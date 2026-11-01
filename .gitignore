@@ -44,29 +44,31 @@ id_ed25519*
 *.backup
 *.tmp
 
-# Raw evidence is retained locally, not silently discarded or uploaded.
-# Markdown findings and safe JSON manifests remain versioned; see docs/REPOSITORY.md.
+# Local logs, archives and proof records stay on this computer.
 *.log
 *.jsonl
 *.zip
 *.7z
 *.tar
 *.gz
+*.bin
+**/settings-before*
+**/recovery.json
+**/recovery-*.json
+**/native-diagnostics*
+**/*-identity.json
+**/runtime-cleanup.json
+**/fake-ui-names*
+
+# Screenshots and text dumps from proofs never belong in the docs.
 /docs/**/*.png
 /docs/**/*.jpg
 /docs/**/*.jpeg
 /docs/**/*.webp
 /docs/**/*.txt
 
-# Settings preimages and process/UI recovery records stay on this computer.
-**/settings-before*
-**/recovery.json
-**/recovery-*.json
-**/*-identity.json
-**/runtime-cleanup.json
-**/native-diagnostics*
-**/fake-ui-names*
-*.bin
+# Disposable scripts, probes and their output.
+.scratch/
 
 .idea/
 .vscode/

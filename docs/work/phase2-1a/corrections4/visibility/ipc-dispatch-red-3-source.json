@@ -1,6 +1,0 @@
-{
-  "path": "desktop/src-tauri/tests/ipc_dispatch.rs",
-  "sha256": "4b1e830a1de0595a7fae56439cba12a25491c33c7957e246e54596df7b7676f8",
-  "provenance": "Supplement captured after visibility-ipc-red-3 completed; no edit to this test source between invocation and capture. Original run inventory predated integration-tests glob fix.",
-  "behavior": "All nine actual generated handlers held invocation dispatch until fake vault access was released; first two attempts were fixture/loader/compiler failures, not behavior results."
-}
