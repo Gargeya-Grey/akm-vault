@@ -43,13 +43,22 @@ The owner authorized implementation of unit 1a only. Each other unit needs its o
 2. **Unit 1a: design first, then one acceptance review.** Round 8 ([raw](reviews/2026-11-01-unit1a-review8.md)) rejected the unit with 1A-R8-01 to 1A-R8-05. The owner then asked GPT-6 Astra once for guidance ([advisory](reviews/2026-11-01-unit1a-advisory.md); advice, not a review). **Owner decisions, 2026-11-01:**
    - Design first, in unit 1a. The clipboard lifecycle, its texts, the CLI disclosure policy, caller-level tests and the action-name docs stay in 1a. Units 1b and 1c keep their scope.
    - The CLI default view uses a fixed mask with no secret characters and no length (1A-R8-01). `--reveal` and `--field secret` stay the only disclosures, and they record the request first.
-   - Clipboard cleanup is best effort (1A-R8-02). Every clipboard text says so and says that the copy may remain. Locking never waits for cleanup.
+   - Clipboard cleanup is best effort (1A-R8-02). Every clipboard text says so and says that the copy may remain. Lock rule, narrowed after design review 1: lock sends its notice first, then makes one cleanup attempt that never retries and never waits for a busy clipboard; it may wait for a copy in progress (built in unit 1h).
 
    Steps, in order:
    1. Inventories, from the real code: every exit of `publish` and `clear` and what it did to the clipboard; every CLI output and disclosure sink; every user-facing clipboard text (Rust, TSX, README); a map from each acceptance claim to the caller-level test that proves it.
    2. A design note (section 10 of `docs/design/unit1a-protocol.md`, or a new file) from those inventories: explicit publisher outcomes, the lease invariants, the output-intent type, and the injectable CLI run. One design review.
    3. Tests that fail first through the real callers (the real publisher with the fake Win32 API, through `Session`; the CLI run function), then the implementation, then the text and action-name sweep.
    4. The full check run on the final build, then one acceptance review. If it rejects, stop and ask the owner.
+   **Status, 2026-11-01:**
+   - Step 1 is done. The repair design ([design](design/unit1a-repair.md)) failed two design reviews ([review 1](reviews/2026-11-01-unit1a-repair-design-review1.md): 10 blocking; [review 2](reviews/2026-11-01-unit1a-repair-design-review2.md): 9 blocking), so the work stopped (AGENTS.md).
+   - **Owner decision, 2026-11-01: split.** Unit 1a closes 1A-R8-01 to 1A-R8-05 narrowly, each through its production caller (design revision 3). The wider hardening moves to the new unit 1h (FINDINGS.md, 1H-01 to 1H-08), with its own design and authorization. The owner's narrowed lock rule is built in 1h. There is no third design review: the acceptance review judges 1a against revision 3.
+   - Next, from revision 3, section 5:
+     1. Commit 1: the test-support move and the failing tests; run them on today's production code. Each defect test must fail as stated.
+     2. Commit 2: the fix, the text and action-name sweep, the `run_with` seam; then the mutants.
+     3. The full check run and the final build with its hashes.
+     4. The owner-gated Windows evidence, each with the owner's yes, or reported as not checked.
+     5. One acceptance review. If it rejects, stop and ask the owner.
 3. **R4-04** stays deferred until the owner chooses option A or B for it (item 1).
 
 **UI work unit (draft PR #2, worktree `W:\akm-worktrees\ui-refine`).** It failed review twice (raw reviews in `docs/reviews/2026-11-01-ui-review.md` and `-ui-review-round2.md` on that branch). The owner then decided, on 2026-11-01: remove the Key Detail timer bar, make colour changes instant (only transform animates), and keep clay destructive buttons as a recorded exception to the house forest rule. Commit `6aa3ee3` applies the decisions. Review round 3 confirmed them and found one P3: press and hover feedback eases back. The owner decided to keep the ease-back (2026-11-01), and `57909a7` records the rule in the CSS comments. Its checks: 191 unit tests, the build, 40 browser tests and the e2e type check passed, and the two changed tests fail on `496205c`. The PR stays a draft until R4-04 and the unit 1a review are done, because a rebuild would change the pinned build. The first review also found P3-REVEAL-CLOCK, which predates the UI work.

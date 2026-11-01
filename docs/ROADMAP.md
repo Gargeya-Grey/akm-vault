@@ -24,6 +24,15 @@ Status: [STATE.md](STATE.md) and [FINDINGS.md](FINDINGS.md).
 
 Acceptance: the findings in the unit 1c table of [FINDINGS.md](FINDINGS.md), with real dispatch through the production command handler. Implementation needs the owner's authorization, like every unit.
 
+## Unit 1h: clipboard and disclosure hardening (split from unit 1a)
+
+- Lock sends its notice first, then makes one cleanup attempt that never retries and never waits for a busy clipboard (owner rule, 2026-11-01). One public call makes at most one cleanup attempt, on every path, including the window and app exit events.
+- Cleanup never empties a newer copy, also with delayed rendering and a failed owner destruction. A failed `CloseClipboard` has a defined outcome.
+- The secret reaches a sink only through a capability bound to its journal record, also through `Vault::env_vars` and whole-key serialization.
+- Encoding and the copy-command wrappers are tested with the real publisher.
+
+Acceptance: the findings in the unit 1h table of [FINDINGS.md](FINDINGS.md). Start with a design. Implementation needs the owner's authorization, like every unit.
+
 ## Unit 1b: private per-device journal
 
 Write these decisions down first. Implementation starts only after the owner approves them and authorizes the unit:
