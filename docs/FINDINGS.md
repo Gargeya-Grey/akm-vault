@@ -13,13 +13,19 @@ Updated 2026-11-01. This file lists every review finding that is not closed, and
 
 | ID | Severity | Status | Problem and the test that closes it |
 |---|---|---|---|
-| R4-01 | P2 | Fixed, not accepted | Backup pruning could delete the dated backup that was just made, when 5 older backups had names that sort later because of clock skew. The app still said a backup was kept. Test: 5 later-sorting backups and a blocked `.bak` refresh. The exact pre-delete vault must stay recoverable, the delete must still succeed, and the warning must match the actual result. |
-| R4-02 | P2 | Fixed, not accepted | A delayed `vault-locked` event from session A could make the UI show "locked" while the native session B stayed open. Fix: a native session ID for each open, carried by status replies and lock events. Test: old A events at each point of B's open, and real B locks at the same points. |
-| R4-03 | P3 | Fixed, not accepted | When a clipboard copy partly failed and the immediate cleanup also failed, no app warning was recorded. Test: a fake backend with a partial copy and a failed immediate clear, then a recovery, then a second episode while the first warning is still pending. Each episode must get its own warning ID. |
+| R4-01 | P2 | Fixed, not accepted ([round 5](reviews/2026-11-01-unit1a-review5.md) accepted the seam) | Backup pruning could delete the dated backup that was just made, when 5 older backups had names that sort later because of clock skew. The app still said a backup was kept. Test: 5 later-sorting backups and a blocked `.bak` refresh. The exact pre-delete vault must stay recoverable, the delete must still succeed, and the warning must match the actual result. |
+| R4-02 | P2 | Open ([round 5](reviews/2026-11-01-unit1a-review5.md): not fixed, see 1A-R5-01) | A delayed `vault-locked` event from session A could make the UI show "locked" while the native session B stayed open. Fix: a native session ID for each open, carried by status replies and lock events. Test: old A events at each point of B's open, and real B locks at the same points. |
+| R4-03 | P3 | Open ([round 5](reviews/2026-11-01-unit1a-review5.md): not fixed, see 1A-R5-02) | When a clipboard copy partly failed and the immediate cleanup also failed, no app warning was recorded. Test: a fake backend with a partial copy and a failed immediate clear, then a recovery, then a second episode while the first warning is still pending. Each episode must get its own warning ID. |
 | R4-04 | Proof gate | Gap, deferred | No real-window test has shown that a delayed result survives hide and navigation. See the pass conditions below. **Owner decision, 2026-11-01:** R4-04 is deferred. Unit 1a gets its review without it. The source verdict can pass, and the work-unit verdict stays NO until R4-04 passes. R4-04 must pass before the release gate. |
 | R4-04-SCRIPT | P1 | Open (design) | The proof script on PR #3 failed review twice ([round 1](reviews/2026-11-01-r4-04-script-review.md), [round 2](reviews/2026-11-01-r4-04-script-review-round2.md)). From outside the app, UI Automation polling cannot show that no outcome returned just before a dismissal click, or that a delayed reveal reply was delivered and discarded. Before R4-04 is attempted, decide how to observe these (STATE.md options A and B), then fix the 8 direct round-2 findings. |
-| P2-WARN-OWNERSHIP | P2 | Fixed, not accepted | A post-commit journal warning from vault session A could appear as a warning for session B. Rounds 1 to 4 tested this area. |
-| P2-JOURNAL-CLAIMS | P2 | Fixed, not accepted | The journal UI claimed "verified" and "complete" when it could not prove that. Missing, damaged, consistent-but-unauthenticated and incomplete logs now show different states. |
+| P2-WARN-OWNERSHIP | P2 | Fixed, not accepted ([round 5](reviews/2026-11-01-unit1a-review5.md): fixed with limits) | A post-commit journal warning from vault session A could appear as a warning for session B. Rounds 1 to 4 tested this area. |
+| P2-JOURNAL-CLAIMS | P2 | Fixed, not accepted ([round 5](reviews/2026-11-01-unit1a-review5.md): fixed with limits; see 1A-R5-04 and 1A-R5-06) | The journal UI claimed "verified" and "complete" when it could not prove that. Missing, damaged, consistent-but-unauthenticated and incomplete logs now show different states. |
+| 1A-R5-01 | P2 | Open | [round 5](reviews/2026-11-01-unit1a-review5.md), `desktop/src/App.tsx:159`, `desktop/src/nativeSession.ts:102`. The status request starts before the lock subscription is registered. A lock emitted in that gap is missed, and a stale unlocked status is accepted. Reproduced with mocked native calls. Test: delay the listener registration, lock after the status is computed, and require the stale status to be rejected; also cover a subscription failure and root replacement. |
+| 1A-R5-02 | P2 | Open | [round 5](reviews/2026-11-01-unit1a-review5.md), `desktop/src-tauri/src/clipboard.rs:384`, `desktop/src-tauri/src/session.rs:782`. When the clipboard sequence is unchanged but its text cannot be read, the lease is dropped as if the user had copied something newer, and no warning is recorded. Reproduced with a fake backend. Test: an unreadable same-sequence clipboard keeps a safe retry and a warning, and a newer identical user copy is kept. |
+| 1A-R5-03 | P2 | Open | [round 5](reviews/2026-11-01-unit1a-review5.md), `desktop/src/components/Settings.tsx:54`, `desktop/src-tauri/src/pending.rs:25`. Cancelling or editing an import clears the frontend review but sends no native cancellation, so the old token can still be confirmed. A delayed preview can install its token after the dialog closes. Test: through the real App, API and native seam, cancel or edit before confirmation, also while a preview is delayed; the old token can never be confirmed or installed, and a dispatched confirmation keeps its outcome. |
+| 1A-R5-04 | P2 | Open | [round 5](reviews/2026-11-01-unit1a-review5.md), `crates/akm-cli/src/main.rs:377`. A successful CLI file export records `export-requested` but no `export-completed`. Reproduced with the release CLI and fake data. Test: a completion record after publication, and a non-retryable warning when that record cannot be written. |
+| 1A-R5-05 | P3 | Open | [round 5](reviews/2026-11-01-unit1a-review5.md), `desktop/src-tauri/src/pending.rs:46`. A confirmation with stale token A, arriving after review B is installed, is rejected but also removes B. Reproduced with the real component. Test: deliver A after B; A fails, and B stays confirmable once. |
+| 1A-R5-06 | P3 | Open | [round 5](reviews/2026-11-01-unit1a-review5.md), `crates/akm-core/src/audit.rs:200`. When one field of a record is invalid, its declared sequence number is dropped too (this keeps 1A-R1-07 open). Reproduced with the release CLI. Test: show an available declared sequence, marked untrusted and without the record contents; show none when it is absent or ambiguous. |
 
 ### R4-04 pass conditions
 
@@ -72,7 +78,7 @@ These are fixed in the source and remain **not accepted**. The scenario and the 
 | 1A-R1-04 | P2 | Malformed-record errors echoed record content |
 | 1A-R1-05 | P2 | Uncertain journal outcome reported as "not recorded" |
 | 1A-R1-06 | P3 | Legacy `*-start` action names still emitted |
-| 1A-R1-07 | P3 | The offending sequence number was not shown |
+| 1A-R1-07 | P3 | The offending sequence number was not shown. Round 5: not fixed, see 1A-R5-06. |
 | 1A-R2-01 | P2 | Whitespace append boundary (form feed and other non-JSON whitespace) |
 | 1A-R2-02 | P2 | `completedWhileLocked` receipts lost between roots |
 | 1A-R2-03 | P3 | Application warnings lost on handoff |
@@ -80,10 +86,10 @@ These are fixed in the source and remain **not accepted**. The scenario and the 
 | 1A-R2-05 | P3 | Delete promised a `.bak` backup. R4-01 covers the rest of this. |
 | 1A-R2-06 | P3 | Sequence numbers above 2^53 lost precision in IPC |
 | 1A-R3-01 | P2 | A dispatched import outcome was lost on hide and navigation |
-| 1A-R3-02 | P3 | Clipboard cleanup episodes shared one warning ID. R4-03 covers the rest of this. |
+| 1A-R3-02 | P3 | Clipboard cleanup episodes shared one warning ID. R4-03 covers the rest of this. Round 5: not fixed, see 1A-R5-02. |
 | 1A-R3-03 | P3 | Stale replies could return session A's path to obsolete callers |
 
-The round 4 review supported the R3-01 and R3-03 fixes, and the ordinary R3-02 cases, within its examples. A real Tauri webview reload was never tested separately. The browser reload tests use mocked IPC.
+The [round 5](reviews/2026-11-01-unit1a-review5.md) review accepted the source seam of 1A-R1-01, R1-02, R1-04, R1-06, R2-01, R2-04, R2-05 and R2-06, and found the others fixed with limits, except R1-07 and R3-02. None closes before the unit passes its review. The round 4 review supported the R3-01 and R3-03 fixes, and the ordinary R3-02 cases, within its examples. A real Tauri webview reload was never tested separately. The browser reload tests use mocked IPC.
 
 ## Later work units
 
