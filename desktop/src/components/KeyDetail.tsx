@@ -240,6 +240,13 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
               Copy
             </button>
           </div>
+          {secret && (
+            <span
+              className="secret-timer"
+              aria-hidden="true"
+              style={{ animationDuration: `${HIDE_SECONDS}s` }}
+            />
+          )}
         </section>
         {secret && (
           <p className="field-note">

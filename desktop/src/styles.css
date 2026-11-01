@@ -1632,6 +1632,65 @@ textarea:disabled {
   }
 }
 
+/* Motion: entry only, transform and opacity only. No exit animation. */
+@keyframes akm-fade {
+  from { opacity: 0; }
+}
+
+@keyframes akm-rise {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+}
+
+@keyframes akm-drain {
+  to { transform: scaleX(0); }
+}
+
+@keyframes akm-dot {
+  from { transform: scale(0); }
+}
+
+.overlay {
+  animation: akm-fade 140ms var(--ease-out);
+}
+
+.overlay > [role="dialog"] {
+  animation: akm-rise var(--dur-enter) var(--ease-out);
+}
+
+/* Decorative drain bar. The script timer and the "Hides in N seconds" text stay the authority. */
+.secret-box {
+  position: relative;
+}
+
+.secret-timer {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 2px;
+  background: var(--leaf-ink);
+  transform-origin: left center;
+  animation: akm-drain 30s linear forwards;
+}
+
+.nav-link[aria-current="page"]::after {
+  animation: akm-dot 160ms var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .secret-timer {
+    display: none;
+  }
+
+  .btn:active,
+  .btn-secondary:active,
+  .btn-danger:active,
+  .theme:active,
+  .icon-button:active {
+    transform: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
