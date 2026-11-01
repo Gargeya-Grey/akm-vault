@@ -160,10 +160,26 @@ The frontend does not promise that a confirm dispatched before the close will im
 
 These differences from sections 4 to 6 answer design review 2 or simplify the change:
 
-- **Section 4, warnings.** A successful retry ends the cleanup episode; it does not remove the warning. The warning stays until the user acknowledges it, and a later episode gets its own warning ID (the R4-03 behaviour, unchanged). A publication that failed but emptied the clipboard in its own open interval (`rolled_back`) holds no unverifiable lease.
+- **Section 4, warnings.** A successful retry ends the cleanup episode; it does not remove the warning. The warning stays until the user acknowledges it, and a later episode gets its own warning ID (the R4-03 behaviour, unchanged). Because the warning outlives the retries, its text is history only (1A-R7-03): "AKM could not confirm that its clipboard copy was cleared. Check the clipboard before you paste, and clear it if the copy is still there." The same text is used for the retry and the final case; it promises no later attempt.
+- **Section 4, lease state table (1A-R7-02).** Each row is one case of `the_lease_state_table_holds_for_every_event_from_every_state` in `clipboard.rs`. The test runs every row from no lease and from an owned earlier lease A, and checks the lease after, the returned error, the reported cleanup failure, the number of cleanup calls and the warning text.
+
+  | Event | Cleanup result | Lease after (from A) | Returned | Cleanup reported |
+  |---|---|---|---|---|
+  | Copy B succeeds | none | B | nothing | nothing |
+  | Copy B refused before publication, or its text has a NUL | none | A (unchanged; nothing was written) | `clipboard` | nothing |
+  | Copy B fails and rolls back (any sequence) | none | none: the rollback emptied the clipboard, so A's copy is gone too | `clipboard` | nothing |
+  | Copy B fails, no rollback, nonzero sequence | cleared, or not ours | none | `clipboard` | nothing |
+  | Copy B fails, no rollback, nonzero sequence | busy, or uncertain | B (retried at the next tick) | `clipboard` | `clipboardUncertain` |
+  | Copy B fails, no rollback, sequence 0 | not attempted | none (final) | `clipboard` | `clipboardUncertain` |
+  | Tick at or after expiry | cleared, or not ours | none | — | nothing |
+  | Tick at or after expiry | busy, or uncertain | A (retried at the next tick) | — | `clipboardUncertain` |
+  | Tick before expiry | not attempted | A | — | nothing |
+
+  From no lease, the "A" cells read "none", and ticks make no cleanup call. The session test `a_rolled_back_publication_after_an_owned_copy_leaves_no_lease_retry_or_warning` checks the rolled-back row through `Session`: no lease, no later cleanup call and no warning.
+- **CLI output (1A-R7-01).** Every CLI print takes one of two forms. Primary output (a listing, a field, an export, the journal display) goes to an explicit writer and returns a failed write as an ordinary error, exit 1. A failed disclosure write (`get --field secret`, `get --reveal`, a stdout export) adds "Some output may already have been written." Text after the result is decided (a saved change, a warning, "Cancelled.") uses the `status!` and `warning!` macros, which ignore a failed write, so a closed pipe never turns a committed change into a failed exit. `crates/akm-cli/clippy.toml` bans `print!`, `println!`, `eprint!` and `eprintln!` in the CLI crate, so a new call site cannot bring back the panic (exit 101).
 - **Section 5, failed file export.** "No file at the destination" means no new destination file: a pre-existing destination keeps its exact bytes. A failed delete request for the owned plaintext temporary file is still not reported; it is finding 1A-D2-09 (unit 3).
 - **Section 6, field.** The declared sequence uses the existing `broken_at` field and its decimal-string IPC field `brokenAt`, not a new `problem_declared_seq` field. Every damaged record's sequence is unverified, so the CLI and the Activity view now both say "declared sequence N (not verified)". The IPC shape does not change.
-- **Section 7, checks.** The release-CLI checks for sections 5 and 6 ran against the final `akm.exe`, between two matching hash runs. The cases that need an injected fault (a partial stdout write, a failed completion append) are unit tests of the CLI functions, not release-binary checks.
+- **Section 7, checks.** The release-CLI checks for sections 5 and 6 ran against the final `akm.exe`, between two matching hash runs. The cases that need an injected fault (a partial stdout write, a failed completion append, a completion line that was written before its sync failed) are unit tests of the CLI functions, not release-binary checks. The completion record takes its append as a closure (`record_completed_with`), so the test writes the real line and then returns an injected sync error.
 
 ## 9. Design review findings and changes
 
