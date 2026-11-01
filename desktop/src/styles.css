@@ -123,11 +123,6 @@ a {
   text-underline-offset: 3px;
 }
 
-a:hover {
-  text-decoration-color: var(--leaf-ink);
-  color: var(--leaf-ink);
-}
-
 button {
   font-family: var(--font-sans);
 }
@@ -173,10 +168,6 @@ select {
   background-position: right 20px center, right 15px center;
   background-size: 5px 5px;
   background-repeat: no-repeat;
-}
-
-select:hover:not(:disabled) {
-  border-color: var(--ink);
 }
 
 select:disabled {
@@ -294,7 +285,6 @@ time {
   cursor: pointer;
 }
 
-.nav-link:hover,
 .nav-link[aria-current="page"] {
   color: var(--ink);
 }
@@ -361,10 +351,6 @@ time {
   white-space: nowrap;
 }
 
-.btn-secondary:hover:not(:disabled) {
-  border-color: var(--ink);
-}
-
 .btn-secondary:disabled {
   border-style: dashed;
   color: var(--ink-2);
@@ -381,7 +367,7 @@ time {
   border-radius: 6px;
   background: var(--clay);
   color: var(--paper);
-  font: 500 0.9375rem var(--font-sans);
+  font: 500 1rem var(--font-sans);
   cursor: pointer;
 }
 
@@ -404,11 +390,6 @@ time {
   cursor: pointer;
 }
 
-.text-button:hover:not(:disabled) {
-  color: var(--leaf-ink);
-  text-decoration-color: var(--leaf-ink);
-}
-
 .text-button:disabled {
   color: var(--ink-2);
   cursor: default;
@@ -420,11 +401,6 @@ time {
 
 .text-button.danger-text {
   color: var(--clay);
-}
-
-.text-button.danger-text:hover:not(:disabled) {
-  color: var(--clay);
-  text-decoration-color: var(--clay);
 }
 
 .icon-button {
@@ -446,6 +422,136 @@ time {
   border-style: dashed;
   color: var(--ink-2);
   cursor: default;
+}
+
+/* Interaction states */
+:root {
+  --dur-fast: 120ms;
+  --dur-press: 80ms;
+  --dur-enter: 180ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.btn,
+.btn-secondary,
+.btn-danger,
+.theme,
+.icon-button {
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease,
+    color var(--dur-fast) ease, transform var(--dur-fast) var(--ease-out);
+}
+
+.nav-link,
+.text-button,
+input,
+textarea,
+select {
+  transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease,
+    text-decoration-color var(--dur-fast) ease, background-color var(--dur-fast) ease;
+}
+
+@media (hover: hover) {
+  a:hover {
+    text-decoration-color: var(--leaf-ink);
+    color: var(--leaf-ink);
+  }
+
+  .nav-link:hover {
+    color: var(--ink);
+  }
+
+  .btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--forest) 86%, var(--paper));
+  }
+
+  .btn-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--clay) 86%, var(--ink));
+  }
+
+  .btn-secondary:hover:not(:disabled),
+  .theme:hover,
+  .icon-button:hover:not(:disabled),
+  select:hover:not(:disabled),
+  input:hover:not(:disabled):not(:focus),
+  textarea:hover:not(:disabled):not(:focus) {
+    border-color: var(--ink);
+  }
+
+  .text-button:hover:not(:disabled) {
+    color: var(--leaf-ink);
+    text-decoration-color: var(--leaf-ink);
+  }
+
+  .text-button.danger-text:hover:not(:disabled) {
+    color: var(--clay);
+    text-decoration-color: var(--clay);
+  }
+
+  .key-row:hover {
+    background: var(--sage);
+  }
+
+  .key-row:hover .row-arrow {
+    color: var(--leaf-ink);
+    transform: translateX(2px);
+  }
+}
+
+.btn:active:not(:disabled),
+.btn-secondary:active:not(:disabled),
+.btn-danger:active:not(:disabled),
+.theme:active,
+.icon-button:active:not(:disabled) {
+  transform: scale(0.97);
+  transition-duration: var(--dur-press);
+}
+
+.key-row:active {
+  background: var(--sage);
+}
+
+.key-row:active .row-arrow {
+  color: var(--leaf-ink);
+  transform: translateX(4px);
+}
+
+.nav-link {
+  padding: 12px 6px;
+  margin-inline: -6px;
+}
+
+.filter select:not(:has(option[value=""]:checked)) {
+  background-color: var(--sage);
+  border-color: var(--leaf-ink);
+}
+
+input:disabled,
+textarea:disabled {
+  border-style: dashed;
+  color: var(--ink-2);
+  cursor: default;
+}
+
+.text-button:disabled:not([aria-busy="true"]) {
+  text-decoration-style: dashed;
+  text-decoration-color: var(--ink-2);
+}
+
+/* A busy button keeps its enabled look; only the cursor shows it is working. */
+[aria-busy="true"]:disabled {
+  cursor: progress;
+}
+
+.btn[aria-busy="true"]:disabled {
+  border: 1px solid transparent;
+  background: var(--forest);
+  color: var(--on-forest);
+}
+
+.btn-danger[aria-busy="true"]:disabled {
+  border: 1px solid transparent;
+  background: var(--clay);
+  color: var(--paper);
 }
 
 /* View frame */
@@ -605,10 +711,6 @@ time {
   border-bottom: 0;
 }
 
-.key-row:hover {
-  background: var(--sage);
-}
-
 .key-row:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
@@ -703,12 +805,7 @@ time {
 
 .row-arrow {
   color: var(--ink-2);
-  transition: transform 120ms ease;
-}
-
-.key-row:hover .row-arrow {
-  color: var(--leaf-ink);
-  transform: translateX(2px);
+  transition: transform 120ms ease, color 120ms ease;
 }
 
 .empty-state {

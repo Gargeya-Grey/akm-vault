@@ -229,6 +229,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
                 className="text-button"
                 onClick={reveal}
                 disabled={busy}
+                aria-busy={busy || undefined}
               >
                 <Icon name="eye" />
                 {busy ? "Revealing…" : "Reveal"}

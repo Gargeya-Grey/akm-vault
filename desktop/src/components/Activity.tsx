@@ -65,6 +65,7 @@ export function Activity() {
           className="btn-secondary"
           onClick={() => void load()}
           disabled={loading}
+          aria-busy={loading || undefined}
         >
           {loading ? "Reading…" : "Refresh"}
         </button>

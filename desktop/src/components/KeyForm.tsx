@@ -310,7 +310,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
             >
               Cancel
             </button>
-            <button type="submit" className="btn" disabled={busy}>
+            <button type="submit" className="btn" disabled={busy} aria-busy={busy || undefined}>
               {busy ? "Saving…" : editing ? "Save changes" : "Add key"}
             </button>
           </div>

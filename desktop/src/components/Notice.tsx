@@ -82,6 +82,7 @@ export function ConfirmDialog({
             className={destructive ? "btn-danger" : "btn"}
             onClick={onConfirm}
             disabled={busy}
+            aria-busy={busy || undefined}
           >
             {busy ? "Working…" : confirmLabel}
           </button>

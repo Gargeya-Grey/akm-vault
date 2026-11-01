@@ -191,7 +191,7 @@ export function Unlock({ status, onUnlocked }: Props) {
           {error && <Notice tone="error">{error}</Notice>}
 
           <div className="form-actions">
-            <button type="submit" className="btn" disabled={busy}>
+            <button type="submit" className="btn" disabled={busy} aria-busy={busy || undefined}>
               {busy
                 ? "Working…"
                 : mode === "create"
