@@ -61,6 +61,7 @@ These contracts do not claim every adjacent seam is complete. The fresh phase-tw
 - Scope confirmation, generation-owned receipts, handle-owned exports and Windows clipboard synthesis handling were added after reproduced adversarial failures. They are preservation requirements, not optional refactors.
 - Source corrections, runtime coverage and numerical readiness are separate gates. The last complete numerical assessment is the historical 40.5/100 baseline in [REVIEW.md](../REVIEW.md).
 - The owner authorized GPT-6.1 Terra at `max` for fresh AKM adversarial reviewers on 2026-10-31. The tool catalogue resolved this to `openai/gpt-6.1-terra#max`. No global routing configuration was changed.
+- On 2026-11-01 the owner separately authorized local Git and private source backup under `Gargeya-Grey/akm-vault`. Public visibility, artifact releases, remote CI and real-secret use remain gated; private backup is not product acceptance. See [repository/evidence policy](REPOSITORY.md).
 
 ## Source map
 

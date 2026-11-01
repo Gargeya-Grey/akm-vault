@@ -6,6 +6,10 @@ Fixing the reported bugs does not itself establish a new score or certify securi
 The owner's release gate is an independent re-review above 90, followed by real-use
 testing before wider distribution.
 
+Private development repository: [Gargeya-Grey/akm-vault](https://github.com/Gargeya-Grey/akm-vault).
+See the [repository/evidence policy](docs/REPOSITORY.md): Git tracks source and safe
+project records, not live vaults, credentials or the complete local evidence archive.
+
 AKM is for a Windows developer who wants a local, account-free KeePass file plus
 API-key fields and process-environment injection. KeePassXC, 1Password CLI and
 Bitwarden Secrets Manager already cover much of this use case. AKM is a narrower

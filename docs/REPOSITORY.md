@@ -1,6 +1,6 @@
 # Repository and evidence policy
 
-The owner authorized local Git followed by a **private** GitHub repository under `Gargeya-Grey` on 2026-11-01. The suggested repository name is `akm-vault`. This does not authorize public visibility, releases, installation, real secrets or a new native minimize test.
+The owner authorized local Git followed by a **private** GitHub repository under `Gargeya-Grey` on 2026-11-01. The repository is [Gargeya-Grey/akm-vault](https://github.com/Gargeya-Grey/akm-vault), on branch `main`. The initial baseline commit is `b187e55f9c83ca96488a1bd9db8af49bd0feba7a`. This does not authorize public visibility, releases, installation, real secrets or a new native minimize test.
 
 ## What Git tracks
 
@@ -9,6 +9,8 @@ The owner authorized local Git followed by a **private** GitHub repository under
 - Only the two existing synthetic KDBX interoperability fixtures under `crates/akm-core/tests/fixtures/`. Never place an owner vault or backup there to bypass the ignore rules.
 
 `.gitattributes` disables newline normalization so Git preserves the exact source bytes used by the recorded fingerprints. Repository-local author settings may use the selected GitHub account's no-reply address; global Git identity and the default GitHub account are not changed.
+
+Setup reviewed 582 selected files (about 6.1 MB), found no configured credential-pattern matches, verified exact staged bytes and 16 ignore-rule probes, and pushed only after checking owner/private visibility and disabling Actions. This is a bounded upload check, not an exhaustive secrets audit. Existing whitespace in historical `.diff`/browser diagnostic evidence was preserved; the source-only whitespace check passed. Authentication used the existing `Gargeya-Grey` credential only in command-scoped process memory, with no token in the remote URL or project files.
 
 ## What stays local
 
