@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, errorText } from "../api";
 import { formatDate, formatDateTime, keyState, rotationLabel } from "../format";
 import type { KeyView } from "../types";
+import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { useDialogFocus } from "./useDialogFocus";
 import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
@@ -82,7 +83,12 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
     setError(null);
     try {
       const value = await api.reveal(item.id);
-      if (view === presentation.current) setSecret(value);
+      if (view === presentation.current) {
+        // Reset the countdown in the same render as the secret, so the
+        // "Hides in N seconds" text never starts from an earlier reveal's value.
+        setSeconds(HIDE_SECONDS);
+        setSecret(value);
+      }
     } catch (cause) {
       if (view === presentation.current) setError(errorText(cause));
     } finally {
@@ -205,7 +211,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
             aria-label="Close"
             onClick={onClose}
           >
-            ×
+            <Icon name="close" size={20} />
           </button>
         </header>
 
@@ -219,6 +225,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
           <div className="secret-actions">
             {secret ? (
               <button type="button" className="text-button" onClick={hide}>
+                <Icon name="eyeOff" />
                 Hide
               </button>
             ) : (
@@ -227,11 +234,14 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
                 className="text-button"
                 onClick={reveal}
                 disabled={busy}
+                aria-busy={busy || undefined}
               >
+                <Icon name="eye" />
                 {busy ? "Revealing…" : "Reveal"}
               </button>
             )}
             <button type="button" className="btn-secondary" onClick={copy}>
+              <Icon name={copied ? "check" : "copy"} />
               Copy
             </button>
           </div>
@@ -263,6 +273,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
 
         <div className="dialog-actions spread">
           <button type="button" className="text-button danger-text" onClick={onDelete} disabled={readOnly}>
+            <Icon name="trash" />
             Delete key
           </button>
           <div className="action-cluster">
@@ -270,6 +281,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
               Close
             </button>
             <button type="button" className="btn-secondary" onClick={onEdit} disabled={readOnly}>
+              <Icon name="pencil" />
               Edit
             </button>
           </div>

@@ -4,6 +4,7 @@ import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
 import { formatBytes, formatDateTime, plural } from "../format";
 import type { BackupInfo, ImportPreview, KeyView, Status } from "../types";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
+import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { useDialogFocus } from "./useDialogFocus";
 
@@ -385,7 +386,9 @@ export function Settings({ status, onLocked }: Props) {
             className="btn"
             onClick={() => void saveEnv()}
             disabled={busy !== null || !scoped}
+            aria-busy={busy === "save" || undefined}
           >
+            <Icon name="download" />
             {busy === "save" ? "Saving…" : "Save .env…"}
           </button>
           <button
@@ -393,6 +396,7 @@ export function Settings({ status, onLocked }: Props) {
             className="btn-secondary"
             onClick={() => void runPreview()}
             disabled={busy !== null || !scoped}
+            aria-busy={busy === "preview" || undefined}
           >
             {busy === "preview" ? "Previewing…" : "Preview"}
           </button>
@@ -401,6 +405,7 @@ export function Settings({ status, onLocked }: Props) {
             className="btn-secondary"
             onClick={() => void copyEnv()}
             disabled={busy !== null || !scoped}
+            aria-busy={busy === "copy" || undefined}
           >
             {busy === "copy" ? "Copying…" : "Copy to clipboard"}
           </button>
@@ -410,6 +415,7 @@ export function Settings({ status, onLocked }: Props) {
             onClick={openImport}
             disabled={status.needsUpgrade || importBusy === "confirm"}
           >
+            <Icon name="upload" />
             Import .env…
           </button>
         </div>
@@ -492,7 +498,7 @@ export function Settings({ status, onLocked }: Props) {
                 onClick={closeImport}
                 disabled={importBusy === "confirm"}
               >
-                ×
+                <Icon name="close" size={20} />
               </button>
             </header>
 
@@ -580,7 +586,7 @@ export function Settings({ status, onLocked }: Props) {
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn" disabled={importBusy !== null}>
+                <button type="submit" className="btn" disabled={importBusy !== null} aria-busy={importBusy !== null || undefined}>
                   {importBusy ? "Working…" : importPreview ? "Confirm import" : "Review import"}
                 </button>
               </div>
