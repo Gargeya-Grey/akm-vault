@@ -26,7 +26,11 @@ Run it only after the owner confirms in chat that they are ready to watch. Each 
 
 **Before the launch:**
 
-1. Check that the application source equals the build's source: `git diff --quiet cfeb1b0 -- crates desktop tools Cargo.toml Cargo.lock` must exit 0, and `git status --porcelain -- crates desktop tools` must print nothing.
+1. Check that the build inputs equal the build's source, and that the proof script is the reviewed one. The proof script is the only tool file that changed after `cfeb1b0`:
+   - `git diff --quiet cfeb1b0 -- crates desktop Cargo.toml Cargo.lock tools ':(exclude)tools/verify_windows_app.ps1' ':(exclude)tools/ProofSnapshot.psm1' ':(exclude)tools/test_proof_snapshot.ps1'` must exit 0.
+   - `git diff --quiet <reviewed proof commit> -- tools/verify_windows_app.ps1 tools/ProofSnapshot.psm1 tools/test_proof_snapshot.ps1` must exit 0. Record the commit and the SHA-256 of these three files in the proof folder.
+   - `git status --porcelain -- crates desktop tools` must print nothing.
+   - `powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_proof_snapshot.ps1` must print `all cases passed`.
 2. Check all four build hashes against [STATE.md](STATE.md#unit-1a-build-under-test) with `Get-FileHash -Algorithm SHA256`. Any difference stops the attempt.
 3. Create a new folder `W:\AKM-archive\proofs\<UTC time>-r4-04\` that did not exist before. Record the hashes there. The script deletes its own working folder after a pass, so this folder is the record.
 
@@ -44,12 +48,14 @@ Run it only after the owner confirms in chat that they are ready to watch. Each 
 4. A native-approved exact-path file save succeeds. A native cancellation and a delayed journal error before disclosure each give the exact output or refusal.
 5. Dismissal works, and no dismissed outcome comes back: not the success, the cancellation or the error.
 
-**What the script checks for each condition.** `tools/verify_windows_app.ps1 -OutcomeOnly` has these checks (branch `test/r4-04-proof-checks`):
-- Condition 2: the import dialog and Settings busy state, and a revealed Key Detail secret that must be gone after a real minimize and restore (`Test-KeyDetailExpiry`).
-- Condition 3: `Assert-OutcomeRegion` counts the outcome records and requires exactly one.
-- Condition 5: `Assert-NoOutcomeResurrection` covers success, cancellation, error and pending texts, and requires the outcome region to be gone.
+**What the script checks for each condition.** `tools/verify_windows_app.ps1 -OutcomeOnly` has these checks. They read complete snapshots of the owned window through `tools/ProofSnapshot.psm1`. A text match stays inside one element or one outcome record. A UI Automation error, or a tree without its sentinel button, never counts as absence. After an outcome is dismissed, every later snapshot and every later click fails if it returns.
+- Condition 2: the import dialog and Settings busy state expire after a real minimize and restore, and stay gone. In Key Detail (`Test-KeyDetailExpiry`), a displayed fake secret must be masked after the minimize and restore. Key Detail then stays open and masked for 5 seconds. A second reveal waits on the fake-journal lock across the minimize and restore. After the lock is released, Key Detail must stay masked, with no stale error, for 5 seconds, while the journal shows that the native reveal finished.
+- Condition 3: `Assert-OutcomeRegion` counts the `status` and `alert` notices in the outcome region and requires exactly one, with the expected text.
+- Condition 5: `Dismiss-Outcome` waits for each removal, then checks that the outcome stays absent. `Assert-NoOutcomeResurrection` covers the success, cancellation, error, pending, unconfirmed and completed-while-locked texts.
 
-`-OutcomeRehearsal` runs the Key Detail, cancellation, count and no-resurrection checks on the real GUI with Hide and a native cancel instead of a minimize. It passed on the pinned build on 2026-11-01 (output in `W:\AKM-archive\proofs61101T114352Z-outcome-rehearsal\`). A rehearsal never passes R4-04. The count check has not yet seen a case with two records.
+`tools/test_proof_snapshot.ps1` tests the snapshot logic without the app. It has 9 cases, one or more for each review finding. Each of 4 deliberately broken versions of the logic fails at least one case.
+
+`-OutcomeRehearsal` runs the Key Detail (Hide in place of a minimize, and the delayed reveal), cancellation, count and no-resurrection checks on the real GUI. It never minimizes. On 2026-11-01 it passed on the pinned build, after the fixes for the second script review (output in `W:\AKM-archive\proofs\20261101T120804Z-outcome-rehearsal-5\`). In the real window, it counted two cancellation records as 2, and the exactly-one check rejected them. A rehearsal never passes R4-04.
 
 Record the build hash, the result and the cleanup. On any failure, stop, keep the evidence, and return to the owner. The proof does not test Windows lock or suspend.
 
@@ -93,6 +99,7 @@ The round 4 review supported the R3-01 and R3-03 fixes, and the ordinary R3-02 c
 | M5 | Medium | Open | 3 | The dotenv parser has no defined external profile for comments, quotes, multiline values and BOM. For example, `TOKEN=abc # note` keeps the comment in the value. |
 | L1 | Low | Partial | 3 | `ApiKey` and `ApiKeyInput` derive a `Debug` that includes the secret, and `Vault::list` loads secrets for callers that need only metadata. |
 | L2 | Low | Partial | 3 | UUID and exact-title matching come first, and ambiguous matches are refused. The fallback search still matches notes and URL. |
+| P3-REVEAL-CLOCK | P3 | Open | 3 | Found by the UI review of 1 Nov 2026 on `5fca93e`; the same code is on `main`. The Key Detail reveal countdown (`desktop/src/components/KeyDetail.tsx`) measures time with the wall clock (`Date.now()`). If the system clock moves back, a revealed fake secret stayed on screen past 30 seconds; with a 40-second rollback the text said "Hides in 39 seconds". A fix uses a monotonic clock (`performance.now()`) or a native expiry, with a test that moves the wall clock back. |
 | L3 | Low | Open | 3 | The CLI stores a date-only expiry at 00:00Z and the GUI at 23:59:59Z. |
 | L6 | Low | Partial | 3 | The frontend rounds expiry days up. Rust still truncates rotation days. |
 | M6 | Medium | Partial | 1a, 1b | Post-commit journal failures are warnings, and the CLI logs reveals. Unit 1a adds damaged and missing journal states. Malformed-tail handling belongs to unit 1b. |

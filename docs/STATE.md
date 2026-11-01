@@ -11,7 +11,7 @@ Updated 2026-11-01. Replace this file's sections when they change. History lives
 
 ## Last full check run
 
-This run checked the application source that is now on `main`. Later commits changed only documentation and Git rules.
+This run checked the application source that is now on `main`. Later commits changed documentation, Git rules and the R4-04 proof tools (`tools/verify_windows_app.ps1`, `tools/ProofSnapshot.psm1`, `tools/test_proof_snapshot.ps1`). They did not change any build input.
 
 - Rust: 196 tests passed, and 2 gated tests were ignored. 9 generated IPC tests passed separately. Clippy (`-D warnings`) and rustfmt were clean.
 - Frontend: 190 cases passed, in two runs. The full run passed 181 cases and then stopped on a Vitest worker start-up timeout. The 9 Settings cases that did not run then passed on their own.
@@ -34,10 +34,12 @@ This run checked the application source that is now on `main`. Later commits cha
 
 The owner authorized implementation of unit 1a only. Each other unit needs its own authorization ([ROADMAP.md](ROADMAP.md)).
 
-1. **The R4-04 proof script is extended** (owner's choice, 2026-11-01): outcome-record count, full no-resurrection check, and a Key Detail check. Its rehearsal passed on the pinned build. Next: one review of the script change, then ask the owner whether they are ready to watch.
+1. **The R4-04 proof script is extended** (owner's choice, 2026-11-01): outcome-record count, full no-resurrection check, and Key Detail checks. Its first review rejected it with 8 findings ([raw review](reviews/2026-11-01-r4-04-script-review.md)). The fixes add `tools/ProofSnapshot.psm1` and its self-test. The self-test passes, 4 broken versions of the logic each fail it, and the rehearsal passed again on the pinned build. Next: the second and last review of the script. If it rejects the script, the design question goes to the owner.
 2. **R4-04 needs the owner present.** After the review, ask the owner whether they are ready to watch. The last attempt minimized the window and then failed its import-dialog-expiry check. The cause was not proved. Since then, a correction moved view expiry into native code, apart from lock handling. That change targets the failed check, but no window run has tested it.
 3. **Then review unit 1a.** Prepare the review inputs now ([REVIEWING.md](REVIEWING.md#unit-1a-inputs)). Request the one fresh review only after R4-04 passes, or after the owner gives an explicit decision about a failed or deferred attempt. The review gives two separate verdicts: source acceptance, and work-unit completion.
 4. Unit 1a has failed review four times. If this review rejects it again, apply the AGENTS.md rule: stop and take the design question to the owner.
+
+**UI work unit (draft PR #2, worktree `W:\akm-worktrees\ui-refine`).** The first review rejected it with 5 findings ([raw review](https://github.com/Gargeya-Grey/akm-vault/blob/feat/ui-icons-states-motion/docs/reviews/2026-11-01-ui-review.md)). Commit `496205c` fixes them, with two new regression tests that fail on `5fca93e` and pass now. Frontend checks on `496205c`: 191 unit tests, the build, 38 browser tests and the e2e type check passed. The second review is running. If it rejects the unit, the design question goes to the owner. The PR stays a draft until R4-04 and the unit 1a review are done, because a rebuild would change the pinned build. The review also found P3-REVEAL-CLOCK, which predates the UI work.
 
 ## Local state outside the repository
 
