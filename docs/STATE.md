@@ -34,10 +34,8 @@ This run checked the application source that is now on `main`. Later commits cha
 
 The owner authorized implementation of unit 1a only. Each other unit needs its own authorization ([ROADMAP.md](ROADMAP.md)).
 
-1. **Owner decision: the R4-04 proof script.** The script cannot prove all five R4-04 pass conditions ([FINDINGS.md](FINDINGS.md#r4-04-pass-conditions)). The owner chooses one option:
-   - Extend `tools/verify_windows_app.ps1` first. It must count the outcome records, include the cancellation in the no-resurrection check, and check Key Detail if that is in scope. The extension changes no application code, so the existing GUI build and its hashes stay valid. Test the script change in a mode that does not minimize (`-JournalOnly`) before the owner-present attempt.
-   - Narrow the pass conditions to what the script proves today, and record the limit.
-2. **R4-04 needs the owner present.** After that decision, ask the owner whether they are ready to watch. The last attempt minimized the window and then failed its import-dialog-expiry check. The cause was not proved. Since then, a correction moved view expiry into native code, apart from lock handling. That change targets the failed check, but no window run has tested it.
+1. **The R4-04 proof script is extended** (owner's choice, 2026-11-01): outcome-record count, full no-resurrection check, and a Key Detail check. Its rehearsal passed on the pinned build. Next: one review of the script change, then ask the owner whether they are ready to watch.
+2. **R4-04 needs the owner present.** After the review, ask the owner whether they are ready to watch. The last attempt minimized the window and then failed its import-dialog-expiry check. The cause was not proved. Since then, a correction moved view expiry into native code, apart from lock handling. That change targets the failed check, but no window run has tested it.
 3. **Then review unit 1a.** Prepare the review inputs now ([REVIEWING.md](REVIEWING.md#unit-1a-inputs)). Request the one fresh review only after R4-04 passes, or after the owner gives an explicit decision about a failed or deferred attempt. The review gives two separate verdicts: source acceptance, and work-unit completion.
 4. Unit 1a has failed review four times. If this review rejects it again, apply the AGENTS.md rule: stop and take the design question to the owner.
 

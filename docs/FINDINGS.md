@@ -44,12 +44,12 @@ Run it only after the owner confirms in chat that they are ready to watch. Each 
 4. A native-approved exact-path file save succeeds. A native cancellation and a delayed journal error before disclosure each give the exact output or refusal.
 5. Dismissal works, and no dismissed outcome comes back: not the success, the cancellation or the error.
 
-**Known gap: the script cannot prove all five yet.** By inspection of `tools/verify_windows_app.ps1`:
-- `Assert-OutcomeRegion` matches outcome text, but does not count outcome records (condition 3).
-- The final no-resurrection check leaves out the cancellation outcome (condition 5).
-- The script checks the import dialog, but never opens a separate Key Detail view (condition 2, if "protected detail" means Key Detail).
+**What the script checks for each condition.** `tools/verify_windows_app.ps1 -OutcomeOnly` has these checks (branch `test/r4-04-proof-checks`):
+- Condition 2: the import dialog and Settings busy state, and a revealed Key Detail secret that must be gone after a real minimize and restore (`Test-KeyDetailExpiry`).
+- Condition 3: `Assert-OutcomeRegion` counts the outcome records and requires exactly one.
+- Condition 5: `Assert-NoOutcomeResurrection` covers success, cancellation, error and pending texts, and requires the outcome region to be gone.
 
-So a script exit code alone does not close R4-04. The owner decides between two options: extend the script before the attempt, or narrow the conditions. See [STATE.md](STATE.md#next-action).
+`-OutcomeRehearsal` runs the Key Detail, cancellation, count and no-resurrection checks on the real GUI with Hide and a native cancel instead of a minimize. It passed on the pinned build on 2026-11-01 (output in `W:\AKM-archive\proofs61101T114352Z-outcome-rehearsal\`). A rehearsal never passes R4-04. The count check has not yet seen a case with two records.
 
 Record the build hash, the result and the cleanup. On any failure, stop, keep the evidence, and return to the owner. The proof does not test Windows lock or suspend.
 

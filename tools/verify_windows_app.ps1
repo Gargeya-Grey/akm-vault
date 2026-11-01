@@ -7,13 +7,15 @@ param(
   [switch]$JournalOnly,
   [switch]$JournalExportOnly,
   [switch]$OutcomeOnly,
+  [switch]$OutcomeRehearsal,
   [switch]$OwnerReadyForVisibility
 )
 
 $ErrorActionPreference = 'Stop'
 if ($OutcomeOnly -and !$OwnerReadyForVisibility) { throw 'Outcome visibility proof requires the owner to confirm readiness first; then pass -OwnerReadyForVisibility. No unattended minimize attempt is permitted.' }
 if ($OutcomeOnly -and $JournalExportOnly) { throw 'Choose either -OutcomeOnly or -JournalExportOnly.' }
-if ($JournalExportOnly -or $OutcomeOnly) { $JournalOnly = $true }
+if ($OutcomeRehearsal -and ($OutcomeOnly -or $JournalExportOnly -or $OwnerReadyForVisibility)) { throw 'The rehearsal never minimizes: use -OutcomeRehearsal alone.' }
+if ($JournalExportOnly -or $OutcomeOnly -or $OutcomeRehearsal) { $JournalOnly = $true }
 if ($JournalOnly -and $RemainingOnly) { throw 'Choose either -JournalOnly or -RemainingOnly, not both.' }
 if ($JournalOnly) { $SkipClipboard = $true }
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
@@ -373,12 +375,53 @@ function Assert-OutcomeRegion([string]$pattern) {
   $region = Find-Control 'Operation outcomes'
   $text = (@($region.FindAll($TS::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }) -join ' ')
   Assert-Proof ($text -match $pattern) 'the retained outcome belongs to the application-level region'
+  $records = @($region.FindAll($TS::Children, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button })
+  Assert-Proof ($records.Count -eq 1) "exactly one application outcome record is retained (found $($records.Count))"
   foreach ($private in @($work, 'HANDOFF_TOKEN', 'fake-outcome-import-value', 'outcome-import-project', 'outcome-import-env', 'handoff-export.env')) {
     Assert-Proof (!$text.Contains($private)) 'the retained outcome contains no fake protected path, input or scope'
   }
 }
 
+function Test-KeyDetailExpiry([switch]$Rehearse) {
+  Click-Control 'Keys'
+  Click-Control 'Open OpenAI prod proof'
+  Click-Control 'Reveal'
+  Assert-Proof (Wait-Text 'fake-prod-must-stay') 'Key Detail reveals the fake secret before the hide'
+  if ($Rehearse) {
+    Click-Control 'Hide'
+    Assert-Proof (!(Wait-Text 'fake-prod-must-stay' 300)) 'rehearsal: Hide masks the revealed fake secret'
+  } else {
+    Minimize-RestoreOwnedWindow
+    Assert-Proof (!(Wait-Text 'fake-prod-must-stay' 300)) 'actual minimize/restore expired the revealed Key Detail secret'
+  }
+  Assert-Proof (Find-Control 'Reveal' ([System.Windows.Automation.ControlType]::Button)).Current.IsEnabled 'Key Detail is masked again and can reveal again'
+  Click-Control 'Close'
+  Assert-Proof (!(Wait-Text 'fake-prod-must-stay' 300)) 'the closed Key Detail leaves no fake secret on screen'
+}
+
+function Test-CancelledOutcome {
+  Click-Control 'Settings'
+  Select-Filter 'Project' 'demo'
+  Select-Filter 'Environment' 'prod'
+  Click-Control ('Save .env' + [char]0x2026)
+  $mainRoot = $script:root
+  $script:root = Wait-SaveDialog
+  Click-NativeDialog '2' 'Cancel'
+  $script:root = $mainRoot
+  Assert-OutcomeRegion 'File export was cancelled\. No file was saved by this request\.'
+  Click-Control 'Dismiss operation outcomes'
+}
+
+function Assert-NoOutcomeResurrection {
+  $dismissed = 'Import completed\.|Import is awaiting an outcome|File export completed\.|File export is awaiting an outcome|File export was cancelled|File export reported an error'
+  Assert-Proof (!(Wait-Text $dismissed 3500)) 'every dismissed outcome (success, cancellation, error, pending) stays absent through later status and warning polls'
+  $region = $null
+  try { $region = Find-Control 'Operation outcomes' $null 500 } catch { }
+  Assert-Proof ($null -eq $region) 'no application outcome region remains after dismissal'
+}
+
 function Test-OutcomeHandoff {
+  Test-KeyDetailExpiry
   Click-Control 'Settings'
   Click-Control ('Import .env' + [char]0x2026)
   Set-Field 'Paste the .env contents' 'HANDOFF_TOKEN=fake-outcome-import-value'
@@ -430,16 +473,7 @@ function Test-OutcomeHandoff {
   Assert-Proof (!(Wait-Text ('Saved plaintext secrets to ' + [regex]::Escape($exportPath)) 300)) 'the export destination is not replayed outside its originating Settings view'
   Click-Control 'Dismiss operation outcomes'
 
-  Click-Control 'Settings'
-  Select-Filter 'Project' 'demo'
-  Select-Filter 'Environment' 'prod'
-  Click-Control ('Save .env' + [char]0x2026)
-  $mainRoot = $script:root
-  $script:root = Wait-SaveDialog
-  Click-NativeDialog '2' 'Cancel'
-  $script:root = $mainRoot
-  Assert-OutcomeRegion 'File export was cancelled\. No file was saved by this request\.'
-  Click-Control 'Dismiss operation outcomes'
+  Test-CancelledOutcome
 
   # Delay a real pre-disclosure error too; an error outcome must not claim nothing was saved.
   $journal = $vault + '.audit.jsonl'
@@ -463,7 +497,7 @@ function Test-OutcomeHandoff {
     Assert-Proof (!(Test-Path -LiteralPath $refusedPath)) 'the induced request-journal failure did not publish a plaintext file'
   } finally { Remove-Item -LiteralPath $journal; [IO.File]::WriteAllBytes($journal, $journalBefore) }
   Click-Control 'Dismiss operation outcomes'
-  Assert-Proof (!(Wait-Text 'Import completed\.|File export completed\.|File export reported an error' 3500)) 'explicitly acknowledged outcomes stay dismissed through later status and warning polls'
+  Assert-NoOutcomeResurrection
 }
 
 try {
@@ -520,6 +554,16 @@ try {
     catch { Click-Control 'I already have a vault' }
     Unlock-FakeVault
     if ($JournalOnly) {
+      if ($OutcomeRehearsal) {
+        Test-KeyDetailExpiry -Rehearse
+        Test-CancelledOutcome
+        Assert-NoOutcomeResurrection
+        $script:root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
+        Assert-Proof ($process.WaitForExit(10000)) 'the outcome rehearsal exited normally'
+        Write-Output 'REHEARSAL ONLY: no minimize, clipboard or OS signal. This does not pass R4-04.'
+        $success = $true
+        return
+      }
       if ($OutcomeOnly) {
         Test-OutcomeHandoff
         $script:root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
