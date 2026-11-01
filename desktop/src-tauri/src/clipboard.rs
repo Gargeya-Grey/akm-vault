@@ -8,6 +8,21 @@ pub const CLEAR_AFTER: Duration = Duration::from_secs(30);
 pub struct CopyAttempt {
     pub sequence: u32,
     pub failure: Option<CommandError>,
+    /// After a failure: AKM emptied the clipboard in the same open interval.
+    pub rolled_back: bool,
+}
+
+/// Cleanup could not prove whether AKM's copy is still on the clipboard (unit 1a design,
+/// rule 6). `retry` keeps the lease; otherwise no later check can prove ownership.
+pub fn uncertain_cleanup(retry: bool) -> CommandError {
+    CommandError::new(
+        "clipboardUncertain",
+        if retry {
+            "AKM could not confirm that its clipboard copy was cleared. It will try again. Check the clipboard before you paste."
+        } else {
+            "AKM could not confirm that its clipboard copy was cleared. Check the clipboard and clear it yourself."
+        },
+    )
 }
 
 pub struct CleanupFailure {
@@ -37,6 +52,8 @@ pub trait ClipboardBackend: Send {
 struct Lease {
     generation: u64,
     sequence: u32,
+    // A zero sequence with contents possibly left behind: ownership cannot be proved.
+    unverifiable: bool,
     text: Zeroizing<String>,
     expires: Duration,
 }
@@ -84,6 +101,7 @@ impl ClipboardLease {
         self.owned = Some(Lease {
             generation: self.generation,
             sequence: attempt.sequence,
+            unverifiable: attempt.sequence == 0 && !attempt.rolled_back,
             text,
             expires: if attempt.failure.is_some() {
                 now
@@ -105,6 +123,11 @@ impl ClipboardLease {
 
     pub fn clear(&mut self) -> Result<(), CommandError> {
         if let Some(lease) = &self.owned {
+            if lease.unverifiable {
+                // Never clear on a zero sequence: a newer identical user copy is indistinguishable.
+                self.owned = None;
+                return Err(uncertain_cleanup(false));
+            }
             self.backend.clear_matching(lease.sequence, &lease.text)?;
         }
         self.owned = None;
@@ -186,8 +209,16 @@ mod windows {
         fn empty(&mut self) -> Result<(), CommandError>;
         fn set(&mut self, format: u32, memory: &mut Self::Memory) -> Result<(), CommandError>;
         fn sequence(&mut self) -> u32;
-        fn matches_text(&mut self, expected: &str) -> bool;
+        fn read_text(&mut self, expected: &str) -> TextMatch;
         fn matches_zero(&mut self, format: u32) -> bool;
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum TextMatch {
+        Same,
+        Different,
+        // GetClipboardData or GlobalLock failed: no evidence either way.
+        Unreadable,
     }
 
     struct Open<'a, A: ClipboardApi> {
@@ -359,7 +390,7 @@ mod windows {
             }
         }
         // No other writer can publish between our SetClipboardData and this ownership sample.
-        let verified = open.api.matches_text(text);
+        let verified = open.api.read_text(text) == TextMatch::Same;
         let sequence = open.api.sequence();
         if failure.is_none() && (sequence == 0 || !verified) {
             failure = Some(CommandError::new(
@@ -367,11 +398,16 @@ mod windows {
                 "The clipboard changed while copying. Copy again.",
             ));
         }
+        let mut rolled_back = false;
         if failure.is_some() {
             // Retain the captured lease if Windows refuses this rollback and later cleanup is busy.
-            let _ = open.api.empty();
+            rolled_back = open.api.empty().is_ok();
         }
-        Ok(CopyAttempt { sequence, failure })
+        Ok(CopyAttempt {
+            sequence,
+            failure,
+            rolled_back,
+        })
     }
 
     fn clear<A: ClipboardApi>(
@@ -381,11 +417,26 @@ mod windows {
     ) -> Result<bool, CommandError> {
         let open = Open::acquire(api, None)?;
         // The comparison and clear share one OS clipboard lock.
-        if sequence == 0 || open.api.sequence() != sequence || !open.api.matches_text(text) {
+        if sequence == 0 {
+            // Only a rolled-back publication reaches here with zero; the lease rejects the rest.
             return Ok(false);
         }
-        open.api.empty()?;
-        Ok(true)
+        let current = open.api.sequence();
+        if current == 0 {
+            // Zero means no clipboard access, not a newer writer.
+            return Err(uncertain_cleanup(true));
+        }
+        if current != sequence {
+            // Another writer published, possibly the same text: preserve it.
+            return Ok(false);
+        }
+        match open.api.read_text(text) {
+            TextMatch::Same => {
+                open.api.empty()?;
+                Ok(true)
+            }
+            TextMatch::Different | TextMatch::Unreadable => Err(uncertain_cleanup(true)),
+        }
     }
 
     struct Win32;
@@ -537,17 +588,17 @@ mod windows {
             unsafe { GetClipboardSequenceNumber() }
         }
 
-        fn matches_text(&mut self, expected: &str) -> bool {
+        fn read_text(&mut self, expected: &str) -> TextMatch {
             // No pointer outlives the exclusive Windows clipboard-open interval.
             unsafe {
                 let handle = GetClipboardData(UNICODE_TEXT);
                 if handle.is_null() {
-                    return false;
+                    return TextMatch::Unreadable;
                 }
                 let count = GlobalSize(handle) / 2;
                 let ptr = GlobalLock(handle).cast::<u16>();
                 if ptr.is_null() {
-                    return false;
+                    return TextMatch::Unreadable;
                 }
                 let units = std::slice::from_raw_parts(ptr, count);
                 let matches = units
@@ -555,7 +606,11 @@ mod windows {
                     .position(|unit| *unit == 0)
                     .is_some_and(|end| units[..end].iter().copied().eq(expected.encode_utf16()));
                 GlobalUnlock(handle);
-                matches
+                if matches {
+                    TextMatch::Same
+                } else {
+                    TextMatch::Different
+                }
             }
         }
 
@@ -604,7 +659,7 @@ mod windows {
                 seq,
                 "the captured sequence must survive owner destruction"
             );
-            assert!(open.api.matches_text(FAKE_VALUE));
+            assert_eq!(open.api.read_text(FAKE_VALUE), TextMatch::Same);
             assert_eq!(unsafe { CountClipboardFormats() }, 7);
             for format in [ANSI_TEXT, OEM_TEXT, TEXT_LOCALE] {
                 unsafe {
@@ -963,13 +1018,17 @@ mod windows {
                 state.sequence
             }
 
-            fn matches_text(&mut self, expected: &str) -> bool {
+            fn read_text(&mut self, expected: &str) -> TextMatch {
                 let mut state = self.0.lock().unwrap();
                 assert!(state.open);
-                if state.fail(Fault::TextRead) {
-                    return false;
+                if state.fail(Fault::TextRead) || !state.formats.contains_key(&UNICODE_TEXT) {
+                    return TextMatch::Unreadable;
                 }
-                state.formats.contains_key(&UNICODE_TEXT) && state.text() == expected
+                if state.text() == expected {
+                    TextMatch::Same
+                } else {
+                    TextMatch::Different
+                }
             }
 
             fn matches_zero(&mut self, format: u32) -> bool {
@@ -1252,9 +1311,15 @@ mod windows {
                 );
                 assert!(!state.owner_alive);
             }
-            assert!(!backend
-                .clear_matching(attempt.sequence, "different fake text")
-                .unwrap());
+            // An unchanged sequence with other text is no proof of a newer owner (1A-R5-02).
+            assert_eq!(
+                backend
+                    .clear_matching(attempt.sequence, "different fake text")
+                    .unwrap_err()
+                    .kind,
+                "clipboardUncertain"
+            );
+            assert_eq!(state.lock().unwrap().text(), "\u{03bb}\u{1f512}");
             assert!(backend
                 .clear_matching(attempt.sequence, "\u{03bb}\u{1f512}")
                 .unwrap());
@@ -1393,6 +1458,123 @@ mod windows {
             }
         }
 
+        // 1A-R5-02: an unreadable or zero-sequence cleanup is uncertain, never a newer owner.
+        #[test]
+        fn unreadable_or_zero_sequence_cleanup_keeps_the_lease_and_reports_uncertainty() {
+            for fault in [Fault::TextRead, Fault::Sequence] {
+                let state = Arc::new(Mutex::new(FakeState::default()));
+                let mut lease =
+                    ClipboardLease::new(Box::new(TransactionBackend(FakeApi(state.clone()))));
+                let owned = lease
+                    .copy(Zeroizing::new(FAKE_TEXT.into()), Duration::ZERO)
+                    .unwrap();
+                state.lock().unwrap().faults.push(fault);
+                let error = lease.tick(CLEAR_AFTER).unwrap_err();
+                assert_eq!(error.kind, "clipboardUncertain");
+                assert!(!error.message.contains(FAKE_TEXT));
+                assert_eq!(lease.owned_generation(), Some(owned));
+                {
+                    let state = state.lock().unwrap();
+                    assert_eq!(state.text(), FAKE_TEXT);
+                    assert_eq!(state.clears, 0);
+                }
+                lease.tick(CLEAR_AFTER).unwrap();
+                assert_eq!(lease.owned_generation(), None);
+                assert_eq!(state.lock().unwrap().text(), "");
+            }
+        }
+
+        #[test]
+        fn same_sequence_with_different_text_is_uncertain_until_a_real_change() {
+            let state = Arc::new(Mutex::new(FakeState::default()));
+            let mut lease =
+                ClipboardLease::new(Box::new(TransactionBackend(FakeApi(state.clone()))));
+            let owned = lease
+                .copy(Zeroizing::new(FAKE_TEXT.into()), Duration::ZERO)
+                .unwrap();
+            let other = vec![b'o', 0, b't', 0, b'h', 0, b'e', 0, b'r', 0, 0, 0];
+            state
+                .lock()
+                .unwrap()
+                .formats
+                .insert(UNICODE_TEXT, other.clone());
+            assert_eq!(
+                lease.tick(CLEAR_AFTER).unwrap_err().kind,
+                "clipboardUncertain"
+            );
+            assert_eq!(lease.owned_generation(), Some(owned));
+            state.lock().unwrap().user_copy(other);
+            lease.tick(CLEAR_AFTER).unwrap();
+            assert_eq!(lease.owned_generation(), None);
+            let state = state.lock().unwrap();
+            assert_eq!(state.text(), "other");
+            assert_eq!(state.clears, 0);
+        }
+
+        #[test]
+        fn a_zero_sequence_publication_that_could_not_roll_back_reports_final_uncertainty() {
+            for rollback_fails in [true, false] {
+                let mut faults = vec![Fault::Sequence];
+                if rollback_fails {
+                    faults.push(Fault::Empty(2));
+                }
+                let state = Arc::new(Mutex::new(FakeState {
+                    faults,
+                    ..FakeState::default()
+                }));
+                let mut lease =
+                    ClipboardLease::new(Box::new(TransactionBackend(FakeApi(state.clone()))));
+                let failure = lease
+                    .copy_reported(Zeroizing::new(FAKE_TEXT.into()), Duration::ZERO)
+                    .err()
+                    .unwrap();
+                assert_eq!(failure.error.kind, "clipboard");
+                assert_eq!(lease.owned_generation(), None);
+                let state = state.lock().unwrap();
+                if rollback_fails {
+                    let cleanup = failure.cleanup.expect("an unverifiable copy is reported");
+                    assert_eq!(cleanup.error.kind, "clipboardUncertain");
+                    assert!(!cleanup.error.message.contains(FAKE_TEXT));
+                    assert_eq!(
+                        state.text(),
+                        FAKE_TEXT,
+                        "a zero sequence never authorizes a clear"
+                    );
+                    assert_eq!(state.clears, 0);
+                } else {
+                    assert!(failure.cleanup.is_none());
+                    assert_eq!(state.text(), "");
+                }
+            }
+        }
+
+        #[test]
+        fn partial_publication_with_an_unreadable_cleanup_keeps_its_lease_and_reports_it() {
+            let state = Arc::new(Mutex::new(FakeState {
+                // Publication verification reads once, then the immediate cleanup reads.
+                faults: vec![
+                    Fault::Set(10),
+                    Fault::Empty(2),
+                    Fault::TextRead,
+                    Fault::TextRead,
+                ],
+                ..FakeState::default()
+            }));
+            let mut lease =
+                ClipboardLease::new(Box::new(TransactionBackend(FakeApi(state.clone()))));
+            let failure = lease
+                .copy_reported(Zeroizing::new(FAKE_TEXT.into()), Duration::ZERO)
+                .err()
+                .unwrap();
+            let cleanup = failure.cleanup.expect("the uncertain cleanup is reported");
+            assert_eq!(cleanup.error.kind, "clipboardUncertain");
+            assert_eq!(lease.owned_generation(), Some(cleanup.lease_generation));
+            assert_eq!(state.lock().unwrap().text(), FAKE_TEXT);
+            lease.tick(Duration::ZERO).unwrap();
+            assert_eq!(lease.owned_generation(), None);
+            assert_eq!(state.lock().unwrap().text(), "");
+        }
+
         #[test]
         fn native_transaction_lease_expires_without_freeing_windows_owned_memory_twice() {
             let state = Arc::new(Mutex::new(FakeState::default()));
@@ -1455,6 +1637,7 @@ pub(crate) mod tests {
             Ok(CopyAttempt {
                 sequence: data.sequence,
                 failure: None,
+                rolled_back: false,
             })
         }
         fn clear_matching(&mut self, seq: u32, text: &str) -> Result<bool, CommandError> {

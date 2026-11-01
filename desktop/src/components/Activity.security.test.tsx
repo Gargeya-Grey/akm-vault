@@ -57,7 +57,7 @@ for (const brokenAt of ["7", null]) {
     const notice = await screen.findByRole("alert");
     expect(notice.textContent).toContain("physical line 3");
     if (brokenAt === null) expect(notice.textContent).not.toContain("sequence");
-    else expect(notice.textContent).toContain("sequence 7");
+    else expect(notice.textContent).toContain("declared sequence 7 (not verified)");
   });
 }
 

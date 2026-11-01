@@ -551,7 +551,11 @@ fn new_exports_emit_requested_events_and_corrupt_audit_displays_known_sequence()
     let fixture = Fixture::new();
     let log = AuditLog::for_vault(&fixture.vault);
     assert_success(&fixture.cli().args(["export", "--all"]).output().unwrap());
-    assert_eq!(log.read(1).unwrap()[0].action, "export-requested");
+    assert!(log
+        .read(2)
+        .unwrap()
+        .iter()
+        .any(|entry| entry.seq == 1 && entry.action == "export-requested"));
     let bytes =
         fs::read_to_string(log.path())
             .unwrap()
@@ -565,6 +569,107 @@ fn new_exports_emit_requested_events_and_corrupt_audit_displays_known_sequence()
         "{text}"
     );
     assert_eq!(fs::read_to_string(log.path()).unwrap(), bytes);
+}
+
+// 1A-R5-06: the release CLI shows a damaged record's declared sequence as unverified.
+#[test]
+fn audit_shows_a_damaged_records_declared_sequence_without_its_contents() {
+    let fixture = Fixture::new();
+    let log = AuditLog::for_vault(&fixture.vault);
+    let bytes = b"{\"seq\":7,\"ts\":\"bad\",\"detail\":\"fake-hidden-detail\"}
+";
+    fs::write(log.path(), bytes).unwrap();
+    let output = fixture.cli().args(["audit", "--verify"]).output().unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        text.contains("physical line 1, declared sequence 7 (not verified)"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("fake-hidden-detail") && !stderr(&output).contains("fake-hidden-detail")
+    );
+    assert_eq!(fs::read(log.path()).unwrap(), bytes);
+}
+
+// 1A-R5-04: a known export outcome is recorded and paired with its request.
+#[test]
+fn exports_pair_requested_and_completed_records_by_operation_without_the_destination() {
+    let fixture = Fixture::new();
+    let log = AuditLog::for_vault(&fixture.vault);
+    let target = fixture.directory.path().join("paired-export.env");
+    assert_success(&fixture.cli().args(["export", "--all"]).output().unwrap());
+    assert_success(
+        &fixture
+            .cli()
+            .args(["export", "--all", "--output"])
+            .arg(&target)
+            .output()
+            .unwrap(),
+    );
+    assert!(target.exists());
+    let mut entries = log.read(10).unwrap();
+    entries.sort_by_key(|entry| entry.seq);
+    let actions: Vec<&str> = entries.iter().map(|entry| entry.action.as_str()).collect();
+    assert_eq!(
+        actions,
+        [
+            "export-requested",
+            "export-completed",
+            "export-requested",
+            "export-completed"
+        ]
+    );
+    let operation = |detail: &Option<String>| {
+        let detail = detail.as_deref().unwrap();
+        let id = detail
+            .strip_prefix("operation ")
+            .and_then(|rest| rest.split(';').next())
+            .unwrap_or_else(|| panic!("no operation ID in {detail:?}"));
+        assert_eq!(id.len(), 36, "{detail:?}");
+        id.to_string()
+    };
+    for pair in entries.chunks(2) {
+        assert_eq!(operation(&pair[0].detail), operation(&pair[1].detail));
+        assert!(pair[1]
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("export completed; 1 keys"));
+    }
+    assert_ne!(operation(&entries[0].detail), operation(&entries[2].detail));
+    let journal = fs::read_to_string(log.path()).unwrap();
+    assert!(
+        !journal.contains("paired-export"),
+        "the destination must not be journaled"
+    );
+    assert!(!journal.contains("fake-intended-secret"));
+}
+
+#[test]
+fn a_failed_file_export_records_only_its_request() {
+    let fixture = Fixture::new();
+    let log = AuditLog::for_vault(&fixture.vault);
+    let target = fixture.directory.path().join("existing.env");
+    fs::write(&target, b"fake-existing-bytes").unwrap();
+    let output = fixture
+        .cli()
+        .args(["export", "--all", "--output"])
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&target).unwrap(), b"fake-existing-bytes");
+    let actions: Vec<String> = log
+        .read(10)
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.action)
+        .collect();
+    assert!(
+        !actions.iter().any(|action| action == "export-completed"),
+        "{actions:?}"
+    );
 }
 
 #[test]

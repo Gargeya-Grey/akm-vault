@@ -373,12 +373,14 @@ fn run() -> Result<i32> {
             let vault = Vault::open(&path, &password)?;
             drop(password);
             let envs = selected_envs(&vault, &selection)?;
+            // Pairs the two records; the destination stays out of the plaintext journal.
+            let operation = uuid::Uuid::new_v4();
 
             vault.log(
                 "export-requested",
                 None,
                 Some(&format!(
-                    "disclosure requested; {} keys selected",
+                    "operation {operation}; disclosure requested; {} keys selected",
                     envs.len()
                 )),
             )?;
@@ -386,7 +388,12 @@ fn run() -> Result<i32> {
 
             match output {
                 Some(path) => export::write_new(&path, &envs)?,
-                None => export::write(&mut std::io::stdout().lock(), &envs)?,
+                None => write_stdout_export(&mut std::io::stdout().lock(), &envs)?,
+            }
+            if let Some(warning) =
+                record_export_completed(&AuditLog::for_vault(&path), &operation, envs.len())
+            {
+                eprintln!("warning: {warning}");
             }
         }
 
@@ -434,7 +441,7 @@ fn run() -> Result<i32> {
                 AuditState::Corrupt => {
                     let sequence = snapshot
                         .broken_at
-                        .map(|seq| format!(", sequence {seq}"))
+                        .map(|seq| format!(", declared sequence {seq} (not verified)"))
                         .unwrap_or_default();
                     println!("Journal data is damaged at physical line {}{sequence}. Original bytes were preserved.", snapshot.problem_line.unwrap_or(0));
                 }
@@ -706,9 +713,104 @@ fn mask(secret: &str) -> String {
     format!("{head}...{tail}")
 }
 
+/// A stdout write can deliver bytes before a later write or flush fails.
+fn write_stdout_export(output: &mut impl Write, envs: &[(String, String)]) -> Result<()> {
+    export::write(output, envs).map_err(|error| {
+        Error::Invalid(format!(
+            "{error}. Some output may already have been written. Check it before you export again."
+        ))
+    })
+}
+
+/// Runs only after the export is known to be written. A failure is a warning, never a
+/// retryable error: the disclosure happened. The record may exist if only its sync failed.
+fn record_export_completed(log: &AuditLog, operation: &uuid::Uuid, keys: usize) -> Option<String> {
+    log.append(
+        "export-completed",
+        None,
+        None,
+        None,
+        None,
+        Some(&format!("operation {operation}; export completed; {keys} keys")),
+    )
+    .err()
+    .map(|error| {
+        format!(
+            "The export was written, but its completion record could not be confirmed in the activity log ({error}). Do not repeat the export."
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FailingWriter {
+        accept: usize,
+        fail_flush: bool,
+        written: Vec<u8>,
+    }
+    impl Write for FailingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.written.len() >= self.accept {
+                return Err(std::io::Error::other("injected pipe failure"));
+            }
+            let count = buf.len().min(self.accept - self.written.len());
+            self.written.extend_from_slice(&buf[..count]);
+            Ok(count)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.fail_flush {
+                return Err(std::io::Error::other("injected flush failure"));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_failed_stdout_export_warns_that_output_may_be_partial() {
+        let envs = vec![("FAKE_NAME".to_string(), "fake-partial-secret".to_string())];
+        for (accept, fail_flush) in [(4, false), (usize::MAX, true)] {
+            let mut writer = FailingWriter {
+                accept,
+                fail_flush,
+                written: Vec::new(),
+            };
+            let error = write_stdout_export(&mut writer, &envs)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                !writer.written.is_empty(),
+                "the writer accepted bytes first"
+            );
+            assert!(
+                error.contains("Some output may already have been written"),
+                "{error}"
+            );
+            assert!(!error.contains("fake-partial-secret"));
+        }
+    }
+
+    #[test]
+    fn an_unconfirmed_completion_record_is_a_non_retryable_warning() {
+        let directory = tempfile::tempdir().unwrap();
+        let blocker = directory.path().join("not-a-directory");
+        std::fs::write(&blocker, b"fake").unwrap();
+        let log = AuditLog::for_vault(&blocker.join("vault.kdbx"));
+        let operation = uuid::Uuid::new_v4();
+        let warning = record_export_completed(&log, &operation, 2).unwrap();
+        assert!(warning.contains("could not be confirmed"), "{warning}");
+        assert!(warning.contains("Do not repeat the export"), "{warning}");
+
+        let log = AuditLog::for_vault(&directory.path().join("vault.kdbx"));
+        assert!(record_export_completed(&log, &operation, 2).is_none());
+        let entry = &log.read(1).unwrap()[0];
+        assert_eq!(entry.action, "export-completed");
+        assert_eq!(
+            entry.detail.as_deref(),
+            Some(format!("operation {operation}; export completed; 2 keys").as_str())
+        );
+    }
 
     #[test]
     fn masks_short_and_long_secrets() {

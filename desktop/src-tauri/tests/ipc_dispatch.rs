@@ -44,6 +44,7 @@ impl clipboard::ClipboardBackend for FakeClipboard {
         Ok(clipboard::CopyAttempt {
             sequence: 1,
             failure: None,
+            rolled_back: false,
         })
     }
     fn clear_matching(&mut self, _: u32, _: &str) -> Result<bool, error::CommandError> {
