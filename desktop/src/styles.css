@@ -432,8 +432,9 @@ time {
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-/* Owner decision, 1 Nov 2026: colour changes are instant, so no in-between colour
-   leaves the token palette. Only transform animates. */
+/* Owner decisions, 1 Nov 2026: colour changes are instant, so no in-between colour
+   leaves the token palette. Only transform animates. Press and hover feedback
+   (button shrink, row-arrow nudge) may ease back on release or when the pointer leaves. */
 .btn,
 .btn-secondary,
 .btn-danger,
@@ -1644,8 +1645,10 @@ textarea:disabled {
   }
 }
 
-/* Motion: entry only, transform only. No exit animation. Dialogs and their
-   notices stay fully opaque from the first frame, so no notice is ever hidden. */
+/* Motion: transform only. Views and dialogs animate on entry and have no exit
+   animation; press and hover feedback may ease back (see the note on transitions).
+   Dialogs and their notices stay fully opaque from the first frame, so no notice is
+   ever hidden. */
 @keyframes akm-rise {
   from { transform: translateY(8px); }
 }
