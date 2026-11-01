@@ -1,0 +1,240 @@
+import { useEffect, useRef, useState } from "react";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { api, errorText } from "../api";
+import type { Status } from "../types";
+import { Notice } from "./Notice";
+
+interface Props {
+  status: Status;
+  onUnlocked: (status: Status) => void;
+}
+
+type Mode = "unlock" | "create";
+
+export function Unlock({ status, onUnlocked }: Props) {
+  const [mode, setMode] = useState<Mode>(status.exists ? "unlock" : "create");
+  const [path, setPath] = useState(status.path);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const request = useRef(0);
+
+  useEffect(() => () => { request.current += 1; }, []);
+
+  useEffect(() => {
+    setPath(status.path);
+    setMode(status.exists ? "unlock" : "create");
+  }, [status.path, status.exists]);
+
+  async function browse() {
+    const currentRequest = ++request.current;
+    try {
+      const chosen =
+        mode === "unlock"
+          ? await openDialog({
+              multiple: false,
+              directory: false,
+              title: "Choose a KDBX vault",
+              filters: [{ name: "KeePass vault", extensions: ["kdbx"] }],
+            })
+          : await saveDialog({
+              title: "Create a KDBX vault",
+              defaultPath: path,
+              filters: [{ name: "KeePass vault", extensions: ["kdbx"] }],
+            });
+
+      if (currentRequest === request.current && typeof chosen === "string") setPath(chosen);
+    } catch (cause) {
+      if (currentRequest === request.current) setError(errorText(cause));
+    }
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setError(null);
+
+    const target = path.trim();
+    if (!target) {
+      setError("Choose where the vault file should live.");
+      return;
+    }
+
+    if (mode === "create") {
+      if (password.length < 12) {
+        setError("Use at least 12 characters for the master password.");
+        return;
+      }
+      if (password !== confirm) {
+        setError("The two passwords do not match.");
+        return;
+      }
+    } else if (!password) {
+      setError("Enter the master password.");
+      return;
+    }
+
+    setBusy(true);
+    const currentRequest = ++request.current;
+    try {
+      const next =
+        mode === "create"
+          ? await api.create(target, password, name.trim() || null)
+           : await api.unlock(target, password);
+      if (currentRequest !== request.current) return;
+      setPassword("");
+      setConfirm("");
+      onUnlocked(next);
+    } catch (cause) {
+      if (currentRequest === request.current) setError(errorText(cause));
+    } finally {
+      if (currentRequest === request.current) setBusy(false);
+    }
+  }
+
+  function switchMode(next: Mode) {
+    request.current += 1;
+    setMode(next);
+    setError(null);
+    setPassword("");
+    setConfirm("");
+  }
+
+  return (
+    <main className="wrap unlock">
+      <div className="unlock-copy">
+        {mode === "unlock" ? (
+          <h1>
+            Your keys, <em>one safe place.</em>
+          </h1>
+        ) : (
+          <h1>
+            Start a vault. <em>Keep the only key.</em>
+          </h1>
+        )}
+        <p className="lead">
+          {mode === "unlock"
+            ? "Unlock a vault on this machine or in your cloud folder. AKM also writes encrypted backups and a separate activity journal."
+            : "Choose where the KDBX file lives. Your master password is not saved in settings and cannot be recovered."}
+        </p>
+
+        <form className="unlock-form raised" onSubmit={submit}>
+          <div className="field">
+            <label htmlFor="vault-path">Vault file</label>
+            <div className="path-row">
+              <input
+                id="vault-path"
+                className="mono"
+                value={path}
+                disabled={busy}
+                onChange={(event) => setPath(event.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+              />
+              <button type="button" className="btn-secondary" onClick={browse} disabled={busy}>
+                Browse…
+              </button>
+            </div>
+          </div>
+
+          {mode === "create" && (
+            <div className="field">
+              <label htmlFor="vault-name">Vault name</label>
+              <input
+                id="vault-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="API Keys"
+                autoComplete="off"
+              />
+              <p className="field-note">
+                Written into the file’s metadata. Optional.
+              </p>
+            </div>
+          )}
+
+          <div className="field">
+            <label htmlFor="master-password">Master password</label>
+            <input
+              id="master-password"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete={
+                mode === "create" ? "new-password" : "current-password"
+              }
+              autoFocus
+            />
+            {mode === "create" && (
+              <p className="field-note">
+                At least 12 characters. There is no reset and no recovery.
+              </p>
+            )}
+          </div>
+
+          {mode === "create" && (
+            <div className="field">
+              <label htmlFor="master-confirm">Confirm password</label>
+              <input
+                id="master-confirm"
+                type="password"
+                value={confirm}
+                onChange={(event) => setConfirm(event.target.value)}
+                autoComplete="new-password"
+              />
+            </div>
+          )}
+
+          {error && <Notice tone="error">{error}</Notice>}
+
+          <div className="form-actions">
+            <button type="submit" className="btn" disabled={busy}>
+              {busy
+                ? "Working…"
+                : mode === "create"
+                  ? "Create vault"
+                  : "Unlock vault"}
+            </button>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() =>
+                switchMode(mode === "unlock" ? "create" : "unlock")
+              }
+              disabled={busy}
+            >
+              {mode === "unlock"
+                ? "Create a new vault instead"
+                : "I already have a vault"}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <aside className="unlock-facts" aria-label="About the vault">
+        <div className="fact">
+          <h2>A real KeePass file</h2>
+          <p>
+            KDBX 4.1 with AES-256 and Argon2id. Open it in KeePassXC at any
+            time, with no dependency on this app.
+          </p>
+        </div>
+        <div className="fact">
+          <h2>No recovery path</h2>
+          <p>
+            There is no password reset. Back up the file and
+            keep the password somewhere you trust.
+          </p>
+        </div>
+        <div className="fact">
+          <h2>Your folder, your sync</h2>
+          <p>
+            OneDrive, Dropbox or Syncthing. Keep the file downloaded locally.
+            Detected changes block saving; this is not a distributed lock or an automatic merge.
+          </p>
+        </div>
+      </aside>
+    </main>
+  );
+}

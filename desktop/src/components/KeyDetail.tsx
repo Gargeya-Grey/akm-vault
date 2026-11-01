@@ -1,0 +1,259 @@
+import { useEffect, useRef, useState } from "react";
+import { api, errorText } from "../api";
+import { formatDate, formatDateTime, keyState, rotationLabel } from "../format";
+import type { KeyView } from "../types";
+import { Notice } from "./Notice";
+import { useDialogFocus } from "./useDialogFocus";
+
+interface Props {
+  item: KeyView;
+  onClose: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  readOnly?: boolean;
+}
+
+const HIDE_SECONDS = 30;
+
+export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }: Props) {
+  const dialogRef = useDialogFocus<HTMLDivElement>();
+  const [secret, setSecret] = useState<string | null>(null);
+  const [seconds, setSeconds] = useState(HIDE_SECONDS);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const timer = useRef<number | null>(null);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!secret) return;
+    setSeconds(HIDE_SECONDS);
+    const started = Date.now();
+    timer.current = window.setInterval(() => {
+      const left = HIDE_SECONDS - Math.floor((Date.now() - started) / 1000);
+      if (left <= 0) {
+        setSecret(null);
+        if (timer.current !== null) window.clearInterval(timer.current);
+        timer.current = null;
+      } else {
+        setSeconds(left);
+      }
+    }, 1000);
+    return () => {
+      if (timer.current !== null) window.clearInterval(timer.current);
+      timer.current = null;
+    };
+  }, [secret]);
+
+  useEffect(() => {
+    if (!copied) return;
+    const id = window.setTimeout(() => setCopied(null), 6000);
+    return () => window.clearTimeout(id);
+  }, [copied]);
+
+  async function reveal() {
+    setBusy(true);
+    setError(null);
+    try {
+      setSecret(await api.reveal(item.id));
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function hide() {
+    setSecret(null);
+  }
+
+  async function copy() {
+    setError(null);
+    try {
+      const clear = await api.copy(item.id);
+      setCopied(`Copied. AKM clears this copy after ${clear} seconds, on lock, or on normal exit. A crash can prevent cleanup.`);
+    } catch (cause) {
+      setError(errorText(cause));
+    }
+  }
+
+  const state = keyState(item);
+  const facts: { key: string; value: React.ReactNode }[] = [];
+
+  if (item.issuer) facts.push({ key: "Issuer", value: item.issuer });
+  if (item.project) facts.push({ key: "Project", value: item.project });
+  if (item.environment)
+    facts.push({ key: "Environment", value: item.environment });
+  facts.push({
+    key: "Environment variable",
+    value: <span className="mono">{item.resolvedEnvVar}</span>,
+  });
+  if (item.scopes.length > 0) {
+    facts.push({
+      key: "Scopes",
+      value: (
+        <span className="chips">
+          {item.scopes.map((scope) => (
+            <span className="chip mono" key={scope}>
+              {scope}
+            </span>
+          ))}
+        </span>
+      ),
+    });
+  }
+  if (item.tags.length > 0) {
+    facts.push({
+      key: "Tags",
+      value: (
+        <span className="chips">
+          {item.tags.map((tag) => (
+            <span className="chip" key={tag}>
+              {tag}
+            </span>
+          ))}
+        </span>
+      ),
+    });
+  }
+  if (item.url) facts.push({ key: "URL", value: item.url });
+  facts.push({
+    key: "Expires",
+    value: item.expiresAt ? (
+      <span>
+        <span className="mono">{formatDate(item.expiresAt)}</span>
+        {item.expired && <span className="danger-text"> · expired</span>}
+      </span>
+    ) : (
+      "Not set"
+    ),
+  });
+  facts.push({
+    key: "Rotation",
+    value:
+      item.rotationDays === null
+        ? "Not set"
+        : `every ${item.rotationDays} days · ${rotationLabel(item)}`,
+  });
+  if (item.createdAt)
+    facts.push({
+      key: "Added",
+      value: <span className="mono">{formatDateTime(item.createdAt)}</span>,
+    });
+  if (item.updatedAt)
+    facts.push({
+      key: "Updated",
+      value: <span className="mono">{formatDateTime(item.updatedAt)}</span>,
+    });
+
+  return (
+    <div
+      className="overlay"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="modal detail-modal raised"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="detail-title"
+      >
+        <header className="modal-head">
+          <div>
+            <p className="label">{item.issuer ?? "API key"}</p>
+            <h2 id="detail-title">{item.title}</h2>
+            <p className={`state state-${state.tone}`}>
+              <span className="state-dot" aria-hidden="true" />
+              {state.label}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Close"
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </header>
+
+        <section className="secret-box" aria-label="Secret value">
+          <div className="secret-copy">
+            <span className="label">Secret</span>
+            <code className={`mono secret-value${secret ? "" : " masked"}`}>
+              {secret ?? "••••••••••••••••••••••••"}
+            </code>
+          </div>
+          <div className="secret-actions">
+            {secret ? (
+              <button type="button" className="text-button" onClick={hide}>
+                Hide
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="text-button"
+                onClick={reveal}
+                disabled={busy}
+              >
+                {busy ? "Revealing…" : "Reveal"}
+              </button>
+            )}
+            <button type="button" className="btn-secondary" onClick={copy}>
+              Copy
+            </button>
+          </div>
+        </section>
+        {secret && (
+          <p className="field-note">
+            Hides in <span className="mono">{seconds}</span> seconds. Revealing
+            is written to the activity log.
+          </p>
+        )}
+        {copied && <Notice tone="ok">{copied}</Notice>}
+        {error && <Notice tone="error">{error}</Notice>}
+
+        <div className="fact-list">
+          {facts.map((fact) => (
+            <div className="fact-row" key={fact.key}>
+              <span className="fact-key">{fact.key}</span>
+              <span className="fact-value">{fact.value}</span>
+            </div>
+          ))}
+        </div>
+
+        {item.notes && (
+          <section className="detail-notes">
+            <h3>Notes</h3>
+            <p className="reading">{item.notes}</p>
+          </section>
+        )}
+
+        <div className="dialog-actions spread">
+          <button type="button" className="text-button danger-text" onClick={onDelete} disabled={readOnly}>
+            Delete key
+          </button>
+          <div className="action-cluster">
+            <button type="button" className="text-button" onClick={onClose}>
+              Close
+            </button>
+            <button type="button" className="btn-secondary" onClick={onEdit} disabled={readOnly}>
+              Edit
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

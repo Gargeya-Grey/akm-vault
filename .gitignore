@@ -1,0 +1,24 @@
+/target
+**/target
+node_modules
+dist
+playwright-report
+test-results
+__pycache__
+
+# Tauri regenerates these on every build
+desktop/src-tauri/gen/schemas
+
+# Vaults, backups, locks and audit logs never belong in a repo.
+# (Vault locks are <vault>.kdbx.lock; Cargo.lock must stay committed.)
+*.kdbx
+*.kdbx.*
+*.audit.jsonl
+*.audit.jsonl.lock
+
+# Synthetic interoperability fixtures only; never add a real vault here.
+!crates/akm-core/tests/fixtures/kdbx3.kdbx
+!crates/akm-core/tests/fixtures/kdbx40.kdbx
+
+.DS_Store
+Thumbs.db
