@@ -1792,3 +1792,157 @@ fn child_probe() {
         .unwrap_or(0);
     std::process::exit(code);
 }
+
+/// Unit 1a, 1A-R8-01: the default view shows a fixed mask, the same for every secret.
+#[test]
+fn the_default_view_and_metadata_fields_print_nothing_derived_from_the_secret() {
+    let secrets = [
+        "*",
+        "fake8chr",
+        "fake9char",
+        "fake-forty-character-secret-value-000000",
+        "fake-ünïcødé-secret-☃",
+    ];
+    let mut fields: Vec<String> = Vec::new();
+    for name in [
+        "id",
+        "title",
+        "project",
+        "env",
+        "environment",
+        "issuer",
+        "url",
+        "notes",
+        "scopes",
+        "env_var",
+        "env-var",
+        "expires",
+    ] {
+        fields.push(name.into());
+        fields.push(name.to_uppercase());
+        fields.push(format!("  {name} "));
+    }
+    let mut views: Vec<Vec<String>> = Vec::new();
+    for secret in secrets {
+        let fixture = Fixture::with_keys(&[("Demo", "DEMO_SECRET", secret, "demo", "dev")]);
+        let id_output = fixture
+            .cli()
+            .args(["get", "Demo", "--field", "id"])
+            .output()
+            .unwrap();
+        assert_success(&id_output);
+        let id = String::from_utf8(id_output.stdout)
+            .unwrap()
+            .trim()
+            .to_owned();
+        let mut view = Vec::new();
+        let default = fixture.cli().args(["get", "Demo"]).output().unwrap();
+        assert_success(&default);
+        let text = String::from_utf8(default.stdout)
+            .unwrap()
+            .replace(&id, "<id>");
+        assert!(
+            text.lines().any(|line| line == "Secret:      ********"),
+            "the mask line for a secret of {} characters:\n{text}",
+            secret.chars().count()
+        );
+        view.push(text);
+        for field in &fields {
+            let output = fixture
+                .cli()
+                .args(["get", "Demo", "--field", field])
+                .output()
+                .unwrap();
+            assert_success(&output);
+            view.push(
+                String::from_utf8(output.stdout)
+                    .unwrap()
+                    .replace(&id, "<id>"),
+            );
+        }
+        let audit = AuditLog::for_vault(&fixture.vault);
+        assert!(
+            audit
+                .read(100)
+                .unwrap_or_default()
+                .iter()
+                .all(|entry| entry.action != "reveal-requested"),
+            "a metadata view records no disclosure"
+        );
+        views.push(view);
+    }
+    for (index, view) in views.iter().enumerate().skip(1) {
+        assert_eq!(view, &views[0], "the output differs for secret {index}");
+    }
+}
+
+/// Unit 1a, 1A-R8-01: the two disclosures still record first and fail closed.
+#[test]
+fn the_secret_disclosures_still_fail_closed_with_a_damaged_journal() {
+    for args in [
+        vec!["get", "Demo", "--reveal"],
+        vec!["get", "Demo", "--field", "secret"],
+        vec!["get", "Demo", "--field", " SECRET "],
+    ] {
+        let fixture = Fixture::new();
+        fs::create_dir_all(AuditLog::for_vault(&fixture.vault).path()).unwrap();
+        let output = fixture.cli().args(&args).output().unwrap();
+        assert!(!output.status.success(), "{args:?}");
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).contains("fake-intended-secret"),
+            "{args:?}"
+        );
+    }
+}
+
+/// Unit 1a, 1A-R8-05: the README names exactly the actions the CLI records, in their order.
+#[test]
+fn the_readme_names_the_recorded_audit_actions_in_their_order() {
+    let fixture = Fixture::new();
+    let path = fixture.report("names.json");
+    let audit = AuditLog::for_vault(&fixture.vault);
+    let run = fixture.probe_command(&path).output().unwrap();
+    assert_success(&run);
+    assert_success(
+        &fixture
+            .cli()
+            .args(["export", "--project", "demo", "--env", "dev"])
+            .output()
+            .unwrap(),
+    );
+    assert_success(
+        &fixture
+            .cli()
+            .args(["get", "Demo", "--reveal"])
+            .output()
+            .unwrap(),
+    );
+    let mut entries = audit.read(100).unwrap();
+    entries.sort_by_key(|entry| entry.seq);
+    let recorded: Vec<&str> = entries.iter().map(|entry| entry.action.as_str()).collect();
+    assert_eq!(
+        recorded,
+        [
+            "run-requested",
+            "export-requested",
+            "export-completed",
+            "reveal-requested"
+        ],
+        "the recorded actions and their order"
+    );
+    let readme =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md")).unwrap();
+    let named: std::collections::BTreeSet<&str> = readme
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|word| {
+            word.ends_with("-requested") || word.ends_with("-completed") || word.ends_with("-start")
+        })
+        .collect();
+    let expected: std::collections::BTreeSet<&str> = recorded.iter().copied().collect();
+    assert_eq!(
+        named, expected,
+        "the README must name exactly the recorded actions"
+    );
+}

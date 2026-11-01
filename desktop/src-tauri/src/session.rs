@@ -2695,4 +2695,446 @@ mod tests {
         f.session.tick();
         assert_eq!(f.clipboard.lock().unwrap().text, "");
     }
+
+    /// Unit 1a, design revision 3, section 3.1: the real publisher and cleanup over the fake
+    /// Win32 API, through `copy_stamped` (the function both production copy commands call).
+    #[cfg(windows)]
+    mod real_publisher {
+        use super::*;
+        use crate::clipboard::win32_fake::{FakeApi, FakeState, Fault, TransactionBackend};
+
+        const A: &str = "fake-copy-A";
+        const B: &str = "fake-copy-B";
+        const EARLIER_REMAINS: &str =
+            "AKM's earlier copy is still on the clipboard and may remain.";
+        const EMPTIED: &str =
+            "The earlier clipboard content was removed, and the new value was not copied. Copy again.";
+        const RESIDUAL: &str =
+            "AKM could not remove the partial copy. Check the clipboard before you paste.";
+
+        fn install(f: &Fixture) -> Arc<Mutex<FakeState>> {
+            let state = Arc::new(Mutex::new(FakeState::default()));
+            f.session.gate().unwrap().clipboard =
+                ClipboardLease::new(Box::new(TransactionBackend(FakeApi(state.clone()))));
+            state
+        }
+
+        fn copy(f: &Fixture, text: &str) -> Result<(), CommandError> {
+            f.session.copy_stamped(Stamped {
+                snapshot: f.session.snapshot().unwrap(),
+                value: Zeroizing::new(text.into()),
+            })
+        }
+
+        fn generation(f: &Fixture) -> Option<u64> {
+            f.session.gate().unwrap().clipboard.owned_generation()
+        }
+
+        fn uncertain() -> String {
+            crate::clipboard::uncertain_cleanup().message
+        }
+
+        fn application_messages(f: &Fixture) -> Vec<String> {
+            f.session
+                .warnings()
+                .unwrap()
+                .application
+                .into_iter()
+                .map(|n| n.message)
+                .collect()
+        }
+
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        enum Lease {
+            Kept,
+            Gone,
+            New,
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum Said {
+            Untouched,
+            Emptied,
+            Uncertain,
+            Residual,
+            Ok,
+        }
+
+        struct Base {
+            registered: usize,
+            allocations: usize,
+            opens: usize,
+            empties: usize,
+            sets: usize,
+        }
+
+        struct Case {
+            name: &'static str,
+            text: &'static str,
+            faults: fn(&Base) -> Vec<Fault>,
+            lease: Lease,
+            said: Said,
+            remains: &'static str,
+            warns: bool,
+        }
+
+        fn cases() -> Vec<Case> {
+            vec![
+                Case {
+                    name: "NUL in the value",
+                    text: "fake\0copy",
+                    faults: |_| vec![],
+                    lease: Lease::Kept,
+                    said: Said::Untouched,
+                    remains: A,
+                    warns: false,
+                },
+                Case {
+                    name: "register",
+                    text: B,
+                    faults: |b| vec![Fault::Register(b.registered + 1)],
+                    lease: Lease::Kept,
+                    said: Said::Untouched,
+                    remains: A,
+                    warns: false,
+                },
+                Case {
+                    name: "allocate",
+                    text: B,
+                    faults: |b| vec![Fault::Allocate(b.allocations + 1)],
+                    lease: Lease::Kept,
+                    said: Said::Untouched,
+                    remains: A,
+                    warns: false,
+                },
+                Case {
+                    name: "owner",
+                    text: B,
+                    faults: |_| vec![Fault::Owner],
+                    lease: Lease::Kept,
+                    said: Said::Untouched,
+                    remains: A,
+                    warns: false,
+                },
+                Case {
+                    name: "open busy",
+                    text: B,
+                    faults: |b| vec![Fault::Open(b.opens + 1)],
+                    lease: Lease::Kept,
+                    said: Said::Untouched,
+                    remains: A,
+                    warns: false,
+                },
+                Case {
+                    name: "empty fails, sequence unchanged",
+                    text: B,
+                    faults: |b| vec![Fault::Empty(b.empties + 1)],
+                    lease: Lease::Kept,
+                    said: Said::Untouched,
+                    remains: A,
+                    warns: false,
+                },
+                Case {
+                    name: "empty fails, sequence changed",
+                    text: B,
+                    faults: |b| vec![Fault::EmptyChanged(b.empties + 1)],
+                    lease: Lease::Gone,
+                    said: Said::Uncertain,
+                    remains: A,
+                    warns: true,
+                },
+                Case {
+                    name: "exclusion set",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 1)],
+                    lease: Lease::Gone,
+                    said: Said::Emptied,
+                    remains: "",
+                    warns: false,
+                },
+                Case {
+                    name: "exclusion check",
+                    text: B,
+                    faults: |_| vec![Fault::ZeroRead(0xc000)],
+                    lease: Lease::Gone,
+                    said: Said::Emptied,
+                    remains: "",
+                    warns: false,
+                },
+                Case {
+                    name: "empty frame set",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 4)],
+                    lease: Lease::Gone,
+                    said: Said::Emptied,
+                    remains: "",
+                    warns: false,
+                },
+                Case {
+                    name: "first secret set",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 8)],
+                    lease: Lease::Gone,
+                    said: Said::Emptied,
+                    remains: "",
+                    warns: false,
+                },
+                Case {
+                    name: "later secret set",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 9)],
+                    lease: Lease::Gone,
+                    said: Said::Emptied,
+                    remains: "",
+                    warns: false,
+                },
+                Case {
+                    name: "read-back unreadable",
+                    text: B,
+                    faults: |_| vec![Fault::TextRead],
+                    lease: Lease::Gone,
+                    said: Said::Emptied,
+                    remains: "",
+                    warns: false,
+                },
+                Case {
+                    name: "rollback fails, sequence unchanged",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 9), Fault::Empty(b.empties + 2)],
+                    lease: Lease::Gone,
+                    said: Said::Residual,
+                    remains: "",
+                    warns: false,
+                },
+                Case {
+                    name: "rollback fails, sequence changed",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 9), Fault::EmptyChanged(b.empties + 2)],
+                    lease: Lease::Gone,
+                    said: Said::Uncertain,
+                    remains: B,
+                    warns: true,
+                },
+                Case {
+                    name: "success",
+                    text: B,
+                    faults: |_| vec![],
+                    lease: Lease::New,
+                    said: Said::Ok,
+                    remains: B,
+                    warns: false,
+                },
+            ]
+        }
+
+        #[test]
+        fn every_copy_outcome_through_copy_stamped_matches_the_lease_table() {
+            let mut failures = Vec::new();
+            for earlier in [true, false] {
+                for case in cases() {
+                    let name = case.name;
+                    let run = std::panic::AssertUnwindSafe(|| run_case(case, earlier));
+                    if let Err(panic) = std::panic::catch_unwind(run) {
+                        let text = panic
+                            .downcast_ref::<String>()
+                            .cloned()
+                            .or_else(|| panic.downcast_ref::<&str>().map(|t| t.to_string()))
+                            .unwrap_or_default();
+                        failures.push(format!("{}", text.lines().next().unwrap_or(name)));
+                    }
+                }
+            }
+            assert!(
+                failures.is_empty(),
+                "failing cases:
+{}",
+                failures.join(
+                    "
+"
+                )
+            );
+        }
+
+        fn run_case(case: Case, earlier: bool) {
+            let label = format!("{} (earlier lease: {earlier})", case.name);
+            let f = fixture();
+            let state = install(&f);
+            if earlier {
+                copy(&f, A).unwrap();
+            }
+            let before = generation(&f);
+            {
+                let mut s = state.lock().unwrap();
+                let base = Base {
+                    registered: s.registered_names.len(),
+                    allocations: s.allocations,
+                    opens: s.open_calls,
+                    empties: s.empty_calls,
+                    sets: s.set_calls,
+                };
+                s.faults = (case.faults)(&base);
+            }
+            let result = copy(&f, case.text);
+            assert!(
+                state.lock().unwrap().faults.is_empty(),
+                "{label}: the fault was not reached"
+            );
+            let after = generation(&f);
+            let lease = match (before, after) {
+                (_, None) => Lease::Gone,
+                (Some(a), Some(b)) if a == b => Lease::Kept,
+                _ => Lease::New,
+            };
+            let expected = match (case.lease, earlier) {
+                (Lease::Kept, false) => Lease::Gone,
+                (other, _) => other,
+            };
+            assert_eq!(lease, expected, "{label}: lease");
+            let remains = if !earlier && case.remains == A {
+                ""
+            } else {
+                case.remains
+            };
+            assert_eq!(
+                state.lock().unwrap().text(),
+                remains,
+                "{label}: clipboard text"
+            );
+            match (case.said, result) {
+                (Said::Ok, Ok(())) => {}
+                (Said::Untouched, Err(e)) => {
+                    assert_eq!(
+                        e.message.ends_with(EARLIER_REMAINS),
+                        earlier,
+                        "{label}: {}",
+                        e.message
+                    )
+                }
+                (Said::Emptied, Err(e)) => {
+                    assert!(e.message.ends_with(EMPTIED), "{label}: {}", e.message);
+                    if case.name == "read-back unreadable" {
+                        assert!(
+                            e.message.starts_with("Windows did not confirm the copy."),
+                            "{label}: {}",
+                            e.message
+                        );
+                    }
+                }
+                (Said::Residual, Err(e)) => {
+                    assert!(e.message.ends_with(RESIDUAL), "{label}: {}", e.message)
+                }
+                (Said::Uncertain, Err(e)) => {
+                    assert!(e.message.ends_with(&uncertain()), "{label}: {}", e.message)
+                }
+                (said, result) => panic!(
+                    "{label}: expected {said:?}, got {:?}",
+                    result.err().map(|e| e.message)
+                ),
+            }
+            let warned = application_messages(&f).iter().any(|m| m == &uncertain());
+            assert_eq!(
+                warned,
+                case.warns && (earlier || case.name.starts_with("rollback")),
+                "{label}: warning"
+            );
+            // Later cleanup: a lease that is gone causes no further clipboard calls.
+            let empties = state.lock().unwrap().empty_calls;
+            f.clock.set(30);
+            f.session.tick();
+            f.session.lock().unwrap();
+            let s = state.lock().unwrap();
+            match expected {
+                Lease::Gone => assert_eq!(
+                    s.empty_calls, empties,
+                    "{label}: cleanup after the lease ended"
+                ),
+                Lease::Kept | Lease::New => {
+                    assert_eq!(s.text(), "", "{label}: the lease was cleaned up")
+                }
+            }
+        }
+
+        #[test]
+        fn a_failed_cleanup_empty_that_changed_the_sequence_ends_the_lease_with_one_warning() {
+            let f = fixture();
+            let state = install(&f);
+            copy(&f, A).unwrap();
+            let next = state.lock().unwrap().empty_calls + 1;
+            state.lock().unwrap().faults = vec![Fault::EmptyChanged(next)];
+            f.clock.set(30);
+            f.session.tick();
+            assert!(state.lock().unwrap().faults.is_empty());
+            assert_eq!(
+                generation(&f),
+                None,
+                "the lease must not wait for a later sequence"
+            );
+            assert_eq!(application_messages(&f), vec![uncertain()]);
+            let empties = state.lock().unwrap().empty_calls;
+            f.clock.set(31);
+            f.session.tick();
+            f.session.lock().unwrap();
+            assert_eq!(state.lock().unwrap().empty_calls, empties);
+            assert_eq!(application_messages(&f), vec![uncertain()]);
+        }
+
+        #[test]
+        fn a_failed_cleanup_empty_with_the_sequence_unchanged_is_retried() {
+            let f = fixture();
+            let state = install(&f);
+            copy(&f, A).unwrap();
+            let next = state.lock().unwrap().empty_calls + 1;
+            state.lock().unwrap().faults = vec![Fault::Empty(next)];
+            f.clock.set(30);
+            f.session.tick();
+            assert!(generation(&f).is_some());
+            assert_eq!(application_messages(&f), vec![uncertain()]);
+            f.clock.set(31);
+            f.session.tick();
+            assert_eq!(generation(&f), None);
+            assert_eq!(state.lock().unwrap().text(), "");
+        }
+
+        #[test]
+        fn cleanup_keeps_a_newer_identical_user_copy() {
+            let f = fixture();
+            let state = install(&f);
+            copy(&f, A).unwrap();
+            let mut units: Vec<u8> = A
+                .encode_utf16()
+                .chain(Some(0))
+                .flat_map(u16::to_ne_bytes)
+                .collect();
+            state.lock().unwrap().user_copy(std::mem::take(&mut units));
+            f.clock.set(30);
+            f.session.tick();
+            assert_eq!(generation(&f), None);
+            assert_eq!(state.lock().unwrap().text(), A);
+            assert!(application_messages(&f).is_empty());
+        }
+
+        #[test]
+        fn a_busy_clipboard_at_expiry_lock_and_exit_leaves_the_copy_and_one_warning() {
+            let f = fixture();
+            let state = install(&f);
+            copy(&f, A).unwrap();
+            let opens = state.lock().unwrap().open_calls;
+            state.lock().unwrap().faults = vec![
+                Fault::Open(opens + 1),
+                Fault::Open(opens + 2),
+                Fault::Open(opens + 3),
+            ];
+            f.clock.set(30);
+            f.session.tick();
+            f.session.lock().unwrap();
+            assert_eq!(application_messages(&f), vec![uncertain()]);
+            drop(f);
+            let s = state.lock().unwrap();
+            assert!(
+                s.faults.is_empty(),
+                "expiry, lock and exit each made one attempt"
+            );
+            assert_eq!(s.text(), A, "best effort: the copy remains");
+        }
+    }
 }

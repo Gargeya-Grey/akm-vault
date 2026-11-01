@@ -176,6 +176,9 @@ impl Drop for ClipboardLease {
 
 pub struct NativeClipboard;
 
+#[cfg(all(test, windows))]
+pub(crate) use windows::transaction_tests as win32_fake;
+
 #[cfg(windows)]
 mod windows {
     use super::*;
@@ -732,8 +735,10 @@ mod windows {
         );
     }
 
+    /// Test support: the real publisher over a fake Win32 API. Session tests use it through
+    /// `crate::clipboard::win32_fake` (test code only).
     #[cfg(test)]
-    mod transaction_tests {
+    pub(crate) mod transaction_tests {
         use super::*;
         use std::{
             collections::BTreeMap,
@@ -742,44 +747,46 @@ mod windows {
 
         const FAKE_TEXT: &str = "AKM fake transaction secret";
 
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        enum Fault {
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        pub(crate) enum Fault {
             Register(usize),
             Allocate(usize),
             Owner,
             Open(usize),
             Empty(usize),
+            /// `EmptyClipboard` fails but still changes the sequence; the formats stay.
+            EmptyChanged(usize),
             Set(usize),
             TextRead,
             ZeroRead(u32),
             Sequence,
         }
 
-        struct FakeState {
-            open: bool,
-            open_with_owner: bool,
-            owner_alive: bool,
-            changed: bool,
-            synthesized: usize,
-            formats: BTreeMap<u32, Vec<u8>>,
-            sequence: u32,
-            race_at_capture: bool,
-            pending_user_copy: Option<Vec<u8>>,
-            blocked_copies: usize,
-            user_sequence: Option<u32>,
-            clears: usize,
-            registered_names: Vec<String>,
-            open_calls: usize,
-            opens: usize,
-            closes: usize,
-            destroyed_owners: usize,
-            allocations: usize,
-            client_frees: usize,
-            transfers: usize,
-            system_frees: usize,
-            empty_calls: usize,
-            set_calls: usize,
-            faults: Vec<Fault>,
+        pub(crate) struct FakeState {
+            pub(crate) open: bool,
+            pub(crate) open_with_owner: bool,
+            pub(crate) owner_alive: bool,
+            pub(crate) changed: bool,
+            pub(crate) synthesized: usize,
+            pub(crate) formats: BTreeMap<u32, Vec<u8>>,
+            pub(crate) sequence: u32,
+            pub(crate) race_at_capture: bool,
+            pub(crate) pending_user_copy: Option<Vec<u8>>,
+            pub(crate) blocked_copies: usize,
+            pub(crate) user_sequence: Option<u32>,
+            pub(crate) clears: usize,
+            pub(crate) registered_names: Vec<String>,
+            pub(crate) open_calls: usize,
+            pub(crate) opens: usize,
+            pub(crate) closes: usize,
+            pub(crate) destroyed_owners: usize,
+            pub(crate) allocations: usize,
+            pub(crate) client_frees: usize,
+            pub(crate) transfers: usize,
+            pub(crate) system_frees: usize,
+            pub(crate) empty_calls: usize,
+            pub(crate) set_calls: usize,
+            pub(crate) faults: Vec<Fault>,
         }
 
         impl Default for FakeState {
@@ -822,7 +829,7 @@ mod windows {
                 false
             }
 
-            fn user_copy(&mut self, text: Vec<u8>) {
+            pub(crate) fn user_copy(&mut self, text: Vec<u8>) {
                 assert!(!self.open);
                 self.system_frees += self.formats.len();
                 self.formats.clear();
@@ -831,7 +838,7 @@ mod windows {
                 self.user_sequence = Some(self.sequence);
             }
 
-            fn text(&self) -> String {
+            pub(crate) fn text(&self) -> String {
                 self.formats
                     .get(&UNICODE_TEXT)
                     .map_or_else(String::new, |bytes| {
@@ -845,8 +852,8 @@ mod windows {
             }
         }
 
-        struct FakeApi(Arc<Mutex<FakeState>>);
-        struct FakeOwner(Arc<Mutex<FakeState>>);
+        pub(crate) struct FakeApi(pub(crate) Arc<Mutex<FakeState>>);
+        pub(crate) struct FakeOwner(Arc<Mutex<FakeState>>);
         impl Drop for FakeOwner {
             fn drop(&mut self) {
                 let mut state = self.0.lock().unwrap();
@@ -856,7 +863,7 @@ mod windows {
             }
         }
 
-        struct FakeMemory {
+        pub(crate) struct FakeMemory {
             bytes: Option<Vec<u8>>,
             state: Arc<Mutex<FakeState>>,
         }
@@ -981,6 +988,13 @@ mod windows {
                         "injected EmptyClipboard failure",
                     ));
                 }
+                if state.fail(Fault::EmptyChanged(call)) {
+                    state.sequence += 1;
+                    return Err(CommandError::new(
+                        "clipboard",
+                        "injected EmptyClipboard failure",
+                    ));
+                }
                 if state.formats.contains_key(&UNICODE_TEXT) {
                     state.clears += 1;
                 }
@@ -1059,7 +1073,7 @@ mod windows {
             }
         }
 
-        struct TransactionBackend(FakeApi);
+        pub(crate) struct TransactionBackend(pub(crate) FakeApi);
         impl ClipboardBackend for TransactionBackend {
             fn set_private(&mut self, text: &str) -> Result<CopyAttempt, CommandError> {
                 publish(&mut self.0, text, false)
