@@ -10,6 +10,7 @@ import {
 import type { KeyView } from "../types";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
 import { KeyDetail } from "./KeyDetail";
+import { Icon } from "./Icon";
 import { KeyForm } from "./KeyForm";
 import { ConfirmDialog, Notice } from "./Notice";
 
@@ -140,6 +141,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
           onClick={() => setFormItem(null)}
           disabled={readOnly}
         >
+          <Icon name="plus" />
           Add key
         </button>
       </header>
@@ -172,6 +174,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
       <section className="raised ledger" aria-label="API keys">
         <div className="ledger-tools">
           <div className="search">
+            <Icon name="search" />
             <label className="sr-only" htmlFor="key-search">
               Search keys
             </label>
@@ -240,6 +243,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
               onClick={() => setFormItem(null)}
               disabled={readOnly}
             >
+              <Icon name="plus" />
               Add the first key
             </button>
           </div>
@@ -291,7 +295,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
                       {state.label}
                     </span>
                     <span className="row-arrow" aria-hidden="true">
-                      →
+                      <Icon name="arrowRight" />
                     </span>
                   </button>
                 </li>

@@ -431,12 +431,14 @@ time {
   flex: none;
   width: 44px;
   height: 44px;
-  padding: 0 0 3px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
   border: 1px solid var(--ink-2);
   border-radius: 6px;
   background: transparent;
   color: var(--ink);
-  font: 400 1.5rem/1 var(--font-sans);
+  font: inherit;
   cursor: pointer;
 }
 
@@ -759,6 +761,61 @@ time {
 .notice-error {
   border-left-color: var(--clay);
   color: var(--clay);
+}
+
+/* Icons */
+.icon {
+  flex: none;
+  display: block;
+}
+
+.btn,
+.btn-secondary,
+.btn-danger {
+  gap: 8px;
+}
+
+.text-button:has(> .icon) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.row-arrow {
+  display: grid;
+  place-items: center;
+}
+
+.notice {
+  position: relative;
+  padding-left: 36px;
+}
+
+.notice > .icon {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+}
+
+.notice-ok > .icon {
+  color: var(--leaf-ink);
+}
+
+.search {
+  position: relative;
+}
+
+.search > .icon {
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--ink-2);
+  pointer-events: none;
+}
+
+.search input {
+  padding-left: 38px;
 }
 
 /* Dialogs */

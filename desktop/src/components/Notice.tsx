@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useEffect, useId } from "react";
+import { Icon } from "./Icon";
 import { useDialogFocus } from "./useDialogFocus";
 
 interface NoticeProps {
@@ -13,6 +14,7 @@ export function Notice({ tone = "info", children }: NoticeProps) {
       className={`notice notice-${tone}`}
       role={tone === "error" ? "alert" : "status"}
     >
+      <Icon name={tone === "error" ? "alert" : tone === "ok" ? "check" : "info"} />
       {children}
     </p>
   );

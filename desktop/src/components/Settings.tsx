@@ -4,6 +4,7 @@ import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
 import { formatBytes, formatDateTime, plural } from "../format";
 import type { BackupInfo, ImportPreview, KeyView, Status } from "../types";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
+import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { useDialogFocus } from "./useDialogFocus";
 
@@ -386,6 +387,7 @@ export function Settings({ status, onLocked }: Props) {
             onClick={() => void saveEnv()}
             disabled={busy !== null || !scoped}
           >
+            <Icon name="download" />
             {busy === "save" ? "Saving…" : "Save .env…"}
           </button>
           <button
@@ -410,6 +412,7 @@ export function Settings({ status, onLocked }: Props) {
             onClick={openImport}
             disabled={status.needsUpgrade || importBusy === "confirm"}
           >
+            <Icon name="upload" />
             Import .env…
           </button>
         </div>
@@ -492,7 +495,7 @@ export function Settings({ status, onLocked }: Props) {
                 onClick={closeImport}
                 disabled={importBusy === "confirm"}
               >
-                ×
+                <Icon name="close" size={20} />
               </button>
             </header>
 

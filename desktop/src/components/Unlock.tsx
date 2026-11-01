@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { api, errorText } from "../api";
 import type { Status } from "../types";
+import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 
 interface Props {
@@ -133,6 +134,7 @@ export function Unlock({ status, onUnlocked }: Props) {
                 autoComplete="off"
               />
               <button type="button" className="btn-secondary" onClick={browse} disabled={busy}>
+                <Icon name="folder" />
                 Browse…
               </button>
             </div>

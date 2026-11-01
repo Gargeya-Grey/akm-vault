@@ -1,4 +1,5 @@
 import type { Theme, View } from "../types";
+import { Icon } from "./Icon";
 
 const sections: { id: View; label: string }[] = [
   { id: "keys", label: "Keys" },
@@ -41,8 +42,14 @@ export function NavBar({ view, onView, unlocked, theme, onToggleTheme, onLock, o
         </nav>
       )}
       {unlocked && <>
-        <button type="button" className="text-button" onClick={onReload}>Reload vault</button>
-        <button type="button" className="btn-secondary" onClick={onLock}>Lock now</button>
+        <button type="button" className="text-button" onClick={onReload}>
+          <Icon name="refresh" />
+          Reload vault
+        </button>
+        <button type="button" className="btn-secondary" onClick={onLock}>
+          <Icon name="lock" />
+          Lock now
+        </button>
       </>}
       <button
         type="button"

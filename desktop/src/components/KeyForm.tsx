@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, errorText } from "../api";
 import type { KeyDraft, KeyView } from "../types";
+import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { useDialogFocus } from "./useDialogFocus";
 
@@ -136,7 +137,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
             onClick={onClose}
             disabled={busy}
           >
-            ×
+            <Icon name="close" size={20} />
           </button>
         </header>
 
