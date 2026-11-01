@@ -27,35 +27,27 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function bar() {
-  return document.querySelector<HTMLElement>(".secret-timer");
-}
-
-function scale() {
-  const match = /scaleX\(([^)]+)\)/.exec(bar()?.style.transform ?? "");
-  return match ? Number(match[1]) : Number.NaN;
-}
-
 async function reveal() {
   fireEvent.click(screen.getByRole("button", { name: "Reveal" }));
   await act(async () => {});
 }
 
-test("the remaining-time bar follows the same countdown as the text and resets on each reveal", async () => {
+// Owner decision, 1 Nov 2026: the "Hides in N seconds" text is the only timer. There is no bar.
+test("the countdown text is the only timer, and it resets on each reveal", async () => {
   render(<KeyDetail item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} />);
   await reveal();
   expect(screen.getByText("fake-timer-value")).toBeTruthy();
-  expect(scale()).toBe(1);
+  expect(document.body.textContent).toContain("Hides in 30 seconds");
+  expect(document.querySelector(".secret-timer")).toBeNull();
 
   act(() => vi.advanceTimersByTime(10_000));
   expect(document.body.textContent).toContain("Hides in 20 seconds");
-  expect(scale()).toBeCloseTo(20 / 30, 5);
 
   act(() => vi.advanceTimersByTime(20_000));
   expect(document.body.textContent).not.toContain("fake-timer-value");
-  expect(bar()).toBeNull();
+  expect(document.body.textContent).not.toContain("Hides in");
 
   await reveal();
-  expect(scale()).toBe(1);
   expect(document.body.textContent).toContain("Hides in 30 seconds");
+  expect(document.querySelector(".secret-timer")).toBeNull();
 });

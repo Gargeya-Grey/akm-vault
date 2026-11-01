@@ -40,6 +40,27 @@ for (const theme of ["light", "dark"]) {
     }
   });
 
+  test(`${theme}: colour changes are instant, and only transform animates`, async ({ page }) => {
+    await open(page, theme);
+    const selectors = [".btn", ".btn-secondary", ".text-button", ".theme", ".nav-link", "select", ".key-row", ".row-arrow"];
+    const animated = await page.evaluate((list) => {
+      const found: string[] = [];
+      for (const selector of list) {
+        for (const node of document.querySelectorAll(selector)) {
+          const style = getComputedStyle(node);
+          const properties = style.transitionProperty.split(",").map((value) => value.trim());
+          const durations = style.transitionDuration.split(",").map((value) => parseFloat(value));
+          properties.forEach((property, index) => {
+            const duration = durations[index % durations.length];
+            if (duration > 0 && property !== "transform") found.push(`${selector}: ${property}`);
+          });
+        }
+      }
+      return [...new Set(found)];
+    }, selectors);
+    expect(animated).toEqual([]);
+  });
+
   test(`${theme}: reduced motion removes press and arrow movement`, async ({ page }) => {
     await open(page, theme);
     const add = page.getByRole("button", { name: "Add key", exact: true });

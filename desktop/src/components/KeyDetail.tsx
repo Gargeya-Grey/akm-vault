@@ -84,8 +84,8 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
     try {
       const value = await api.reveal(item.id);
       if (view === presentation.current) {
-        // Reset the countdown in the same render as the secret, so the text and
-        // the remaining-time bar never start from an earlier reveal's value.
+        // Reset the countdown in the same render as the secret, so the
+        // "Hides in N seconds" text never starts from an earlier reveal's value.
         setSeconds(HIDE_SECONDS);
         setSecret(value);
       }
@@ -245,13 +245,6 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
               Copy
             </button>
           </div>
-          {secret && (
-            <span
-              className="secret-timer"
-              aria-hidden="true"
-              style={{ transform: `scaleX(${seconds / HIDE_SECONDS})` }}
-            />
-          )}
         </section>
         {secret && (
           <p className="field-note">
