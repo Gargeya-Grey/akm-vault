@@ -537,6 +537,10 @@ textarea:disabled {
   text-decoration-color: var(--ink-2);
 }
 
+.text-button.danger-text:disabled:not([aria-busy="true"]) {
+  color: var(--ink-2);
+}
+
 /* A busy button keeps its enabled look; only the cursor shows it is working. */
 [aria-busy="true"]:disabled {
   cursor: progress;
