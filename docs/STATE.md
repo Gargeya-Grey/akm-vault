@@ -20,15 +20,28 @@ This run checked the application source that is now on `main`. Later commits cha
 - Native, with fake data: the exact-GUI journal and export proofs passed (`-JournalOnly`, `-JournalExportOnly`). Both needed the harness's UI Automation root refresh at start-up. Settings were restored.
 - KeePassXC interchange: the last pass was on the same CLI binary. It was not run again.
 
+## Unit 1a build under test
+
+- Source: the application files on `main` at `cfeb1b0`, unchanged since. The whole unit is `git diff baseline/pre-unit-1a main -- crates desktop tools .github Cargo.toml Cargo.lock`: 30 changed and 18 added files.
+- Builds in `target/release`, all unsigned and not installed, SHA-256:
+  - `akm-desktop.exe` `bc393ed9a5081aac2d30e4999e1537bb806c047e9a22bd025e06d2b78d3e6ea8`
+  - `akm.exe` `495d72976b552746ebe170f1ab1f25280272b54bff5365b251d3cf546342011b`
+  - `bundle/msi/AKM_0.1.0_x64_en-US.msi` `e29139eadb113da5d998a173ea05d7ddf10ae29f8d1bcb72798f3a7e61b6f3ac`
+  - `bundle/nsis/AKM_0.1.0_x64-setup.exe` `b0455b8912350d6d1c98f271364257f47e7f6340b19e2ed6a80cbfb3c2c2f7cb`
+- Before you use a build for a proof, check its hash against this list. A different hash needs a rebuild and a new check run.
+
 ## Next action
 
-1. **Review unit 1a.** Run one fresh review of the whole of unit 1a on current `main`, as [REVIEWING.md](REVIEWING.md) describes. This review does not need the window proof.
-2. **R4-04 needs the owner.** It is the owner-present proof `tools/verify_windows_app.ps1 -OutcomeOnly -OwnerReadyForVisibility` ([TESTING.md](TESTING.md)). Ask the owner whether they are ready to watch. The last attempt minimized the window and then failed its import-dialog-expiry check. The cause was not proved. Since then, a correction moved view expiry into native code, apart from lock handling. That change targets the failed check, but no window run has tested it.
+The owner authorized implementation of unit 1a only. Each other unit needs its own authorization ([ROADMAP.md](ROADMAP.md)).
+
+1. **R4-04 needs the owner.** Ask the owner whether they are ready to watch the proof under R4-04 in [FINDINGS.md](FINDINGS.md). The last attempt minimized the window and then failed its import-dialog-expiry check, and the cause was not proved. Since then, a correction moved view expiry into native code, apart from lock handling. That change targets the failed check, but no window run has tested it.
+2. **Then review unit 1a.** Do the review after the R4-04 attempt finishes, or after the owner decides what to do about it. Prepare the review inputs now ([REVIEWING.md](REVIEWING.md#unit-1a-inputs)). The review gives two separate verdicts: source acceptance, and work-unit completion.
 3. Unit 1a has failed review four times. If this review rejects it again, apply the AGENTS.md rule: stop and take the design question to the owner.
 
 ## Local state outside the repository
 
 - Git tag `archive/pre-cleanup-2026-11-01` keeps all the tracked evidence that the cleanup removed: phase-one records, the review rounds, probes and hash manifests.
+- Git tag `baseline/pre-unit-1a` is a commit with no parent. It holds the 139-file source snapshot from before unit 1a, rebuilt from `before.zip`, and each file matches the archived `before-sha256.json`.
 - `W:\AKM-archive\2026-11-01-local-evidence\` keeps the 265 ignored local files that the cleanup moved out: raw logs, screenshots and source archives.
 - The desktop app's settings select the fake vault `%TEMP%\opencode\akm-app-proof-07ee8d95-96d0-40df-bf1c-e24b33600ef2\vault.kdbx`. An earlier restart lost the owner's previous setting, so it is unknown. Keep that folder while the app selects it.
 - `%TEMP%\opencode\akm-app-proof-030c41dd-649e-44ae-8086-285677373566` holds the diagnostics of the failed R4-04 attempt.

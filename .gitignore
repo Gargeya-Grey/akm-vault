@@ -56,6 +56,16 @@ id_ed25519*
 **/recovery.json
 **/recovery-*.json
 **/native-diagnostics*
+**/*-identity.json
+**/runtime-cleanup.json
+**/fake-ui-names*
+
+# Screenshots and text dumps from proofs never belong in the docs.
+/docs/**/*.png
+/docs/**/*.jpg
+/docs/**/*.jpeg
+/docs/**/*.webp
+/docs/**/*.txt
 
 # Disposable scripts, probes and their output.
 .scratch/

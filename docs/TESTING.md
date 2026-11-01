@@ -47,9 +47,10 @@ Use the portable KeePassXC 2.8.0.
 
 - The proof refuses to start while another AKM process runs or the clipboard has content. `-SkipClipboard` skips the clipboard checks and keeps the user's clipboard. The skipped checks stay unproved.
 - `-JournalOnly` and `-JournalExportOnly` run the journal, backup and export flows only. They do not touch the clipboard or minimize the window.
-- `-OutcomeOnly -OwnerReadyForVisibility` minimizes and restores the AKM window that the proof owns. Run it only after the owner confirms in chat (AGENTS.md). Run it once per confirmation, and stop if it fails.
+- `-OutcomeOnly -OwnerReadyForVisibility` minimizes and restores the AKM window that the proof owns. Run it only after the owner confirms in chat (AGENTS.md). Run it once per confirmation, and stop if it fails. Its full command and pass conditions are under R4-04 in [FINDINGS.md](FINDINGS.md).
 - `-RemainingOnly` re-runs only the export, clipboard, synthetic session, exit and capture checks. It does not replace the full proof after a large change.
-- Before it launches the app, the proof writes `recovery.json` and the previous settings bytes to its scratch folder. If the proof stops early, keep that folder. Check the recorded process and vault before you restore settings.
+- Before it launches the app, the proof writes `recovery.json` and the previous settings bytes to its scratch folder. If the proof stops early, keep that folder.
+- Before you restore settings by hand, verify the process executable and its creation identity. A PID that still exists is not proof of identity. Also confirm that the current settings still select this proof's fake vault. If ownership is uncertain, or the settings changed for another reason, leave them as they are and tell the owner. Never guess an unknown preference. After a restore, compare the saved bytes exactly with the preimage.
 
 **Real clipboard test.** This test is opt-in. The owner must be present and the clipboard must be empty:
 
@@ -66,6 +67,7 @@ Remove the variable afterwards.
 - **Journal:** append, read and failure tests across sessions, plus the CLI and Activity callers. A journal warning after a commit must never look like an unsaved change.
 - **Session, clipboard or export:** deterministic interleaving tests, plus real Windows evidence. Mocked browser tests do not prove native clipboard or OS behaviour.
 - **IPC shapes shared by Rust and TypeScript:** the TypeScript checks and the real frontend-native boundary.
+- **Frontend:** the affected lifecycle and interaction tests, a rebuilt GUI, and the affected native flow.
 - **Parser:** a written external dialect, and fixtures from another reader. Round trips through AKM alone are not enough.
 - **Documentation only:** check that the links resolve and the documents agree. No build is needed.
 

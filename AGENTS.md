@@ -35,7 +35,8 @@ You can do these without asking: branches, commits, pushes and pull requests on 
 ## How work runs
 
 - Git is the record. Each commit or pull request says what changed and which checks ran, with their results. Put disposable scripts, probes and logs in `.scratch/`, which Git ignores. Commit only what becomes a real test or tool.
-- A finding closes only when two things are true: a permanent regression test fails before the fix and passes after it, and the work unit passes its review.
+- Before each commit or push, read `git status` and the exact staged diff. Look for secrets, vaults, screenshots and private evidence. Ignore rules are a guard, not a secrets scanner. Keep unfamiliar changes that you did not make. Ask the owner about them.
+- A code defect closes only when two things are true: a permanent regression test fails on the affected version and passes after the fix, and the work unit passes its review. A design, coverage or premise finding closes when its decision or evidence is verified and reviewed. Write down any limit that remains.
 - Each work unit gets one fresh review (REVIEWING.md). If one work unit fails review twice, stop patching. Write the design question in STATE.md and ask the owner.
 - The only measured score is 40.5/100, from the baseline review of 30 Oct 2026. Never add projected points to it. A new score needs a new full review.
 - Before you stop, update STATE.md: what changed, the checks you ran, the open findings, and one next action.

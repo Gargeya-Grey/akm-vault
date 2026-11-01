@@ -2,7 +2,7 @@
 
 Phase two fixes the remaining privacy, history and compatibility problems without weakening the [project contracts](PROJECT.md#contracts-every-change-keeps). Finishing this list does not guarantee a score. Only a new full review measures one.
 
-Work units run in this order. Units that share `model.rs`, `vault.rs`, the IPC types or the CLI command definitions run one after another, never in parallel. Do not redo the closed findings in [FINDINGS.md](FINDINGS.md).
+**Authorization.** The owner has authorized implementation of unit 1a only. Each other unit needs the owner's explicit authorization in chat before implementation starts. Work units run in this order. Units that share `model.rs`, `vault.rs`, the IPC types or the CLI command definitions run one after another, never in parallel. Do not redo the closed findings in [FINDINGS.md](FINDINGS.md).
 
 ## Unit 1a: warning ownership and honest journal outcomes (in progress)
 
@@ -15,7 +15,7 @@ Status: [STATE.md](STATE.md) and [FINDINGS.md](FINDINGS.md).
 
 ## Unit 1b: private per-device journal
 
-Start only after these decisions are written down and the owner has seen them:
+Write these decisions down first. Implementation starts only after the owner approves them and authorizes the unit:
 
 - **Location and vault identity.** Use a private non-roaming folder. Specify rename, clone, replacement, rollback, two separate vaults, unclear identity, and `akm audit` without a password. A path alone, a content hash that changes on save, or a root UUID that clones copy is not enough by itself. Never write to an older-format or read-only vault just to give it an ID, and never merge clone histories.
 - **What to record.** Record the minimum. Moving titles, scopes and export paths to another plaintext file is not privacy.
@@ -47,11 +47,15 @@ The master-password change (M2) needs its own plan: old backups keep the old pas
 - Decide whether the CLI fallback search through notes and URL is safe for disclosure and delete commands.
 - Remove the secret-bearing `Debug` and the secret loading for metadata-only callers. Do not claim full memory zeroization.
 
+Acceptance: external parser fixtures as well as round trips, controlled clocks at exact expiry and refresh boundaries, executable CLI regressions, ambiguous selectors, and assertions on metadata and `Debug` output.
+
 ## Unit 4: reminders and accessibility
 
 - Specify the unlock summary and the opt-in Windows notification content. A notification on the lock screen shows no secret and no sensitive metadata. Do not add an always-running service as a hidden prerequisite.
-- Check focus containment and return for every modal, including import. Ledger status must be announced.
+- Check focus containment and return for every modal, including import. On the Keys screen, each key row's accessible name or description must announce its expiry and rotation status.
 - Fix the Keys-screen layout debt, or list it as kept debt. Functional fixes and visual changes go in separate pull requests.
+
+Acceptance: expired, overdue, unknown-date and no-key states; locked and hidden transitions; denied or disabled notifications; accessible status; and keyboard-only paths. Mocked UI tests do not prove native notification delivery.
 
 ## Unit 5: second reader and full rescore
 

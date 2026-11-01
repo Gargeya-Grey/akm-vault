@@ -12,7 +12,22 @@ Owner instruction, 2026-11-01:
 
 Give the reviewer this file, the scope, and nothing from the implementer's chat or reasoning.
 
-**Scope to supply:** the work unit's plan (from [ROADMAP.md](ROADMAP.md)), the commit range (`git diff <base>..<head>`), the check results, and the open findings for that unit ([FINDINGS.md](FINDINGS.md)).
+**Scope to supply:** the work unit's plan (from [ROADMAP.md](ROADMAP.md)), a diff that contains the whole unit, the check results, the reviewed source commit and build hashes, and the open findings for that unit ([FINDINGS.md](FINDINGS.md)). Use a plain commit range only when it really contains the whole unit.
+
+### Unit 1a inputs
+
+Git started after unit 1a was written, so `main` alone does not show the unit. Supply these:
+
+- The whole change: `git diff baseline/pre-unit-1a main -- crates desktop tools .github Cargo.toml Cargo.lock`. Added files appear as added.
+- The frozen contracts, read with `git show archive/pre-cleanup-2026-11-01:<path>`:
+  - `docs/work/phase2-1a/PLAN.md` (original unit plan)
+  - `docs/work/phase2-1a/corrections3/PLAN.md` (round-three recalibration)
+  - `docs/work/phase2-1a/corrections4/PLAN.md` (round-four recalibration)
+  - `docs/work/phase2-1a/corrections4/visibility/PLAN.md` and `PUBLICATION_CONTRACT.md` (visibility correction)
+  - `docs/work/phase2-1a/corrections4/visibility/NATIVE_PROOF.md` (R4-04 proof plan)
+  - `docs/work/phase2-1a/reviews/round4/review-result.md` (last rejected review)
+- The build hashes in [STATE.md](STATE.md#unit-1a-build-under-test). The reviewer records the source commit and the hashes that it checked.
+- The R4-04 result, or the owner's decision about it.
 
 **Method.** Assume that a defect or a claim without evidence exists, and find it.
 
@@ -34,4 +49,6 @@ Do not give a numerical score. A unit review is not the full rescore and not a p
 
 ## After the review
 
-The main session adds each new finding to FINDINGS.md, with an ID like `1A-R5-01`, and updates STATE.md. Commit the raw review text to `docs/reviews/` only when it is a full-rubric score. Otherwise, the pull request keeps the review.
+1. Commit the raw review text, unchanged, to `docs/reviews/<date>-<scope>.md`. Put a header above it that gives the model, the requested effort, the reviewed commit and build hashes, and the date. Never rewrite a rejected review into an approval.
+2. Add each new finding to FINDINGS.md, with an ID like `1A-R5-01` and a link to that review file.
+3. Update STATE.md.
