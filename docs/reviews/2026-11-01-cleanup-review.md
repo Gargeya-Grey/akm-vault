@@ -3,9 +3,10 @@
 - Date: 2026-11-01
 - Model: GPT-6.1 Terra (`gpt-6.1-terra`), Codex provider, requested `reasoningEffort: max`
 - Reviewed: `git diff cfeb1b0..35c8c55` on branch `chore/clean-project-structure`
-- Verdict: REJECT, 12 findings. The fixes are in the commit that follows 35c8c55 on the same branch. One reviewer note is wrong: the remote tag `archive/pre-cleanup-2026-11-01` exists. `git ls-remote` with the owner's credentials shows it. The reviewer had no GitHub credentials.
+- Verdict: REJECT, 12 findings. The fixes are in commit 399cab9.
+- The reviewer could not verify the remote tag `archive/pre-cleanup-2026-11-01`. A later check with the owner's credentials (`git ls-remote`) showed that it exists.
 
-The text below is the reviewer's report. The only change: typographic quotation marks and apostrophes became straight ones.
+The text below is the reviewer's report, copied by hand with typographic quotation marks and apostrophes made straight. The original message cannot be compared byte for byte, so other differences cannot be excluded. Round 2 is in [2026-11-01-cleanup-review-round2.md](2026-11-01-cleanup-review-round2.md).
 
 ---
 

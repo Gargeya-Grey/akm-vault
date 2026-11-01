@@ -22,19 +22,34 @@ Updated 2026-11-01. This file lists every review finding that is not closed, and
 
 ### R4-04 pass conditions
 
-Run it only after the owner confirms in chat that they are ready to watch, once per confirmation, on the build whose hashes are in [STATE.md](STATE.md#unit-1a-build-under-test):
+Run it only after the owner confirms in chat that they are ready to watch. Each confirmation allows one attempt.
+
+**Before the launch:**
+
+1. Check that the application source equals the build's source: `git diff --quiet cfeb1b0 -- crates desktop tools Cargo.toml Cargo.lock` must exit 0, and `git status --porcelain -- crates desktop tools` must print nothing.
+2. Check all four build hashes against [STATE.md](STATE.md#unit-1a-build-under-test) with `Get-FileHash -Algorithm SHA256`. Any difference stops the attempt.
+3. Create a new folder `W:\AKM-archive\proofs\<UTC time>-r4-04\` that did not exist before. Record the hashes there. The script deletes its own working folder after a pass, so this folder is the record.
+
+**The launch,** with the full output copied to that folder:
 
 ```powershell
-./tools/verify_windows_app.ps1 -DesktopExe target/release/akm-desktop.exe -CliExe target/release/akm.exe -OutcomeOnly -OwnerReadyForVisibility
+./tools/verify_windows_app.ps1 -DesktopExe target/release/akm-desktop.exe -CliExe target/release/akm.exe -OutcomeOnly -OwnerReadyForVisibility *>&1 | Tee-Object -FilePath W:\AKM-archive\proofs\<UTC time>-r4-04\output.txt
 ```
 
-It passes only if all of these hold, with fake data:
+**The pass conditions.** R4-04 passes only if all of these hold, with fake data:
 
 1. While the proof's own fake-journal lock delays a fake import, the owned AKM window really minimizes (`IsIconic`) and restores.
 2. The import dialog and the busy state expire locally before the lock releases. The protected detail view expires. The user can navigate away.
 3. Exactly one path-free application outcome is kept, with its acknowledgment. The CLI shows exactly one scoped fake import.
 4. A native-approved exact-path file save succeeds. A native cancellation and a delayed journal error before disclosure each give the exact output or refusal.
-5. Dismissal works, and nothing comes back after it.
+5. Dismissal works, and no dismissed outcome comes back: not the success, the cancellation or the error.
+
+**Known gap: the script cannot prove all five yet.** By inspection of `tools/verify_windows_app.ps1`:
+- `Assert-OutcomeRegion` matches outcome text, but does not count outcome records (condition 3).
+- The final no-resurrection check leaves out the cancellation outcome (condition 5).
+- The script checks the import dialog, but never opens a separate Key Detail view (condition 2, if "protected detail" means Key Detail).
+
+So a script exit code alone does not close R4-04. The owner decides between two options: extend the script before the attempt, or narrow the conditions. See [STATE.md](STATE.md#next-action).
 
 Record the build hash, the result and the cleanup. On any failure, stop, keep the evidence, and return to the owner. The proof does not test Windows lock or suspend.
 

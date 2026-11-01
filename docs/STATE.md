@@ -22,7 +22,7 @@ This run checked the application source that is now on `main`. Later commits cha
 
 ## Unit 1a build under test
 
-- Source: the application files on `main` at `cfeb1b0`, unchanged since. The whole unit is `git diff baseline/pre-unit-1a main -- crates desktop tools .github Cargo.toml Cargo.lock`: 30 changed and 18 added files.
+- Source: the application files on `main` at `cfeb1b0`, unchanged since. `git diff baseline/pre-unit-1a main -- crates desktop tools .github Cargo.toml Cargo.lock` compares them with the 139-file pre-unit snapshot: 30 changed files, and 18 files absent from the snapshot. An absent file is not necessarily new in unit 1a. For example, `desktop/icon.svg` existed before phase one with its current hash ([REVIEWING.md](REVIEWING.md#unit-1a-inputs)).
 - Builds in `target/release`, all unsigned and not installed, SHA-256:
   - `akm-desktop.exe` `bc393ed9a5081aac2d30e4999e1537bb806c047e9a22bd025e06d2b78d3e6ea8`
   - `akm.exe` `495d72976b552746ebe170f1ab1f25280272b54bff5365b251d3cf546342011b`
@@ -34,9 +34,12 @@ This run checked the application source that is now on `main`. Later commits cha
 
 The owner authorized implementation of unit 1a only. Each other unit needs its own authorization ([ROADMAP.md](ROADMAP.md)).
 
-1. **R4-04 needs the owner.** Ask the owner whether they are ready to watch the proof under R4-04 in [FINDINGS.md](FINDINGS.md). The last attempt minimized the window and then failed its import-dialog-expiry check, and the cause was not proved. Since then, a correction moved view expiry into native code, apart from lock handling. That change targets the failed check, but no window run has tested it.
-2. **Then review unit 1a.** Do the review after the R4-04 attempt finishes, or after the owner decides what to do about it. Prepare the review inputs now ([REVIEWING.md](REVIEWING.md#unit-1a-inputs)). The review gives two separate verdicts: source acceptance, and work-unit completion.
-3. Unit 1a has failed review four times. If this review rejects it again, apply the AGENTS.md rule: stop and take the design question to the owner.
+1. **Owner decision: the R4-04 proof script.** The script cannot prove all five R4-04 pass conditions ([FINDINGS.md](FINDINGS.md#r4-04-pass-conditions)). The owner chooses one option:
+   - Extend `tools/verify_windows_app.ps1` first. It must count the outcome records, include the cancellation in the no-resurrection check, and check Key Detail if that is in scope. The extension changes no application code, so the existing GUI build and its hashes stay valid. Test the script change in a mode that does not minimize (`-JournalOnly`) before the owner-present attempt.
+   - Narrow the pass conditions to what the script proves today, and record the limit.
+2. **R4-04 needs the owner present.** After that decision, ask the owner whether they are ready to watch. The last attempt minimized the window and then failed its import-dialog-expiry check. The cause was not proved. Since then, a correction moved view expiry into native code, apart from lock handling. That change targets the failed check, but no window run has tested it.
+3. **Then review unit 1a.** Prepare the review inputs now ([REVIEWING.md](REVIEWING.md#unit-1a-inputs)). Request the one fresh review only after R4-04 passes, or after the owner gives an explicit decision about a failed or deferred attempt. The review gives two separate verdicts: source acceptance, and work-unit completion.
+4. Unit 1a has failed review four times. If this review rejects it again, apply the AGENTS.md rule: stop and take the design question to the owner.
 
 ## Local state outside the repository
 

@@ -18,7 +18,7 @@ Give the reviewer this file, the scope, and nothing from the implementer's chat 
 
 Git started after unit 1a was written, so `main` alone does not show the unit. Supply these:
 
-- The whole change: `git diff baseline/pre-unit-1a main -- crates desktop tools .github Cargo.toml Cargo.lock`. Added files appear as added.
+- The change: `git diff baseline/pre-unit-1a main -- crates desktop tools .github Cargo.toml Cargo.lock`. This compares `main` with the 139-file pre-unit snapshot. A path shown as added was absent from that snapshot. It is not necessarily new in unit 1a: `desktop/icon.svg` existed before phase one with its current hash. Review each added-looking path as a full file. Check the other pre-unit records in the archive tag, and record any preimage or deletion that cannot be proved.
 - The frozen contracts, read with `git show archive/pre-cleanup-2026-11-01:<path>`:
   - `docs/work/phase2-1a/PLAN.md` (original unit plan)
   - `docs/work/phase2-1a/corrections3/PLAN.md` (round-three recalibration)
