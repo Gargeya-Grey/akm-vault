@@ -1,14 +1,11 @@
 # AKM: a Windows API-key manager
 
 **Untrusted development build. Use fake keys only.** The initial adversarial
-review scored the implementation 40.5/100, rounded to 41. See [REVIEW.md](REVIEW.md).
-Fixing the reported bugs does not itself establish a new score or certify security.
-The owner's release gate is an independent re-review above 90, followed by real-use
-testing before wider distribution.
-
-Private development repository: [Gargeya-Grey/akm-vault](https://github.com/Gargeya-Grey/akm-vault).
-See the [repository/evidence policy](docs/REPOSITORY.md): Git tracks source and safe
-project records, not live vaults, credentials or the complete local evidence archive.
+review scored the implementation 40.5/100, rounded to 41. See the
+[baseline review](docs/reviews/2026-10-30-baseline.md). Fixing the reported bugs
+does not itself establish a new score or certify security. The release gate is an
+independent re-review above 90, followed by real-use testing before wider
+distribution. Current status: [docs/STATE.md](docs/STATE.md).
 
 AKM is for a Windows developer who wants a local, account-free KeePass file plus
 API-key fields and process-environment injection. KeePassXC, 1Password CLI and
@@ -155,74 +152,28 @@ does not intentionally contain secret values.
 
 The hash chain detects some edits but cannot prove completeness. Truncating the
 end, deleting the log or rewriting the whole chain is not authenticated. Treat it
-as a convenience journal, not security evidence. Moving to a private, per-device
-journal is phase-2 work. A journal failure after a successful vault commit must
+as a convenience journal, not security evidence. A private, per-device journal is
+[planned](docs/ROADMAP.md). A journal failure after a successful vault commit must
 produce a warning, not an error that encourages retrying an already-saved change.
 
 ## Build and verify on Windows
 
-Requires Rust 1.89+, Node 22.12+ (or a newer supported Node), Visual Studio C++
-Build Tools, Windows SDK and WebView2. Microsoft Edge is used for headless UI
-regressions; those mock the native boundary and do not replace native tests.
+Requires Rust 1.89+, Node 22.12+, Visual Studio C++ Build Tools, the Windows SDK
+and WebView2.
 
 ```powershell
+cargo build --release -p akm-cli --locked
 cd desktop
 npm ci
-npm test
-npm run build
-npm run test:ui
-cd ..
-cargo test --workspace --offline
-cargo clippy --workspace --all-targets --offline -- -D warnings
-cargo fmt --all -- --check
-cargo build --release -p akm-cli --offline
-cd desktop
-npm run tauri -- build -- --locked --offline
+npm run tauri -- build -- --locked
 ```
 
-Omit `--offline` on the first dependency fetch if needed. Windows installers go
-to `target\release\bundle\msi` and `target\release\bundle\nsis`. They are unsigned
-development artifacts. Do not disable Windows security checks or distribute them
-as trusted software. Checksums identify a build; they are not publisher signatures.
-
-Run the repeatable independent-reader regression with a portable KeePassXC:
-
-```powershell
-python tools/verify_keepassxc.py --akm target/release/akm.exe --keepassxc "C:/path/to/keepassxc-cli.exe"
-```
-
-It creates only temporary vaults and fake keys. Windows CI also downloads the
-pinned KeePassXC 2.8.0 portable build, checks its recorded SHA-256 and runs this
-test. The workflow tests the desktop crate as well as core, CLI and frontend.
-It uploads development artifacts, not a public release.
-
-`tools/verify_windows_app.ps1 -DesktopExe target/release/akm-desktop.exe -CliExe
-target/release/akm.exe -KeePassXC C:/path/to/keepassxc-cli.exe` drives only its own
-test process with fake vaults. The optional KeePassXC argument adds a cloned-entry
-GUI-edit fixture. It also tests the native save dialog, rejected imports and explicit
-upgrade confirmation. Synthetic lock/suspend messages are not proof of actual
-Windows lock or power-event delivery.
-
-The GUI proof refuses to overwrite a non-empty clipboard. Add `-SkipClipboard`
-to preserve its contents while running the other flows; that explicitly skips
-interactive clipboard-copy and cleanup verification.
-
-The proof prints its scratch directory and saves `recovery.json` plus the prior
-settings bytes before opening AKM. If the harness is interrupted, preserve that
-directory; check its recorded process/vault ownership before restoring settings.
-Do not guess a previous vault preference or delete another process's files.
-
-For an interrupted run whose earlier checks remain valid, `-RemainingOnly` creates
-a fresh fake CLI fixture and runs only native export cancellation/save, clipboard,
-synthetic session/power, normal exit and capture-affinity checks. It does not rerun
-GUI creation, rejected/scoped imports, cloned-entry edits or format upgrades and
-is not a substitute for the full proof on materially changed code. The proof
-refuses another open AKM process and records native startup diagnostics on failure.
-
-The final correction review and resumed native proof passed; see the final
-checkpoint and artifact hashes in [PHASE1.md](PHASE1.md). Actual OS lock/suspend
-delivery remains unverified. This is still a fake-keys-only development build,
-not an above-90 readiness verdict.
+The CLI is `target\release\akm.exe`. The unsigned development installers go to
+`target\release\bundle\msi` and `target\release\bundle\nsis`. Do not distribute
+them as trusted software. A checksum identifies a build; it is not a publisher
+signature. The full test commands, the KeePassXC interchange test and the native
+GUI proof are in [docs/TESTING.md](docs/TESTING.md). Actual OS lock/suspend
+delivery is not verified yet.
 
 ## Limits
 
@@ -237,13 +188,9 @@ not an above-90 readiness verdict.
 - This source tree's `.gitignore` is not protection for secrets exported into a
   different repository.
 
-The phase-1 implementation and verification contract is in [PHASE1.md](PHASE1.md).
+## Development
 
-## Project context and continuation
-
-For an agent resuming after compaction or a restart, begin with [AGENTS.md](AGENTS.md)
-and [docs/STATE.md](docs/STATE.md). Stable requirements and contracts are in
-[docs/PROJECT.md](docs/PROJECT.md). The [review ledger](docs/REVIEW_LEDGER.md) separates
-closed scenarios from remaining work, and [docs/history](docs/history/) preserves
-the surviving reviews and evidence with hashes. [PHASE2.md](PHASE2.md) contains the
-recalibrated draft plan. No old projected score is a current readiness verdict.
+Agents and contributors start with [AGENTS.md](AGENTS.md). The requirements and
+contracts are in [docs/PROJECT.md](docs/PROJECT.md), open findings in
+[docs/FINDINGS.md](docs/FINDINGS.md) and the remaining work in
+[docs/ROADMAP.md](docs/ROADMAP.md).

@@ -1,6 +1,6 @@
 # AKM project brief
 
-Stable requirements and contracts. Mutable progress belongs in [STATE.md](STATE.md). This is a consolidation of recorded requirements, not a verbatim transcript of the initial conversation.
+Stable requirements and contracts. Current progress is in [STATE.md](STATE.md).
 
 ## Owner's objective
 
@@ -17,7 +17,6 @@ Reuse established encrypted storage and cryptographic implementations. Do not in
 - Review scoped `.env` imports. Export or inject only an explicit scope, or an explicit CLI `--all`.
 - Keep encrypted backups and a useful activity journal without leaking metadata into a cloud folder by default.
 - Support defensive use of fully downloaded cloud-sync folders. Detect conflicts and refuse stale writes; do not silently merge them.
-- Resume interrupted engineering work without losing findings or needlessly repeating valid verification.
 
 ## Non-goals and trust boundaries
 
@@ -36,7 +35,7 @@ Reuse established encrypted storage and cryptographic implementations. Do not in
 - KDBX 3.x and 4.0 open read-only until explicit upgrade. Upgrade preserves encryption/KDF settings and an original encrypted backup.
 - Entry identity is the native KDBX UUID, never the copyable `AKM_ID` field. Unrelated groups, foreign entries, attachments and existing history must survive changes.
 
-## Contracts phase two must preserve
+## Contracts every change keeps
 
 1. Mutations work on a candidate snapshot. A pre-commit failure must not mutate the open snapshot or leak into a later save.
 2. Decrypt and compare the candidate before replacing the vault. Recheck the source fingerprint immediately before publication and retain five dated encrypted backups plus the convenience `.bak`.
@@ -51,7 +50,7 @@ Reuse established encrypted storage and cryptographic implementations. Do not in
 11. Child processes never inherit `AKM_*`, including `AKM_PASSWORD`. Release the vault before starting a child. Windows command shims are resolved explicitly with conservative argument handling.
 12. Post-commit journal failure is a warning, not an invitation to repeat a completed mutation. Logging failure before disclosure/export/launch currently fails closed and is covered by CLI regressions; do not silently replace it with the post-commit policy.
 
-These contracts do not claim every adjacent seam is complete. The fresh phase-two review identified open native warning ownership, journal-presentation and stale time-status defects. See the ledger rather than inferring that the earlier scoped acceptance covered them.
+These contracts do not claim that every nearby seam is complete. Open defects are in [FINDINGS.md](FINDINGS.md).
 
 ## Decision history
 
@@ -59,9 +58,7 @@ These contracts do not claim every adjacent seam is complete. The fresh phase-tw
 - Explicit upgrades replaced automatic format changes. Password policy for newly created vaults is a minimum of 12 Unicode characters, not a claim of password strength.
 - Conflict refusal and reload replaced lifetime reader locks. Automatic cross-device merging remains deliberately absent.
 - Scope confirmation, generation-owned receipts, handle-owned exports and Windows clipboard synthesis handling were added after reproduced adversarial failures. They are preservation requirements, not optional refactors.
-- Source corrections, runtime coverage and numerical readiness are separate gates. The last complete numerical assessment is the historical 40.5/100 baseline in [REVIEW.md](../REVIEW.md).
-- The owner authorized GPT-6.1 Terra at `max` for fresh AKM adversarial reviewers on 2026-10-31. The tool catalogue resolved this to `openai/gpt-6.1-terra#max`. No global routing configuration was changed.
-- On 2026-11-01 the owner separately authorized local Git and private source backup under `Gargeya-Grey/akm-vault`. Public visibility, artifact releases, remote CI and real-secret use remain gated; private backup is not product acceptance. See [repository/evidence policy](REPOSITORY.md).
+- Source fixes, runtime proof and a numerical score are separate gates. The only full numerical assessment is the 40.5/100 [baseline review](reviews/2026-10-30-baseline.md).
 
 ## Source map
 
@@ -71,4 +68,4 @@ These contracts do not claim every adjacent seam is complete. The fresh phase-tw
 - `crates/akm-cli/src/` owns child isolation, CLI workflows and protected exports.
 - `desktop/src-tauri/src/` owns session policy, commands, clipboard and native exports.
 - `desktop/src/` owns frontend lifecycle, forms and reviewed workflow presentation.
-- `tools/verify_keepassxc.py` and `tools/verify_windows_app.ps1` are repeatable real-surface proofs.
+- `tools/verify_keepassxc.py`, `tools/verify_windows_app.ps1` and `tools/prepare_gui_fixture.py` are repeatable real-surface proofs ([TESTING.md](TESTING.md)).

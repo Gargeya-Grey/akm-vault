@@ -1,76 +1,50 @@
-# Current state and resume point
+# Current state
 
-Updated 2026-11-01. This is the short operational checkpoint. Requirements live in [PROJECT.md](PROJECT.md); findings live in [REVIEW_LEDGER.md](REVIEW_LEDGER.md).
+Updated 2026-11-01. Replace this file's sections when they change. History lives in Git.
 
-## Current task
+## Status
 
-Owner-authorized repository side task is complete: local Git on `main`, private [Gargeya-Grey/akm-vault](https://github.com/Gargeya-Grey/akm-vault), initial baseline `b187e55f9c83ca96488a1bd9db8af49bd0feba7a` pushed and verified. Final metadata checkpoint follows that baseline. [Repository policy](REPOSITORY.md).582 selected files passed the bounded credential-pattern/path guard and exact staged-byte comparison;16 ignore probes passed. Historical evidence whitespace was preserved (source-only check passed); a Python output-decoding failure was separately recovered without source changes. Global author/default GitHub account unchanged; repository-local GitHub no-reply author and command-scoped target-account auth used. Actions disabled,0 remote runs. Vaults/credentials/recovery/raw logs/archives/screenshots/build products/dependencies stay local, not deleted. Setup records: `C:\Users\Gargeya\AppData\Local\Temp\opencode\akm-repository-setup-19r905yh`.
+- **Phase one is complete.** Its review rounds accepted the fixes for the original critical and high findings. H9 (rotation) is still open, and H6 is partial: real Windows lock and suspend delivery is not tested.
+- **Phase two, unit 1a, is in progress.** Unit 1a covers warning ownership and honest journal outcomes ([ROADMAP.md](ROADMAP.md)). Its fourth review rejected it, with findings R4-01, R4-02 and R4-03 and one missing proof, R4-04 ([FINDINGS.md](FINDINGS.md)).
+- **The fixes for R4-01, R4-02 and R4-03 are in the source on `main`.** They have regression tests. No review has checked them yet.
+- **No new score exists.** The only measured score is 40.5/100 ([baseline review](reviews/2026-10-30-baseline.md)).
 
-Underlying phase-two unit1a remains paused before renewed owner readiness for its outcome proof; its latest verified candidate and next engineering gate are below. Private storage migration, rotation/history and stale time-derived status are not included.
+## Last full check run
 
-Context preservation and the fresh calibration review are complete. Forty-four original historical records, the new raw review, twelve frozen review-input snapshots and two recovered earlier GUI logs are saved locally with hashes. The caller requested `openai/gpt-6.1-terra#max`; the reviewer confirmed Terra but could not independently observe active effort. See the [raw verdict and disposition](reviews/2026-10-31-calibration/disposition.md).
+This run checked the application source that is now on `main`. Later commits changed only documentation and Git rules.
 
-After rejected round four, the owner renewed authorization: **"Please recalibrate and continue."** One new bounded cycle follows the [identity-based recalibration plan](work/phase2-1a/corrections4/PLAN.md): protect the exact immediate original, reserve/own native session events before credentials, and report immediate partial-copy cleanup outcomes. Main implements serially, then one fresh scoped Terra review. Other phase-two work, publication, installation, real secrets and score claims remain excluded. Any new actual hide/minimize proof needs owner readiness confirmation; no unattended retry or OS lock/unlock.
+- Rust: 196 tests passed, and 2 gated tests were ignored. 9 generated IPC tests passed separately. Clippy (`-D warnings`) and rustfmt were clean.
+- Frontend: 190 cases passed, in two runs. The full run passed 181 cases and then stopped on a Vitest worker start-up timeout. The 9 Settings cases that did not run then passed on their own.
+- Browser: 32 mocked-native cases passed. The production and e2e type checks passed.
+- Builds: the GUI and the unsigned MSI and NSIS installers built. None is installed.
+- Native, with fake data: the exact-GUI journal and export proofs passed (`-JournalOnly`, `-JournalExportOnly`). Both needed the harness's UI Automation root refresh at start-up. Settings were restored.
+- KeePassXC interchange: the last pass was on the same CLI binary. It was not run again.
 
-## Last completed engineering checkpoint
+## Unit 1a build under test
 
-- Phase-one source corrections are approved within their reviewed scope. The final P3 lock-reply feedback defect is fixed with two failing-first permanent regressions and independent follow-up verification.
-- The GUI and MSI/NSIS installers were rebuilt after that frontend-only correction. The remaining exact-GUI native proof passed.
-- Preserved results are 132 Rust workspace tests, strict Clippy/rustfmt, a complete 24-test frontend run before the final P3, 4 browser scenarios, real KeePassXC interchange and the repaired standalone real-Windows clipboard test.
-- After the final P3, the affected App/receipt run passed 10 tests. Do not report this as a fresh full 26-test frontend run. The reviewer independently ran the two new regressions.
-- The final GUI passed native save cancellation, exact filename read-back, exact destination and scoped content, clipboard exclusions and cleanup, synthetic session/power handling, normal exit and capture affinity `0x11`.
-- Completed import/clone/upgrade probes were reported from a preceding GUI run. Its recovered raw output shows those passes followed by a filter-automation failure. The preceding hash is recorded only in conversation history and is not embedded in the recovered logs; exact binary binding is unavailable. `-RemainingOnly` did not rerun those flows on the final GUI.
-- Startup automation succeeded on the resumed run on `WinSta0` / `Default`. The preceding missing-controls failure did not recur, and its cause remains unproven.
-- At cleanup verification, no AKM or matching WebView processes remained. This is a recorded observation, not a promise about processes in a later session.
-
-The exact artifact hashes and source manifest are preserved under [history/phase1-final](history/phase1-final/). See [VERIFICATION.md](VERIFICATION.md) for coverage and invalidation rules.
-
-## Readiness is not established
-
-- The last full numerical review is the historical **40.5/100, rounded to 41** baseline. There is no post-phase-one full rubric rescore. Do not assert that the current source was independently scored either 41 or above 90.
-- Scoped correction acceptance is not the original three-perspective full-rubric review, and neither is a professional security audit.
-- Real OS lock/suspend delivery is unverified. Synthetic messages prove handlers only. Wall-clock idle expiry is unverified; fake-clock policy tests passed.
-- Installers are unsigned, built but not installed. CI is configured but has not run remotely.
-- Real secrets, public publication, installation and signing enrollment remain unauthorized. The owner's 2026-11-01 request separately authorizes local Git and the named private repository only, not public sharing or remote CI.
-
-## Important retained runtime state
-
-An earlier server restart lost the interrupted proof's original in-memory preference snapshot. The durable recovery baseline still points to this known fake vault:
-
-`C:\Users\Gargeya\AppData\Local\Temp\opencode\akm-app-proof-07ee8d95-96d0-40df-bf1c-e24b33600ef2\vault.kdbx`
-
-The final proof restored that baseline byte-for-byte. The user's pre-restart preference is unknown. Do not guess it, delete that fake-vault directory while it remains selected, or overwrite settings on the strength of a stale PID. New native proof runs persist `recovery.json` and prior settings bytes before launch.
-
-## Open phase-two work
-
-1. Private per-device journal, honest integrity claims and malformed-tail handling. The current log still exposes metadata beside a synced vault.
-2. Secret-change rotation timestamps, native history and recoverable deletion/tombstone semantics.
-3. External dotenv compatibility, date/rounding consistency and remaining CLI selection/memory issues.
-4. Reminder privacy and delivery, remaining accessibility and documented layout debt.
-5. Expanded independent-reader/CI evidence and a fresh full-rubric assessment. Higher numerical scores are not guaranteed by completing this list.
-
-Several original phase-two IDs were already addressed during phase one. Use the ledger rather than rebuilding the old roadmap blindly.
-
-The fresh review added three inspection-supported open P2 defects. Unit 1a addresses native warnings crossing sessions and journal UI/CLI overclaims. Stale expiry/rotation presentation remains for unit 3. All remain open until the appropriate implementation evidence and fresh acceptance are recorded.
-
-## Context preservation checks
-
-The [calibration completion record](reviews/2026-10-31-calibration/completion.json) records that earlier unit's local-link, archive/hash, frozen-input and unchanged-source checks. Its raw review and original 44-record archive remain immutable. That calibration changed project guidance, planning and evidence only, with no application tests/builds, GUI, clipboard, AppData, installation or publication. Its reviewed documents are retained separately from subsequent dispositions and unit-1a implementation evidence.
+- Source: the application files on `main` at `cfeb1b0`, unchanged since. `git diff baseline/pre-unit-1a main -- crates desktop tools .github Cargo.toml Cargo.lock` compares them with the 139-file pre-unit snapshot: 30 changed files, and 18 files absent from the snapshot. An absent file is not necessarily new in unit 1a. For example, `desktop/icon.svg` existed before phase one with its current hash ([REVIEWING.md](REVIEWING.md#unit-1a-inputs)).
+- Builds in `target/release`, all unsigned and not installed, SHA-256:
+  - `akm-desktop.exe` `bc393ed9a5081aac2d30e4999e1537bb806c047e9a22bd025e06d2b78d3e6ea8`
+  - `akm.exe` `495d72976b552746ebe170f1ab1f25280272b54bff5365b251d3cf546342011b`
+  - `bundle/msi/AKM_0.1.0_x64_en-US.msi` `e29139eadb113da5d998a173ea05d7ddf10ae29f8d1bcb72798f3a7e61b6f3ac`
+  - `bundle/nsis/AKM_0.1.0_x64-setup.exe` `b0455b8912350d6d1c98f271364257f47e7f6340b19e2ed6a80cbfb3c2c2f7cb`
+- Before you use a build for a proof, check its hash against this list. A different hash needs a rebuild and a new check run.
 
 ## Next action
 
-**The owner's "Yes, if that's safe" authorized bounded visibility/invocation correction, now implemented and verified; unit1a remains unaccepted.** Main owns all changes serially. No test/build/proof/reviewer job pending. No new actual minimize has run; the earlier readiness is spent. [Frozen plan](work/phase2-1a/corrections4/visibility/PLAN.md), [publication refinement](work/phase2-1a/corrections4/visibility/PUBLICATION_CONTRACT.md), [current evidence](work/phase2-1a/corrections4/visibility/evidence.md).
+The owner authorized implementation of unit 1a only. Each other unit needs its own authorization ([ROADMAP.md](ROADMAP.md)).
 
-- **Changed boundary:**9 native handlers now use explicit workers/captured snapshots. `session.rs`/new `visibility.rs`/`lib.rs` separate owned presentation expiry from native lock and committed acknowledgment; `commands.rs` preserves file-save ticket/revision authority at extraction/publication. Runtime-generic status/path helpers and test-only Cargo/build manifest support generated IPC tests. Frontend `nativeSession.ts`, App, Settings and KeyDetail validate/coalesce expiry, clear local protected data, fence continuations and fail closed on listener setup failure. Tests/e2e and candidate-aware proof tooling updated. Core/CLI/dependency versions unchanged in this continuation; no journal/dialog reordering, timeout increase or visual redesign. Existing layout findings remain.
-- **Final checks:**196 Rust passes/2 gated ignored plus9 standalone generated IPC cases; strict Clippy/rustfmt;190 unique frontend cases via181 full3 passes plus9 previously unexecuted Settings cases on matching source; production/e2e types and32 browser cases pass. Full3's worker-startup error and earlier genuine-red/compiler/type/loader/fixture failures remain, not an all-first-try/full-green claim. [Verification collection2](work/phase2-1a/corrections4/visibility/verification-record-2.json) pins31 raw records. No application change after final verification. [CLI/KeePassXC evidence retained](work/phase2-1a/corrections4/visibility/retained-cli-evidence.json) through18 unchanged inputs and exact CLI hash, not rerun.
-- **Immutable visibility-1 candidate:**141 input paths; record SHA-256 `7f67cd150d133f66f324319a81978907d40377192331d69ee9beef3862189b3e`; GUI `bc393ed9a5081aac2d30e4999e1537bb806c047e9a22bd025e06d2b78d3e6ea8`; CLI `495d72976b552746ebe170f1ab1f25280272b54bff5365b251d3cf546342011b`; MSI/NSIS rebuilt unsigned/uninstalled. [Candidate](work/phase2-1a/corrections4/visibility/visibility-1-candidate.json), [4 hashes](work/phase2-1a/corrections4/visibility/visibility-1-artifacts-sha256.json), [pre-readiness source checkpoint](work/phase2-1a/corrections4/visibility/pre-readiness-checkpoint.json). Old c722584c GUI proofs/checkpoints and all4 failed reviews remain historical, not current acceptance.
-- **Renewed exact-GUI proof:**`visibility-native-journal-1`/`visibility-native-export-1` pass backup/deletion recovery, honest/damaged/missing/precision journal, cross-vault notices, approved scoped native save and fail-closed refusal. Both used recorded owned-root startup refresh, exited normally and restored settings exactly. [Cleanup](work/phase2-1a/corrections4/visibility/runtime-cleanup.json) observes no matching AKM/WebView, unchanged141 inputs/4 artifacts and settings SHA-256 `dacba49a3b4c08c71ab8265f3a00cc42199a968cdf0ba245f29a030c9ed49115`. Successful owned scratch removed; selected fake baseline and prior failed scratch retained. No clipboard/minimize/OS signals. Interactive desktop-control tools unavailable; harness output is not a screenshot or independent owner observation.
-- **Still open:**R4-01/02/03 need fresh acceptance; R4-04 actual outcome hide/navigation proof is unmet. The previous owner-ready run confirmed actual minimization then failed dialog expiry; later acknowledgment/exact1 fake import did not establish receipt loss or pre-completion expiry. [Failure/disposition](work/phase2-1a/corrections4/native-outcome-disposition.json) and `Temp\opencode\akm-app-proof-030c41dd-649e-44ae-8086-285677373566` remain. Do not infer its cause from desktop labels or erase it with new passes.
+1. **Owner decision: the R4-04 proof script.** The script cannot prove all five R4-04 pass conditions ([FINDINGS.md](FINDINGS.md#r4-04-pass-conditions)). The owner chooses one option:
+   - Extend `tools/verify_windows_app.ps1` first. It must count the outcome records, include the cancellation in the no-resurrection check, and check Key Detail if that is in scope. The extension changes no application code, so the existing GUI build and its hashes stay valid. Test the script change in a mode that does not minimize (`-JournalOnly`) before the owner-present attempt.
+   - Narrow the pass conditions to what the script proves today, and record the limit.
+2. **R4-04 needs the owner present.** After that decision, ask the owner whether they are ready to watch. The last attempt minimized the window and then failed its import-dialog-expiry check. The cause was not proved. Since then, a correction moved view expiry into native code, apart from lock handling. That change targets the failed check, but no window run has tested it.
+3. **Then review unit 1a.** Prepare the review inputs now ([REVIEWING.md](REVIEWING.md#unit-1a-inputs)). Request the one fresh review only after R4-04 passes, or after the owner gives an explicit decision about a failed or deferred attempt. The review gives two separate verdicts: source acceptance, and work-unit completion.
+4. Unit 1a has failed review four times. If this review rejects it again, apply the AGENTS.md rule: stop and take the design question to the owner.
 
-**Repository checkpoint:** only Git guards/configuration and documentation changed; no application suite/build/proof was repeated. The pre-readiness archive/candidate remain immutable. This private source/history backup is not a complete raw-evidence backup or a new security score; no public release, remote CI or native minimize authorization was inferred.
+## Local state outside the repository
 
-**Next engineering owner decision, still pending:** renewed readiness for the [one bounded fake-data OutcomeOnly attempt](work/phase2-1a/corrections4/visibility/NATIVE_PROOF.md), with multiple minimize/restore steps targeting only its owned AKM window; no clipboard or Windows lock/suspend. Do not pass the readiness flag or retry automatically. If ready, record fresh consent, verify candidate/ownership, then use a new immutable `visibility-native-outcome-1` identity and stop/preserve on failure. After runtime disposition freeze full-unit/cycle/source/artifact/evidence and confirm model availability before the one fresh `openai/gpt-6.1-terra#max` review. Another rejection returns to owner. No score, real-secret, public-release, installation or signing authorization.
-
-## Checkpoint format for the next work unit
-
-Replace the current-task and next-action sections when they change. Record the date, exclusive file ownership, changed paths, exact verification commands/results, reviewed source/artifact identity, unresolved findings, temporary resources still owned, decisions requiring the owner and one executable next step. Keep old evidence in history rather than growing this file into a transcript.
+- Git tag `archive/pre-cleanup-2026-11-01` keeps all the tracked evidence that the cleanup removed: phase-one records, the review rounds, probes and hash manifests.
+- Git tag `baseline/pre-unit-1a` is a commit with no parent. It holds the 139-file source snapshot from before unit 1a, rebuilt from `before.zip`, and each file matches the archived `before-sha256.json`.
+- `W:\AKM-archive\2026-11-01-local-evidence\` keeps the 265 ignored local files that the cleanup moved out: raw logs, screenshots and source archives.
+- The desktop app's settings select the fake vault `%TEMP%\opencode\akm-app-proof-07ee8d95-96d0-40df-bf1c-e24b33600ef2\vault.kdbx`. An earlier restart lost the owner's previous setting, so it is unknown. Keep that folder while the app selects it.
+- `%TEMP%\opencode\akm-app-proof-030c41dd-649e-44ae-8086-285677373566` holds the diagnostics of the failed R4-04 attempt.

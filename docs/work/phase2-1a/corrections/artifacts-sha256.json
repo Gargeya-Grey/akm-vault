@@ -1,6 +1,0 @@
-{
-  "target/release/akm.exe": "382422d789ded2216aa8f3d344b8be72c27bd76a88f77fff88b76c9d2a5983e7",
-  "target/release/akm-desktop.exe": "c5ed1a150d97eca63687a9a2d923f522d7245bb9580124b87e82e2663c128aca",
-  "target/release/bundle/msi/AKM_0.1.0_x64_en-US.msi": "c1a04efabfca348845ed7190cede6f2f5eb206d7e86f427a9731d5a8b95a7461",
-  "target/release/bundle/nsis/AKM_0.1.0_x64-setup.exe": "6a0eea352c38d6fadf18bf6195e9db324d2ebaa5c4cc81b51ddb9fa263e886dc"
-}
