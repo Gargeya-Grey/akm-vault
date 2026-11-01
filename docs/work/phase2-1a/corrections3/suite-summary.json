@@ -1,0 +1,16 @@
+{
+  "rustRuntimePasses": 163,
+  "rustProvenance": "Exact same-workspace feature-unification resume:156 completed before harness timeout;7 unfinished tests passed with all156 completed names explicitly skipped; remaining binary/doc targets pass.163 unique runtime passes,2 gated ignored. The earlier package-only7 are supplemental duplicates, not additional unique tests. No uninterrupted full-workspace exit0 claim.",
+  "rustDocTestsExit": 0,
+  "frontendPasses": 105,
+  "browserPasses": 18,
+  "clippyExit": 0,
+  "fmtExit": 0,
+  "typeFrontendBuildExit": 0,
+  "guiBundleBuildExit": 0,
+  "layoutExit": 1,
+  "layoutFindings": "Activity5, Keys/notice21 and Keys/outcome21 per theme; no page overflow or text overlap. Existing Keys/Activity findings, not a checker pass.",
+  "sourceUnchangedSinceRustRuntimeChecks": true,
+  "cliCoreEvidenceRetained": "CLI hash and all core/CLI persistence inputs match rejected round3 checkpoint; its exact-CLI KeePassXC evidence is retained, not newly rerun.",
+  "workspaceSelectiveResumeExit": 0
+}

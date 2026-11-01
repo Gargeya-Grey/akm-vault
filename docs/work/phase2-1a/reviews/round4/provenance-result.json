@@ -1,0 +1,332 @@
+{
+  "reviewedAtUtc": "2026-10-31T10:27:22.290710+00:00",
+  "role": "one fresh independent read-only reviewer/collector",
+  "requestedModelVariant": "openai/gpt-6.1-terra#max",
+  "harnessDeclaredModel": "openai/gpt-6.1-terra",
+  "catalogModelActive": true,
+  "catalogListsMaxVariant": true,
+  "independentlyObservedActiveVariant": null,
+  "independentlyObservedEffort": null,
+  "independentlyObservedTokenUsage": null,
+  "sourceAcceptance": "NO",
+  "overallWorkUnitRuntimeCompletion": "NO",
+  "findings": [
+    {
+      "id": "1A-R4-01",
+      "priority": "P2",
+      "classification": "reproduced exact CLI with fake vault; GUI consequence inspection-supported",
+      "summary": "Future-sorting dated backups can cause pruning of the just-created pre-deletion backup while refresh fails and success/warnings say retained."
+    },
+    {
+      "id": "1A-R4-02",
+      "priority": "P2",
+      "classification": "reproduced against frozen App/API with mocked native IPC and deliberately delayed event",
+      "summary": "Old untagged native lock notification can false-lock frontend B; actual native event ordering is not established."
+    },
+    {
+      "id": "1A-R4-03",
+      "priority": "P3",
+      "classification": "reproduced with frozen Session/ClipboardLease and fake backend",
+      "summary": "Failed immediate cleanup after partial publication bypasses lease episode warning accounting."
+    },
+    {
+      "id": "1A-R4-04",
+      "priority": "P2 work-unit proof gate",
+      "classification": "coverage gap, not product defect",
+      "summary": "Exact-GUI native delayed outcome handoff not reached after two failed minimize observations."
+    }
+  ],
+  "inputIndexSha256": "805b000d58010d421fe2f4a63c27c67142ff161672ef02f00293a7b000f725f4",
+  "currentSourceZipSha256": "db2f270176b64ae1fa7cdbb36340776d10446f778a21c8070dfa20b50937bfb0",
+  "cycleSourceManifestSha256": "8e6cb389054e1c179dfe22b42c70d149a4d2646e9d14fe232bb494ba2eaa8eb7",
+  "fullUnitSourceManifestPaths": 148,
+  "diffs": {
+    "combined": {
+      "sha256": "41e74004f79a2df53bbcd682527060de620b43ad4e03d315cce495a693a389ba",
+      "lines": 4172,
+      "diffPaths": 36,
+      "headersMatch": true,
+      "duplicatePaths": false,
+      "changedManifestPaths": 36,
+      "manifestChangesNotInDiff": [],
+      "diffPathsNotManifestChanges": [],
+      "nontext": [],
+      "reconstructedExactText": true,
+      "reconstructedNormalizedNewlines": true
+    },
+    "cycle": {
+      "sha256": "a656b6011d5af9a75ad967deae3a45307337d2395d0a36eb9a0e3be52b741a0e",
+      "lines": 1584,
+      "diffPaths": 23,
+      "headersMatch": true,
+      "duplicatePaths": false,
+      "changedManifestPaths": 23,
+      "manifestChangesNotInDiff": [],
+      "diffPathsNotManifestChanges": [],
+      "nontext": [],
+      "reconstructedExactText": true,
+      "reconstructedNormalizedNewlines": true
+    }
+  },
+  "liveDifferences": [
+    {
+      "path": "docs/STATE.md",
+      "expected": "5a53204868023830872f6590e63a79d27fe1827cc587e9dd8bb7d6ac6639ac40",
+      "actual": "8020a40a7256dc917af1a4595c42b82e47487b9086bfeaa4d78def1d9f4f7041"
+    }
+  ],
+  "artifactHashes": {
+    "target/release/akm.exe": {
+      "expected": "0024f9005a68bf5b5ab9d32297c9d6eb4043ee5616a7ae6c465a054adfddcdc0",
+      "actual": "0024f9005a68bf5b5ab9d32297c9d6eb4043ee5616a7ae6c465a054adfddcdc0",
+      "matches": true
+    },
+    "target/release/akm-desktop.exe": {
+      "expected": "c3b125872f26a609e63158f6ae72fb8cac9e666ca11ff83efb64aa19de0f0ec6",
+      "actual": "c3b125872f26a609e63158f6ae72fb8cac9e666ca11ff83efb64aa19de0f0ec6",
+      "matches": true
+    },
+    "target/release/bundle/msi/AKM_0.1.0_x64_en-US.msi": {
+      "expected": "960737cc445d066632e32e778a2488c2deb3de6f6aa46ccf27bfc6fffab5c871",
+      "actual": "960737cc445d066632e32e778a2488c2deb3de6f6aa46ccf27bfc6fffab5c871",
+      "matches": true
+    },
+    "target/release/bundle/nsis/AKM_0.1.0_x64-setup.exe": {
+      "expected": "2c5647c9dfdaf45212752bbad4bbbc28ec5c3d78c909531e382f40d4fc9953c0",
+      "actual": "2c5647c9dfdaf45212752bbad4bbbc28ec5c3d78c909531e382f40d4fc9953c0",
+      "matches": true
+    }
+  },
+  "beforeCycleCoreCliPathsChecked": 22,
+  "beforeCycleCoreCliDifferences": [],
+  "scratchSourceCopies": {
+    "desktop/src-tauri/src/clipboard.rs": {
+      "sha256": "49dd7b0eb88479738cb357563abd042f2e61ef1f2ffa7d4248223ad650c5a899",
+      "matchesFrozen": true
+    },
+    "desktop/src-tauri/src/session.rs": {
+      "sha256": "531802f1d4ec10d4e54e8f3c04b8383985af34e6a7f8ec426e8348b653cc0bce",
+      "matchesFrozen": true
+    },
+    "desktop/src-tauri/src/pending.rs": {
+      "sha256": "630dabd02168f6f7871a5b4aad715bc3bb809f096449c99cf11094c6444fb24f",
+      "matchesFrozen": true
+    },
+    "desktop/src-tauri/src/policy.rs": {
+      "sha256": "3f53fe7e1f015c763a87e2cd423357d971b44f900a5736517b220cd52d13d822",
+      "matchesFrozen": true
+    },
+    "desktop/src-tauri/src/error.rs": {
+      "sha256": "2f8a55ec8d85582a3613de74222d57adac090aefcc6dfc75581b190041a505b3",
+      "matchesFrozen": true
+    },
+    "desktop/package.json": {
+      "sha256": "6ff058cecb303e85ed4c40d6b0d35db8a264bdd301b3c0c1a8eb53dbe90dbd8a",
+      "matchesFrozen": true
+    },
+    "desktop/src/ApiFence.security.test.tsx": {
+      "sha256": "546f8f69422de715dbc25f3a00b7603904fdc405f601baa91661d5f5016c0d2d",
+      "matchesFrozen": true
+    },
+    "desktop/src/App.security.test.tsx": {
+      "sha256": "556032385b1f2700c36776a98c51db85803fcebf99220a32d092cdda6688a85a",
+      "matchesFrozen": true
+    },
+    "desktop/src/App.tsx": {
+      "sha256": "2890c8157aa8df24d750ac4825c8bbeb98d7fba45cacd7132c59bad4e6d54044",
+      "matchesFrozen": true
+    },
+    "desktop/src/DeleteOutcome.security.test.tsx": {
+      "sha256": "16ebc59a40481f5cfa0ba2912f265cea6bdf00635ae221adb81d621a5a418639",
+      "matchesFrozen": true
+    },
+    "desktop/src/OutcomeHandoff.security.test.tsx": {
+      "sha256": "62e5337486cf45ea13605e5b3001c37093ce6456b53b509731c51158608f619f",
+      "matchesFrozen": true
+    },
+    "desktop/src/SessionReceipt.security.test.tsx": {
+      "sha256": "0c76b873124868ab8e777c79f94b76c2ad86efa1530bee0698cedcaf36def8cd",
+      "matchesFrozen": true
+    },
+    "desktop/src/Unlock.security.test.tsx": {
+      "sha256": "21ae6ad005ca121b6860d6aa8b0027c5c07a6dcef6d3e88fbf91a2a04089e018",
+      "matchesFrozen": true
+    },
+    "desktop/src/Warnings.security.test.tsx": {
+      "sha256": "aef283b8ae8b5630a7aaa0ff70193f62626d400c97ccf4384daa9a507f69ee83",
+      "matchesFrozen": true
+    },
+    "desktop/src/api.security.test.ts": {
+      "sha256": "b5e2b7a49a40d4f2ff99f8045166d0d5785257fbab0a02e0de046f5e16339979",
+      "matchesFrozen": true
+    },
+    "desktop/src/api.ts": {
+      "sha256": "9061e1f81f5c4aae2a9d12991294befb6026a959e52fb8d838ae49b098723f45",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/Activity.security.test.tsx": {
+      "sha256": "06310e69768b689f4c2dd2014622b3415958f83c7c8b538f9bff0a959ce82eb9",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/Activity.tsx": {
+      "sha256": "1552a22dfd6a3a52e6c619a2e415f37cf3c0614b93d65ac32d91f0b38f16441b",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/Dialog.security.test.tsx": {
+      "sha256": "af795dee5fbb4de3b6542abbc61b39b5ddf5e565ae1e9ac73fe289e11cbf3058",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/FilterSelect.tsx": {
+      "sha256": "16e741471edee0c6c7b606bf4339d42763d9a0a2986db92e0b4c77c4045a28ae",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/KeyDetail.tsx": {
+      "sha256": "a4eaad696aac8ac7a1825d21a08acc919bd9d206be39724766724dd81defa275",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/KeyForm.security.test.tsx": {
+      "sha256": "612c12a77e337687340b74e12162544baebd1fec5fd07a31bff839ba42e64a90",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/KeyForm.tsx": {
+      "sha256": "93d5519ddeae69d1cd305a0984f60eccfcf89a2a9dce1ca93b59e1ef28e47f97",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/KeysView.tsx": {
+      "sha256": "6785789bc1fb0bc7d190dfc3eea120d9fd7bd6325c317b5f874c2259e7937398",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/NavBar.tsx": {
+      "sha256": "302ab43933ec719d80748020584ec0880d80a11ddb1f65dd64a5cd8672e21bc3",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/Notice.tsx": {
+      "sha256": "c981a496570bd4e4c6824a8ba6d1fef392d2c18d9d18494a5ce9f57c3a857b0f",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/Settings.security.test.tsx": {
+      "sha256": "c9b0803e46f307c4ea3c37ef0e68f59c0c9847ca9e01e65b184e9ed6e6e4a5d6",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/Settings.tsx": {
+      "sha256": "09d7c612b979161f8d06e2407c7fcdfd5939cb59015a6d0289fa30b507a294dc",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/Unlock.tsx": {
+      "sha256": "1746b0cced7676016c7f9411691563c06088ec79116bdb0b516e19579026afbd",
+      "matchesFrozen": true
+    },
+    "desktop/src/components/useDialogFocus.ts": {
+      "sha256": "393447325fb9584eab7d9601a813341ec3ce37a622ea5f9fdd9501d7c5553564",
+      "matchesFrozen": true
+    },
+    "desktop/src/format.ts": {
+      "sha256": "c08a1f1367342afdd1d6c123dac1c1914abd8d0f47a137133a1126bd2cdd71db",
+      "matchesFrozen": true
+    },
+    "desktop/src/main.tsx": {
+      "sha256": "f88beba40a1547b31283c4e7178b2b80082c90f663f1f7311d29962c74d338a5",
+      "matchesFrozen": true
+    },
+    "desktop/src/operationNotices.ts": {
+      "sha256": "989e5beb63bd2a1cee96f531363332fbf4d60b1a9522c69e131e141c408ce9e5",
+      "matchesFrozen": true
+    },
+    "desktop/src/sessionBoundary.ts": {
+      "sha256": "dc55eabc924f9324d2de5df7dd8814f24ce88c89812524beb81f3b4615d857c2",
+      "matchesFrozen": true
+    },
+    "desktop/src/styles.css": {
+      "sha256": "d95e2d0fd773d77854955838746a8c85989331985cda91557d23addaf11f8fcd",
+      "matchesFrozen": true
+    },
+    "desktop/src/theme.ts": {
+      "sha256": "0e37c40f2fd2b4ca876d339537e003d2ff34e05ca03d14f7a67345b9d5d88777",
+      "matchesFrozen": true
+    },
+    "desktop/src/types.ts": {
+      "sha256": "0bf59e0649fcfd3d8476ba905e23bb7cacc8392ab6f526395bf191fd10aa5c31",
+      "matchesFrozen": true
+    },
+    "desktop/tsconfig.json": {
+      "sha256": "f2a068c09992a7696139e01927f5e4ab6353e4e3c4073de60439cfbaeb0a4f87",
+      "matchesFrozen": true
+    }
+  },
+  "allScratchSourceCopiesMatchFrozen": true,
+  "independentChecks": [
+    {
+      "name": "frozen inputs, baseline/current archives, exact diff reconstruction, live source and artifacts",
+      "command": "python verify_inputs.py",
+      "exit": 0,
+      "result": "19 frozen files and three archives matched; diffs exact; four artifact hashes matched; only allowed docs/STATE.md differed"
+    },
+    {
+      "name": "clock-skew backup fake vault",
+      "command": "python probe_backup_clock_skew.py; python probe_backup_validate.py",
+      "exit": 0,
+      "result": "exact pinned CLI reproduced deletion with no retained backup containing the deleted fake key"
+    },
+    {
+      "name": "partial publication cleanup fake backend",
+      "command": "python run_probe_partial_cleanup.py",
+      "compileExit": 0,
+      "exit": 0,
+      "result": "actual copied Session/ClipboardLease skipped warning both initially and after an earlier pending episode"
+    },
+    {
+      "name": "native event delay mocked tests",
+      "command": "node W:/API Keys Manager/desktop/node_modules/vitest/vitest.mjs run src/probe-stale-native-event.test.tsx --config vitest.config.ts",
+      "cwd": "C:\\Users\\Gargeya\\AppData\\Local\\Temp\\opencode\\akm-unit1a-acceptance-round4-4c50b64c-9058-4032-829b-ad4bb77b74be\\frontend-probe",
+      "exit": 0,
+      "testsPassed": 2,
+      "result": "tests assert the current false-lock behavior under mocked event ordering"
+    }
+  ],
+  "mainSessionEvidenceReportedNotRerun": {
+    "rustUniquePasses": 163,
+    "rustProvenance": "156 completed before harness timeout plus seven same-workspace selective resume with completed names skipped; no uninterrupted full-workspace exit0 claim",
+    "rustGatedIgnored": 2,
+    "frontendPasses": 105,
+    "mockedNativeBrowserPasses": 18,
+    "strictLintTypeAndGuiBundles": "reported pass",
+    "nativeJournalAndExport": "reported pass on exact GUI; logs inspected",
+    "nativeOutcome": "two failed minimize observations before handoff assertions; coverage incomplete",
+    "layoutChecker": "exit1; existing Activity5 and Keys21 findings per theme; outcome fixture same21 Keys findings"
+  },
+  "realSecretReadiness": "not established and not evaluated",
+  "projectSourceDocsTestProofChangesByReviewer": false,
+  "realClipboardGuiSettingsOsSessionInstallationGitPublicationOrRealSecrets": false,
+  "nextAction": "Main archives verdict and returns rejected acceptance to owner; no automatic correction or extra review cycle.",
+  "scratchArtifactSha256": {
+    "review-result.md": "71a74909ab565c32295e69a68fd8f8448cc731e6513fe3d13a733379c236fb7f",
+    "verify_inputs.py": "28d76c5e1e82ca51714c1fef7032f758917a502bcc2ce484448fc9f66a2e10b6",
+    "input-verification.json": "34b6ca1eb8689061625110757baf903e81f7fb700ccd3fc942f25e79929f8896",
+    "input-verification-final.log": "216a46c4c7cbc89436e87c7bc9823c47277fc0c8517772454d974e4207e7a989",
+    "probe_backup_clock_skew.py": "28b25fe118f346ef75dc79e02de316658fb7b7ee1d15d091e5b19bd49e59f36e",
+    "probe_backup_clock_skew.log": "1a42d2b85a7aa8c64e1de55df24668310d3c471a9857238d9ed4c2dea2d7fb56",
+    "probe_backup_validate.py": "000bba2a4eb8f5a7420338de69ee6d217c6a0f9770fd98e8a85d4d0e491d34d9",
+    "probe_backup_validate.log": "2ebacf0f5d0ec3aeb7863986af778d75554a9cfef6b8af8dece2ce5d69252af6",
+    "probe_partial_cleanup.rs": "8b8f1f8e83487f934fe97b6c1708750de255f3b0d7fceab056e832fed20d13af",
+    "run_probe_partial_cleanup.py": "1e53dcee641865191a4f29a74a35ba69228aab9cafaa82a3b01d861f1a579b1a",
+    "probe_partial_cleanup-build-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "probe_partial_cleanup-final.log": "4d036241509c6bcd563c59228d0192a03cea52721f98587577158e4acd3f33e2",
+    "probe_partial_cleanup.exe": "2e9f10c69a04b9f5aaaec3d79221476ea747a89fa9251a6d8400b30110e61088",
+    "frontend-probe/vitest.config.ts": "c15630c8a274804d817b509923b6be2f0e573f1ee48d6823431ed4063dbb466e",
+    "frontend-probe/src/probe-stale-native-event.test.tsx": "e099d72055b8fe0df29cbc99cb0dfe265da3fef650ebfa0fe8e18e5a10ab2ca6",
+    "frontend-probe/probe-stale-native-event-final.log": "df3c434a968eb193a5de71d8206c47b2f28c5a9542091e5544939d43978738ea",
+    "write_provenance.py": "59e75efe47db01b27bcac76317f2e6a94dcc4f8a14f659888edeb1e3e00d84fe"
+  },
+  "debugLibrariesUsedForFakeNativeProbeSha256": {
+    "libakm_core-7c5c09b231fa42f3.rlib": "7e9c6b6dd577fa82f69a13fd57f382fe4ddc8b10b695c9d6252914eb62ddbfcc",
+    "libserde-aa63687df4fd0aed.rlib": "56b506816352d4184c094e8bf08689bcb683e8e7658be8024d9db8b4d7e658e9",
+    "libsha2-aa896634fe35136b.rlib": "2b2be0594ab3cb8c753c03ac0a3a8c5047a5e49b901af880c2e20a68d819b380",
+    "libuuid-1e0e0f481680fde2.rlib": "f89899bec98b6fe487efd257f9a2adf4233c69105f3061a896d7d0aa1a92da1b",
+    "libzeroize-89d0f21f858ecf35.rlib": "94e016771cfe5e0fc57334f5db4e0e7f515446ff60ca55fedfb3eca62153840c",
+    "libwindows_sys-7dd0390b325cd753.rlib": "0ebd8cc7fb7b24510562d7d9a065fc4113ef04e55248813d18a55d88bc155762"
+  },
+  "externalTauriSourceSha256": {
+    "C:\\Users\\Gargeya\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\tauri-2.12.5\\src\\webview\\mod.rs": "b5319b171c09a8e652d75585be39d92b387df370340ca90b58141b501c17009a",
+    "C:\\Users\\Gargeya\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\tauri-runtime-wry-2.12.3\\src\\lib.rs": "ec343fc347aff1fb5327100df2541992e47eb6be1ddb55102170e2253b9c6d59"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "scratch": "C:\\Users\\Gargeya\\AppData\\Local\\Temp\\opencode\\akm-unit1a-acceptance-round4-4c50b64c-9058-4032-829b-ad4bb77b74be",
+  "requestedModel": "openai/gpt-6.1-terra#max",
+  "applicationSourceFrozen": true,
+  "nativeHandoffProof": "incomplete; two failed minimize attempts; do not infer a product failure or pass",
+  "noFurtherCorrectionAfterRejection": true
+}

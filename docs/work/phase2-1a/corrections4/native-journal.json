@@ -1,0 +1,12 @@
+{
+  "command": [
+    "C:\\Python313\\python.exe",
+    "docs/work/phase2-1a/corrections4/run_native.py",
+    "JournalOnly"
+  ],
+  "cwd": "W:\\API Keys Manager",
+  "started": "2026-10-31T13:20:56.057371+00:00",
+  "finished": "2026-10-31T13:21:43.914075+00:00",
+  "exit": 0,
+  "logSha256": "76eeb06d8d9c2e361df1d75bc5971f544faacee50a190065c1b93ecb8f02d681"
+}

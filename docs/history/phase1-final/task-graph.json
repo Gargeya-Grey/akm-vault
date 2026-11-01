@@ -1,0 +1,87 @@
+{
+  "title": "AKM Windows hardening",
+  "goal": "Fix credential leaks and data-loss blockers, then prove them against real Windows artifacts.",
+  "tier": "Tier 2: three independent implementation units plus frontend integration; high data-integrity risk",
+  "status": "blocked",
+  "stages": [
+    {
+      "name": "Implement",
+      "mode": "parallel",
+      "why": "Exclusive file ownership and fixed Rust/IPC contracts prevent conflicting edits. Large implementation and regression-test output can proceed independently.",
+      "input": "PHASE1.md, verified adversarial findings, source snapshot",
+      "output": "Core, CLI and native desktop fixes with targeted regression tests",
+      "nodes": [
+        {"name":"Vault persistence","role":"Worker","model":"self","effort":"host default","reason":"Large implementation and test unit; routing presets are unavailable in this harness.","owns":["crates/akm-core/"],"check":"40 unit/integration tests pass; planner journal-concurrency regression passes; real KeePassXC interchange passes","state":"done"},
+        {"name":"Windows CLI","role":"Worker","model":"self","effort":"host default","reason":"Independent command handling and subprocess tests; model selection not requested.","owns":["crates/akm-cli/"],"check":"19 executable and 2 unit regressions pass; integration review pending","state":"done"},
+        {"name":"Native lifecycle","role":"Worker","model":"self","effort":"host default","reason":"Independent Windows clipboard/session APIs and native lifecycle tests.","owns":["desktop/src-tauri/"],"check":"31 native tests pass; opt-in real clipboard proof passes; real app lock/suspend/exit/affinity proof passes","state":"done"}
+      ]
+    },
+    {
+      "name":"Integrate and prove",
+      "mode":"single",
+      "input":"Implemented Rust and IPC contracts",
+      "output":"Rebuilt Windows executable, regression results, KeePassXC and UI evidence",
+      "nodes":[{"name":"Planner integration","role":"Planner","model":"self","effort":"host default","reason":"Uses existing project context and avoids another worker re-reading it.","owns":["desktop/src/","README.md","PHASE1.md","Cargo.toml","Cargo.lock"],"check":"93 workspace tests, strict Clippy/format, 7 frontend tests, 4 browser scenarios, release bundles, real KeePassXC and native GUI proof passed","state":"done"}]
+    },
+    {
+      "name":"Review",
+      "mode":"single",
+      "input":"PHASE1.md, combined diff, exact verification commands; no worker reasoning",
+      "output":"Ranked findings and a decision on phase-1 blockers",
+      "nodes":[{"name":"First fresh review failed","role":"Reviewer","model":"self","effort":"host default","reason":"Independent context found six supported race and export defects.","owns":[],"check":"FAIL: three high and three medium findings require corrections","state":"failed"}]
+    },
+    {
+      "name":"Correct review findings",
+      "mode":"parallel",
+      "why":"The clipboard writer and CLI exporter own independent files and need substantial native implementation/tests. The planner keeps coupled session, UI and GUI-export changes together.",
+      "input":"Six findings, scratch probes, correction contracts in PHASE1.md",
+      "output":"Permanent race/failure regressions and corrected outcomes, previews, clipboard and exports",
+      "nodes":[
+        {"name":"Session and UI races","role":"Planner","model":"self","effort":"host default","reason":"Coupled cancellation semantics and frontend epochs reuse the planner's context.","owns":["desktop/src/","desktop/src-tauri/src/session.rs","desktop/src-tauri/src/commands.rs","desktop/src-tauri/src/private_export.rs","desktop/src-tauri/src/error.rs","tools/","PHASE1.md","README.md"],"check":"Committed outcome, lock nonblocking and deferred frontend regressions pass; exact-release proof pending","state":"done"},
+        {"name":"Atomic clipboard ownership","role":"Worker","model":"self","effort":"host default","reason":"Independent Windows publication API implementation and failure/interleaving tests; presets unavailable.","owns":["desktop/src-tauri/src/clipboard.rs"],"check":"15 clipboard tests pass including publication ownership and partial failure; real flags proof pending","state":"done"},
+        {"name":"CLI export failure safety","role":"Worker","model":"self","effort":"host default","reason":"Independent native ACL, file publication and injected-failure regression output; no model selection requested.","owns":["crates/akm-cli/src/export.rs","crates/akm-cli/tests/security.rs"],"check":"27 executable/helper regressions pass including cleanup, no-overwrite and unsupported ACL storage","state":"done"}
+      ]
+    },
+    {
+      "name":"Rebuild and re-review",
+      "mode":"parallel",
+      "why":"Application source is stable. Read-only review uses separate scratch probes and cannot touch the GUI or clipboard while the planner completes native proof scripts.",
+      "input":"Collected correction diff and permanent regressions",
+      "output":"Exact release evidence and fresh acceptance verdict; no readiness score inferred",
+      "nodes":[
+        {"name":"Combined verification","role":"Planner","model":"self","effort":"host default","reason":"One final full verification pass avoids duplicate build work.","owns":[],"check":"Historical candidate: 117 workspace, 19 frontend and 4 browser tests plus builds/KeePassXC passed; later clipboard/runtime failures were corrected in the following stages","state":"done"},
+        {"name":"Fresh correction review","role":"Reviewer","model":"self","effort":"host default","reason":"A new independent context checks the combined diff against the plan, not worker explanations.","owns":[],"check":"FAIL: desktop temp ownership, opening error, bootstrap retry, hidden import and Unix-doc defects; real clipboard also failed","state":"failed"}
+      ]
+    },
+    {
+      "name":"Repair runtime and review failures",
+      "mode":"parallel",
+      "why":"Windows clipboard synthesis and file-handle publication require independent native implementations. The planner keeps all frontend/session error flows together.",
+      "input":"Second fresh review probes and real clipboard sequence failure; PHASE1.md second-correction ownership",
+      "output":"Owned-handle export, valid native clipboard lease, visible fenced errors and completed native proof",
+      "nodes":[
+        {"name":"Windows clipboard lifecycle","role":"Worker","model":"self","effort":"host default","reason":"New native runtime evidence requires a focused implementation; stronger unrequested model selection is not available.","owns":["desktop/src-tauri/src/clipboard.rs","desktop/src-tauri/Cargo.toml"],"check":"20 deterministic clipboard tests and the planner-run real Windows sequence/private flags/cleanup test pass","state":"done"},
+        {"name":"Owned desktop export","role":"Worker","model":"self","effort":"host default","reason":"Independent mechanical port of proven handle ownership and native failure regressions.","owns":["desktop/src-tauri/src/private_export.rs"],"check":"14 owned-file/path/ACL regressions pass, including renamed/replaced temp cancellation and publication","state":"done"},
+        {"name":"Terminal UI outcomes","role":"Planner","model":"self","effort":"host default","reason":"Error fencing and boot/import lifecycle reuse coupled session/frontend context.","owns":["desktop/src/","desktop/src-tauri/src/session.rs","tools/","PHASE1.md","README.md","crates/akm-cli/README.md"],"check":"Review regressions and cross-session receipt test pass; 132 workspace, 24 frontend and 4 browser tests pass","state":"done"}
+      ]
+    },
+    {
+      "name":"Acceptance recheck",
+      "mode":"parallel",
+      "why":"Application source is frozen. Read-only review uses its own scratch and cannot touch GUI/clipboard while the planner verifies rebuilt artifacts.",
+      "input":"Combined correction diff, source hashes, PHASE1.md contracts and current verification results",
+      "output":"Exact release evidence, fresh review verdict and explicit residual gates without a projected score",
+      "nodes":[
+        {"name":"Exact release verification","role":"Planner","model":"self","effort":"host default","reason":"One collector owns real OS interaction and avoids concurrent clipboard or GUI tests.","owns":["tools/verify_windows_app.ps1","PHASE1.md","README.md"],"check":"Final GUI 95396108 rebuilt after P3; resumed exact-path save/cancel, clipboard, synthetic session/power, exit and affinity passed. Prior imports/clone/upgrade and unchanged CLI/KeePassXC evidence preserved; process/settings cleanup verified","state":"done"},
+        {"name":"Fresh acceptance review","role":"Reviewer","model":"self","effort":"host default","reason":"Independent context is required after supported corrections, not another pass over a knowingly failed candidate.","owns":[],"check":"Approved within phase-1 correction scope after sole P3 lock-reply feedback fix; both new regressions independently passed. No new numerical readiness verdict","state":"done"}
+      ]
+    }
+  ],
+  "gates":[
+    {"name":"Regression tests","who":"Planner","rule":"132 workspace, 24 frontend and 4 browser checks preserved; affected App/receipt 10-test run passed after final P3; strict Clippy/format and standalone real clipboard passed","state":"done"},
+    {"name":"Real Windows artifact","who":"Planner","rule":"Final frontend/GUI/MSI/NSIS rebuilt; only remaining native proof resumed and passed on that GUI. Completed unaffected probes were not repeated","state":"done"},
+    {"name":"Independent review","who":"Fresh reviewer","rule":"Merged source-correction verdict approved after the bounded P3 fix; no higher readiness score inferred","state":"done"},
+    {"name":"Real-secret readiness","who":"Owner and independent reviewer","rule":"Blocked: actual OS lock/suspend delivery and wall-clock idle need owner-assisted checks; later hardening, signing and professional review remain. Original 40.5/100 score unchanged; an independent score above 90 followed by testing is still required","state":"blocked"}
+  ],
+  "notes":["A source archive preserves the pre-change baseline without initializing git. PR/merge is not applicable; no push or publication was requested.","Frontend integration follows fixed IPC contracts; no concurrent edits to native Rust files.","This graph supports code fixes, not a separate analytical deliverable. No Canvas is needed.","Final correction review and remaining native checks passed; the blocked readiness gate covers wider trust/manual-coverage work, not unresolved supported phase-1 source defects.","Settings were restored byte-for-byte to the durable recovery baseline, which points to a fake vault. The unknown pre-restart original preference was not guessed.","Synthetic Windows messages prove handlers, not actual OS delivery. No score above 90 is claimed from tests alone."]
+}

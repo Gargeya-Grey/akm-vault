@@ -1,0 +1,220 @@
+# AKM adversarial review — 30 October 2026
+
+**Scope:** Windows only. Covers the premise, the design, the Rust core, the CLI
+and the desktop app as they stand today.
+
+**Verdict:** **41 / 100. Not ready for real secrets.** The pass mark set by the
+owner is 90.
+
+## Method
+
+- **Rubric.** Nine areas worth 100 points, fixed before any findings came in.
+- **Reviewers.** Three independent reviewers, each starting with no knowledge of
+  how the project was built: security, product premise and architecture, and
+  correctness. They could read the code but not change it, and used throwaway
+  vaults only.
+- **Live tests by the author.**
+  - Interoperability with the real KeePassXC 2.8.0 (portable build, checksum
+    verified).
+  - Desktop app tests driven through Windows UI Automation.
+  - A round-trip probe of the `keepass` library.
+- **Verified before counted.** Every Critical and High finding below was
+  reproduced by running code, unless it says "inspection".
+- **Double counting removed.** When reviewers penalised the same root cause in
+  two areas, it is counted once, in the area where it belongs. Without this the
+  raw total was 35.5.
+
+## Scorecard
+
+| Area | Points | Score | Main deductions |
+| --- | ---: | ---: | --- |
+| A. Premise and positioning | 10 | 5.5 | "Proven storage layer" overstated (P1); thin differentiation (P2); docs still mention macOS |
+| B. Architecture and design | 15 | 7 | Lock held for the whole session (H4); no unlock agent, which pushes users to `AKM_PASSWORD` (C1); refuse-only sync with no reload; fragile audit-log design |
+| C. Security at rest | 15 | 7.5 | No check of the saved file before it replaces the only copy (H8); plaintext metadata log synced beside the vault (M1); CLI skips password rules (M2); plaintext `.env` exports with no protection (M8) |
+| D. Security in use | 15 | 4 | Master password handed to child processes (C1); clipboard history and cloud sync (H3); no auto-lock (H6); empty filter means every secret (H7); no screen-capture protection (M11) |
+| E. Data integrity and durability | 15 | 4 | Import overwrites other projects' secrets (C2); phantom changes saved later without a record (H1); clones target the wrong entry (H2); race window (M3); no history or Recycle Bin (M7) |
+| F. Functional correctness | 10 | 3.5 | Can't save KeePassXC-saved or KDBX 3.1 vaults (C3); `akm run -- npm` fails (H5); rotation clock wrong (H9); dotenv edge cases (M5) |
+| G. Desktop app quality | 10 | 6 | No rotation workflow; reminders only inside the app; modal focus handling; Lock button only in Settings; import is paste-only |
+| H. Verification and engineering hygiene | 5 | 2 | Claims verified against a stale binary (P3); no desktop or frontend tests; interop checks not in the repo |
+| I. Shareability | 5 | 1 | Unsigned installers, no updater, no checksums, no SECURITY.md, no independent review (P4) |
+| **Total** | **100** | **40.5** | |
+
+## Findings
+
+"Verified" means reproduced by running code. File references are to the
+current source.
+
+### Critical
+
+**C1. Every `akm run` child process receives the master password.**
+- **Evidence:** `main.rs:316` starts the child with `Command::new(program)`, so it inherits the whole parent environment. `akm run --project demo -- cmd /c "echo %AKM_PASSWORD%"` printed `correct horse battery staple`. `AKM_VAULT` is passed on too, and the `--password` flag (`main.rs:23`) puts the password on the process command line, where other processes can read it.
+- **Impact:** any npm or pip dependency, postinstall script or tool you run can decrypt the whole vault.
+- **Verified:** independently by the author and all three reviewers.
+- **Fix:** remove every `AKM_*` variable from the child's environment and delete the `--password` flag. Later, add a Windows Hello or DPAPI unlock session so `AKM_PASSWORD` isn't needed.
+
+**C2. `.env` import overwrites or blanks secrets in other projects.**
+- **Evidence:** `vault.rs:208-251` matches existing keys by variable name across the whole vault, and applies project and environment only to new keys. Importing `OPENAI_API_KEY=dev-…` into project `beta` replaced project `alpha`'s production secret. Empty values such as `KEY=` wipe secrets because `validate()` is never called. If the same name exists in two projects, every import fails.
+- **Verified.**
+- **Fix:** match only within the target project and environment, reject empty values, and show which keys will change before applying.
+
+**C3. After KeePassXC saves the vault, AKM can never save it again.**
+- **Evidence:** reproduced with the real KeePassXC 2.8.0. It saves as KDBX 4.0, and the `keepass` crate only writes 4.1 (`dump.rs:31`). After that, every add, edit or delete fails with "Unsupported database version" and leaves an empty `.tmp` file. KDBX 3.1 vaults from older KeePass versions behave the same way.
+- **Verified.**
+- **Fix, already tested:** upgrade the vault to 4.1 on save after the user confirms. A probe that did exactly this produced a KeePassXC XML export identical to the original apart from one timestamp: attachments, history and other groups all survived. 3.1 vaults convert too, and KeePassXC reads the result.
+
+### High
+
+**H1. A failed save leaves the change in memory, and a later save writes it silently.**
+- **Evidence:** `vault.rs:133-191` changes the vault in memory before `save()`. In the desktop app, after a "changed on disk" error the unsaved key still appeared in the list. The reviewer showed that a later, unrelated save then wrote it to disk with no audit entry.
+- **Verified:** in the desktop app and with a probe.
+- **Fix:** apply each change to a copy and keep it only after the save succeeds.
+
+**H2. Entries are identified by `AKM_ID`, so clones and foreign entries break.**
+- **Evidence:** cloning an entry in KeePass or KeePassXC copies `AKM_ID`, so revealing or deleting the clone acts on the original. Entries created in KeePassXC have no `AKM_ID`, so they can be listed but not edited or deleted (`vault.rs:386`).
+- **Verified.**
+- **Fix:** identify entries by their KDBX UUID.
+
+**H3. Copied secrets go into Windows clipboard history and cloud clipboard, and outlive the app.**
+- **Evidence:** `lib.rs:443` calls plain `set_text`. arboard 3.7 supports the history, cloud and monitoring exclusions, but they aren't requested. Clipboard history is enabled on this PC. A secret copied and then left behind by closing the app was still on the clipboard 34 seconds later.
+- **Verified:** exit behaviour by running it; the missing flags by inspection.
+- **Fix:** set the exclusions, and clear the clipboard on lock and on exit.
+
+**H4. The vault lock is held for the whole session.**
+- **Evidence:** while the desktop app is unlocked, even `akm list` fails with "open in another process". `akm run` keeps the lock while the child runs, so two `run`s can't overlap.
+- **Verified.**
+- **Fix:** take the lock only around a save, and release the vault before starting the child process.
+
+**H5. `akm run -- npm …` fails on Windows.**
+- **Evidence:** "program not found", because Rust only adds `.exe` to a bare program name and npm is `npm.cmd`. This is the README's main example.
+- **Verified.**
+- **Fix:** look the program up using PATHEXT before starting it.
+
+**H6. The app never auto-locks.**
+- **Evidence:** no idle timer and no lock on Win+L, sleep or minimise. Lock is only in Settings.
+- **Verified:** inspection.
+- **Fix:** add an idle lock (default 10 minutes), lock on session lock and sleep, and put a Lock button in the navigation bar.
+
+**H7. Leaving the filter empty exposes every secret.**
+- **Evidence:** `akm run` and `akm export` with no `--project` or `--env` use every key. The desktop export defaults to all keys, and "Save .env…" is the main button.
+- **Verified.**
+- **Fix:** require a project and environment, or an explicit `--all`.
+
+**H8. The saved file is never checked before it replaces the vault, and only one backup is kept.**
+- **Evidence:** `vault.rs:340-358` writes, copies `.bak` and renames without decrypting the new file, even though the writer is labelled experimental. `.bak` is overwritten on every save, even when the rename then fails.
+- **Verified:** inspection.
+- **Fix:** decrypt the temporary file and compare its entries before the rename, and keep several dated backups.
+
+**H9. Rotation is measured from the last edit, not the last secret change.**
+- **Evidence:** `model.rs:64` uses `updated_at`, so editing the notes resets an overdue key. Re-importing an unchanged value resets it too. Old secrets aren't kept in history, and there is no rotate command.
+- **Verified.**
+- **Fix:** add an `AKM_ROTATED_AT` field set only when the secret changes, keep KDBX history, and add a rotate action in the app and CLI.
+
+### Medium
+
+| ID | Finding | Verified | Fix |
+| --- | --- | --- | --- |
+| M1 | The plaintext audit log beside the vault exposes key titles, projects, timings and export paths to the cloud provider. This contradicts `audit.rs:11-12` and the README. Removing lines from the end, or deleting the whole log, is not detected. | Yes | Keep a separate log on each PC in `%LOCALAPPDATA%`, write IDs only or encrypt entries, and store the latest hash inside the vault |
+| M2 | The CLI accepts a 1-character master password through `AKM_PASSWORD` or `--password` (`main.rs:395-396`). There is no change-password command. | Yes | Enforce the rules in `Vault::create`; add `akm passwd` |
+| M3 | Race between the changed-on-disk check and the rename, while the key is being derived. A write from another device was lost. | Yes | Check the file hash again immediately before the rename |
+| M4 | Editing in the desktop app replaces the username with `api-key`, because the form never sends it. | Yes | Send the username, or merge the edit over the existing entry |
+| M5 | dotenv parsing: inline comments and quotes end up in stored secrets; multi-line values and a byte-order mark are rejected. | Yes | Follow common dotenv rules |
+| M6 | An audit-log failure after a successful save reports failure, so a retry creates a duplicate key. A damaged last line breaks every save. CLI reveals are not logged. | Yes | Never fail a save that has already happened; tolerate a damaged last line; log CLI reveals |
+| M7 | No entry history. Deletes skip the Recycle Bin and are not recorded as deletions, so a KeePassXC merge brings deleted keys back. | Yes | Track changes and record deletions |
+| M8 | `env_save` writes plaintext secrets to any path the webview sends. Files get no owner-only permissions on Windows, and a failed save leaves a plaintext `.akm.tmp`. | Inspection | Show the save dialog from Rust, reject network (UNC) paths, restrict file permissions |
+| M9 | A top-level group named "API keys" instead of "API Keys" hides every key. | Yes | Use one case-insensitive lookup everywhere |
+| M10 | `akm export > .env.local` in Windows PowerShell 5.1 writes UTF-16, which dotenv tools can't read. | Yes | Add `--output <file>` that writes UTF-8 |
+| M11 | No screen-capture protection: a revealed secret appeared in a window screenshot. | Yes | Set `contentProtected` |
+| M12 | Dialogs don't keep keyboard focus inside them or return it when closed. Ledger rows hide their status from screen readers. | Inspection | Keep focus inside the open dialog and restore it on close; label rows with their content |
+| M13 | Reminders appear only inside the app: nothing at unlock and no Windows notifications. | Inspection | Show expiring keys at unlock; add Windows notifications |
+
+### Low
+
+| ID | Finding |
+| --- | --- |
+| L1 | Every list makes plaintext copies of all secrets; the vault stays decrypted while an `akm run` child runs; `ApiKey`'s `Debug` output includes the secret |
+| L2 | CLI matching is ambiguous ("OpenAI" vs "OpenAI prod") and also searches notes and URL |
+| L3 | Expiry is stored at 00:00Z by the CLI and at 23:59:59Z by the desktop app |
+| L4 | Empty `.tmp` files are left after failed saves, and they sync |
+| L5 | Import accepts `PATH`, `NODE_OPTIONS` and `COMSPEC` as variable names |
+| L6 | A new 30-day key shows "in 29d" because days are truncated |
+
+### Premise and process
+
+**P1. "Proven storage layer" is only partly true.** The format and the crypto
+primitives are proven. In our tests the library preserved everything
+KeePassXC and kdbxweb wrote, including attachments, history, icons, custom data,
+the Recycle Bin and deletion records. But every write goes through a community
+crate whose 4.1 writer is labelled experimental, with a best-effort security
+policy and a past write-corruption fix.
+**Fix:** check each save by reading it back, and run KeePassXC and kdbxweb
+interop tests in CI.
+
+**P2. Thin differentiation.** KeePassXC plus a small wrapper, 1Password
+`op run` and Bitwarden `bws run` cover most of AKM's jobs. The real niche is
+KeePass users on Windows who want local, account-free injection and API-key
+fields. That is enough for personal use, but not yet for sharing.
+
+**P3. Verification used a stale build.** `target\debug\akm.exe` predated the
+hardened-KDF code, so the earlier "kdbxweb reads our hardened vault" result
+tested a weak vault. KeePassXC had never been run until this review. The
+README also says "KeePass 2.47+"; KDBX 4.1 arrived in 2.48.
+
+**P4. Not shareable yet.**
+- No code signing, so users must click past SmartScreen.
+- No updater, no checksums and no SECURITY.md.
+- No independent review.
+- The docs and CI still target macOS.
+
+## What held up (all verified)
+
+- KDBX 4.1, AES-256, ChaCha20, Argon2id at 64 MiB / 3 iterations /
+  parallelism 4. Confirmed by KeePassXC itself and by a header parser.
+- A fresh KDF salt and seeds on every save.
+- Round trips through the library are faithful (see P1).
+- Changes made on disk by another app are detected outside the race window.
+  KeePassXC's concurrent edit was not overwritten, and the app explained why.
+- Saves are atomic (temporary file, sync, rename), and a second writer gets a
+  clear "locked" error.
+- dotenv rendering and parsing round-trip: zero mismatches over 200,000
+  random values.
+- Strict CSP, minimal Tauri permissions, no remote content, and React escaping
+  of all vault text.
+- The desktop app logs reveals and copies, and hides a revealed secret after
+  30 s.
+- `rm` asks for confirmation, the child's exit code is passed through, and all
+  15 existing tests pass.
+- The README is honest about no recovery path, memory exposure and malware.
+
+## Path to above 90
+
+| Area | Now | After phase 1 | After phase 2 | After phase 3 |
+| --- | ---: | ---: | ---: | ---: |
+| A. Premise | 5.5 | 6 | 7 | 8 |
+| B. Architecture | 7 | 11 | 14 | 15 |
+| C. Security at rest | 7.5 | 11 | 13.5 | 13.5 |
+| D. Security in use | 4 | 13.5 | 14 | 14 |
+| E. Data integrity | 4 | 12 | 14 | 14 |
+| F. Functional correctness | 3.5 | 7.5 | 9.5 | 9.5 |
+| G. Desktop app quality | 6 | 6.5 | 8.5 | 9 |
+| H. Verification | 2 | 3.5 | 4.5 | 4.5 |
+| I. Shareability | 1 | 1 | 1.5 | 4.5 |
+| **Total (projected)** | **40.5** | **72** | **86.5** | **92** |
+
+1. **Phase 1, blockers before any real secret:** C1–C3, H1–H8, M2, M11, with a
+   regression test for each.
+2. **Phase 2, correctness and trust:**
+   - H9, M1, M3–M10, M12, M13 and the Low items.
+   - Correct the README overclaims and make the docs Windows-only.
+   - Commit a KeePassXC and kdbxweb interop suite and run it in Windows CI.
+3. **Phase 3, ready to share:**
+   - Windows Hello or DPAPI quick unlock, which removes the need for
+     `AKM_PASSWORD`.
+   - Code signing: SignPath Foundation for an open-source release, or an OV
+     certificate.
+   - Tauri updater with signed updates, plus SHA-256 checksums.
+   - SECURITY.md.
+   - An independent re-review.
+
+**Gate:** after each phase, run the same three reviewers against the same rubric
+and repeat the KeePassXC interop tests. AKM passes only when that re-review scores
+it above 90.

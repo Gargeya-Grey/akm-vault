@@ -1,0 +1,133 @@
+{
+  "title": "AKM journal outcome correction",
+  "goal": "Keep warnings owned and show what journal evidence actually establishes.",
+  "tier": "Tier 2: core, CLI, native IPC and frontend outcome contracts",
+  "status": "blocked",
+  "stages": [
+    {
+      "name": "Freeze and reproduce",
+      "mode": "single",
+      "output": "Pinned baseline, contracts and failing behavior regressions",
+      "nodes": [{"name":"Contracts and red tests","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"One owner retains the coupled outcome context; no implementation delegates.","owns":["docs/work/phase2-1a/","desktop/src-tauri/src/session.rs","crates/akm-core/tests/","desktop/src/"],"check":"Native, actual CLI and frontend warning/journal regressions failed first; baseline pinned","state":"done"}]
+    },
+    {
+      "name":"Owned outcome implementation",
+      "mode":"single",
+      "input":"Frozen contracts and red regressions",
+      "output":"Typed session-origin notices, atomic snapshots and honest event labels",
+      "nodes":[{"name":"Coupled caller migration","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Shared IPC, journal callers and App lifecycle must change together, not in competing workers.","owns":["crates/","desktop/src-tauri/src/","desktop/src/","desktop/e2e/"],"check":"Typed origin notices, one-lock snapshots and requested/completed/legacy labels implemented; 34 frontend and 8 browser checks pass","state":"done"}]
+    },
+    {
+      "name":"Collect and prove",
+      "mode":"single",
+      "input":"Stable implementation and affected green checks",
+      "output":"Full relevant checks, exact rebuilt artifacts and focused native evidence",
+      "nodes":[{"name":"Round-one artifact proof","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"One collector owns GUI/settings and preserves the user clipboard.","owns":["tools/","docs/work/phase2-1a/","docs/STATE.md","docs/REVIEW_LEDGER.md"],"check":"Rejected candidate: Rust144, frontend34, browser8, lint, builds, KeePassXC and focused journal proof; changed GUI hash requires renewed proof","state":"done"}]
+    },
+    {
+      "name":"Fresh adversarial acceptance",
+      "mode":"single",
+      "input":"Plan, combined diff, pinned source identities and verification policy/results",
+      "output":"Supported findings and scoped acceptance, not a readiness score",
+      "nodes":[{"name":"Round-one Terra review","role":"Reviewer and collector","model":"openai/gpt-6.1-terra","effort":"max requested","reason":"Owner explicitly authorized this exact model/variant for fresh AKM adversarial review; active effort telemetry may not be exposed.","owns":[],"check":"Rejected with seven supported findings; raw report and probes preserved in reviews/round1","state":"blocked"}]
+    },
+    {
+      "name":"Correct round-one findings",
+      "mode":"single",
+      "input":"Seven supported findings and revised typed-warning/acknowledgment/append contracts",
+      "output":"Failing-first regressions, corrected callers and renewed exact-artifact evidence",
+      "nodes":[{"name":"Serial correction and proof","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Core, native, CLI and App share outcome contracts; one main-session owner avoids conflicting edits.","owns":["crates/","desktop/","tools/","docs/"],"check":"Rust153, frontend43, browser10, lint/builds, final CLI KeePassXC and exact-GUI journal/export proofs pass; startup discovery retry and layout debt recorded","state":"done"}]
+    },
+    {
+      "name":"Corrected candidate acceptance",
+      "mode":"single",
+      "input":"Revised plan, full unit diff, pinned corrected source and verification results",
+      "output":"New independent scoped verdict; failed first round remains preserved",
+      "nodes":[{"name":"Round-two Terra correction review","role":"Reviewer and collector","model":"openai/gpt-6.1-terra","effort":"max requested","reason":"Fresh context required after rejected acceptance; exact owner-authorized model and max availability confirmed.","owns":[],"check":"Rejected: skipped control whitespace, completion/application-warning handoff and four presentation gaps; raw verdict preserved","state":"blocked"}]
+    },
+    {
+      "name":"Second correction cycle",
+      "mode":"single",
+      "input":"Six round-two findings and explicit boundary/receipt/precision contracts",
+      "output":"Actual-caller red/green regressions, renewed stable verification and bounded fresh acceptance",
+      "nodes":[{"name":"Boundary and handoff corrections","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Shared native/React receipt contracts remain serial; do not add competing implementation workers.","owns":["crates/","desktop/","tools/","docs/"],"check":"Rust157/frontend55/browser10/lint/builds; 1024 byte cases; extended exact-GUI journal/delete/action/sequence and export proofs; KeePassXC passed","state":"done"}]
+    },
+    {
+      "name":"Final bounded unit1a acceptance",
+      "mode":"single",
+      "input":"Frozen revised plan, full combined diff, current source identities and renewed verification",
+      "output":"Scoped verdict with source/runtime limits; another rejection goes to owner, not an unbounded correction loop",
+      "nodes":[{"name":"Round-three Terra acceptance","role":"Reviewer and collector","model":"openai/gpt-6.1-terra","effort":"max requested","reason":"Owner-authorized fresh reviewer; active model/max availability confirmed before dispatch, effort telemetry may remain unavailable.","owns":[],"check":"Rejected: dispatched import acknowledgment, distinct warning episodes and incomplete API fencing. Three supported findings archived; returned to owner.","state":"blocked"}]
+    },
+    {
+      "name":"Owner-renewed recalibration",
+      "mode":"single",
+      "input":"Owner's renewed bounded authorization and three R3 findings",
+      "output":"Revised ownership contracts, pinned baseline and combined-transition red tests",
+      "nodes":[{"name":"Contracts before another fix","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Owner asks main to recalibrate; retain coupled context without extra implementation delegates or model/config changes.","owns":["docs/work/phase2-1a/corrections3/","docs/","desktop/src/","desktop/src-tauri/src/session.rs"],"check":"Before-cycle146 pinned; frontend33/native6 behavior regressions failed first; separate ownership contracts frozen","state":"done"}]
+    },
+    {
+      "name":"Renewed bounded correction and collection",
+      "mode":"single",
+      "input":"Frozen cycle contracts and red lifecycle/episode/fence regressions",
+      "output":"Application-owned outcomes, lease-owned cleanup episodes, full reply fences and exact rebuilt proof",
+      "nodes":[{"name":"Serial cross-layer correction","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Shared App/API/native receipt contracts require one owner; parallelize only independent check processes.","owns":["desktop/src/","desktop/src-tauri/src/","desktop/e2e/","tools/","docs/"],"check":"Rust163 via timeout/selective workspace resume; frontend105/browser18/build/lint and exact-GUI journal/export pass. Actual hide handoff unproven after two minimize failures, retained as a proof gap.","state":"done"}]
+    },
+    {
+      "name":"Renewed independent acceptance",
+      "mode":"single",
+      "input":"Frozen recalibrated plan, full combined diff, current source and verification",
+      "output":"One new scoped verdict, not a score; another rejection returns to owner",
+      "nodes":[{"name":"Round-four Terra acceptance","role":"Reviewer and collector","model":"openai/gpt-6.1-terra","effort":"max requested","reason":"Owner-authorized exact review model; actual active variant/effort/tokens remain unavailable.","owns":[],"check":"Rejected: immediate-original backup assurance, untagged delayed native lock event, partial-copy cleanup warning; actual native outcome proof remains incomplete. Raw probes archived; returned to owner.","state":"blocked"}]
+    },
+    {
+      "name":"Owner-renewed identity calibration",
+      "mode":"single",
+      "input":"Owner's request to recalibrate and continue; three R4 defects and one proof gap",
+      "output":"Exact-original, native reservation/event ownership and immediate-cleanup contracts; red tests",
+      "nodes":[{"name":"Enumerate every producer","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Main retains cross-layer context and escalates the invariant/test method, not an unauthorized model or worker.","owns":["docs/work/phase2-1a/corrections4/","docs/","crates/","desktop/"],"check":"Frozen identity contracts; eleven behavior-red regressions, separate fixture failure; resume matched160 source paths/four prior artifacts; no completed suite repeated for context","state":"done"}]
+    },
+    {
+      "name":"Identity-bound correction",
+      "mode":"single",
+      "input":"Frozen contracts and failing-first producer/consumer regressions",
+      "output":"Protected immediate original, reserved native owners, complete cleanup episodes and stable rebuilt evidence",
+      "nodes":[{"name":"Serial core/native/API owner","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Native IPC and typed warnings share files; serialize implementation, parallelize only independent checks.","owns":["crates/","desktop/","tools/","docs/"],"check":"Rust184, frontend161, strict lint/format/builds; browser18 plus selective2 after an archived fixture correction.46-case ownership matrix, path-variant backup and partial-cleanup regressions pass. New CLI/GUI/bundles hashed; KeePassXC and exact-GUI backup/journal/export pass with settings restored","state":"done"}]
+    },
+    {
+      "name":"Owner-participating native outcome proof",
+      "mode":"single",
+      "input":"Exact corrected GUI, fake-data plan, durable settings/process recovery and owner readiness confirmation",
+      "output":"Observed delayed import/file-save handoff or a clearly retained proof gap",
+      "nodes":[{"name":"Owned-window visibility proof","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Owner participation is necessary after failed unattended minimize observations; no clipboard or OS state changes.","owns":["tools/","docs/work/phase2-1a/corrections4/"],"check":"Owner-ready attempt confirmed actual minimization, then failed import-dialog expiration while the fake journal lock held. Later acknowledgment exists; downstream proof not reached. Settings restored; no retry or cause claim. Owner decision needed","state":"blocked"}]
+    },
+    {
+      "name":"Bounded visibility and invocation correction",
+      "mode":"single",
+      "input":"Owner's safe-correction approval, retained failed actual minimize attempt, matched178-path checkpoint",
+      "output":"Mock-runtime red/green IPC responsiveness, native-owned local presentation expiry and rebuilt evidence",
+      "nodes":[{"name":"Separate presentation from session loss","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Main serially owns native command/window/Session and App/Settings boundaries; no competing implementation agents.","owns":["desktop/src-tauri/","desktop/src/","desktop/e2e/","tools/","docs/"],"check":"Rust196/2 gated ignored plus9 generated IPC cases, strict lint/format, frontend190 via181+9 selective with worker-startup failure preserved, types/browser32 pass. Visibility-1 GUI/bundles rebuilt; exact-GUI backup/journal/export pass with both startup-root refreshes/settings restoration recorded. No minimize/clipboard/OS signals or independent acceptance","state":"done"}]
+    },
+    {
+      "name":"Renewed owner-ready outcome proof",
+      "mode":"single",
+      "input":"New exact GUI, completed fake checks, settings/process recovery and renewed owner readiness",
+      "output":"One safe native attempt with real minimize plus expiry/navigation/outcome/content checks, or retained failure",
+      "nodes":[{"name":"No automatic visibility retry","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"The earlier readiness authorizes only the already-failed attempt; get fresh confirmation for a new candidate.","owns":["tools/","docs/work/phase2-1a/corrections4/"],"check":"Visibility-1 pre-readiness checkpoint complete; waiting for renewed owner readiness. No timeout relaxation, synthetic native hide, clipboard or OS state change; stop on failure and ask before another attempt","state":"blocked"}]
+    },
+    {
+      "name":"New bounded independent acceptance",
+      "mode":"single",
+      "input":"Frozen full-unit/cycle diff, source/artifact identities, plans and exact verification facts",
+      "output":"One new scoped verdict; another rejection returns to owner",
+      "nodes":[{"name":"Fresh Terra identity review","role":"Reviewer and collector","model":"openai/gpt-6.1-terra","effort":"max requested","reason":"Exact owner-authorized reviewer; confirm active model/variant availability before dispatch; effort/tokens may not be exposed.","owns":[],"check":"Attack preservation contracts and producer coverage; distinguish source acceptance and actual runtime completion; no score projection","state":"planned"}]
+    }
+  ],
+  "gates":[
+    {"name":"New candidate checks","who":"Planner","rule":"Native196 plus9 IPC/strict lint/format; frontend190 via181+selective9, types/browser32 and GUI-bundles pass; raw failures retained","state":"done"},
+    {"name":"Exact release / owner proof","who":"Planner / owner","rule":"New exact-GUI backup/journal/export pass and settings restored. Prior minimize/dialog-expiry failure preserved; actual outcome attempt awaits renewed readiness","state":"blocked"},
+    {"name":"Review / owner decision","who":"Terra / owner","rule":"Owner authorized one further bounded cycle; another rejection returns to owner","state":"planned"},
+    {"name":"Real-secret readiness","who":"Owner","rule":"Still blocked by wider phase-two/release work, actual OS coverage and full above-90 assessment","state":"blocked"}
+  ],
+  "notes":["Implementation runs serially because files and outcome contracts overlap.","No git repository, PR, installation, publication or real-secret migration is authorized.","Storage migration, rotation/history and stale time-derived status are separate work units.","The graph supports code delivery, not a separate analytical artifact."]
+}

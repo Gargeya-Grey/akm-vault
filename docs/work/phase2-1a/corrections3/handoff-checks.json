@@ -1,0 +1,20 @@
+{
+  "reviewStatus": "rejected returned to owner",
+  "rawReviewRecordsVerified": 47,
+  "round4RawRecords": 19,
+  "frozenInputFilesVerified": 19,
+  "currentArchivePathsVerified": 155,
+  "artifactHashesVerified": 4,
+  "currentDifferencesFromReviewedPin": [
+    "PHASE2.md",
+    "docs/REVIEW_LEDGER.md",
+    "docs/STATE.md",
+    "docs/VERIFICATION.md",
+    "docs/work/phase2-1a/PLAN.md",
+    "docs/work/phase2-1a/graph.json"
+  ],
+  "applicationBuildTestProofChangesAfterReview": false,
+  "localLinksChecked": 70,
+  "missingLinks": [],
+  "nextAction": "Owner decision; no automatic correction cycle, build, suite or native minimize retry"
+}

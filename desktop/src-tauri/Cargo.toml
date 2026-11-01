@@ -1,0 +1,52 @@
+[package]
+name = "akm-desktop"
+description = "AKM desktop app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "akm_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[test]]
+name = "ipc_dispatch"
+path = "tests/ipc_dispatch.rs"
+harness = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+akm-core = { path = "../../crates/akm-core" }
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+arboard = "3.7"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Power",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+tauri = { version = "2", features = ["test"] }

@@ -1,0 +1,18 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--workspace",
+    "--all-targets",
+    "--offline",
+    "--locked",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "cwd": "W:\\API Keys Manager",
+  "started": "2026-10-31T09:49:06.833565+00:00",
+  "finished": "2026-10-31T09:49:34.351951+00:00",
+  "exit": 0,
+  "logSha256": "b955693af600f0346359848755145a26c698965f605f07848f58dc0d06a89338"
+}

@@ -1,0 +1,12 @@
+﻿{
+    "observedUtc":  "2026-10-31T10:09:08.2705289Z",
+    "matchingProcesses":  [
+
+                          ],
+    "noneRemaining":  true,
+    "retainedFakeFailureDirectories":  [
+                                           "C:\\Users\\Gargeya\\AppData\\Local\\Temp\\opencode\\akm-app-proof-43505207-721c-4baa-a17f-2c081b425a1a",
+                                           "C:\\Users\\Gargeya\\AppData\\Local\\Temp\\opencode\\akm-app-proof-94352c49-2ce4-4717-8801-bdd2aeb2158f"
+                                       ],
+    "note":  "Observation only; no unrelated process was stopped; failed proof resources preserved and selected fake baseline left alone."
+}

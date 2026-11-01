@@ -1,0 +1,33 @@
+{
+  "cli_sha256": "382422d789ded2216aa8f3d344b8be72c27bd76a88f77fff88b76c9d2a5983e7",
+  "runtime_data": "temporary fake vault and journal removed by TemporaryDirectory",
+  "results": [
+    {
+      "trailing_byte": "space",
+      "audit_before_exit": 0,
+      "reveal_exit": 0,
+      "fake_secret_disclosed": true,
+      "journal_changed": true,
+      "audit_after_exit": 0,
+      "audit_after_damaged": false
+    },
+    {
+      "trailing_byte": "form-feed",
+      "audit_before_exit": 0,
+      "reveal_exit": 0,
+      "fake_secret_disclosed": true,
+      "journal_changed": true,
+      "audit_after_exit": 2,
+      "audit_after_damaged": true
+    },
+    {
+      "trailing_byte": "vertical-tab",
+      "audit_before_exit": 2,
+      "reveal_exit": 1,
+      "fake_secret_disclosed": false,
+      "journal_changed": false,
+      "audit_after_exit": 2,
+      "audit_after_damaged": true
+    }
+  ]
+}

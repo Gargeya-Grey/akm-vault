@@ -1,0 +1,10 @@
+{
+  "classification": "checkpoint allowlist failure, not an application test or runtime proof",
+  "error": "AssertionError at the archive-input suffix guard before output creation",
+  "rejectedInputs": [
+    "crates/akm-core/tests/fixtures/kdbx3.kdbx",
+    "crates/akm-core/tests/fixtures/kdbx40.kdbx"
+  ],
+  "preReadinessOutputsPresentAfterFailure": [],
+  "disposition": "These are the two existing canonical source test fixtures, not live runtime vaults. Explicitly allow only those exact paths after matching their frozen baseline hashes; continue excluding every runtime vault/settings preimage/build binary/dependency. No source correction or suite/build/proof rerun required."
+}

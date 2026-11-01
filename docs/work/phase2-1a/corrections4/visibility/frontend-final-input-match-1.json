@@ -1,0 +1,9 @@
+{
+  "reference": "visibility-stable-frontend-tests-3-sources.json",
+  "pathsChecked": 47,
+  "changed": [],
+  "completedCasesRetained": 181,
+  "unexecutedSuite": "desktop/src/components/Settings.security.test.tsx",
+  "unexecutedCases": 9,
+  "scope": "Static source comparison only. No test rerun, worker startup or claim about infrastructure-failure cause."
+}

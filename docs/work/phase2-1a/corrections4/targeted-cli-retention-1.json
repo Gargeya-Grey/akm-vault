@@ -1,0 +1,18 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "akm-cli",
+    "--test",
+    "security",
+    "--offline",
+    "--locked",
+    "protected_original"
+  ],
+  "cwd": "W:\\API Keys Manager",
+  "started": "2026-10-31T12:28:29.718591+00:00",
+  "finished": "2026-10-31T12:28:35.995605+00:00",
+  "exit": 0,
+  "logSha256": "c28b859540cb4ee9eb8f7419b9bfbc760a22a8c684b841cd9ee62d777cb442a9"
+}

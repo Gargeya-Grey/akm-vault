@@ -1,0 +1,21 @@
+{
+  "command": [
+    "cmd.exe",
+    "/d",
+    "/c",
+    "npx",
+    "vitest",
+    "run",
+    "src/OutcomeHandoff.security.test.tsx",
+    "src/ApiFence.security.test.tsx",
+    "src/SessionReceipt.security.test.tsx",
+    "src/api.security.test.ts",
+    "src/App.security.test.tsx",
+    "src/components/Settings.security.test.tsx"
+  ],
+  "cwd": "W:\\API Keys Manager\\desktop",
+  "started": "2026-10-31T09:41:24.313617+00:00",
+  "finished": "2026-10-31T09:41:47.960783+00:00",
+  "exit": 0,
+  "logSha256": "06f081d918a8b9957f08ea939038b7c1d93b19ead0b313e2777c03d5613e0419"
+}

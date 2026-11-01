@@ -1,0 +1,24 @@
+{
+  "command": [
+    "C:\\Python313\\python.exe",
+    "C:/Users/Gargeya/.claude/scripts/harness_metrics.py",
+    "log",
+    "report",
+    "--repo",
+    "W:\\API Keys Manager",
+    "--branch",
+    "local-unit1a-corrections3",
+    "--tier",
+    "2",
+    "--units",
+    "3",
+    "--risk",
+    "Backup assurance; untagged native-event ownership; partial-cleanup episodes; incomplete native handoff",
+    "--checks",
+    "fail",
+    "--subagent",
+    "reviewer:no"
+  ],
+  "exit": 0,
+  "meaning": "Overall rejected acceptance/native proof gap; passing runtime suites did not fail. Reviewer requested Terra#max, actual effort/tokens unknown."
+}

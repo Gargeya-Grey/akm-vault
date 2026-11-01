@@ -1,0 +1,75 @@
+{
+  "recordedAtUtc": "2026-10-30T16:31:38.064189+00:00",
+  "evidenceKind": "Collected existing command results plus current hash verification; no rerun of completed suites",
+  "codeCorrectionVerdict": "Approved within reviewed phase-1 scope",
+  "review": "C:\\Users\\Gargeya\\AppData\\Local\\Temp\\opencode\\akm-phase1-acceptance-review\\followup-review-result.md",
+  "reviewedPathsChecked": 132,
+  "postReviewChanges": {
+    "PHASE1.md": {
+      "reviewed": "175c2037e70c73a5861171afb65cfeded0f8c2dc5b6db3987f98d7736ebfc562",
+      "final": "be559ac150a2242b05674e24b70f38101d4bbce4335a31b63f5a4d4156ce73b1"
+    },
+    "README.md": {
+      "reviewed": "355e988e9959288e8627b24bfce69a599ec7b33953b83b8dafd00ff3af5a7960",
+      "final": "b10c612791ddd7d9700c4975be4920acd2bee9ed9988f18f4ed8391d6e8b592f"
+    },
+    "tools/verify_windows_app.ps1": {
+      "reviewed": "4d387a0469523e3c40d1950694c5b2a32228d2c88ef79ee5bdc76d8a17900cc3",
+      "final": "9c0a7e1a70d87c9601ae873ed77c9d7769bf6a979964284c17900a3eec6cdc11"
+    }
+  },
+  "applicationSourcesMatchMergedReview": true,
+  "preservedChecks": {
+    "rustWorkspacePassed": 132,
+    "strictClippyAndRustfmt": "passed",
+    "frontendFullBeforeFinalP3Passed": 24,
+    "browserBeforeFinalP3Passed": 4,
+    "keepassxcInterchange": "passed with unchanged release CLI",
+    "standaloneRealWindowsClipboard": "passed"
+  },
+  "finalAffectedChecks": {
+    "appAndReceiptPassed": 10,
+    "reviewerIndependentlyPassedNewLockReplyRegressions": 2,
+    "typescriptProductionFrontendGuiMsiAndNsisBuild": "passed"
+  },
+  "finalNativeProof": {
+    "command": "tools/verify_windows_app.ps1 -DesktopExe target/release/akm-desktop.exe -CliExe target/release/akm.exe -RemainingOnly",
+    "guiSha256": "9539610849a4a43b868703c2bd5e1725219fc2718aa5b01bd816890ffa269085",
+    "result": "passed",
+    "covered": [
+      "save cancellation",
+      "exact filename read-back",
+      "exact saved path and scoped content",
+      "clipboard exclusions",
+      "synthetic session/power handlers and clipboard cleanup",
+      "normal exit and clipboard cleanup",
+      "display affinity 0x11"
+    ],
+    "priorImportCloneUpgradeEvidence": "Preserved from preceding GUI build, not relabeled as rerun on final executable",
+    "successfulFakeWorkspaceRemoved": true,
+    "akmAndMatchingWebviewProcessesAfterCleanup": 0,
+    "station": "WinSta0",
+    "threadAndInputDesktop": "Default",
+    "priorMissingStartupControlsCause": "Not established; did not recur"
+  },
+  "settings": {
+    "restoredToDurableRecoveryBaselineByteForByte": true,
+    "retainsKnownFakeVaultPreference": true,
+    "preRestartOriginalPreference": "Unknown; not guessed or restored"
+  },
+  "artifactsSha256": {
+    "target/release/akm-desktop.exe": "9539610849a4a43b868703c2bd5e1725219fc2718aa5b01bd816890ffa269085",
+    "target/release/akm.exe": "788d26afa834697e4183476a504b1f8159826b77ac065d39a281fbc7c5b2a154",
+    "target/release/bundle/msi/AKM_0.1.0_x64_en-US.msi": "4f8d7332d7543a315659222f4a3e32fb65781e162441da97a9581b983d84f27b",
+    "target/release/bundle/nsis/AKM_0.1.0_x64-setup.exe": "22b50086186f1f3181d7964d8de26549288e46d98a2054e1fbefc12a34c684f7"
+  },
+  "trustGate": {
+    "fakeKeysOnly": true,
+    "originalScoreUnchanged": 40.5,
+    "above90Established": false,
+    "actualOsLockSuspendDelivery": "unverified; requires owner participation",
+    "wallClockIdle": "unverified; fake-clock policy tested",
+    "installers": "unsigned; built, not installed",
+    "phase2AndProfessionalReview": "not completed"
+  }
+}

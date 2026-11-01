@@ -1,0 +1,97 @@
+{
+  "frozenFilesChecked": 19,
+  "frozenFailures": [],
+  "expectedCurrentZipSha256": "db2f270176b64ae1fa7cdbb36340776d10446f778a21c8070dfa20b50937bfb0",
+  "expectedSourceManifestSha256": "8e6cb389054e1c179dfe22b42c70d149a4d2646e9d14fe232bb494ba2eaa8eb7",
+  "archives": [
+    {
+      "label": "unit baseline",
+      "archiveSha256": "f11c41ebb482e1b43c266980125809d0b888e0c07a499fecfaf2ddab8587b8e4",
+      "manifestSha256": "738d646d681a91c7bfb60b976db3ee592c8ae7279d25a37780a72a84d31c710d",
+      "manifestPaths": 139,
+      "archivePaths": 139,
+      "missing": [],
+      "extra": [],
+      "mismatched": []
+    },
+    {
+      "label": "cycle baseline",
+      "archiveSha256": "ed400e8b12c54b865f2a964efac2e803adbd3c84abecf44c555cbd48593af15a",
+      "manifestSha256": "2e959a6c2c2a6eb2a7f4fb6a26936d1af60beba94316f9b6c98a4bc561f8179d",
+      "manifestPaths": 146,
+      "archivePaths": 146,
+      "missing": [],
+      "extra": [],
+      "mismatched": []
+    },
+    {
+      "label": "current cycle",
+      "archiveSha256": "db2f270176b64ae1fa7cdbb36340776d10446f778a21c8070dfa20b50937bfb0",
+      "manifestSha256": "8e6cb389054e1c179dfe22b42c70d149a4d2646e9d14fe232bb494ba2eaa8eb7",
+      "manifestPaths": 155,
+      "archivePaths": 155,
+      "missing": [],
+      "extra": [],
+      "mismatched": []
+    }
+  ],
+  "fullUnitManifestPaths": 148,
+  "fullManifestDifferencesFromCycle": {},
+  "liveDifferences": [
+    {
+      "path": "docs/STATE.md",
+      "expected": "5a53204868023830872f6590e63a79d27fe1827cc587e9dd8bb7d6ac6639ac40",
+      "actual": "8020a40a7256dc917af1a4595c42b82e47487b9086bfeaa4d78def1d9f4f7041"
+    }
+  ],
+  "artifacts": {
+    "target/release/akm.exe": {
+      "expected": "0024f9005a68bf5b5ab9d32297c9d6eb4043ee5616a7ae6c465a054adfddcdc0",
+      "actual": "0024f9005a68bf5b5ab9d32297c9d6eb4043ee5616a7ae6c465a054adfddcdc0",
+      "matches": true
+    },
+    "target/release/akm-desktop.exe": {
+      "expected": "c3b125872f26a609e63158f6ae72fb8cac9e666ca11ff83efb64aa19de0f0ec6",
+      "actual": "c3b125872f26a609e63158f6ae72fb8cac9e666ca11ff83efb64aa19de0f0ec6",
+      "matches": true
+    },
+    "target/release/bundle/msi/AKM_0.1.0_x64_en-US.msi": {
+      "expected": "960737cc445d066632e32e778a2488c2deb3de6f6aa46ccf27bfc6fffab5c871",
+      "actual": "960737cc445d066632e32e778a2488c2deb3de6f6aa46ccf27bfc6fffab5c871",
+      "matches": true
+    },
+    "target/release/bundle/nsis/AKM_0.1.0_x64-setup.exe": {
+      "expected": "2c5647c9dfdaf45212752bbad4bbbc28ec5c3d78c909531e382f40d4fc9953c0",
+      "actual": "2c5647c9dfdaf45212752bbad4bbbc28ec5c3d78c909531e382f40d4fc9953c0",
+      "matches": true
+    }
+  },
+  "diffs": {
+    "combined": {
+      "sha256": "41e74004f79a2df53bbcd682527060de620b43ad4e03d315cce495a693a389ba",
+      "lines": 4172,
+      "diffPaths": 36,
+      "headersMatch": true,
+      "duplicatePaths": false,
+      "changedManifestPaths": 36,
+      "manifestChangesNotInDiff": [],
+      "diffPathsNotManifestChanges": [],
+      "nontext": [],
+      "reconstructedExactText": true,
+      "reconstructedNormalizedNewlines": true
+    },
+    "cycle": {
+      "sha256": "a656b6011d5af9a75ad967deae3a45307337d2395d0a36eb9a0e3be52b741a0e",
+      "lines": 1584,
+      "diffPaths": 23,
+      "headersMatch": true,
+      "duplicatePaths": false,
+      "changedManifestPaths": 23,
+      "manifestChangesNotInDiff": [],
+      "diffPathsNotManifestChanges": [],
+      "nontext": [],
+      "reconstructedExactText": true,
+      "reconstructedNormalizedNewlines": true
+    }
+  }
+}

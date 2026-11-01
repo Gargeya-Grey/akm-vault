@@ -1,0 +1,6 @@
+{
+  "cli_audit_exit": 0,
+  "reported_consistent": true,
+  "displayed_action": true,
+  "fake_journal_removed_on_exit": true
+}

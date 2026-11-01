@@ -1,0 +1,42 @@
+[
+  {
+    "command": [
+      "powershell.exe",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "W:\\API Keys Manager\\tools\\verify_windows_app.ps1",
+      "-DesktopExe",
+      "W:\\API Keys Manager\\target\\release\\akm-desktop.exe",
+      "-CliExe",
+      "W:\\API Keys Manager\\target\\release\\akm.exe",
+      "-JournalOnly"
+    ],
+    "exitCode": 0,
+    "settingsRestoredByteForByte": true,
+    "guiSha256": "42f3f63afae5c6dfa426c92da7635972d5e0642c2d6e8482681588dfc14510c8",
+    "cliSha256": "0024f9005a68bf5b5ab9d32297c9d6eb4043ee5616a7ae6c465a054adfddcdc0",
+    "clipboard": "skipped entirely",
+    "output": "native-journal.log"
+  },
+  {
+    "command": [
+      "powershell.exe",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      "W:\\API Keys Manager\\tools\\verify_windows_app.ps1",
+      "-DesktopExe",
+      "W:\\API Keys Manager\\target\\release\\akm-desktop.exe",
+      "-CliExe",
+      "W:\\API Keys Manager\\target\\release\\akm.exe",
+      "-JournalExportOnly"
+    ],
+    "exitCode": 0,
+    "settingsRestoredByteForByte": true,
+    "guiSha256": "42f3f63afae5c6dfa426c92da7635972d5e0642c2d6e8482681588dfc14510c8",
+    "cliSha256": "0024f9005a68bf5b5ab9d32297c9d6eb4043ee5616a7ae6c465a054adfddcdc0",
+    "clipboard": "skipped entirely",
+    "output": "native-export.log"
+  }
+]

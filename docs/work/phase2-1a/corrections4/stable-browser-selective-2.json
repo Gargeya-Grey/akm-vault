@@ -1,0 +1,18 @@
+{
+  "command": [
+    "cmd.exe",
+    "/d",
+    "/c",
+    "npm",
+    "run",
+    "test:ui",
+    "--",
+    "--grep",
+    "native reservation precedes credentials"
+  ],
+  "cwd": "W:\\API Keys Manager\\desktop",
+  "started": "2026-10-31T13:14:28.669342+00:00",
+  "finished": "2026-10-31T13:15:06.673135+00:00",
+  "exit": 0,
+  "logSha256": "4187a4628c2a5c64e3d27d4e1daa6fd16586d713ce9682ee052e04680375df2e"
+}

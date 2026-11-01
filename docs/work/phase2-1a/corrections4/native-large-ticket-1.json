@@ -1,0 +1,17 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "akm-desktop",
+    "--lib",
+    "--offline",
+    "--locked",
+    "large_native_tickets"
+  ],
+  "cwd": "W:\\API Keys Manager",
+  "started": "2026-10-31T12:39:55.618243+00:00",
+  "finished": "2026-10-31T12:39:56.723922+00:00",
+  "exit": 0,
+  "logSha256": "007658a818af88147f0c0d380b766dabb5a2b598d2f3b5bd8b8fd7259e889010"
+}

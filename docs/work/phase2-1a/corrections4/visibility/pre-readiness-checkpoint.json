@@ -1,0 +1,52 @@
+{
+  "createdUtc": "2026-10-31T16:09:08.985735+00:00",
+  "candidate": "visibility-1",
+  "candidateRecordSha256": "7f67cd150d133f66f324319a81978907d40377192331d69ee9beef3862189b3e",
+  "sourceManifestSha256": "83cc06ebc0baeaa6852ac1a2ba39ca61ce79519dc15ee245b54003cef12c803e",
+  "archiveSha256": "58f45231f00da1a87d92fb9622d15ef139848d2ade29c6c59940a599b3e20323",
+  "pathsArchived": 295,
+  "compiledInputsMatch": 141,
+  "artifacts": {
+    "target/release/akm.exe": "495d72976b552746ebe170f1ab1f25280272b54bff5365b251d3cf546342011b",
+    "target/release/akm-desktop.exe": "bc393ed9a5081aac2d30e4999e1537bb806c047e9a22bd025e06d2b78d3e6ea8",
+    "target/release/bundle/msi/AKM_0.1.0_x64_en-US.msi": "e29139eadb113da5d998a173ea05d7ddf10ae29f8d1bcb72798f3a7e61b6f3ac",
+    "target/release/bundle/nsis/AKM_0.1.0_x64-setup.exe": "b0455b8912350d6d1c98f271364257f47e7f6340b19e2ed6a80cbfb3c2c2f7cb"
+  },
+  "rawVerificationRecordsChecked": 31,
+  "verificationRecordSha256": "3aee26f2a2084a039079076f4f4fe8a8e8d6911e949239eee1665e5f45ee446a",
+  "runtimeCleanupSha256": "f147a253016e76a4ddf1570c34a7dde5eb370f81e78fdd3199884cdb443cd232",
+  "fourFailedReviewsRetained": {
+    "round1": {
+      "manifestSha256": "7b408e3214549c3537fa68e3cfe6a1e8d1eb13f5286d61a3055b6adbafa4697a",
+      "archivedFilesChecked": 10,
+      "changed": []
+    },
+    "round2": {
+      "manifestSha256": "077177b1b7c6fc960aae298aed58a5540c82aedf0aaec9d8b7fa4dac8be01c4b",
+      "archivedFilesChecked": 11,
+      "changed": []
+    },
+    "round3": {
+      "manifestSha256": "513166664edc59e6682cb0603cd5455222a4d146a1e1a6dad7703bf102e4fae3",
+      "archivedFilesChecked": 7,
+      "changed": []
+    },
+    "round4": {
+      "manifestSha256": "02fce52b0e068f9a9844f67f46165d0d07a14c52fc0e719d853a4dc38902ec15",
+      "archivedFilesChecked": 19,
+      "changed": []
+    }
+  },
+  "frozenOriginalPlanUnchanged": true,
+  "beforeVisibilityArchiveChecked": 179,
+  "canonicalSourceFixturePaths": [
+    "crates/akm-core/tests/fixtures/kdbx3.kdbx",
+    "crates/akm-core/tests/fixtures/kdbx40.kdbx"
+  ],
+  "localLinksChecked": 117,
+  "missingLinks": [],
+  "noRuntimeVaultSettingsPreimageBuildBinaryOrDependenciesArchived": true,
+  "pendingJobs": [],
+  "open": "Unit1a source acceptance and actual native outcome hide/navigation proof remain open; no numerical readiness rescore.",
+  "next": "Ask renewed owner readiness before visibility-native-outcome-1; old consent spent. No automatic minimize/retry or fresh reviewer dispatch."
+}

@@ -1,0 +1,6 @@
+{
+  "expected_offending_sequence": 1,
+  "exit": 2,
+  "stdout": "Journal data is damaged at physical line 1. Original bytes were preserved.\nCompleteness unknown. Missing records, truncation and rewritten history cannot be ruled out. Requested events do not prove completion; legacy action outcomes are unknown.\nNo records displayed. This is not proof of inactivity.\n",
+  "stderr": ""
+}

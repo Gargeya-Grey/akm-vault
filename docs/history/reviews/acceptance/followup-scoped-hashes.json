@@ -1,0 +1,20 @@
+﻿[
+    {
+        "Path":  "desktop/src/App.tsx",
+        "Pinned":  "192d981c98b6c3e673921b37974a42fd75738c6583cdeb376c48f2d6836547ea",
+        "Current":  "10acbc8b5083ee1814d71da4a801af7d2762966325a72599c3b1fff3710ec8b0",
+        "Changed":  true
+    },
+    {
+        "Path":  "desktop/src/SessionReceipt.security.test.tsx",
+        "Pinned":  "594aa83d203daa7d172e0574994ea07cc5e108ef249f7495135e50282d015486",
+        "Current":  "08cc3f25a03665c736c10e9545c221e3f348237a3619fa96ac3acaed19324b45",
+        "Changed":  true
+    },
+    {
+        "Path":  "desktop/src/api.ts",
+        "Pinned":  "e05a09211c375f8c114cf21b80728bf1a0b713273517bdd6bd7d40c97105a62a",
+        "Current":  "e05a09211c375f8c114cf21b80728bf1a0b713273517bdd6bd7d40c97105a62a",
+        "Changed":  false
+    }
+]

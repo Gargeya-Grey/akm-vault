@@ -1,0 +1,23 @@
+[package]
+name = "akm-core"
+description = "Vault, metadata, audit and injection core for the API Keys Manager"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+sha2.workspace = true
+hex.workspace = true
+fs2.workspace = true
+keepass.workspace = true
+rust-argon2.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

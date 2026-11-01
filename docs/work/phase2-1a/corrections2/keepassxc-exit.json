@@ -1,0 +1,11 @@
+{
+  "command": [
+    "python",
+    "tools/verify_keepassxc.py",
+    "--akm",
+    "target/release/akm.exe",
+    "--keepassxc",
+    "C:/Users/Gargeya/AppData/Local/Temp/akm-kpxc/kpxc/KeePassXC-2.8.0-x64/keepassxc-cli.exe"
+  ],
+  "exitCode": 0
+}

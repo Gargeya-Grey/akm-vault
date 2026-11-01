@@ -1,0 +1,78 @@
+[
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "akm-core",
+      "--test",
+      "audit_states",
+      "--offline",
+      "--locked"
+    ],
+    "cwd": "W:\\API Keys Manager",
+    "exitCode": 0,
+    "output": "green-core.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "akm-cli",
+      "--test",
+      "security",
+      "--offline",
+      "--locked",
+      "skipped_whitespace_boundary"
+    ],
+    "cwd": "W:\\API Keys Manager",
+    "exitCode": 0,
+    "output": "green-cli.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "akm-desktop",
+      "--lib",
+      "--offline",
+      "--locked",
+      "unsafe_journal_appends"
+    ],
+    "cwd": "W:\\API Keys Manager",
+    "exitCode": 0,
+    "output": "green-native.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "akm-desktop",
+      "--lib",
+      "--offline",
+      "--locked",
+      "ipc_audit_sequences"
+    ],
+    "cwd": "W:\\API Keys Manager",
+    "exitCode": 0,
+    "output": "green-precision.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "akm-desktop",
+      "--lib",
+      "--offline",
+      "--locked",
+      "application_warnings"
+    ],
+    "cwd": "W:\\API Keys Manager",
+    "exitCode": 0,
+    "output": "green-app-warnings.log"
+  }
+]

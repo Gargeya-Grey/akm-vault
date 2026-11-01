@@ -1,0 +1,17 @@
+{
+  "command": [
+    "cmd.exe",
+    "/d",
+    "/c",
+    "npx",
+    "vitest",
+    "run",
+    "src/OutcomeHandoff.security.test.tsx",
+    "src/ApiFence.security.test.tsx"
+  ],
+  "cwd": "W:\\API Keys Manager\\desktop",
+  "started": "2026-10-31T09:35:13.841667+00:00",
+  "finished": "2026-10-31T09:35:37.308600+00:00",
+  "exit": 1,
+  "logSha256": "903eb9f0acc363f760cca7edcc58fb344a9fba4d97b67a8b1fe06efdbaf50569"
+}

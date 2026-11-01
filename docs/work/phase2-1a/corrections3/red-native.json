@@ -1,0 +1,17 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "akm-desktop",
+    "--lib",
+    "--offline",
+    "--locked",
+    "cleanup_episode"
+  ],
+  "cwd": "W:\\API Keys Manager",
+  "started": "2026-10-31T09:35:13.841360+00:00",
+  "finished": "2026-10-31T09:36:53.320066+00:00",
+  "exit": 101,
+  "logSha256": "ce5901b882624d30fc38c8aae43c64a6a4bcee10531d01ac50e42096c8cc9170"
+}

@@ -1,0 +1,14 @@
+{
+  "command": [
+    "python",
+    "docs/work/phase2-1a/corrections3/run_native.py",
+    "OutcomeOnly",
+    "--attempt",
+    "2"
+  ],
+  "cwd": "W:\\API Keys Manager",
+  "started": "2026-10-31T09:57:17.362038+00:00",
+  "finished": "2026-10-31T09:58:45.713232+00:00",
+  "exit": 1,
+  "logSha256": "cb9c2e53cdd7cbc2ba6fdcc4a9377e011fc9d2da740a267015b5bf82c3e1352c"
+}

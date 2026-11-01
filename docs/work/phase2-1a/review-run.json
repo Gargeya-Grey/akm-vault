@@ -1,0 +1,13 @@
+{
+  "status": "rejected-round-one",
+  "sessionId": "ses_e6f5c4454ffepv9w2kH46BB2x0",
+  "requestedModelAndVariant": "openai/gpt-6.1-terra#max",
+  "scope": "Fresh read-only unit1a implementation acceptance, not repeated calibration or numerical rescore",
+  "inputs": ["PLAN.md", "changes.diff", "before-sha256.json", "source-sha256.json"],
+  "rawReportExpectedAt": "C:\\Users\\Gargeya\\AppData\\Local\\Temp\\opencode\\akm-unit1a-acceptance-review\\review-result.md",
+  "applicationSourceFrozen": false,
+  "archivedRawReview": "reviews/round1/manifest.json",
+  "supportedFindings": 7,
+  "anticipatedMainChangesDuringReview": ["verification evidence", "state", "graph", "native proof harness details"],
+  "tokenUsage": null
+}

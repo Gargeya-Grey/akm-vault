@@ -1,0 +1,20 @@
+[
+  {
+    "name": "followup-ownership",
+    "exit_code": 0,
+    "stdout": "PASS: publication=false handles the owned file and preserves the unrelated replacement\nPASS: publication=true handles the owned file and preserves the unrelated replacement\nEvidence directory: C:\\Users\\Gargeya\\AppData\\Local\\Temp\\opencode\\akm-phase1-correction-review\\fake-corrected-ownership-4f9b8238-096d-47c9-bd62-2ed8ab5dc4d3\n",
+    "stderr": "   Compiling akm-phase1-correction-review-probes v0.0.0 (C:\\Users\\Gargeya\\AppData\\Local\\Temp\\opencode\\akm-phase1-correction-review)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.91s\n     Running `target\\debug\\corrected_ownership.exe`\n"
+  },
+  {
+    "name": "followup-receipt-native",
+    "exit_code": 0,
+    "stdout": "CONFIRMED: session-A export can return completedWhileLocked after session B has opened, while native B remains active\nCONFIRMED: unlocking over that active native session emits vault-locked, then successfully installs another active native session\nPASS: corrected wrong-password opening returns its terminal error without an extra lock event\nEvidence directory: C:\\Users\\Gargeya\\AppData\\Local\\Temp\\opencode\\akm-phase1-correction-review\\fake-late-receipt-b293c9f9-e7e4-461a-af2f-6e3c1fae37e1\n",
+    "stderr": "   Compiling akm-phase1-correction-review-probes v0.0.0 (C:\\Users\\Gargeya\\AppData\\Local\\Temp\\opencode\\akm-phase1-correction-review)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.27s\n     Running `target\\debug\\late_receipt_native.exe`\n"
+  },
+  {
+    "name": "followup-clipboard-model",
+    "exit_code": 0,
+    "stdout": "\nrunning 1 test\ntest clipboard::windows::transaction_tests::captured_lease_survives_windows_close_synthesis_and_owner_destruction ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.00s\n\n",
+    "stderr": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s\n     Running unittests src\\bin\\clipboard_model.rs (target\\debug\\deps\\clipboard_model-478b2cfabd870cfc.exe)\n"
+  }
+]

@@ -1,0 +1,17 @@
+{
+  "files": {
+    "docs/STATE.md": "71cba8f7dcf9ea93c8658793a4dd92566b52ce59166b3fe0ade96bc9e2835d94",
+    "docs/REVIEW_LEDGER.md": "00e46fd9b3fe6c018f5a91ef78b1550c9954f8431fd1befcd22c56e5d48a8b34",
+    "docs/REVIEWER_BRIEF.md": "e398484ec2c80de819ee6ac1e6af6fce91b4bf0db564498a96dd933189060c83",
+    "docs/VERIFICATION.md": "2f8c157f7b671746daddbc54da77ad39c8dcc63e7e507213068614c5d5861164",
+    "docs/work/phase2-1a/corrections4/evidence.md": "1c0265301d339be8f1a3cc81c35086c075344ecabd0983627d62b1b8f7cec501",
+    "docs/work/phase2-1a/corrections4/visibility/evidence.md": "ce2a9acd2d5ecd6e9df8fb3dbd6c9097f64840fa349a6126b614d6c7e8131a60",
+    "docs/work/phase2-1a/corrections4/visibility/NATIVE_PROOF.md": "889331c9585264e2a42b0a04efe88c2d8b59c0338d396898d57a8a5cc48127cd",
+    "docs/work/phase2-1a/corrections4/visibility/PLAN.md": "90997294b2a9cde71dadab8acde7e75f4b4c9b7dd00c704c6edb9303a509c17a",
+    "docs/work/phase2-1a/corrections4/visibility/PUBLICATION_CONTRACT.md": "4eeb5a91727f5e232a3399f7b4024d5a95cce343d8fab491b8af2fb67464d086"
+  },
+  "localLinksChecked": 104,
+  "missing": [],
+  "graphJsonParses": true,
+  "scope": "Documentation link and JSON syntax checks only; not a design/layout or application proof."
+}

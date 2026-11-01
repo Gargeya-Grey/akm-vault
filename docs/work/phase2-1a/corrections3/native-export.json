@@ -1,0 +1,12 @@
+{
+  "command": [
+    "python",
+    "docs/work/phase2-1a/corrections3/run_native.py",
+    "JournalExportOnly"
+  ],
+  "cwd": "W:\\API Keys Manager",
+  "started": "2026-10-31T10:02:12.626249+00:00",
+  "finished": "2026-10-31T10:03:18.227100+00:00",
+  "exit": 0,
+  "logSha256": "4712b4d425bfbfc8eb8675a6a173d6287cd343fec639674630040a067c57af00"
+}

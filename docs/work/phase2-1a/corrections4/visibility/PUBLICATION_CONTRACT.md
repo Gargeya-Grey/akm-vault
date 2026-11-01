@@ -1,0 +1,11 @@
+# Clarification before stable acceptance: presentation is not filesystem authority
+
+This explicitly refines the presentation/publication sentence in PLAN.md; the original frozen plan is preserved. The owner's existing PROJECT contracts8/9 and the unit's no-change-to-native-publication-semantics requirement take precedence over an implementer adding a new revocation rule accidentally.
+
+`Snapshot.presentation` is private local-disclosure/review lifetime, not a replacement for the user-approved export destination/scope or the existing native policy ticket and vault revision. The new presentation field must not silently change the meaning of `Session::publish`'s existing authorization check.
+
+- Native hide expires pending reviews and direct UI/clipboard disclosure results, including those computed before hide. Their postchecks include presentation.
+- A file save whose immutable scope and destination were already approved may still publish after hiding its originating Settings view, just as before. The registry must retain its truthful completed/error/cancel outcome; local details expire. Native filesystem publication continues to compare **policy ticket and vault revision** before preparation and publication, with all path/ACL/native-dialog checks unchanged. A subsequent lock/replacement or vault mutation still cancels before publication; already-authorized publication may finish truthfully.
+- Do not move the requested journal event, native dialog or filesystem publication simply to make the proof easier. The existing fake journal lock can continue to delay the real file-save continuation at its original point. No production test delay, invented path approval or timeout relaxation.
+
+The first implementation compared the entire newly enlarged Snapshot at publication, which would add hide-only cancellation to an already-dispatched, native-dialog-approved save. That is not necessary for the Settings expiry fix and conflicts with preserving its original authority. Before stable verification, retain the original two-field publication comparison explicitly and add complementary hide-success and lock/revision-refusal regressions. Any editing-stage check of the initial enlarged comparison is limited to that intermediate source, not acceptance.

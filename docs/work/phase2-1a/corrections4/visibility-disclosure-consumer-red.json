@@ -1,0 +1,18 @@
+{
+  "command": [
+    "cmd.exe",
+    "/d",
+    "/c",
+    "npx",
+    "vitest",
+    "run",
+    "src/NativeViewExpiry.security.test.tsx",
+    "-t",
+    "direct disclosure consumer"
+  ],
+  "cwd": "W:\\API Keys Manager\\desktop",
+  "started": "2026-10-31T15:17:26.885468+00:00",
+  "finished": "2026-10-31T15:17:39.794614+00:00",
+  "exit": 1,
+  "logSha256": "6aa42954120bc34f64fbb80b6bdbde3de654917711ed032f7286514c0b1a3e6f"
+}

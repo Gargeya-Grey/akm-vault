@@ -1,0 +1,1584 @@
+--- before/desktop/e2e/outcome-ui.spec.ts
++++ after/desktop/e2e/outcome-ui.spec.ts
+@@ -0,0 +1,61 @@
++import { expect, test } from "@playwright/test";
++import { installNativeBoundaryMock } from "./native-boundary";
++
++for (const theme of ["light", "dark"]) {
++  for (const operation of ["import", "export"] as const) {
++    for (const reply of ["success", "error"] as const) {
++      test(`${theme} ${operation} ${reply}: hidden view handoff retains a path-free outcome`, async ({ page }) => {
++        await page.setViewportSize({ width: 390, height: 1000 });
++        await installNativeBoundaryMock(page, theme);
++        await page.addInitScript(({ operation }) => {
++          const host = window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<unknown> }; settleOutcome: (reply: string) => void };
++          const original = host.__TAURI_INTERNALS__.invoke;
++          host.__TAURI_INTERNALS__.invoke = async (command, args) => {
++            if (command === (operation === "import" ? "env_import_confirm" : "env_save")) {
++              return new Promise((resolve, reject) => {
++                host.settleOutcome = (reply) => reply === "error"
++                  ? reject({ kind: "io", message: "FAKE_PRIVATE_ERROR C:/private-origin-a/export.env" })
++                  : resolve(operation === "import" ? { added: 0, updated: 1 } : "C:/private-origin-a/export.env");
++              });
++            }
++            return original(command, args);
++          };
++        }, { operation });
++        const errors: string[] = [];
++        page.on("pageerror", (error) => errors.push(error.message));
++        await page.goto("/");
++        await page.getByRole("button", { name: "Settings", exact: true }).click();
++        await page.getByLabel("Project", { exact: true }).selectOption("demo");
++        await page.getByLabel("Environment", { exact: true }).selectOption("dev");
++        if (operation === "import") {
++          await page.getByRole("button", { name: "Import .env…" }).click();
++          await page.getByLabel("Paste the .env contents").fill("OPENAI_API_KEY=fake-handoff-secret");
++          await page.getByRole("button", { name: "Review import" }).click();
++          await page.getByRole("button", { name: "Confirm import" }).click();
++        } else await page.getByRole("button", { name: "Save .env…" }).click();
++        const outcomes = page.getByRole("region", { name: "Operation outcomes" });
++        await expect(outcomes).toContainText("awaiting an outcome");
++        await expect(page.getByRole("button", { name: "Dismiss operation outcomes" })).toBeDisabled();
++        // Browser-boundary proof uses a synthetic visibility signal. Native minimize is a separate proof.
++        await page.evaluate(() => {
++          Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
++          document.dispatchEvent(new Event("visibilitychange"));
++          Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
++          document.dispatchEvent(new Event("visibilitychange"));
++        });
++        await expect(page.getByRole("dialog")).toHaveCount(0);
++        await page.getByRole("button", { name: "Keys", exact: true }).click();
++        await page.evaluate((reply) => (window as unknown as { settleOutcome: (reply: string) => void }).settleOutcome(reply), reply);
++        await expect(outcomes).toContainText(reply === "success" ? "completed" : "reported an error");
++        await expect(outcomes).not.toContainText("fake-handoff-secret");
++        await expect(outcomes).not.toContainText("FAKE_PRIVATE_ERROR");
++        await expect(outcomes).not.toContainText("private-origin-a");
++        await expect(page.getByRole("button", { name: "Add key", exact: true })).toBeVisible();
++        expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
++        await page.getByRole("button", { name: "Dismiss operation outcomes" }).click();
++        await expect(outcomes).toHaveCount(0);
++        expect(errors).toEqual([]);
++      });
++    }
++  }
++}
+--- before/desktop/src-tauri/src/clipboard.rs
++++ after/desktop/src-tauri/src/clipboard.rs
+@@ -35,6 +35,11 @@
+             generation: 0,
+             owned: None,
+         }
++    }
++
++    // Opaque ownership identity only; no clipboard value or OS sequence escapes the lease.
++    pub fn owned_generation(&self) -> Option<u64> {
++        self.owned.as_ref().map(|lease| lease.generation)
+     }
+ 
+     pub fn copy(&mut self, text: Zeroizing<String>, now: Duration) -> Result<u64, CommandError> {
+--- before/desktop/src-tauri/src/session.rs
++++ after/desktop/src-tauri/src/session.rs
+@@ -102,6 +102,7 @@
+     revision: u64,
+     pending: PendingImports,
+     clipboard: ClipboardLease,
++    cleanup_episode: Option<u64>,
+     path: Option<PathBuf>,
+     warnings: Vec<ApplicationNotice>,
+     notices: Vec<OperationNotice>,
+@@ -136,6 +137,7 @@
+                 revision: 0,
+                 pending: PendingImports::default(),
+                 clipboard: ClipboardLease::new(clipboard),
++                cleanup_episode: None,
+                 path: None,
+                 warnings: Vec::new(),
+                 notices: Vec::new(),
+@@ -170,9 +172,7 @@
+ 
+     fn locked_gate(&self, gate: &mut Gate) {
+         gate.pending.clear();
+-        if let Err(error) = gate.clipboard.clear() {
+-            warn_once(gate, error.message);
+-        }
++        cleanup_clipboard(gate, None);
+         (self.notify_locked)();
+     }
+ 
+@@ -182,9 +182,7 @@
+             gate.policy.observe(signal);
+             if signal != Signal::Available {
+                 gate.pending.clear();
+-                if let Err(error) = gate.clipboard.clear() {
+-                    warn_once(&mut gate, error.message);
+-                }
++                cleanup_clipboard(&mut gate, None);
+                 if !was_locked {
+                     (self.notify_locked)();
+                 }
+@@ -224,14 +222,8 @@
+ 
+     pub fn tick(&self) {
+         if let Ok(mut gate) = self.gate() {
+-            let result = if gate.policy.is_locked() {
+-                gate.clipboard.clear()
+-            } else {
+-                gate.clipboard.tick(self.clock.now())
+-            };
+-            if let Err(error) = result {
+-                warn_once(&mut gate, error.message);
+-            }
++            let due = (!gate.policy.is_locked()).then(|| self.clock.now());
++            cleanup_clipboard(&mut gate, due);
+         }
+         self.discard_locked_vault();
+     }
+@@ -271,9 +263,7 @@
+             let was_locked = gate.policy.is_locked();
+             let ticket = gate.policy.begin_open(self.clock.now());
+             gate.pending.clear();
+-            if let Err(error) = gate.clipboard.clear() {
+-                warn_once(&mut gate, error.message);
+-            }
++            cleanup_clipboard(&mut gate, None);
+             if !was_locked {
+                 (self.notify_locked)();
+             }
+@@ -551,7 +541,7 @@
+ 
+     pub fn warn(&self, message: String) {
+         if let Ok(mut gate) = self.gate() {
+-            warn_once(&mut gate, message);
++            application_warning(&mut gate, message);
+         }
+     }
+ 
+@@ -577,13 +567,29 @@
+     }
+ }
+ 
+-fn warn_once(gate: &mut Gate, message: String) {
+-    if !gate.warnings.iter().any(|notice| notice.message == message) {
+-        gate.warnings.push(ApplicationNotice {
+-            id: uuid::Uuid::new_v4().to_string(),
+-            message,
+-        });
+-    }
++fn cleanup_clipboard(gate: &mut Gate, due: Option<Duration>) {
++    let result = match due {
++        Some(now) => gate.clipboard.tick(now),
++        None => gate.clipboard.clear(),
++    };
++    match (gate.clipboard.owned_generation(), result) {
++        (Some(lease), Err(error)) => {
++            if gate.cleanup_episode != Some(lease) {
++                gate.cleanup_episode = Some(lease);
++                application_warning(gate, error.message);
++            }
++        }
++        (None, _) => gate.cleanup_episode = None,
++        // A not-due tick returns Ok while retaining the lease. It is not recovery.
++        (Some(_), Ok(())) => {}
++    }
++}
++
++fn application_warning(gate: &mut Gate, message: String) {
++    gate.warnings.push(ApplicationNotice {
++        id: uuid::Uuid::new_v4().to_string(),
++        message,
++    });
+ }
+ 
+ fn operation_notice(gate: &mut Gate, ticket: Ticket, kind: OperationWarningKind) {
+@@ -610,7 +616,7 @@
+     use super::*;
+     use crate::clipboard::tests::{FakeClipboard, FakeData};
+     use std::sync::{
+-        atomic::{AtomicU64, AtomicUsize, Ordering},
++        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+         mpsc,
+     };
+ 
+@@ -806,6 +812,209 @@
+             serde_json::to_value(f.session.warnings().unwrap()).unwrap()["application"],
+             recurrence["application"]
+         );
++    }
++
++    struct CleanupFault {
++        data: Arc<Mutex<FakeData>>,
++        fail: Arc<AtomicBool>,
++        attempts: Arc<AtomicUsize>,
++    }
++    impl ClipboardBackend for CleanupFault {
++        fn set_private(
++            &mut self,
++            text: &str,
++        ) -> Result<crate::clipboard::CopyAttempt, CommandError> {
++            FakeClipboard(self.data.clone()).set_private(text)
++        }
++        fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
++            self.attempts.fetch_add(1, Ordering::SeqCst);
++            if self.fail.load(Ordering::SeqCst) {
++                return Err(CommandError::new(
++                    "clipboard",
++                    "Could not clean up AKM's clipboard copy.",
++                ));
++            }
++            FakeClipboard(self.data.clone()).clear_matching(sequence, text)
++        }
++    }
++
++    fn cleanup_fault(f: &Fixture) -> (Arc<AtomicBool>, Arc<AtomicUsize>) {
++        let fail = Arc::new(AtomicBool::new(true));
++        let attempts = Arc::new(AtomicUsize::new(0));
++        f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(CleanupFault {
++            data: f.clipboard.clone(),
++            fail: fail.clone(),
++            attempts: attempts.clone(),
++        }));
++        let ticket = f.session.snapshot().unwrap().ticket;
++        f.session
++            .copy(ticket, Zeroizing::new("fake-cleanup-value".into()))
++            .unwrap();
++        (fail, attempts)
++    }
++
++    fn application_ids(f: &Fixture) -> Vec<String> {
++        f.session
++            .warnings()
++            .unwrap()
++            .application
++            .into_iter()
++            .map(|n| n.id)
++            .collect()
++    }
++
++    fn reopen_fixture(f: &Fixture) {
++        let ticket = f.session.begin_open().unwrap();
++        f.session
++            .open(ticket, || {
++                Vault::open(
++                    f._directory.path().join("vault.kdbx"),
++                    "fake-test-password-123!",
++                )
++                .map_err(Into::into)
++            })
++            .unwrap();
++    }
++
++    #[test]
++    fn cleanup_episode_uninterrupted_retries_keep_one_id_even_after_acknowledgment() {
++        let f = fixture();
++        let (_fail, _) = cleanup_fault(&f);
++        f.session.lock().unwrap();
++        let first = application_ids(&f);
++        assert_eq!(first.len(), 1);
++        f.session.tick();
++        f.session.observe(Signal::Locked);
++        assert_eq!(application_ids(&f), first);
++        f.session.dismiss_warnings(&first).unwrap();
++        f.session.tick();
++        f.session.lock().unwrap();
++        assert!(
++            application_ids(&f).is_empty(),
++            "acknowledging one unresolved episode must not make each retry a new warning"
++        );
++    }
++
++    #[test]
++    fn cleanup_episode_recovery_then_recurrence_before_old_ack_keeps_a_new_id() {
++        let f = fixture();
++        let (fail, _) = cleanup_fault(&f);
++        f.clock.set(30);
++        f.session.tick();
++        let first = application_ids(&f);
++        assert_eq!(first.len(), 1);
++        fail.store(false, Ordering::SeqCst);
++        f.session.tick();
++        assert_eq!(f.clipboard.lock().unwrap().text, "");
++        assert_eq!(application_ids(&f), first);
++        let ticket = f.session.snapshot().unwrap().ticket;
++        f.session
++            .copy(ticket, Zeroizing::new("fake-next-copy".into()))
++            .unwrap();
++        fail.store(true, Ordering::SeqCst);
++        f.clock.set(60);
++        f.session.tick();
++        let both = application_ids(&f);
++        assert_eq!(
++            both.len(),
++            2,
++            "a recovered episode cannot absorb a later failure"
++        );
++        assert_ne!(both[0], both[1]);
++        f.session.lock().unwrap();
++        reopen_fixture(&f);
++        assert_eq!(application_ids(&f), both);
++        f.session.dismiss_warnings(&first).unwrap();
++        assert_eq!(application_ids(&f), vec![both[1].clone()]);
++        let report = serde_json::to_string(&f.session.warnings().unwrap()).unwrap();
++        assert!(!report.contains("fake-next-copy"));
++        assert!(!report.contains("vault.kdbx"));
++    }
++
++    #[test]
++    fn cleanup_episode_a_new_owned_lease_does_not_reuse_an_old_pending_warning() {
++        let f = fixture();
++        let (_fail, _) = cleanup_fault(&f);
++        f.clock.set(30);
++        f.session.tick();
++        let first = application_ids(&f);
++        let ticket = f.session.snapshot().unwrap().ticket;
++        f.session
++            .copy(ticket, Zeroizing::new("fake-new-lease".into()))
++            .unwrap();
++        f.clock.set(60);
++        f.session.tick();
++        let both = application_ids(&f);
++        assert_eq!(both.len(), 2);
++        assert_eq!(both[0], first[0]);
++        assert_ne!(both[0], both[1]);
++        f.session.dismiss_warnings(&first).unwrap();
++        f.session.tick();
++        assert_eq!(application_ids(&f), vec![both[1].clone()]);
++    }
++
++    #[test]
++    fn cleanup_episode_a_successful_not_due_tick_is_not_recovery() {
++        let f = fixture();
++        let (_fail, attempts) = cleanup_fault(&f);
++        f.session.lock().unwrap();
++        reopen_fixture(&f);
++        let first = application_ids(&f);
++        assert_eq!(first.len(), 1);
++        f.session.dismiss_warnings(&first).unwrap();
++        let before = attempts.load(Ordering::SeqCst);
++        f.clock.set(1);
++        f.session.tick();
++        assert_eq!(
++            attempts.load(Ordering::SeqCst),
++            before,
++            "not-due lease must not attempt cleanup"
++        );
++        f.clock.set(30);
++        f.session.tick();
++        assert!(
++            application_ids(&f).is_empty(),
++            "not-due success must not reset the acknowledged unresolved episode"
++        );
++    }
++
++    #[test]
++    fn cleanup_episode_relinquishing_a_newer_user_copy_is_recovery_without_erasing_it() {
++        let f = fixture();
++        let (fail, _) = cleanup_fault(&f);
++        f.clock.set(30);
++        f.session.tick();
++        let first = application_ids(&f);
++        {
++            let mut data = f.clipboard.lock().unwrap();
++            data.sequence += 1;
++            data.text = "fake-user-copy".into();
++        }
++        fail.store(false, Ordering::SeqCst);
++        f.session.tick();
++        assert_eq!(f.clipboard.lock().unwrap().text, "fake-user-copy");
++        assert_eq!(f.clipboard.lock().unwrap().clears, 0);
++        let ticket = f.session.snapshot().unwrap().ticket;
++        f.session
++            .copy(ticket, Zeroizing::new("fake-owned-again".into()))
++            .unwrap();
++        fail.store(true, Ordering::SeqCst);
++        f.clock.set(60);
++        f.session.tick();
++        assert_eq!(application_ids(&f).len(), 2);
++        f.session.dismiss_warnings(&first).unwrap();
++        assert_eq!(application_ids(&f).len(), 1);
++    }
++
++    #[test]
++    fn cleanup_episode_explicit_application_warnings_are_separate_occurrences() {
++        let f = fixture();
++        f.session.warn("Explicit safety occurrence".into());
++        let first = application_ids(&f);
++        f.session.warn("Explicit safety occurrence".into());
++        assert_eq!(application_ids(&f).len(), 2);
++        f.session.dismiss_warnings(&first).unwrap();
++        assert_eq!(application_ids(&f).len(), 1);
+     }
+ 
+     #[test]
+--- before/desktop/src/ApiFence.security.test.tsx
++++ after/desktop/src/ApiFence.security.test.tsx
+@@ -0,0 +1,79 @@
++import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { afterEach, expect, test, vi } from "vitest";
++import { App } from "./App";
++import { api } from "./api";
++import { acknowledgeCompletions, retainedCompletions } from "./sessionBoundary";
++
++const native = vi.hoisted(() => ({ invoke: vi.fn(), onLock: undefined as undefined | (() => void) }));
++vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
++vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async (_event: string, callback: () => void) => { native.onLock = callback; return () => { native.onLock = undefined; }; }) }));
++vi.mock("./theme", () => ({ useTheme: () => ({ theme: "light", toggle: vi.fn() }) }));
++vi.mock("./components/KeysView", () => ({ KeysView: () => <p>Active B</p> }));
++afterEach(() => { cleanup(); acknowledgeCompletions(retainedCompletions().map(({ id }) => id)); });
++
++const current = { path: "C:/fake/b.kdbx", exists: true, unlocked: true, keyCount: 0, vaultName: "B", needsUpgrade: false };
++function defaults() {
++  native.invoke.mockReset();
++  native.invoke.mockImplementation(async (command: string) => {
++    if (command === "vault_status") return current;
++    if (command === "vault_warnings") return { application: [], operations: [] };
++    if (command === "vault_activity") return;
++    throw new Error(command);
++  });
++}
++
++for (const between of [true, false]) {
++  for (const kind of ["status", "unlock-success", "lock-success", "read-success", "unlock-error", "status-error", "read-error", "lock-error"] as const) {
++    test(`obsolete ${kind} delivered ${between ? "between" : "after"} roots returns only sanitized cancellation`, async () => {
++      defaults();
++      const root = render(<App />);
++      await screen.findByText("Active B");
++      let deliver!: (value: unknown) => void;
++      native.invoke.mockImplementationOnce(() => new Promise((resolve, reject) => { deliver = kind.endsWith("error") ? reject : resolve; }));
++      const call = kind.startsWith("status") ? api.status() : kind.startsWith("unlock") ? api.unlock("C:/fake/private-a.kdbx", "fake-password") : kind.startsWith("lock") ? api.lock() : api.keys();
++      const old = call.catch((error: unknown) => error);
++      root.unmount();
++      if (!between) { render(<App />); await screen.findByText("Active B"); }
++      await act(async () => deliver(kind.endsWith("error") ? { kind: "notFound", message: "No vault at C:/fake/private-a.kdbx. Private A" } : { ...current, path: "C:/fake/private-a.kdbx", vaultName: "Private A" }));
++      const result = await old;
++      expect(result).toMatchObject({ kind: "locked" });
++      expect(JSON.stringify(result)).not.toContain("private-a");
++      expect(JSON.stringify(result)).not.toContain("Private A");
++      if (between) { render(<App />); await screen.findByText("Active B"); }
++      expect(screen.getByText("Active B")).toBeTruthy();
++      expect(document.body.textContent).not.toContain("private-a");
++      expect(retainedCompletions()).toHaveLength(0);
++    });
++  }
++}
++
++test("a current-generation error remains actionable instead of being replaced by cancellation", async () => {
++  defaults();
++  const reason = { kind: "notFound", message: "No vault at the currently selected C:/fake/b.kdbx." };
++  native.invoke.mockRejectedValueOnce(reason);
++  expect(await api.unlock(current.path, "fake-password").catch((error: unknown) => error)).toBe(reason);
++});
++
++test("a bootstrap status overtaken by lock uses a fresh retry rather than obsolete path metadata", async () => {
++  defaults();
++  let resolve!: (value: unknown) => void;
++  // Reserve the status request explicitly; warning polling is independent.
++  native.invoke.mockImplementation(async (command: string) => {
++    if (command === "vault_warnings") return { application: [], operations: [] };
++    if (command === "vault_status") return new Promise((done) => { resolve = done; });
++    throw new Error(command);
++  });
++  await act(async () => { render(<App />); });
++  act(() => native.onLock?.());
++  await act(async () => resolve({ ...current, path: "C:/fake/private-a.kdbx", vaultName: "Private A" }));
++  expect(document.body.textContent).not.toContain("private-a");
++  const retry = screen.getByRole("button", { name: "Try again" });
++  native.invoke.mockImplementation(async (command: string) => {
++    if (command === "vault_status") return { ...current, unlocked: false, vaultName: null };
++    if (command === "vault_warnings") return { application: [], operations: [] };
++    throw new Error(command);
++  });
++  fireEvent.click(retry);
++  await screen.findByRole("button", { name: "Unlock vault" });
++  expect((screen.getByLabelText("Vault file") as HTMLInputElement).value).toBe(current.path);
++});
+--- before/desktop/src/App.security.test.tsx
++++ after/desktop/src/App.security.test.tsx
+@@ -83,14 +83,18 @@
+   expect(screen.getByText(COMPLETION_MESSAGE)).toBeTruthy();
+ });
+ 
+-test("a lock during the initial status request leaves a usable locked screen", async () => {
++test("a lock during the initial status request requires fresh metadata for a usable locked screen", async () => {
+   let resolve!: (value: unknown) => void;
+   native.status.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+   await act(async () => { render(<App />); });
+   act(() => native.onLock?.());
+   await act(async () => resolve({ path: "C:/fake/vault.kdbx", exists: true, unlocked: true, keyCount: 1, vaultName: "Private", needsUpgrade: false }));
+   expect(screen.queryByText("Unlocked secrets region")).toBeNull();
+-  expect(screen.getByText("Unlock screen")).toBeTruthy();
++  expect(screen.queryByText("Unlock screen")).toBeNull();
++  const retry = screen.getByRole("button", { name: "Try again" });
++  native.status.mockResolvedValueOnce({ path: "C:/fake/current.kdbx", exists: true, unlocked: false, keyCount: 0, vaultName: null, needsUpgrade: false });
++  fireEvent.click(retry);
++  await screen.findByText("Unlock screen");
+ });
+ 
+ test("a rejected initial status overtaken by lock leaves a retry instead of endless loading", async () => {
+--- before/desktop/src/App.tsx
++++ after/desktop/src/App.tsx
+@@ -9,7 +9,8 @@
+ import { Unlock } from "./components/Unlock";
+ import { useTheme } from "./theme";
+ import type { OperationNotice, Status, View, WarningReport } from "./types";
+-import { acknowledgeCompletions, COMPLETION_EVENT, COMPLETION_MESSAGE, invalidateSession, retainedCompletions, sessionGeneration, WARNING_EVENT } from "./sessionBoundary";
++import { acknowledgeCompletions, COMPLETION_EVENT, COMPLETION_MESSAGE, invalidateSession, retainedCompletions, sessionGeneration, SESSION_LOSS_EVENT, WARNING_EVENT } from "./sessionBoundary";
++import type { OperationOutcome } from "./sessionBoundary";
+ import { retainedApplicationWarnings, retainedOperationNotices } from "./operationNotices";
+ 
+ const OPERATION_MESSAGES: Record<OperationNotice["kind"], string> = {
+@@ -19,6 +20,18 @@
+   backupPrune: "A vault change was saved, but old backups could not be pruned. Do not repeat the saved operation. Check its retained backups.",
+   preference: "A vault was opened, but its path preference was not saved. Check the vault path the next time you open AKM.",
+ };
++
++function outcomeMessage({ operation, outcome }: OperationOutcome) {
++  const name = operation === "import" ? "Import" : operation === "export" ? "File export" : "Operation";
++  switch (outcome) {
++    case "pending": return `${name} is awaiting an outcome. Do not repeat it while it is pending.`;
++    case "completed": return `${name} completed. Inspect the relevant vault or saved file before repeating it.`;
++    case "cancelled": return "File export was cancelled. No file was saved by this request.";
++    case "reportedError": return `${name} reported an error. This does not confirm that nothing was saved. Inspect the relevant vault or export before retrying.`;
++    case "unconfirmed": return `${name} outcome could not be confirmed after the session changed. Inspect the relevant vault or export before retrying.`;
++    case "completedWhileLocked": return COMPLETION_MESSAGE;
++  }
++}
+ 
+ export function App() {
+   const { theme, toggle } = useTheme();
+@@ -56,14 +69,18 @@
+   }, []);
+ 
+   useEffect(() => {
+-    const acknowledge = (event: Event) => {
++    const update = () => setCompletions(retainedCompletions());
++    const sessionLost = (event: Event) => {
+       const origin = (event as CustomEvent<{ generation: number }>).detail?.generation;
+       if (origin === sessionGeneration()) showLocked();
+-      setCompletions(retainedCompletions());
+-    };
+-    window.addEventListener(COMPLETION_EVENT, acknowledge);
++    };
++    window.addEventListener(COMPLETION_EVENT, update);
++    window.addEventListener(SESSION_LOSS_EVENT, sessionLost);
+     setCompletions(retainedCompletions()); // Replay is presentation-only, not a new lock signal.
+-    return () => window.removeEventListener(COMPLETION_EVENT, acknowledge);
++    return () => {
++      window.removeEventListener(COMPLETION_EVENT, update);
++      window.removeEventListener(SESSION_LOSS_EVENT, sessionLost);
++    };
+   }, [showLocked]);
+ 
+   useEffect(() => {
+@@ -104,10 +121,7 @@
+     const current = () => currentRequest === request.current && currentEpoch === epoch.current && currentTransition === transition.current;
+     try {
+       const next = await api.status();
+-      if (!current()) {
+-        if (currentEpoch !== epoch.current) setStatus((existing) => existing ?? { ...next, unlocked: false, keyCount: 0, vaultName: null, needsUpgrade: false });
+-        return;
+-      }
++      if (!current()) return;
+       if (!next.unlocked) showLocked();
+       setStatus(next);
+       setError(null);
+@@ -211,10 +225,10 @@
+         onReload={() => void reload()}
+       />
+ 
+-      {completions.length > 0 && <div className="wrap session-notices">
+-        <Notice>{COMPLETION_MESSAGE}</Notice>
+-        <button type="button" className="text-button" onClick={() => acknowledgeCompletions(completions.map(({ id }) => id))}>Dismiss completed-operation receipt</button>
+-      </div>}
++      {completions.length > 0 && <section className="wrap session-notices" aria-label="Operation outcomes">
++        {completions.map((record) => <Notice key={record.id} tone={record.outcome === "reportedError" || record.outcome === "unconfirmed" ? "error" : "info"}>{outcomeMessage(record)}</Notice>)}
++        <button type="button" className="text-button" disabled={completions.every(({ outcome }) => outcome === "pending")} onClick={() => acknowledgeCompletions(completions.filter(({ outcome }) => outcome !== "pending").map(({ id }) => id))}>Dismiss operation outcomes</button>
++      </section>}
+ 
+       {status && error && <div className="wrap session-notices"><Notice tone="error">{error}</Notice></div>}
+       {operationNotices.length > 0 && (
+--- before/desktop/src/OutcomeHandoff.security.test.tsx
++++ after/desktop/src/OutcomeHandoff.security.test.tsx
+@@ -0,0 +1,152 @@
++import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
++import { afterEach, expect, test, vi } from "vitest";
++import { App } from "./App";
++import { acknowledgeCompletions, COMPLETION_MESSAGE, retainedCompletions } from "./sessionBoundary";
++
++const native = vi.hoisted(() => ({ active: true, onLock: undefined as undefined | (() => void), invoke: vi.fn() }));
++vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
++vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async (_event: string, callback: () => void) => { native.onLock = callback; return () => { native.onLock = undefined; }; }) }));
++vi.mock("./theme", () => ({ useTheme: () => ({ theme: "light", toggle: vi.fn() }) }));
++vi.mock("./components/KeysView", () => ({ KeysView: () => <p>Unlocked keys region</p> }));
++afterEach(() => {
++  cleanup();
++  acknowledgeCompletions(retainedCompletions().map(({ id }) => id));
++  vi.restoreAllMocks();
++});
++
++type Operation = "import" | "export";
++type Reply = "success" | "error" | "cancel";
++type Handoff = "normal" | "hide" | "navigate" | "return" | "between-roots" | "after-remount" | "lock-b";
++
++async function dispatch(operation: Operation) {
++  native.invoke.mockReset();
++  native.active = true;
++  let settle!: (reply: Reply) => void;
++  const status = () => ({ path: "C:/fake/current.kdbx", exists: true, unlocked: native.active, keyCount: 1, vaultName: "Fake", needsUpgrade: false });
++  native.invoke.mockImplementation(async (command: string) => {
++    if (command === "vault_status") return status();
++    if (command === "vault_activity" || command === "vault_dismiss_warnings") return;
++    if (command === "vault_warnings") return { application: [], operations: [] };
++    if (command === "vault_unlock") { native.active = true; return status(); }
++    if (command === "keys_list") return [{ id: "fake-key", title: "Fixture key", project: "demo", environment: "dev" }];
++    if (command === "backup_info") return { path: "C:/fake/current.bak", exists: false, bytes: 0, modified: null };
++    if (command === "env_import_preview") return { token: "fake-private-review-token", added: 1, updated: 0, unchanged: 0, changes: [] };
++    if (command === (operation === "import" ? "env_import_confirm" : "env_save")) {
++      return new Promise((resolve, reject) => {
++        settle = (reply) => reply === "error"
++          ? reject({ kind: "io", message: "Error for C:/fake/private-origin-a-export.env: FAKE_DETAIL_MARKER" })
++          : resolve(reply === "cancel" ? null : operation === "import" ? { added: 1, updated: 0 } : "C:/fake/private-origin-a-export.env");
++      });
++    }
++    throw new Error(`Unexpected command ${command}`);
++  });
++  const root = render(<App />);
++  await screen.findByText("Unlocked keys region");
++  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
++  if (operation === "import") {
++    fireEvent.click(screen.getByRole("button", { name: "Import .env…" }));
++    for (const [label, value] of [["Paste the .env contents", "PRIVATE_TOKEN=fake-private-import-value"], ["Target project", "private-scope-a"], ["Target environment", "private-env-a"]]) {
++      fireEvent.change(screen.getByLabelText(label), { target: { value } });
++    }
++    fireEvent.click(screen.getByRole("button", { name: "Review import" }));
++    await screen.findByRole("button", { name: "Confirm import" });
++    fireEvent.click(screen.getByRole("button", { name: "Confirm import" }));
++  } else {
++    await screen.findByRole("option", { name: "demo" });
++    fireEvent.change(screen.getByLabelText("Project"), { target: { value: "demo" } });
++    fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "dev" } });
++    fireEvent.click(screen.getByRole("button", { name: "Save .env…" }));
++  }
++  return { root, settle };
++}
++
++function hideAndRestore() {
++  const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
++  act(() => document.dispatchEvent(new Event("visibilitychange")));
++  hidden.mockReturnValue(false);
++  act(() => document.dispatchEvent(new Event("visibilitychange")));
++}
++
++for (const operation of ["import", "export"] as const) {
++  for (const reply of ["success", "error"] as const) {
++    for (const handoff of ["normal", "hide", "navigate", "return", "between-roots", "after-remount", "lock-b"] as Handoff[]) {
++      test(`${operation} ${reply}: retained once through ${handoff}`, async () => {
++        const { root, settle } = await dispatch(operation);
++        if (handoff !== "normal") hideAndRestore();
++        if (handoff === "between-roots" || handoff === "after-remount") {
++          root.unmount();
++          if (handoff === "after-remount") { render(<App />); await screen.findByText("Unlocked keys region"); }
++        } else if (handoff === "lock-b") {
++          act(() => { native.active = false; native.onLock?.(); });
++          fireEvent.change(screen.getByLabelText("Master password"), { target: { value: "fake-password-for-b" } });
++          fireEvent.click(screen.getByRole("button", { name: "Unlock vault" }));
++          await screen.findByText("Unlocked keys region");
++        } else if (handoff !== "normal" && handoff !== "hide") {
++          fireEvent.click(screen.getByRole("button", { name: "Keys" }));
++          await screen.findByText("Unlocked keys region");
++          if (handoff === "return") fireEvent.click(screen.getByRole("button", { name: "Settings" }));
++        }
++        await act(async () => settle(reply));
++        if (handoff === "between-roots") { render(<App />); await screen.findByText("Unlocked keys region"); }
++        const changed = ["between-roots", "after-remount", "lock-b"].includes(handoff);
++        const expected = reply === "success" ? (changed ? "completedWhileLocked" : "completed") : (changed ? "unconfirmed" : "reportedError");
++        const records = retainedCompletions();
++        expect(records).toHaveLength(1);
++        expect(records[0]).toMatchObject({ operation, outcome: expected });
++        const region = screen.getByRole("region", { name: "Operation outcomes" });
++        expect(within(region).getAllByRole(reply === "success" ? "status" : "alert")).toHaveLength(1);
++        if (reply === "success" && changed) expect(within(region).getByText(COMPLETION_MESSAGE)).toBeTruthy();
++        for (const forbidden of ["private-scope-a", "private-env-a", "PRIVATE_TOKEN", "fake-private-import-value", "private-origin-a-export.env", "FAKE_DETAIL_MARKER", "fake-private-review-token"]) {
++          expect(region.textContent).not.toContain(forbidden);
++          expect(JSON.stringify(records)).not.toContain(forbidden);
++          if (handoff !== "normal") expect(document.body.textContent).not.toContain(forbidden);
++        }
++        if (handoff === "normal") {
++          if (reply === "error") expect(screen.getAllByText(/FAKE_DETAIL_MARKER/).length).toBeGreaterThan(0);
++          else if (operation === "import") expect(screen.getByText("Imported: 1 added, 0 updated.")).toBeTruthy();
++          else expect(screen.getByText(/Saved plaintext secrets to C:\/fake\/private-origin-a-export.env/)).toBeTruthy();
++        }
++        expect(native.invoke.mock.calls.filter(([command]) => command === (operation === "import" ? "env_import_confirm" : "env_save"))).toHaveLength(1);
++        if (!["normal", "hide", "return"].includes(handoff)) expect(screen.getByText("Unlocked keys region")).toBeTruthy();
++        fireEvent.click(screen.getByRole("button", { name: "Dismiss operation outcomes" }));
++        expect(retainedCompletions()).toHaveLength(0);
++        cleanup();
++        render(<App />);
++        await screen.findByText("Unlocked keys region");
++        expect(screen.queryByRole("region", { name: "Operation outcomes" })).toBeNull();
++      });
++    }
++  }
++}
++
++test("a cancelled file dialog after navigation is not a saved export", async () => {
++  const { settle } = await dispatch("export");
++  hideAndRestore();
++  fireEvent.click(screen.getByRole("button", { name: "Keys" }));
++  await act(async () => settle("cancel"));
++  expect(retainedCompletions()).toHaveLength(1);
++  expect(retainedCompletions()[0]).toMatchObject({ operation: "export", outcome: "cancelled" });
++  const region = screen.getByRole("region", { name: "Operation outcomes" });
++  expect(region.textContent).toContain("cancelled");
++  expect(region.textContent).toContain("No file was saved by this request.");
++  expect(region.textContent).not.toContain("completed");
++});
++
++test("pending outcomes cannot be dismissed; a later settled snapshot does not erase an unseen request", async () => {
++  const { settle } = await dispatch("import");
++  const pending = retainedCompletions();
++  expect(pending).toHaveLength(1);
++  expect(pending[0]).toMatchObject({ operation: "import", outcome: "pending" });
++  act(() => acknowledgeCompletions(pending.map(({ id }) => id)));
++  expect(retainedCompletions()).toHaveLength(1);
++  await act(async () => settle("success"));
++  expect(retainedCompletions()[0].id).toBe(pending[0].id);
++  const settledIds = retainedCompletions().map(({ id }) => id);
++  // A different request can start while the first historical outcome remains visible.
++  cleanup();
++  const next = await dispatch("export");
++  act(() => acknowledgeCompletions(settledIds));
++  expect(retainedCompletions()).toHaveLength(1);
++  expect(retainedCompletions()[0]).toMatchObject({ operation: "export", outcome: "pending" });
++  await act(async () => next.settle("cancel"));
++});
+--- before/desktop/src/SessionReceipt.security.test.tsx
++++ after/desktop/src/SessionReceipt.security.test.tsx
+@@ -39,7 +39,7 @@
+     expect(screen.getByText(COMPLETION_MESSAGE)).toBeTruthy();
+     expect(screen.getByText("Unlocked region")).toBeTruthy();
+     expect(document.body.textContent).not.toContain("private-a-export.env");
+-    fireEvent.click(screen.getByRole("button", { name: "Dismiss completed-operation receipt" }));
++    fireEvent.click(screen.getByRole("button", { name: "Dismiss operation outcomes" }));
+     cleanup();
+     render(<App />);
+     await screen.findByText("Unlocked region");
+--- before/desktop/src/api.security.test.ts
++++ after/desktop/src/api.security.test.ts
+@@ -1,24 +1,28 @@
+ import { afterEach, expect, test, vi } from "vitest";
+ import { api } from "./api";
+-import { COMPLETION_EVENT, invalidateSession } from "./sessionBoundary";
++import { acknowledgeCompletions, COMPLETION_EVENT, invalidateSession, retainedCompletions, SESSION_LOSS_EVENT } from "./sessionBoundary";
+ 
+ const native = vi.hoisted(() => ({ invoke: vi.fn() }));
+ vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
+-afterEach(() => vi.resetAllMocks());
++afterEach(() => { vi.resetAllMocks(); acknowledgeCompletions(retainedCompletions().map(({ id }) => id)); });
+ 
+ test("a mutation reply overtaken by lock emits a secret-free receipt, not a retryable failure", async () => {
+   let resolve!: (value: unknown) => void;
+   native.invoke.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+   const notice = vi.fn();
++  const lost = vi.fn();
+   window.addEventListener(COMPLETION_EVENT, notice);
++  window.addEventListener(SESSION_LOSS_EVENT, lost);
+   try {
+     const outcome = api.confirmImport("fake-single-use-token").catch((error: unknown) => error);
+     invalidateSession();
+     resolve({ added: 1, updated: 0 });
+     expect(await outcome).toMatchObject({ kind: "completedWhileLocked", message: expect.stringContaining("Do not repeat") });
+-    expect(notice).toHaveBeenCalledTimes(1);
++    expect(notice).toHaveBeenCalledTimes(2); // Pending and settlement update one retained record.
++    expect(lost).toHaveBeenCalledTimes(1);
++    expect(retainedCompletions()).toHaveLength(1);
+     expect(JSON.stringify(notice.mock.calls)).not.toContain("fake-single-use-token");
+-  } finally { window.removeEventListener(COMPLETION_EVENT, notice); }
++  } finally { window.removeEventListener(COMPLETION_EVENT, notice); window.removeEventListener(SESSION_LOSS_EVENT, lost); }
+ });
+ 
+ test("an obsolete secret reply is suppressed without claiming a completed mutation", async () => {
+@@ -30,3 +34,33 @@
+   expect(await outcome).toMatchObject({ kind: "locked" });
+   expect(JSON.stringify(await outcome)).not.toContain("fake-private-plaintext");
+ });
++
++test("a cancelled save overtaken by a session change remains cancellation, not completion or uncertainty", async () => {
++  let resolve!: (value: unknown) => void;
++  native.invoke.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
++  const lost = vi.fn();
++  window.addEventListener(SESSION_LOSS_EVENT, lost);
++  try {
++    const outcome = api.saveEnv("fake-scope", "fake-env").catch((error: unknown) => error);
++    const pending = retainedCompletions()[0];
++    invalidateSession();
++    resolve(null);
++    expect(await outcome).toMatchObject({ kind: "locked" });
++    expect(retainedCompletions()).toEqual([{ ...pending, outcome: "cancelled" }]);
++    expect(lost).not.toHaveBeenCalled();
++  } finally { window.removeEventListener(SESSION_LOSS_EVENT, lost); }
++});
++
++test("native known-commit errors are normalized and retain only four fixed classification fields", async () => {
++  native.invoke.mockRejectedValueOnce({ kind: "completedWhileLocked", message: "FAKE_PRIVATE_NATIVE_ERROR C:/private-a/export.env", value: "fake-secret" });
++  const error = await api.confirmImport("fake-private-token").catch((cause: unknown) => cause);
++  expect(error).toMatchObject({ kind: "completedWhileLocked", message: expect.stringContaining("Do not repeat") });
++  const records = retainedCompletions();
++  expect(records).toHaveLength(1);
++  expect(Object.keys(records[0]).sort()).toEqual(["generation", "id", "operation", "outcome"]);
++  expect(records[0]).toMatchObject({ operation: "import", outcome: "completedWhileLocked" });
++  for (const privateText of ["fake-private-token", "FAKE_PRIVATE_NATIVE_ERROR", "export.env", "fake-secret"]) {
++    expect(JSON.stringify(error)).not.toContain(privateText);
++    expect(JSON.stringify(records)).not.toContain(privateText);
++  }
++});
+--- before/desktop/src/api.ts
++++ after/desktop/src/api.ts
+@@ -1,5 +1,5 @@
+ import { invoke as nativeInvoke } from "@tauri-apps/api/core";
+-import { completedWhileLocked, reportCompletion, sessionGeneration } from "./sessionBoundary";
++import { beginOutcome, completedWhileLocked, reportCompletion, sessionGeneration, settleOutcome } from "./sessionBoundary";
+ import { acknowledgeNotices, receiveWarnings } from "./operationNotices";
+ import type {
+   AuditReport,
+@@ -16,15 +16,27 @@
+ 
+ async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+   const generation = sessionGeneration();
++  const outcome = command === "env_import_confirm" ? beginOutcome("import", generation)
++    : command === "env_save" ? beginOutcome("export", generation) : undefined;
++  const cancelled = () => ({ kind: "locked", message: "The session changed. Unlock the vault again." });
+   try {
+     const result = await nativeInvoke<T>(command, args);
+-    if (command !== "vault_lock" && command !== "vault_status" && generation !== sessionGeneration()) {
++    if (command === "env_save" && result === null && outcome !== undefined) settleOutcome(outcome, "cancelled");
++    if (generation !== sessionGeneration()) {
+       if (mutations.has(command) && !(command === "env_save" && result === null)) throw completedWhileLocked();
+-      throw { kind: "locked", message: "The session changed. Unlock the vault again." };
++      throw cancelled();
+     }
++    if (outcome !== undefined) settleOutcome(outcome, "completed");
+     return result;
+   } catch (error) {
+-    if (errorKind(error) === "completedWhileLocked") reportCompletion(generation);
++    if (errorKind(error) === "completedWhileLocked") {
++      if (outcome !== undefined) settleOutcome(outcome, "completedWhileLocked");
++      else reportCompletion(generation);
++      throw completedWhileLocked(); // Do not forward native details, even in a known-commit error.
++    }
++    const obsolete = generation !== sessionGeneration();
++    if (outcome !== undefined) settleOutcome(outcome, obsolete ? "unconfirmed" : "reportedError");
++    if (obsolete) throw cancelled();
+     throw error;
+   }
+ }
+--- before/desktop/src/components/Settings.security.test.tsx
++++ after/desktop/src/components/Settings.security.test.tsx
+@@ -144,7 +144,7 @@
+   expect(mocks.confirmImport).not.toHaveBeenCalled();
+ });
+ 
+-test("hiding an already-dispatched import confirmation preserves its completion acknowledgment", async () => {
++test("hiding an already-dispatched confirmation expires local details without leaving its controls busy", async () => {
+   let resolve!: (value: unknown) => void;
+   mocks.confirmImport.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+   render(<Settings status={status} onLocked={() => {}} />);
+@@ -160,5 +160,7 @@
+   hidden.mockReturnValue(false);
+   await act(async () => resolve({ added: 1, updated: 0 }));
+   expect(screen.queryByRole("dialog")).toBeNull();
+-  expect(screen.getByText("Imported: 1 added, 0 updated.")).toBeTruthy();
++  // The real API/App handoff suite checks retained acknowledgment. This mocked view owns no outcomes.
++  expect(screen.queryByText("Imported: 1 added, 0 updated.")).toBeNull();
++  expect((screen.getByRole("button", { name: "Import .env…" }) as HTMLButtonElement).disabled).toBe(false);
+ });
+--- before/desktop/src/components/Settings.tsx
++++ after/desktop/src/components/Settings.tsx
+@@ -77,17 +77,15 @@
+     const onVisibility = () => {
+       if (!document.hidden) return;
+       hidePreview();
+-      if (importBusy === "confirm") {
+-        setImporting(false);
+-        setImportText("");
+-        setImportPreview(null);
+-      } else {
+-        closeImport();
+-      }
++      sideEffectRequest.current += 1;
++      setBusy(null);
++      setMessage(null);
++      // Local protected results expire here. Already-dispatched outcomes belong to the API.
++      closeImport();
+     };
+     document.addEventListener("visibilitychange", onVisibility);
+     return () => document.removeEventListener("visibilitychange", onVisibility);
+-  }, [hidePreview, closeImport, importBusy]);
++  }, [hidePreview, closeImport]);
+ 
+   const loadBackup = useCallback(async () => {
+     try {
+@@ -139,6 +137,8 @@
+ 
+   function chooseProject(value: string) {
+     hidePreview();
++    sideEffectRequest.current += 1;
++    setBusy(null);
+     setProject(value);
+     setEnvironment("");
+     setPreview(null);
+@@ -147,6 +147,8 @@
+ 
+   function chooseEnvironment(value: string) {
+     hidePreview();
++    sideEffectRequest.current += 1;
++    setBusy(null);
+     setEnvironment(value);
+     setPreview(null);
+     setMessage(null);
+--- before/desktop/src/sessionBoundary.ts
++++ after/desktop/src/sessionBoundary.ts
+@@ -1,14 +1,27 @@
+ export const COMPLETION_EVENT = "akm-operation-completed";
++export const SESSION_LOSS_EVENT = "akm-completed-session-lost";
+ export const WARNING_EVENT = "akm-operation-notices";
+ export const COMPLETION_MESSAGE = "An operation completed, but its originating session is no longer available. Do not repeat it. Open the relevant vault or check its export to inspect the saved result.";
+ 
++export type Operation = "import" | "export" | "operation";
++export type Outcome = "pending" | "completed" | "reportedError" | "cancelled" | "unconfirmed" | "completedWhileLocked";
++export interface OperationOutcome {
++  id: number;
++  generation: number;
++  operation: Operation;
++  outcome: Outcome;
++}
++
+ let generation = 0;
+ let nextReceipt = 0;
+-const receipts = new Map<number, { id: number; generation: number }>();
++// Only opaque identity/classification lives here. Never retain native input, results or errors.
++const receipts = new Map<number, OperationOutcome>();
+ 
+-export function retainedCompletions() { return [...receipts.values()]; }
++export function retainedCompletions() { return [...receipts.values()].map((receipt) => ({ ...receipt })); }
+ export function acknowledgeCompletions(ids: number[]) {
+-  for (const id of ids) receipts.delete(id);
++  for (const id of ids) {
++    if (receipts.get(id)?.outcome !== "pending") receipts.delete(id);
++  }
+   // An acknowledgment updates presentation, never locks a session.
+   window.dispatchEvent(new CustomEvent(COMPLETION_EVENT));
+ }
+@@ -20,8 +33,29 @@
+   return { kind: "completedWhileLocked", message: COMPLETION_MESSAGE };
+ }
+ 
++export function beginOutcome(operation: "import" | "export", origin: number) {
++  const id = ++nextReceipt;
++  receipts.set(id, { id, generation: origin, operation, outcome: "pending" });
++  window.dispatchEvent(new CustomEvent(COMPLETION_EVENT));
++  return id;
++}
++
++export function settleOutcome(id: number, outcome: Exclude<Outcome, "pending">) {
++  const pending = receipts.get(id);
++  if (!pending || pending.outcome !== "pending") return;
++  receipts.set(id, { ...pending, outcome });
++  window.dispatchEvent(new CustomEvent(COMPLETION_EVENT));
++  if (outcome === "completedWhileLocked") signalSessionLoss(pending.generation);
++}
++
++function signalSessionLoss(origin: number) {
++  // This is a live signal, not a replayable outcome-state update.
++  window.dispatchEvent(new CustomEvent(SESSION_LOSS_EVENT, { detail: { generation: origin } }));
++}
++
+ export function reportCompletion(origin = sessionGeneration()) {
+-  const receipt = { id: ++nextReceipt, generation: origin };
++  const receipt: OperationOutcome = { id: ++nextReceipt, generation: origin, operation: "operation", outcome: "completedWhileLocked" };
+   receipts.set(receipt.id, receipt);
+-  window.dispatchEvent(new CustomEvent(COMPLETION_EVENT, { detail: receipt }));
++  window.dispatchEvent(new CustomEvent(COMPLETION_EVENT));
++  signalSessionLoss(origin);
+ }
+--- before/docs/REVIEW_LEDGER.md
++++ after/docs/REVIEW_LEDGER.md
+@@ -138,7 +138,7 @@
+ 
+ ### Owner-authorized recalibration after round three
+ 
+-The owner requested recalibration and implementation of one new bounded cycle. [Cycle plan](work/phase2-1a/corrections3/PLAN.md) separates protected view results from application-owned dispatched outcomes, message delivery IDs from owned cleanup episodes, and sanitized stale cancellation from actionable current errors. R3 findings remain open until permanent combined-transition regressions, affected runtime proof and fresh acceptance. Source ownership/fingerprints checked; no application change or new suite was used merely to recalibrate. No other phase-two implementation or readiness score is authorized.
++The owner requested recalibration and implementation of one new bounded cycle. [Cycle plan](work/phase2-1a/corrections3/PLAN.md) separates protected view results from application-owned dispatched outcomes, message delivery IDs from owned cleanup episodes, and sanitized stale cancellation from actionable current errors. [Evidence](work/phase2-1a/corrections3/evidence.md) preserves failing-first frontend33/native6 and stable Rust163 (timeout/selective exact-workspace resume), frontend105/browser18/lint/builds. Exact-GUI journal/export proofs pass with settings restored. **Actual native hide/navigation handoff is unproven:** both minimized-state attempts failed before those assertions; this is a proof gap, not a demonstrated dropped receipt or a synthetic pass. R3 findings await fresh scoped acceptance; no whole-unit/runtime readiness claim yet. No other phase-two implementation or readiness score is authorized.
+ 
+ ## Updating this ledger
+ 
+--- before/docs/STATE.md
++++ after/docs/STATE.md
+@@ -57,11 +57,11 @@
+ 
+ ## Next action
+ 
+-All three reviewers are finished; no build/proof/reviewer is pending. Immutable evidence lives under `docs/work/phase2-1a/reviews/round1`, `round2`, `round3`; do not overwrite failed verdicts with future approval. No application code was changed after the third review returned.
++All three prior reviewers are finished. Immutable evidence lives under `docs/work/phase2-1a/reviews/round1`, `round2`, `round3`; do not overwrite failed verdicts with future approval. The owner-renewed cycle is now implementing the three remaining findings.
+ 
+ Current changed seams: `audit.rs` JSON whitespace/boundary checks; Session application-warning IDs; native audit serializers; frontend completion/app-warning retention, own-key action labels, delete copy and IPC types; permanent regressions and proof harness. Targeted checks pass: core8 (including 1,024 byte cases), affected CLI/native checks, frontend39 in five files. See [second-cycle evidence](work/phase2-1a/corrections2/evidence.md). The interrupted patch had applied no production edits; its failing-first tests were retained and not needlessly repeated.
+ 
+-Stable Rust157/frontend55/browser10 and strict lint pass. Production build caught two test-only unsupported Testing Library options; corrected, affected delete test rerun, then build/browser passed. Release CLI/GUI/MSI/NSIS all exit0. Current GUI `42f3f63afae5c6dfa426c92da7635972d5e0642c2d6e8482681588dfc14510c8`; CLI `0024f9005a68bf5b5ab9d32297c9d6eb4043ee5616a7ae6c465a054adfddcdc0`.
++The prior rejected candidate passed Rust157/frontend55/browser10 and strict lint. Its production build caught two unsupported test-only Testing Library options; corrected, affected delete/build/browser rerun. That GUI was `42f3f63afae5c6dfa426c92da7635972d5e0642c2d6e8482681588dfc14510c8`; CLI `0024f9005a68bf5b5ab9d32297c9d6eb4043ee5616a7ae6c465a054adfddcdc0`. This is historical evidence, not the renewed candidate below.
+ 
+ Extended JournalOnly passed on that GUI (delete/backup-warning copy, unknown action labels, exact large sequence, journal states/bytes/sessionB/dismissal). Its UI Automation discovery used the prior root-refresh recovery. JournalExportOnly passed on the same hash. Both restored settings byte-for-byte and skipped clipboard entirely. CLI KeePassXC passed. No owned AKM/WebView processes remained at cleanup. No build/proof is pending.
+ 
+@@ -69,9 +69,13 @@
+ 
+ Remaining supported findings: **1A-R3-01/P2** dispatched import outcome lost after hide then navigation out of Settings (mocked successful confirmation, not a proven real commit; check dispatched export too); **1A-R3-02/P3** recovered then recurring identical safety failures are merged while the old ID remains pending (inspection-supported; no real clipboard operation); **1A-R3-03/P3** stale status successes and ordinary native errors bypass API generation fencing (old callers receive A metadata; no B-DOM display was reproduced). Full disposition is in the ledger.
+ 
+-Resume check matched all application/build/test/proof inputs to the rejected round3 pin; only the five recorded guidance/state files differ. All raw archives and current GUI/CLI identities verified. No suite/build/proof/reviewer is pending and no application edit has been made in this newly authorized cycle yet.
++Resume matched all146 frozen before-cycle paths and the rejected GUI/CLI hashes. [Current-cycle evidence](work/phase2-1a/corrections3/evidence.md) preserves33 failing-first frontend behaviors (1 pass) and6 fake native failures. The capture-helper print encoding failure occurred after its log/exit were saved, not instead of test execution.
+ 
+-Next: pin this cycle's before source and add failing-first combined App/API/Settings and fake cleanup-episode regressions under the recalibrated plan. Do not repeat completed suites merely for context. Clipboard, real OS lock/suspend, actual Tauri reload, installation and real-secret tests remain excluded. Known layout debt is reported, not a checker pass. Another rejected acceptance goes back to the owner.
++Changed production: frontend API/sessionBoundary/App/Settings and native Session/minimal clipboard generation getter. Registry, separate live session-loss signal, success/error fences and shared lease-owned cleanup handler implemented. Full frontend105/browser18/typebuild/lint pass. Rust163 unique passes complete across a timed-out156-pass workspace attempt and exact same-workspace7-case selective resume, with the156 completed names skipped; binary/doc targets also pass. Supplementary package-only7 not counted again. Two gated ignored remain. Partial/failed logs retained; no reviewer dispatched.
++
++New GUI/MSI/NSIS built exit0; GUI `c3b125872f26a609e63158f6ae72fb8cac9e666ca11ff83efb64aa19de0f0ec6`; CLI unchanged. OutcomeOnly **both attempts failed to observe actual minimization**, even after the same verified Tauri-handle IsIconic check. Both confirmed pending+fake committed import, but never reached handoff acknowledgment assertions: native hide/navigation remains unproven, not a product failure or pass. Settings restored exactly both times; failure evidence retained in `...\opencode\akm-app-proof-43505207-721c-4baa-a17f-2c081b425a1a` and `...94352c49-2ce4-4717-8801-bdd2aeb2158f`. Input desktop was Screen-saver; no inferred cause, unlock, desktop change or global input. No more minimize retries. Exact-GUI JournalOnly and JournalExportOnly passed (owned-root refresh used), including delete/backup warning, unknown actions, exact large sequence, journal bytes/states, A notice across B/dismissal, approved export path/content/request-completion order and refusal before publication on request-log error. Settings restored both runs. No build/proof is pending; clipboard untouched.
++
++Next: freeze combined/cycle diffs and source identity and obtain the one fresh Terra review with the actual minimize/handoff proof gap explicit. Reviewer model `openai/gpt-6.1-terra#max` availability confirmed; none dispatched yet. Existing layout debt persists (Activity5/Keys21 per theme; no new outcome overflow/overlap reported). Do not repeat unchanged CLI/KeePassXC solely for context. Another rejected acceptance returns to owner, not another correction cycle.
+ 
+ ## Checkpoint format for the next work unit
+ 
+--- before/docs/VERIFICATION.md
++++ after/docs/VERIFICATION.md
+@@ -75,9 +75,9 @@
+ 
+ The [unit evidence](work/phase2-1a/evidence.md) preserves the rejected first candidate and [raw failed review](work/phase2-1a/reviews/round1/manifest.json). The [first correction evidence](work/phase2-1a/corrections/evidence.md) records Rust153/frontend43/browser10, explicit exits, hashes, exact-GUI proofs and KeePassXC on the subsequently rejected round-two source. Its failed export startup-discovery run remains beside the root-refresh recovery; do not report an all-first-try native pass. The [second correction evidence](work/phase2-1a/corrections2/evidence.md) records the six newer findings and affected checks. No earlier pass substitutes for the current candidate's acceptance. Clipboard was not accessed. Native late-lock/sync faults are injected, and browser reload has mocked IPC. No numerical readiness score is implied.
+ 
+-Round-three bounded acceptance also [rejected the candidate](work/phase2-1a/reviews/round3/review-result.md), with three supported contract findings. Main's current157/55/10/lint/build/native/KeePassXC results remain valid for their checked scenarios but do not override rejection. Work is paused for the owner's decision; this documentation handoff requires no repeated suite or native proof.
++Round-three bounded acceptance also [rejected that candidate](work/phase2-1a/reviews/round3/review-result.md), with three supported contract findings. Its157/55/10/lint/build/native/KeePassXC results remain valid for their checked scenarios but do not override rejection. The owner subsequently authorized one renewed cycle under the [recalibrated plan](work/phase2-1a/corrections3/PLAN.md); new [evidence](work/phase2-1a/corrections3/evidence.md) is separate from the earlier failed acceptance.
+ 
+-For focused fake-data native journal flows, use `tools/verify_windows_app.ps1` with `-JournalOnly` or `-JournalExportOnly`. Both skip clipboard entirely. They are scoped proofs, not aliases for full native/OS delivery or installation coverage.
++For focused fake-data native flows, use `tools/verify_windows_app.ps1` with `-JournalOnly`, `-JournalExportOnly` or `-OutcomeOnly`. These skip clipboard entirely. OutcomeOnly delays replies using its own fake-journal lock and minimizes/restores only the owned AKM window; failure to demonstrate a real hide is a proof gap, not a synthetic pass. They are scoped proofs, not aliases for full native/OS delivery or installation coverage.
+ 
+ ## Evidence invalidation rules
+ 
+--- before/docs/work/phase2-1a/check_layout.mjs
++++ after/docs/work/phase2-1a/check_layout.mjs
+@@ -0,0 +1,100 @@
++import { chromium } from "file:///W:/API%20Keys%20Manager/desktop/node_modules/playwright-core/index.mjs";
++import { preview } from "file:///W:/API%20Keys%20Manager/desktop/node_modules/vite/dist/node/index.js";
++import ts from "file:///W:/API%20Keys%20Manager/desktop/node_modules/typescript/lib/typescript.js";
++import { readFile, writeFile, copyFile } from "node:fs/promises";
++
++const base = "W:/API Keys Manager/docs/work/phase2-1a";
++const work = process.argv.includes("--corrections3") ? `${base}/corrections3` : base;
++const scratch = "C:/Users/Gargeya/AppData/Local/Temp/opencode";
++const mock = ts.transpileModule(await readFile("W:/API Keys Manager/desktop/e2e/native-boundary.ts", "utf8"), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
++const { installNativeBoundaryMock } = await import(`data:text/javascript;base64,${Buffer.from(mock).toString("base64")}`);
++const server = await preview({ root: "W:/API Keys Manager/desktop", configFile: false, preview: { host: "127.0.0.1", port: 1439, strictPort: true, cors: true } });
++const browser = await chromium.launch({ channel: "msedge", args: ["--allow-file-access-from-files"] });
++const layoutFindings = [];
++
++async function measure(file, name, theme) {
++  const page = await browser.newPage({ viewport: { width: 1500, height: 1800 } });
++  try {
++    const query = new URLSearchParams({ page: `file:///${file}`, theme });
++    await page.goto(`file:///C:/Users/Gargeya/.claude/design/checks/measure-layout.html?${query}`);
++    await page.waitForFunction(() => document.querySelector("#out")?.textContent?.startsWith("RESULT:"));
++    const text = await page.locator("#out").innerText();
++    await writeFile(`${work}/${name}-layout-${theme}.txt`, text);
++    console.log(name, theme, text.split("\n")[0]);
++    if (!text.startsWith("RESULT: no FAIL line")) layoutFindings.push({ name, theme, verdict: text.split("\n")[0] });
++  } finally { await page.close(); }
++}
++
++try {
++  await copyFile(`${base}/graph.html`, `${scratch}/akm-unit1a-graph.html`);
++  for (const theme of ["light", "dark"]) {
++    await measure(`${scratch}/akm-unit1a-graph.html`, "graph", theme);
++    if (process.argv.includes("--graph-only")) continue;
++    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
++    await installNativeBoundaryMock(page, theme);
++    await page.goto("http://127.0.0.1:1439/");
++    await page.getByRole("button", { name: "Activity", exact: true }).click();
++    await page.getByText("Recorded chain is consistent", { exact: true }).waitFor();
++    await page.evaluate(() => document.fonts.ready);
++    await page.screenshot({ path: `${work}/activity-${theme}-1440.png`, fullPage: true });
++    let html = (await page.content()).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "").replaceAll('href="/assets/', 'href="http://127.0.0.1:1439/assets/');
++    const fixture = `${scratch}/akm-unit1a-activity-${theme}.html`;
++    await writeFile(fixture, html);
++    await page.setViewportSize({ width: 390, height: 1000 });
++    await page.screenshot({ path: `${work}/activity-${theme}-390.png`, fullPage: true });
++    await page.close();
++    await measure(fixture, "activity", theme);
++    const notices = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
++    await installNativeBoundaryMock(notices, theme, ["journal", "backupRefresh", "backupPrune", "exportJournal"].map((kind) => ({ id: kind, originSession: "fake-a", kind })), [{ id: "fake-monitor-warning", message: "Fake app-global Windows monitor warning." }]);
++    await notices.goto("http://127.0.0.1:1439/");
++    await notices.getByRole("region", { name: "Saved-operation notices" }).waitFor();
++    await notices.evaluate(() => document.fonts.ready);
++    await notices.screenshot({ path: `${work}/notices-${theme}-1440.png`, fullPage: true });
++    const noticeFixture = `${scratch}/akm-unit1a-notices-${theme}.html`;
++    await writeFile(noticeFixture, (await notices.content()).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "").replaceAll('href="/assets/', 'href="http://127.0.0.1:1439/assets/'));
++    await notices.setViewportSize({ width: 390, height: 1000 });
++    await notices.screenshot({ path: `${work}/notices-${theme}-390.png`, fullPage: true });
++    await notices.close();
++    await measure(noticeFixture, "notices", theme);
++    if (process.argv.includes("--corrections3")) {
++      const outcomes = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
++      await installNativeBoundaryMock(outcomes, theme);
++      await outcomes.goto("http://127.0.0.1:1439/");
++      await outcomes.getByRole("button", { name: "Settings", exact: true }).click();
++      await outcomes.getByRole("button", { name: "Import .env…" }).click();
++      await outcomes.getByLabel("Paste the .env contents").fill("TOKEN=fake-layout-token");
++      await outcomes.getByLabel("Target project").fill("demo");
++      await outcomes.getByLabel("Target environment").fill("dev");
++      await outcomes.getByRole("button", { name: "Review import" }).click();
++      await outcomes.getByRole("button", { name: "Confirm import" }).click();
++      await outcomes.getByRole("region", { name: "Operation outcomes" }).waitFor();
++      await outcomes.getByRole("button", { name: "Keys", exact: true }).click();
++      await outcomes.evaluate(() => document.fonts.ready);
++      await outcomes.screenshot({ path: `${work}/outcomes-${theme}-1440.png`, fullPage: true });
++      const outcomeFixture = `${scratch}/akm-unit1a-outcomes-${theme}.html`;
++      await writeFile(outcomeFixture, (await outcomes.content()).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "").replaceAll('href="/assets/', 'href="http://127.0.0.1:1439/assets/'));
++      await outcomes.setViewportSize({ width: 390, height: 1000 });
++      await outcomes.screenshot({ path: `${work}/outcomes-${theme}-390.png`, fullPage: true });
++      await outcomes.close();
++      await measure(outcomeFixture, "outcomes", theme);
++    }
++  }
++  const graph = await browser.newPage({ viewport: { width: 1440, height: 1100 }, colorScheme: "light" });
++  await graph.goto(`file:///${scratch}/akm-unit1a-graph.html`);
++  await graph.evaluate(() => localStorage.setItem("theme", "light"));
++  await graph.reload();
++  await graph.locator("#theme-toggle").click();
++  if (await graph.locator("html").getAttribute("data-theme") !== "dark") throw new Error("Graph theme switch did not select dark");
++  await graph.reload();
++  if (await graph.locator("html").getAttribute("data-theme") !== "dark") throw new Error("Graph theme preference was lost");
++  await graph.locator("#theme-toggle").click();
++  if (await graph.locator("html").getAttribute("data-theme") !== "light") throw new Error("Graph theme switch did not return to light");
++  await graph.screenshot({ path: `${work}/graph-1440.png`, fullPage: true });
++  await graph.close();
++  console.log(process.argv.includes("--graph-only") ? "Graph theme switch/reload checks passed." : "Theme switch/reload checks passed. Screenshots are mocked-boundary renders; width measurements use inert copies of their rendered markup and CSS.");
++  await writeFile(`${work}/${process.argv.includes("--graph-only") ? "graph-layout-findings" : "layout-findings"}.json`, JSON.stringify({ findings: layoutFindings, note: "All findings remain findings; do not interpret successful screenshots as a checker pass." }, null, 2));
++  if (layoutFindings.length) process.exitCode = 1;
++} finally {
++  await browser.close();
++  await new Promise((resolve) => server.httpServer.close(resolve));
++}
+--- before/docs/work/phase2-1a/corrections3/collect_cycle.py
++++ after/docs/work/phase2-1a/corrections3/collect_cycle.py
+@@ -0,0 +1,34 @@
++"""Pin the renewed cycle without adding runtime files or initializing git."""
++import difflib
++import hashlib
++import json
++from pathlib import Path
++import zipfile
++
++folder = Path(__file__).resolve().parent
++root = folder.parents[3]
++with zipfile.ZipFile(folder / "before-cycle.zip") as archive:
++    before = {entry.filename: archive.read(entry) for entry in archive.infolist()}
++paths = set(before)
++for base in ["crates", "desktop/src", "desktop/e2e", "desktop/src-tauri/src", "tools"]:
++    paths.update(p.relative_to(root).as_posix() for p in (root / base).rglob("*") if p.is_file() and p.suffix in {".rs", ".ts", ".tsx", ".py", ".ps1", ".toml", ".json"})
++for name in ["run_check.py", "run_native.py", "collect_cycle.py"]:
++    paths.add((folder / name).relative_to(root).as_posix())
++paths.update(["docs/work/phase2-1a/check_layout.mjs", "docs/work/phase2-1a/graph.json", "docs/work/phase2-1a/render_graph.py"])
++manifest, diff, changed = {}, [], []
++for name in sorted(paths):
++    path = root / name
++    new = path.read_bytes() if path.is_file() else b""
++    if path.is_file():
++        manifest[name] = hashlib.sha256(new).hexdigest()
++    old = before.get(name, b"")
++    if old == new:
++        continue
++    changed.append(name)
++    try:
++        diff.extend(difflib.unified_diff(old.decode("utf-8-sig").splitlines(keepends=True), new.decode("utf-8-sig").splitlines(keepends=True), fromfile="before/" + name, tofile="after/" + name))
++    except UnicodeDecodeError:
++        diff.append("Binary difference: " + name + "\n")
++(folder / "source-sha256.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
++(folder / "changes.diff").write_text("".join(diff), encoding="utf-8")
++print(json.dumps({"paths": len(manifest), "changedFromBeforeCycle": changed}, indent=2))
+--- before/docs/work/phase2-1a/corrections3/run_check.py
++++ after/docs/work/phase2-1a/corrections3/run_check.py
+@@ -0,0 +1,34 @@
++"""Capture a named check once, with its actual exit and source identity."""
++import argparse
++import hashlib
++import json
++from pathlib import Path
++import subprocess
++import sys
++from datetime import datetime, timezone
++
++sys.stdout.reconfigure(encoding="utf-8", errors="replace")
++parser = argparse.ArgumentParser()
++parser.add_argument("--name", required=True)
++parser.add_argument("--cwd", default=".")
++parser.add_argument("command", nargs=argparse.REMAINDER)
++args = parser.parse_args()
++root = Path(__file__).resolve().parents[4]
++folder = Path(__file__).resolve().parent
++log = folder / (args.name + ".log")
++record = folder / (args.name + ".json")
++if log.exists() or record.exists():
++    raise SystemExit("Refusing to overwrite an earlier check: " + args.name)
++command = args.command[1:] if args.command[:1] == ["--"] else args.command
++pin = json.loads((folder / "before-cycle-sha256.json").read_text(encoding="utf-8-sig"))
++paths = set(pin)
++paths.update(str(p.relative_to(root)).replace("\\", "/") for base in ["desktop/src", "desktop/e2e"] for p in (root / base).rglob("*") if p.is_file())
++sources = {p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in sorted(paths) if (root / p).is_file()}
++(folder / (args.name + "-sources.json")).write_text(json.dumps(sources, indent=2) + "\n", encoding="utf-8")
++started = datetime.now(timezone.utc).isoformat()
++with log.open("wb") as output:
++    result = subprocess.run(command, cwd=root / args.cwd, stdout=output, stderr=subprocess.STDOUT, check=False)
++record.write_text(json.dumps({"command": command, "cwd": str(root / args.cwd), "started": started, "finished": datetime.now(timezone.utc).isoformat(), "exit": result.returncode, "logSha256": hashlib.sha256(log.read_bytes()).hexdigest()}, indent=2) + "\n", encoding="utf-8")
++print(log.read_text(encoding="utf-8", errors="replace")[-24000:])
++print("RECORDED EXIT:", result.returncode)
++sys.exit(result.returncode)
+--- before/docs/work/phase2-1a/corrections3/run_native.py
++++ after/docs/work/phase2-1a/corrections3/run_native.py
+@@ -0,0 +1,40 @@
++"""Run only one approved fake-native proof and record settings/artifact identity."""
++import argparse
++import hashlib
++import json
++from pathlib import Path
++import os
++import subprocess
++import sys
++
++parser = argparse.ArgumentParser()
++parser.add_argument("mode", choices=["OutcomeOnly", "JournalOnly", "JournalExportOnly"])
++parser.add_argument("--attempt", type=int, default=1)
++args = parser.parse_args()
++root = Path(__file__).resolve().parents[4]
++folder = Path(__file__).resolve().parent
++suffix = "" if args.attempt == 1 else "-attempt" + str(args.attempt)
++record = folder / ("native-" + args.mode + suffix + "-identity.json")
++if record.exists():
++    raise SystemExit("Do not overwrite earlier native proof records")
++settings = Path(os.environ["APPDATA"]) / "com.akm.desktop/settings.json"
++def digest(path):
++    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
++gui = root / "target/release/akm-desktop.exe"
++cli = root / "target/release/akm.exe"
++build = json.loads((folder / "stable-gui-build.json").read_text(encoding="utf-8"))
++assert build["exit"] == 0, "A successful current release build is required"
++assert digest(cli) == "0024f9005a68bf5b5ab9d32297c9d6eb4043ee5616a7ae6c465a054adfddcdc0", "CLI identity changed: inspect before reusing its evidence"
++before = digest(settings)
++artifacts = {"guiSha256": digest(gui), "cliSha256": digest(cli)}
++command = ["powershell.exe", "-NoProfile", "-File", str(root / "tools/verify_windows_app.ps1"), "-DesktopExe", str(gui), "-CliExe", str(cli), "-" + args.mode]
++try:
++    result = subprocess.run(command, cwd=root, check=False)
++finally:
++    after = digest(settings)
++    data = {"command": command, **artifacts, "settingsBeforeSha256": before, "settingsAfterSha256": after, "settingsRestoredByteForByte": before == after, "artifactsUnchanged": digest(gui) == artifacts["guiSha256"] and digest(cli) == artifacts["cliSha256"]}
++    record.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
++    print(json.dumps(data, indent=2), flush=True)
++if before != after or not data["artifactsUnchanged"]:
++    raise SystemExit("Native proof changed settings/artifact identity: inspect ownership before recovery")
++sys.exit(result.returncode)
+--- before/docs/work/phase2-1a/graph.json
++++ after/docs/work/phase2-1a/graph.json
+@@ -0,0 +1,91 @@
++{
++  "title": "AKM journal outcome correction",
++  "goal": "Keep warnings owned and show what journal evidence actually establishes.",
++  "tier": "Tier 2: core, CLI, native IPC and frontend outcome contracts",
++  "status": "running",
++  "stages": [
++    {
++      "name": "Freeze and reproduce",
++      "mode": "single",
++      "output": "Pinned baseline, contracts and failing behavior regressions",
++      "nodes": [{"name":"Contracts and red tests","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"One owner retains the coupled outcome context; no implementation delegates.","owns":["docs/work/phase2-1a/","desktop/src-tauri/src/session.rs","crates/akm-core/tests/","desktop/src/"],"check":"Native, actual CLI and frontend warning/journal regressions failed first; baseline pinned","state":"done"}]
++    },
++    {
++      "name":"Owned outcome implementation",
++      "mode":"single",
++      "input":"Frozen contracts and red regressions",
++      "output":"Typed session-origin notices, atomic snapshots and honest event labels",
++      "nodes":[{"name":"Coupled caller migration","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Shared IPC, journal callers and App lifecycle must change together, not in competing workers.","owns":["crates/","desktop/src-tauri/src/","desktop/src/","desktop/e2e/"],"check":"Typed origin notices, one-lock snapshots and requested/completed/legacy labels implemented; 34 frontend and 8 browser checks pass","state":"done"}]
++    },
++    {
++      "name":"Collect and prove",
++      "mode":"single",
++      "input":"Stable implementation and affected green checks",
++      "output":"Full relevant checks, exact rebuilt artifacts and focused native evidence",
++      "nodes":[{"name":"Round-one artifact proof","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"One collector owns GUI/settings and preserves the user clipboard.","owns":["tools/","docs/work/phase2-1a/","docs/STATE.md","docs/REVIEW_LEDGER.md"],"check":"Rejected candidate: Rust144, frontend34, browser8, lint, builds, KeePassXC and focused journal proof; changed GUI hash requires renewed proof","state":"done"}]
++    },
++    {
++      "name":"Fresh adversarial acceptance",
++      "mode":"single",
++      "input":"Plan, combined diff, pinned source identities and verification policy/results",
++      "output":"Supported findings and scoped acceptance, not a readiness score",
++      "nodes":[{"name":"Round-one Terra review","role":"Reviewer and collector","model":"openai/gpt-6.1-terra","effort":"max requested","reason":"Owner explicitly authorized this exact model/variant for fresh AKM adversarial review; active effort telemetry may not be exposed.","owns":[],"check":"Rejected with seven supported findings; raw report and probes preserved in reviews/round1","state":"blocked"}]
++    },
++    {
++      "name":"Correct round-one findings",
++      "mode":"single",
++      "input":"Seven supported findings and revised typed-warning/acknowledgment/append contracts",
++      "output":"Failing-first regressions, corrected callers and renewed exact-artifact evidence",
++      "nodes":[{"name":"Serial correction and proof","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Core, native, CLI and App share outcome contracts; one main-session owner avoids conflicting edits.","owns":["crates/","desktop/","tools/","docs/"],"check":"Rust153, frontend43, browser10, lint/builds, final CLI KeePassXC and exact-GUI journal/export proofs pass; startup discovery retry and layout debt recorded","state":"done"}]
++    },
++    {
++      "name":"Corrected candidate acceptance",
++      "mode":"single",
++      "input":"Revised plan, full unit diff, pinned corrected source and verification results",
++      "output":"New independent scoped verdict; failed first round remains preserved",
++      "nodes":[{"name":"Round-two Terra correction review","role":"Reviewer and collector","model":"openai/gpt-6.1-terra","effort":"max requested","reason":"Fresh context required after rejected acceptance; exact owner-authorized model and max availability confirmed.","owns":[],"check":"Rejected: skipped control whitespace, completion/application-warning handoff and four presentation gaps; raw verdict preserved","state":"blocked"}]
++    },
++    {
++      "name":"Second correction cycle",
++      "mode":"single",
++      "input":"Six round-two findings and explicit boundary/receipt/precision contracts",
++      "output":"Actual-caller red/green regressions, renewed stable verification and bounded fresh acceptance",
++      "nodes":[{"name":"Boundary and handoff corrections","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Shared native/React receipt contracts remain serial; do not add competing implementation workers.","owns":["crates/","desktop/","tools/","docs/"],"check":"Rust157/frontend55/browser10/lint/builds; 1024 byte cases; extended exact-GUI journal/delete/action/sequence and export proofs; KeePassXC passed","state":"done"}]
++    },
++    {
++      "name":"Final bounded unit1a acceptance",
++      "mode":"single",
++      "input":"Frozen revised plan, full combined diff, current source identities and renewed verification",
++      "output":"Scoped verdict with source/runtime limits; another rejection goes to owner, not an unbounded correction loop",
++      "nodes":[{"name":"Round-three Terra acceptance","role":"Reviewer and collector","model":"openai/gpt-6.1-terra","effort":"max requested","reason":"Owner-authorized fresh reviewer; active model/max availability confirmed before dispatch, effort telemetry may remain unavailable.","owns":[],"check":"Rejected: dispatched import acknowledgment, distinct warning episodes and incomplete API fencing. Three supported findings archived; returned to owner.","state":"blocked"}]
++    },
++    {
++      "name":"Owner-renewed recalibration",
++      "mode":"single",
++      "input":"Owner's renewed bounded authorization and three R3 findings",
++      "output":"Revised ownership contracts, pinned baseline and combined-transition red tests",
++      "nodes":[{"name":"Contracts before another fix","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Owner asks main to recalibrate; retain coupled context without extra implementation delegates or model/config changes.","owns":["docs/work/phase2-1a/corrections3/","docs/","desktop/src/","desktop/src-tauri/src/session.rs"],"check":"Before-cycle146 pinned; frontend33/native6 behavior regressions failed first; separate ownership contracts frozen","state":"done"}]
++    },
++    {
++      "name":"Renewed bounded correction and collection",
++      "mode":"single",
++      "input":"Frozen cycle contracts and red lifecycle/episode/fence regressions",
++      "output":"Application-owned outcomes, lease-owned cleanup episodes, full reply fences and exact rebuilt proof",
++      "nodes":[{"name":"Serial cross-layer correction","role":"Planner","model":"openai/gpt-6.1-sol","effort":"host default","reason":"Shared App/API/native receipt contracts require one owner; parallelize only independent check processes.","owns":["desktop/src/","desktop/src-tauri/src/","desktop/e2e/","tools/","docs/"],"check":"Rust163 via timeout/selective workspace resume; frontend105/browser18/build/lint and exact-GUI journal/export pass. Actual hide handoff unproven after two minimize failures, retained as a proof gap.","state":"done"}]
++    },
++    {
++      "name":"Renewed independent acceptance",
++      "mode":"single",
++      "input":"Frozen recalibrated plan, full combined diff, current source and verification",
++      "output":"One new scoped verdict, not a score; another rejection returns to owner",
++      "nodes":[{"name":"Fresh Terra renewed acceptance","role":"Reviewer and collector","model":"openai/gpt-6.1-terra","effort":"max requested","reason":"Owner-authorized exact review model; availability checked before dispatch, no assurance of exposed active-effort telemetry.","owns":[],"check":"Frozen plan, full combined diff and pinned source; attack actual callers and distinguish source acceptance from the native handoff proof gap","state":"running"}]
++    }
++  ],
++  "gates":[
++    {"name":"Renewed checks","who":"Planner","rule":"Rust163/frontend105/browser18/build/lint pass; timeout/selective resume and existing layout findings explicit","state":"done"},
++    {"name":"Exact release","who":"Planner","rule":"Rebuilt GUI journal/export pass; actual minimize/handoff proof gap retained, not a synthetic pass","state":"blocked"},
++    {"name":"Review / owner decision","who":"Terra / owner","rule":"One fresh bounded acceptance; another rejection returns to owner","state":"running"},
++    {"name":"Real-secret readiness","who":"Owner","rule":"Still blocked by wider phase-two/release work, actual OS coverage and full above-90 assessment","state":"blocked"}
++  ],
++  "notes":["Implementation runs serially because files and outcome contracts overlap.","No git repository, PR, installation, publication or real-secret migration is authorized.","Storage migration, rotation/history and stale time-derived status are separate work units.","The graph supports code delivery, not a separate analytical artifact."]
++}
+--- before/docs/work/phase2-1a/render_graph.py
++++ after/docs/work/phase2-1a/render_graph.py
+@@ -0,0 +1,18 @@
++"""Use the installed house renderer without changing its global model policy."""
++import importlib.util
++import json
++from pathlib import Path
++
++path = Path.home() / '.claude/scripts/graph/render_graph.py'
++spec = importlib.util.spec_from_file_location('akm_house_graph', path)
++renderer = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(renderer)
++renderer.load_models = lambda routing=None: {
++    'openai/gpt-6.1-sol': ['GPT-6.1 Sol', 'Main session', 'self'],
++    'openai/gpt-6.1-terra': ['GPT-6.1 Terra', 'Fresh read-only review', '0'],
++}
++work = Path(__file__).parent
++page = renderer.render(json.loads((work / 'graph.json').read_text(encoding='utf-8')))
++page = page.replace('</style>', '.files { flex-direction: column; align-items: stretch; } .files code { width: 100%; white-space: normal; }\n</style>', 1)
++(work / 'graph.html').write_text(page, encoding='utf-8')
++print(f'Rendered {work / "graph.html"}')
+--- before/tools/verify_windows_app.ps1
++++ after/tools/verify_windows_app.ps1
+@@ -5,11 +5,13 @@
+   [switch]$SkipClipboard,
+   [switch]$RemainingOnly,
+   [switch]$JournalOnly,
+-  [switch]$JournalExportOnly
++  [switch]$JournalExportOnly,
++  [switch]$OutcomeOnly
+ )
+ 
+ $ErrorActionPreference = 'Stop'
+-if ($JournalExportOnly) { $JournalOnly = $true }
++if ($OutcomeOnly -and $JournalExportOnly) { throw 'Choose either -OutcomeOnly or -JournalExportOnly.' }
++if ($JournalExportOnly -or $OutcomeOnly) { $JournalOnly = $true }
+ if ($JournalOnly -and $RemainingOnly) { throw 'Choose either -JournalOnly or -RemainingOnly, not both.' }
+ if ($JournalOnly) { $SkipClipboard = $true }
+ Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+@@ -23,6 +25,7 @@
+   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr window, StringBuilder name, int length);
+   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window, uint message, UIntPtr wparam, IntPtr lparam);
++  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
+   [DllImport("user32.dll", EntryPoint="SendMessageTimeoutW", CharSet=CharSet.Unicode, SetLastError=true)]
+   static extern IntPtr SendText(IntPtr window, uint message, UIntPtr wparam, string text, uint flags, uint timeout, out UIntPtr result);
+   [DllImport("user32.dll", EntryPoint="SendMessageTimeoutW", CharSet=CharSet.Unicode, SetLastError=true)]
+@@ -108,6 +111,7 @@
+   remainingOnly = [bool]$RemainingOnly
+   journalOnly = [bool]$JournalOnly
+   journalExportOnly = [bool]$JournalExportOnly
++  outcomeOnly = [bool]$OutcomeOnly
+ }
+ if ($null -ne $settingsBefore) { [IO.File]::WriteAllBytes((Join-Path $work 'settings-before.bin'), $settingsBefore) }
+ $recovery | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $work 'recovery.json') -Encoding UTF8
+@@ -332,6 +336,132 @@
+   }
+ }
+ 
++function Hold-TestJournal {
++  # This sidecar belongs only to the temporary fake vault. Overlap fs2's byte-range lock.
++  $stream = [IO.File]::Open(($vault + '.audit.jsonl.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite)
++  try { $stream.Lock(0, [Int64]::MaxValue) }
++  catch { $stream.Dispose(); throw }
++  return $stream
++}
++
++function Minimize-RestoreOwnedWindow {
++  # Process.MainWindowHandle can switch to Tao's event-target window while the real window is minimized.
++  $handle = [IntPtr]$script:root.Current.NativeWindowHandle
++  $owned = $AE::FromHandle($handle)
++  Assert-Proof ($owned.Current.ProcessId -eq $process.Id -and $owned.Current.ClassName -eq 'Tauri Window') 'visibility handoff targets only the owned AKM window'
++  $window = $owned.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
++  $window.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Minimized)
++  try {
++    $until = [DateTime]::UtcNow.AddSeconds(3)
++    do {
++      if ([AkmProofClipboard]::IsIconic($handle)) { break }
++      Start-Sleep -Milliseconds 50
++    } while ([DateTime]::UtcNow -lt $until)
++    Assert-Proof ([AkmProofClipboard]::IsIconic($handle)) 'the owned AKM window actually minimized (native handle check)'
++    # Allow its webview to process the visibility event, without global keystrokes or OS locking.
++    Start-Sleep -Milliseconds 300
++  } finally { $window.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal) }
++  $script:root = $AE::FromHandle($handle)
++}
++
++function Assert-OutcomeRegion([string]$pattern) {
++  Assert-Proof (Wait-Text $pattern) 'the application-owned classified outcome is visible after view handoff'
++  $region = Find-Control 'Operation outcomes'
++  $text = (@($region.FindAll($TS::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }) -join ' ')
++  Assert-Proof ($text -match $pattern) 'the retained outcome belongs to the application-level region'
++  foreach ($private in @($work, 'HANDOFF_TOKEN', 'fake-outcome-import-value', 'outcome-import-project', 'outcome-import-env', 'handoff-export.env')) {
++    Assert-Proof (!$text.Contains($private)) 'the retained outcome contains no fake protected path, input or scope'
++  }
++}
++
++function Test-OutcomeHandoff {
++  Click-Control 'Settings'
++  Click-Control ('Import .env' + [char]0x2026)
++  Set-Field 'Paste the .env contents' 'HANDOFF_TOKEN=fake-outcome-import-value'
++  Set-Field 'Target project' 'outcome-import-project'
++  Set-Field 'Target environment' 'outcome-import-env'
++  Click-Control 'Review import'
++  Find-Control 'Confirm import' ([System.Windows.Automation.ControlType]::Button) | Out-Null
++  $before = (Get-FileHash -LiteralPath $vault -Algorithm SHA256).Hash
++  $hold = Hold-TestJournal
++  try {
++    Click-Control 'Confirm import'
++    Assert-Proof (Wait-Text 'Import is awaiting an outcome') 'dispatched import creates a pending application-owned outcome'
++    $until = [DateTime]::UtcNow.AddSeconds(20)
++    do {
++      $changed = (Get-FileHash -LiteralPath $vault -Algorithm SHA256).Hash -ne $before
++      if (!$changed) { Start-Sleep -Milliseconds 100 }
++    } while (!$changed -and [DateTime]::UtcNow -lt $until)
++    Assert-Proof $changed 'the fake encrypted import commits while its reply waits on the test-owned journal lock'
++    Minimize-RestoreOwnedWindow
++    Assert-Proof (!(Wait-Text 'Import keys' 300)) 'actual minimize/restore expired the local import dialog'
++    Assert-Proof (Find-Control ('Import .env' + [char]0x2026) ([System.Windows.Automation.ControlType]::Button)).Current.IsEnabled 'the hidden confirmation does not leave Settings busy'
++    Click-Control 'Keys'
++  } finally { $hold.Unlock(0, [Int64]::MaxValue); $hold.Dispose() }
++  Assert-OutcomeRegion 'Import completed\.'
++  Assert-Proof (!(Wait-Text 'Imported: 1 added' 300)) 'obsolete Settings details do not reappear on Keys'
++  $keys = Invoke-TestCli @('list', '--json') | Out-String | ConvertFrom-Json
++  Assert-Proof (@($keys | Where-Object { $_.env_var -eq 'HANDOFF_TOKEN' -and $_.project -eq 'outcome-import-project' -and $_.environment -eq 'outcome-import-env' }).Count -eq 1) 'the actual CLI confirms the dispatched import saved once in its reviewed scope'
++  Click-Control 'Dismiss operation outcomes'
++
++  Click-Control 'Settings'
++  Select-Filter 'Project' 'demo'
++  Select-Filter 'Environment' 'prod'
++  $hold = Hold-TestJournal
++  try {
++    Click-Control ('Save .env' + [char]0x2026)
++    $mainRoot = $script:root
++    $script:root = Wait-SaveDialog
++    $exportPath = Join-Path $work 'handoff-export.env'
++    Set-NativeDialogValue (Native-FilenameControl) $exportPath
++    Click-NativeDialog '1' 'Save'
++    $script:root = $mainRoot
++    Assert-Proof (Wait-Text 'File export is awaiting an outcome') 'native-dialog file save has a pending application-owned outcome'
++    Minimize-RestoreOwnedWindow
++    Assert-Proof (Find-Control ('Save .env' + [char]0x2026) ([System.Windows.Automation.ControlType]::Button)).Current.IsEnabled 'actual minimize/restore expired the local file-save continuation'
++    Click-Control 'Keys'
++  } finally { $hold.Unlock(0, [Int64]::MaxValue); $hold.Dispose() }
++  Assert-OutcomeRegion 'File export completed\.'
++  Assert-Proof ([IO.File]::ReadAllText($exportPath) -eq "OPENAI_API_KEY=fake-prod-must-stay`n") 'handoff export published exactly the selected fake scope to the approved destination'
++  Assert-Proof (!(Wait-Text ('Saved plaintext secrets to ' + [regex]::Escape($exportPath)) 300)) 'the export destination is not replayed outside its originating Settings view'
++  Click-Control 'Dismiss operation outcomes'
++
++  Click-Control 'Settings'
++  Select-Filter 'Project' 'demo'
++  Select-Filter 'Environment' 'prod'
++  Click-Control ('Save .env' + [char]0x2026)
++  $mainRoot = $script:root
++  $script:root = Wait-SaveDialog
++  Click-NativeDialog '2' 'Cancel'
++  $script:root = $mainRoot
++  Assert-OutcomeRegion 'File export was cancelled\. No file was saved by this request\.'
++  Click-Control 'Dismiss operation outcomes'
++
++  # Delay a real pre-disclosure error too; an error outcome must not claim nothing was saved.
++  $journal = $vault + '.audit.jsonl'
++  $journalBefore = [IO.File]::ReadAllBytes($journal)
++  $hold = Hold-TestJournal
++  try {
++    Remove-Item -LiteralPath $journal
++    New-Item -ItemType Directory -Path $journal | Out-Null
++    Click-Control ('Save .env' + [char]0x2026)
++    $mainRoot = $script:root
++    $script:root = Wait-SaveDialog
++    $refusedPath = Join-Path $work 'handoff-refused.env'
++    Set-NativeDialogValue (Native-FilenameControl) $refusedPath
++    Click-NativeDialog '1' 'Save'
++    $script:root = $mainRoot
++    Minimize-RestoreOwnedWindow
++    Click-Control 'Keys'
++  } finally { $hold.Unlock(0, [Int64]::MaxValue); $hold.Dispose() }
++  try {
++    Assert-OutcomeRegion 'File export reported an error\. This does not confirm that nothing was saved\.'
++    Assert-Proof (!(Test-Path -LiteralPath $refusedPath)) 'the induced request-journal failure did not publish a plaintext file'
++  } finally { Remove-Item -LiteralPath $journal; [IO.File]::WriteAllBytes($journal, $journalBefore) }
++  Click-Control 'Dismiss operation outcomes'
++  Assert-Proof (!(Wait-Text 'Import completed\.|File export completed\.|File export reported an error' 3500)) 'explicitly acknowledged outcomes stay dismissed through later status and warning polls'
++}
++
+ try {
+   if (Get-Process -Name 'akm-desktop' -ErrorAction SilentlyContinue) { throw 'Another AKM process is open. Close it yourself before running the owned-process proof.' }
+   if (!$SkipClipboard) { Assert-EmptyClipboard }
+@@ -352,6 +482,7 @@
+   Write-Output "Proof process ID: $($process.Id)"
+   $recovery.processId = $process.Id
+   $recovery.processStartUtc = $process.StartTime.ToUniversalTime().ToString('o')
++  Write-Output "Proof process start UTC: $($recovery.processStartUtc)"
+   $recovery | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $work 'recovery.json') -Encoding UTF8
+   $until = [DateTime]::UtcNow.AddSeconds(20)
+   do {
+@@ -385,6 +516,14 @@
+     catch { Click-Control 'I already have a vault' }
+     Unlock-FakeVault
+     if ($JournalOnly) {
++      if ($OutcomeOnly) {
++        Test-OutcomeHandoff
++        $script:root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
++        Assert-Proof ($process.WaitForExit(10000)) 'the focused outcome proof exited normally'
++        Write-Output 'SKIPPED: clipboard, OS lock/suspend, Tauri reload and unrelated native flows; no clipboard access was performed.'
++        $success = $true
++        return
++      }
+       if ($JournalExportOnly) {
+         $encryptedBefore = [Convert]::ToBase64String([IO.File]::ReadAllBytes($vault))
+         Click-Control 'Settings'

@@ -1,0 +1,27 @@
+{
+  "command": [
+    "cmd.exe",
+    "/d",
+    "/c",
+    "npx",
+    "vitest",
+    "run",
+    "src/NativeViewExpiry.security.test.tsx",
+    "src/NativeOwnershipMatrix.security.test.tsx",
+    "src/NativeEventOwnership.security.test.tsx",
+    "src/ApiFence.security.test.tsx",
+    "src/App.security.test.tsx",
+    "src/Unlock.security.test.tsx",
+    "src/OutcomeHandoff.security.test.tsx",
+    "src/SessionReceipt.security.test.tsx",
+    "src/Warnings.security.test.tsx",
+    "src/DeleteOutcome.security.test.tsx",
+    "src/components/Settings.security.test.tsx",
+    "src/api.security.test.ts"
+  ],
+  "cwd": "W:\\API Keys Manager\\desktop",
+  "started": "2026-10-31T15:19:27.505856+00:00",
+  "finished": "2026-10-31T15:20:00.465999+00:00",
+  "exit": 0,
+  "logSha256": "97996ff090233c816075855d47dbb7f280facfb5a37baa3da12b982f4ccc48cb"
+}

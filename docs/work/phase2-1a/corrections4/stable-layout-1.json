@@ -1,0 +1,13 @@
+{
+  "command": [
+    "node",
+    "docs/work/phase2-1a/check_layout.mjs",
+    "--corrections4",
+    "--capture=stable-layout-1"
+  ],
+  "cwd": "W:\\API Keys Manager",
+  "started": "2026-10-31T13:24:11.926005+00:00",
+  "finished": "2026-10-31T13:24:37.749107+00:00",
+  "exit": 1,
+  "logSha256": "759619960523c4ea76f14da2a2684af78fb978a3ab0a4dee87c5eea7ba6a0f44"
+}

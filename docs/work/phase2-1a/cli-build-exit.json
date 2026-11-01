@@ -1,0 +1,12 @@
+{
+  "command": [
+    "cargo",
+    "build",
+    "--release",
+    "-p",
+    "akm-cli",
+    "--offline",
+    "--locked"
+  ],
+  "exitCode": 0
+}

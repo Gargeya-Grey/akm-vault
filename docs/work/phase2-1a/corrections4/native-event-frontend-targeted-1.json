@@ -1,0 +1,16 @@
+{
+  "command": [
+    "cmd.exe",
+    "/d",
+    "/c",
+    "npx",
+    "vitest",
+    "run",
+    "src/NativeEventOwnership.security.test.tsx"
+  ],
+  "cwd": "W:\\API Keys Manager\\desktop",
+  "started": "2026-10-31T12:45:07.251843+00:00",
+  "finished": "2026-10-31T12:45:34.175081+00:00",
+  "exit": 0,
+  "logSha256": "fb63ddca111bbb212ed1988691a15c31db30f6c00540cebaeda4896a98fc88f0"
+}

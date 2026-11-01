@@ -1,0 +1,29 @@
+{
+  "baseline": "reviews/round2/source-sha256.json",
+  "changedPinnedPaths": [
+    "crates/akm-cli/tests/security.rs",
+    "crates/akm-core/src/audit.rs",
+    "crates/akm-core/tests/audit_states.rs",
+    "desktop/e2e/journal-ui.spec.ts",
+    "desktop/e2e/native-boundary.ts",
+    "desktop/src-tauri/src/commands.rs",
+    "desktop/src-tauri/src/session.rs",
+    "desktop/src-tauri/src/views.rs",
+    "desktop/src/App.security.test.tsx",
+    "desktop/src/App.tsx",
+    "desktop/src/SessionReceipt.security.test.tsx",
+    "desktop/src/Warnings.security.test.tsx",
+    "desktop/src/components/Activity.security.test.tsx",
+    "desktop/src/components/Activity.tsx",
+    "desktop/src/components/KeysView.tsx",
+    "desktop/src/operationNotices.ts",
+    "desktop/src/sessionBoundary.ts",
+    "desktop/src/types.ts",
+    "docs/REVIEW_LEDGER.md",
+    "docs/STATE.md",
+    "docs/work/phase2-1a/PLAN.md",
+    "tools/verify_windows_app.ps1"
+  ],
+  "newMainOwnedTest": "desktop/src/DeleteOutcome.security.test.tsx",
+  "note": "Second-cycle implementation/tests and main-owned state/contracts/proof harness; do not discard unfamiliar files."
+}

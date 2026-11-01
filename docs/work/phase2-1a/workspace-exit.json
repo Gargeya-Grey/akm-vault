@@ -1,0 +1,11 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--workspace",
+    "--offline",
+    "--locked"
+  ],
+  "exitCode": 0,
+  "output": "workspace-tests-clean.log"
+}

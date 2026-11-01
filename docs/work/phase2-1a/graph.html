@@ -1,0 +1,492 @@
+<meta charset="utf-8">
+<title>AKM journal outcome correction</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;1,7..72,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: header with goal and progress; the graph (SVG, stages left to right, parallel lanes, hand-off points);
+   a detail panel below that follows the selection; gates as a second linear graph; plan decisions last.
+   Tokens follow the house style (DESIGN.md). Each model takes one colour slot (table order). The house has three marks
+   that read apart on paper (leaf-ink, ink, ink-2), so slots repeat; every node also prints its model name. */
+:root {
+  --bg: #F6F7F4; --fg: #14201C; --muted: #53615B; --faint: #53615B; --line: #DDE2DC; --surface: #FFFFFF; --card: #FFFFFF;
+  --edge: #53615B; --edge-hot: #0B7A55; --focus: #0B7A55;
+  --c0: #0B7A55; --c1: #53615B; --c2: #14201C; --c3: #0B7A55; --c4: #53615B; --c5: #14201C; --cself: #14201C;
+  --ok: #0B7A55; --run: #14201C; --bad: #B4472F; --wait: #53615B;
+  --font-ui: "Instrument Sans", system-ui, sans-serif; --font-prose: "Literata", Georgia, serif;
+  --font-code: "IBM Plex Mono", ui-monospace, monospace;
+  --shadow: 0 1px 2px rgba(20,20,19,.06), 0 4px 14px rgba(20,20,19,.07);
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0E1412; --fg: #ECEFEA; --muted: #A3B0AA; --faint: #A3B0AA; --line: #26302C; --surface: #151D1A; --card: #151D1A;
+  --edge: #A3B0AA; --edge-hot: #3DDC9F; --focus: #10B981;
+  --c0: #3DDC9F; --c1: #A3B0AA; --c2: #ECEFEA; --c3: #3DDC9F; --c4: #A3B0AA; --c5: #ECEFEA; --cself: #ECEFEA;
+  --ok: #3DDC9F; --run: #ECEFEA; --bad: #E5866B; --wait: #A3B0AA; --shadow: none; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0E1412; --fg: #ECEFEA; --muted: #A3B0AA; --faint: #A3B0AA; --line: #26302C; --surface: #151D1A; --card: #151D1A;
+  --edge: #A3B0AA; --edge-hot: #3DDC9F; --focus: #10B981;
+  --c0: #3DDC9F; --c1: #A3B0AA; --c2: #ECEFEA; --c3: #3DDC9F; --c4: #A3B0AA; --c5: #ECEFEA; --cself: #ECEFEA;
+  --ok: #3DDC9F; --run: #ECEFEA; --bad: #E5866B; --wait: #A3B0AA; --shadow: none; color-scheme: dark; }
+:root { --gutter: 22px; }
+@media (min-width: 640px) { :root { --gutter: 30px; } }
+@media (min-width: 1024px) { :root { --gutter: 44px; } }
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 400 1rem/1.55 var(--font-ui); }
+main { padding-block: 32px 72px; padding-inline: var(--gutter); display: flex; flex-direction: column; gap: 36px; max-width: 1320px; margin-inline: auto; }
+h1, h2, h3, p, ul, ol, dl, dd { margin: 0; padding: 0; }
+ul, ol { list-style: none; }
+h1, h2 { text-wrap: balance; line-height: 1.15; font-weight: 500; letter-spacing: -0.035em; }
+h3 { text-wrap: balance; line-height: 1.25; font-weight: 600; }
+code { font-family: var(--font-code); font-size: .82em; }
+.label { font-size: .9375rem; color: var(--muted); font-weight: 400; }
+.num { font-family: var(--font-code); font-variant-numeric: tabular-nums; }
+
+/* Header */
+.top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 20px 40px; align-items: end; }
+.top-text { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+h1 { font-size: clamp(1.5rem, 3.6vw, 2.25rem); }
+.goal { font-family: var(--font-prose); font-size: 1.125rem; max-width: 62ch; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-size: .9375rem; color: var(--muted); }
+.tier { background: transparent; border: 1px solid var(--muted); border-radius: 6px; padding: 2px 8px; color: var(--fg); font-family: var(--font-ui); font-size: .9375rem; }
+.progress { display: flex; flex-direction: column; gap: 8px; min-width: 220px; }
+.progress .num { font-size: 2rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
+.progress .num span { font-family: var(--font-ui); font-size: .9375rem; font-weight: 400; color: var(--muted); }
+.bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--ok); border-radius: 3px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 1px 10px; font-size: .9375rem; font-weight: 500; border: 1px solid currentColor; white-space: nowrap; }
+.s-planned { color: var(--muted); } .s-running { color: var(--run); } .s-done { color: var(--ok); }
+.s-failed { color: var(--bad); } .s-blocked { color: var(--wait); } .s-skipped { color: var(--faint); }
+
+/* Legend */
+.legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 22px; grid-column: 1 / -1; padding-top: 4px; border-top: 1px solid var(--line); padding-block: 14px 0; }
+.legend li { display: flex; align-items: center; gap: 8px; font-size: .9375rem; }
+.legend .sw { width: 10px; height: 10px; border-radius: 3px; background: var(--mc); }
+.legend b { font-family: var(--font-code); font-weight: 600; font-variant-numeric: tabular-nums; }
+.legend .use { color: var(--muted); }
+.m-0 { --mc: var(--c0); } .m-1 { --mc: var(--c1); } .m-2 { --mc: var(--c2); } .m-3 { --mc: var(--c3); }
+.m-4 { --mc: var(--c4); } .m-5 { --mc: var(--c5); } .m-self { --mc: var(--cself); }
+
+/* Graph */
+.graph-card { border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; padding: 6px 0 4px; }
+.graph-scroll { overflow-x: auto; padding-inline: 8px; }
+.hint { font-size: .9375rem; color: var(--muted); padding: 10px 20px 8px; }
+svg.g { display: block; margin-inline: auto; font-family: var(--font-ui); overflow: visible; }
+.lane { fill: none; stroke: var(--edge); stroke-width: 1.2; stroke-dasharray: 5 4; }
+.stage-no { font-size: 12px; font-weight: 600; fill: var(--muted); letter-spacing: .08em; }
+.stage-name { font-size: 14px; font-weight: 600; fill: var(--fg); }
+.stage-mode { font-size: 12px; fill: var(--muted); }
+.edge { fill: none; stroke: var(--edge); stroke-width: 1.6; transition: stroke .15s, opacity .15s; }
+.edge.hot { stroke: var(--edge-hot); stroke-width: 2.2; }
+.handoff { font-size: 13px; fill: var(--muted); font-family: var(--font-prose); font-style: italic; }
+.cap-rule { stroke: var(--edge); stroke-width: 1; stroke-dasharray: 2 3; }
+.junction circle { fill: var(--bg); stroke: var(--edge); stroke-width: 1.6; transition: stroke .15s; }
+.junction .core { fill: var(--edge); stroke: none; }
+.junction { cursor: pointer; outline: none; }
+.junction:hover circle, .junction:focus-visible circle, .junction.sel circle { stroke: var(--edge-hot); }
+.junction.sel .core, .junction:hover .core { fill: var(--edge-hot); }
+.node { cursor: pointer; outline: none; transition: opacity .15s; }
+.node .box { fill: var(--bg); stroke: var(--muted); stroke-width: 1; transition: stroke .15s; }
+.node .band { fill: var(--mc); }
+.node:hover .box, .node:focus-visible .box { stroke: var(--mc); stroke-width: 1.6; }
+.node.sel .box { stroke: var(--mc); stroke-width: 2.4; }
+.node .nm { font-size: 13px; font-weight: 600; fill: var(--fg); }
+.node .md { font-size: 12px; fill: var(--muted); }
+.node .md tspan.mdl { fill: var(--mc); font-weight: 600; }
+.st-done { fill: var(--ok); } .st-running { fill: var(--run); } .st-failed { fill: var(--bad); } .st-blocked { fill: var(--wait); }
+.st-planned, .st-skipped { fill: none; stroke: var(--faint); stroke-width: 1.5; }
+svg.g.focus .node:not(.near) { opacity: .32; }
+svg.g.focus .edge:not(.hot) { opacity: .35; }
+/* No animation in artifacts (DESIGN.md). */
+
+.tip { position: fixed; z-index: 5; pointer-events: none; max-width: 300px; background: var(--fg); color: var(--bg); border-radius: 8px; padding: 8px 11px; font-size: 1rem; line-height: 1.45; box-shadow: var(--shadow); }
+.tip b { display: block; font-weight: 600; margin-bottom: 2px; }
+
+/* Detail panel */
+.detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 0; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; overflow: hidden; box-shadow: none; }
+.d-head { padding: 22px 24px; display: flex; flex-direction: column; gap: 10px; border-right: 1px solid var(--line); background: transparent; }
+.d-head h2 { font-size: 1.125rem; }
+.d-head .role { font-family: var(--font-prose); font-size: 1rem; }
+.d-head .badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mchip { display: inline-flex; align-items: center; gap: 7px; font-size: .9375rem; font-weight: 600; color: var(--fg); }
+.mchip i { width: 10px; height: 10px; border-radius: 3px; background: var(--mc); }
+.mchip span { font-weight: 400; color: var(--muted); }
+.d-body { padding: 18px 24px 22px; display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 12px 18px; align-content: start; }
+.d-body dt { padding-top: 1px; }
+.d-body dd { font-size: 1rem; min-width: 0; }
+.d-body dd.prose { font-family: var(--font-prose); }
+.files { display: flex; flex-wrap: wrap; gap: 5px; }
+.files code { background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px; overflow-wrap: anywhere; }
+
+/* Gates */
+.block { display: flex; flex-direction: column; gap: 14px; }
+.block h2 { font-size: 1.125rem; }
+.gates { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(170px, 1fr); gap: 0; overflow-x: auto; padding-bottom: 4px; }
+.gate { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 0 16px 0 0; cursor: pointer; background: none; border: 0; text-align: left; color: inherit; font: inherit; border-radius: 8px; }
+.gate:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; }
+.gate .rail { display: flex; align-items: center; gap: 0; }
+.gate .dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--gc); background: var(--bg); flex: 0 0 auto; }
+.gate.st-g-done .dot { background: var(--gc); }
+.gate .line { height: 2px; background: var(--line); flex: 1; }
+.gate:last-child .line { visibility: hidden; }
+.gate strong { font-size: 1rem; font-weight: 600; }
+.gate .who { font-size: .9375rem; color: var(--muted); }
+.gate.sel strong { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 4px; }
+.st-g-done { --gc: var(--ok); } .st-g-running { --gc: var(--run); } .st-g-planned { --gc: var(--faint); }
+.st-g-failed { --gc: var(--bad); } .st-g-blocked { --gc: var(--wait); } .st-g-skipped { --gc: var(--faint); }
+.notes { display: flex; flex-direction: column; gap: 10px; font-family: var(--font-prose); }
+.notes li { padding-left: 18px; position: relative; }
+@media (min-width: 1024px) { .notes { display: block; columns: 2; column-gap: 48px; } .notes li { break-inside: avoid; margin-bottom: 12px; } }
+.notes li::before { content: ""; position: absolute; left: 0; top: .72em; width: 8px; height: 1.5px; background: var(--muted); }
+.stamp { font-size: .9375rem; color: var(--muted); }
+
+@media (max-width: 860px) {
+  .top { grid-template-columns: 1fr; }
+  .detail { grid-template-columns: 1fr; }
+  .d-head { border-right: 0; border-bottom: 1px solid var(--line); }
+  .d-body { grid-template-columns: 1fr; gap: 4px 0; }
+  .d-body dd { margin-bottom: 10px; }
+  .gates { grid-auto-flow: row; grid-auto-columns: auto; gap: 14px; }
+  .gate .line { display: none; }
+}
+/* Navigation bar with the light and dark switch (house style: every artifact has one). */
+.navbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; padding: 10px max(var(--gutter), calc((100% - 1320px) / 2 + var(--gutter))); border-bottom: 1px solid var(--line); background: var(--bg); position: sticky; top: env(safe-area-inset-top, 0px); z-index: 6; }
+.bar-name { margin: 0; margin-right: auto; font-weight: 500; font-size: .9375rem; min-width: 0; }
+.navbar nav ul { display: flex; flex-wrap: wrap; gap: 0 18px; margin: 0; padding: 0; }
+.navbar nav a { position: relative; display: inline-block; padding-block: 12px; color: var(--muted); text-decoration: none; font-size: .9375rem; }
+.navbar nav a:hover, .navbar nav a[aria-current="true"] { color: var(--fg); }
+.navbar nav a[aria-current="true"]::after { content: ""; position: absolute; left: 50%; bottom: 4px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--ok); }
+.theme { min-height: 44px; min-width: 44px; padding: 0 14px; border: 1px solid var(--muted); border-radius: 6px; background: transparent; color: var(--fg); font: 500 .9375rem var(--font-ui); cursor: pointer; }
+.navbar a:focus-visible, .theme:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+section[id] { scroll-margin-top: 72px; }
+@media (max-width: 860px) { .navbar { position: static; } }
+.files { flex-direction: column; align-items: stretch; } .files code { width: 100%; white-space: normal; }
+</style>
+<header class="navbar">
+  <p class="bar-name" id="bar-name">Task graph</p>
+  <nav aria-label="Sections"><ul>
+    <li><a href="#graph-block">Graph</a></li>
+    <li><a href="#gates-block">Gates</a></li>
+    <li><a href="#notes-block">Decisions</a></li>
+  </ul></nav>
+  <button type="button" class="theme" id="theme-toggle">Dark mode</button>
+</header>
+<main>
+  <header class="top">
+    <div class="top-text">
+      <p class="label">Task graph</p>
+      <h1 id="title"></h1>
+      <p class="goal" id="goal"></p>
+      <div class="meta label"><code class="tier" id="tier"></code><span id="status"></span><span id="shape"></span></div>
+    </div>
+    <div class="progress" aria-label="Progress">
+      <p class="num" id="pnum"></p>
+      <div class="bar"><i id="pbar"></i></div>
+    </div>
+    <ul class="legend label" id="legend" aria-label="Models"></ul>
+  </header>
+
+  <section class="graph-card" id="graph-block" aria-label="Graph">
+    <p class="hint label">Hover a node to light its path. Click a node, a hand-off point or a gate to read it below. Arrow keys move between nodes.</p>
+    <div class="graph-scroll"><svg class="g" id="graph" role="group" aria-label="Task graph"></svg></div>
+  </section>
+
+  <section class="detail" id="detail" aria-live="polite"></section>
+
+  <section class="block" id="gates-block">
+    <h2>Gates after the graph</h2>
+    <ol class="gates" id="gates"></ol>
+  </section>
+
+  <section class="block" id="notes-block">
+    <h2>Decisions in this plan</h2>
+    <ul class="notes" id="notes"></ul>
+    <p class="stamp label" id="stamp"></p>
+  </section>
+  <div class="tip" id="tip" hidden></div>
+</main>
+<script type="application/json" id="data">{"plan": {"title": "AKM journal outcome correction", "goal": "Keep warnings owned and show what journal evidence actually establishes.", "tier": "Tier 2: core, CLI, native IPC and frontend outcome contracts", "status": "blocked", "stages": [{"name": "Freeze and reproduce", "mode": "single", "output": "Pinned baseline, contracts and failing behavior regressions", "nodes": [{"name": "Contracts and red tests", "role": "Planner", "model": "openai/gpt-6.1-sol", "effort": "host default", "reason": "One owner retains the coupled outcome context; no implementation delegates.", "owns": ["docs/work/phase2-1a/", "desktop/src-tauri/src/session.rs", "crates/akm-core/tests/", "desktop/src/"], "check": "Native, actual CLI and frontend warning/journal regressions failed first; baseline pinned", "state": "done"}]}, {"name": "Owned outcome implementation", "mode": "single", "input": "Frozen contracts and red regressions", "output": "Typed session-origin notices, atomic snapshots and honest event labels", "nodes": [{"name": "Coupled caller migration", "role": "Planner", "model": "openai/gpt-6.1-sol", "effort": "host default", "reason": "Shared IPC, journal callers and App lifecycle must change together, not in competing workers.", "owns": ["crates/", "desktop/src-tauri/src/", "desktop/src/", "desktop/e2e/"], "check": "Typed origin notices, one-lock snapshots and requested/completed/legacy labels implemented; 34 frontend and 8 browser checks pass", "state": "done"}]}, {"name": "Collect and prove", "mode": "single", "input": "Stable implementation and affected green checks", "output": "Full relevant checks, exact rebuilt artifacts and focused native evidence", "nodes": [{"name": "Round-one artifact proof", "role": "Planner", "model": "openai/gpt-6.1-sol", "effort": "host default", "reason": "One collector owns GUI/settings and preserves the user clipboard.", "owns": ["tools/", "docs/work/phase2-1a/", "docs/STATE.md", "docs/REVIEW_LEDGER.md"], "check": "Rejected candidate: Rust144, frontend34, browser8, lint, builds, KeePassXC and focused journal proof; changed GUI hash requires renewed proof", "state": "done"}]}, {"name": "Fresh adversarial acceptance", "mode": "single", "input": "Plan, combined diff, pinned source identities and verification policy/results", "output": "Supported findings and scoped acceptance, not a readiness score", "nodes": [{"name": "Round-one Terra review", "role": "Reviewer and collector", "model": "openai/gpt-6.1-terra", "effort": "max requested", "reason": "Owner explicitly authorized this exact model/variant for fresh AKM adversarial review; active effort telemetry may not be exposed.", "owns": [], "check": "Rejected with seven supported findings; raw report and probes preserved in reviews/round1", "state": "blocked"}]}, {"name": "Correct round-one findings", "mode": "single", "input": "Seven supported findings and revised typed-warning/acknowledgment/append contracts", "output": "Failing-first regressions, corrected callers and renewed exact-artifact evidence", "nodes": [{"name": "Serial correction and proof", "role": "Planner", "model": "openai/gpt-6.1-sol", "effort": "host default", "reason": "Core, native, CLI and App share outcome contracts; one main-session owner avoids conflicting edits.", "owns": ["crates/", "desktop/", "tools/", "docs/"], "check": "Rust153, frontend43, browser10, lint/builds, final CLI KeePassXC and exact-GUI journal/export proofs pass; startup discovery retry and layout debt recorded", "state": "done"}]}, {"name": "Corrected candidate acceptance", "mode": "single", "input": "Revised plan, full unit diff, pinned corrected source and verification results", "output": "New independent scoped verdict; failed first round remains preserved", "nodes": [{"name": "Round-two Terra correction review", "role": "Reviewer and collector", "model": "openai/gpt-6.1-terra", "effort": "max requested", "reason": "Fresh context required after rejected acceptance; exact owner-authorized model and max availability confirmed.", "owns": [], "check": "Rejected: skipped control whitespace, completion/application-warning handoff and four presentation gaps; raw verdict preserved", "state": "blocked"}]}, {"name": "Second correction cycle", "mode": "single", "input": "Six round-two findings and explicit boundary/receipt/precision contracts", "output": "Actual-caller red/green regressions, renewed stable verification and bounded fresh acceptance", "nodes": [{"name": "Boundary and handoff corrections", "role": "Planner", "model": "openai/gpt-6.1-sol", "effort": "host default", "reason": "Shared native/React receipt contracts remain serial; do not add competing implementation workers.", "owns": ["crates/", "desktop/", "tools/", "docs/"], "check": "Rust157/frontend55/browser10/lint/builds; 1024 byte cases; extended exact-GUI journal/delete/action/sequence and export proofs; KeePassXC passed", "state": "done"}]}, {"name": "Final bounded unit1a acceptance", "mode": "single", "input": "Frozen revised plan, full combined diff, current source identities and renewed verification", "output": "Scoped verdict with source/runtime limits; another rejection goes to owner, not an unbounded correction loop", "nodes": [{"name": "Round-three Terra acceptance", "role": "Reviewer and collector", "model": "openai/gpt-6.1-terra", "effort": "max requested", "reason": "Owner-authorized fresh reviewer; active model/max availability confirmed before dispatch, effort telemetry may remain unavailable.", "owns": [], "check": "Rejected: dispatched import acknowledgment, distinct warning episodes and incomplete API fencing. Three supported findings archived; returned to owner.", "state": "blocked"}]}, {"name": "Owner-renewed recalibration", "mode": "single", "input": "Owner's renewed bounded authorization and three R3 findings", "output": "Revised ownership contracts, pinned baseline and combined-transition red tests", "nodes": [{"name": "Contracts before another fix", "role": "Planner", "model": "openai/gpt-6.1-sol", "effort": "host default", "reason": "Owner asks main to recalibrate; retain coupled context without extra implementation delegates or model/config changes.", "owns": ["docs/work/phase2-1a/corrections3/", "docs/", "desktop/src/", "desktop/src-tauri/src/session.rs"], "check": "Before-cycle146 pinned; frontend33/native6 behavior regressions failed first; separate ownership contracts frozen", "state": "done"}]}, {"name": "Renewed bounded correction and collection", "mode": "single", "input": "Frozen cycle contracts and red lifecycle/episode/fence regressions", "output": "Application-owned outcomes, lease-owned cleanup episodes, full reply fences and exact rebuilt proof", "nodes": [{"name": "Serial cross-layer correction", "role": "Planner", "model": "openai/gpt-6.1-sol", "effort": "host default", "reason": "Shared App/API/native receipt contracts require one owner; parallelize only independent check processes.", "owns": ["desktop/src/", "desktop/src-tauri/src/", "desktop/e2e/", "tools/", "docs/"], "check": "Rust163 via timeout/selective workspace resume; frontend105/browser18/build/lint and exact-GUI journal/export pass. Actual hide handoff unproven after two minimize failures, retained as a proof gap.", "state": "done"}]}, {"name": "Renewed independent acceptance", "mode": "single", "input": "Frozen recalibrated plan, full combined diff, current source and verification", "output": "One new scoped verdict, not a score; another rejection returns to owner", "nodes": [{"name": "Round-four Terra acceptance", "role": "Reviewer and collector", "model": "openai/gpt-6.1-terra", "effort": "max requested", "reason": "Owner-authorized exact review model; actual active variant/effort/tokens remain unavailable.", "owns": [], "check": "Rejected: immediate-original backup assurance, untagged delayed native lock event, partial-copy cleanup warning; actual native outcome proof remains incomplete. Raw probes archived; returned to owner.", "state": "blocked"}]}, {"name": "Owner-renewed identity calibration", "mode": "single", "input": "Owner's request to recalibrate and continue; three R4 defects and one proof gap", "output": "Exact-original, native reservation/event ownership and immediate-cleanup contracts; red tests", "nodes": [{"name": "Enumerate every producer", "role": "Planner", "model": "openai/gpt-6.1-sol", "effort": "host default", "reason": "Main retains cross-layer context and escalates the invariant/test method, not an unauthorized model or worker.", "owns": ["docs/work/phase2-1a/corrections4/", "docs/", "crates/", "desktop/"], "check": "Frozen identity contracts; eleven behavior-red regressions, separate fixture failure; resume matched160 source paths/four prior artifacts; no completed suite repeated for context", "state": "done"}]}, {"name": "Identity-bound correction", "mode": "single", "input": "Frozen contracts and failing-first producer/consumer regressions", "output": "Protected immediate original, reserved native owners, complete cleanup episodes and stable rebuilt evidence", "nodes": [{"name": "Serial core/native/API owner", "role": "Planner", "model": "openai/gpt-6.1-sol", "effort": "host default", "reason": "Native IPC and typed warnings share files; serialize implementation, parallelize only independent checks.", "owns": ["crates/", "desktop/", "tools/", "docs/"], "check": "Rust184, frontend161, strict lint/format/builds; browser18 plus selective2 after an archived fixture correction.46-case ownership matrix, path-variant backup and partial-cleanup regressions pass. New CLI/GUI/bundles hashed; KeePassXC and exact-GUI backup/journal/export pass with settings restored", "state": "done"}]}, {"name": "Owner-participating native outcome proof", "mode": "single", "input": "Exact corrected GUI, fake-data plan, durable settings/process recovery and owner readiness confirmation", "output": "Observed delayed import/file-save handoff or a clearly retained proof gap", "nodes": [{"name": "Owned-window visibility proof", "role": "Planner", "model": "openai/gpt-6.1-sol", "effort": "host default", "reason": "Owner participation is necessary after failed unattended minimize observations; no clipboard or OS state changes.", "owns": ["tools/", "docs/work/phase2-1a/corrections4/"], "check": "Owner-ready attempt confirmed actual minimization, then failed import-dialog expiration while the fake journal lock held. Later acknowledgment exists; downstream proof not reached. Settings restored; no retry or cause claim. Owner decision needed", "state": "blocked"}]}, {"name": "New bounded independent acceptance", "mode": "single", "input": "Frozen full-unit/cycle diff, source/artifact identities, plans and exact verification facts", "output": "One new scoped verdict; another rejection returns to owner", "nodes": [{"name": "Fresh Terra identity review", "role": "Reviewer and collector", "model": "openai/gpt-6.1-terra", "effort": "max requested", "reason": "Exact owner-authorized reviewer; confirm active model/variant availability before dispatch; effort/tokens may not be exposed.", "owns": [], "check": "Attack preservation contracts and producer coverage; distinguish source acceptance and actual runtime completion; no score projection", "state": "planned"}]}], "gates": [{"name": "New candidate checks", "who": "Planner", "rule": "Current184 Rust/161 frontend/lint/build;20 browser scenarios across18+selective2 with raw fixture failure preserved", "state": "done"}, {"name": "Exact release / owner proof", "who": "Planner / owner", "rule": "New artifacts/reader/native backup/journal/export pass. Owner-ready minimization confirmed, but dialog-expiry predicate failed; preserve and ask before retry/changed mechanism", "state": "blocked"}, {"name": "Review / owner decision", "who": "Terra / owner", "rule": "Owner authorized one further bounded cycle; another rejection returns to owner", "state": "planned"}, {"name": "Real-secret readiness", "who": "Owner", "rule": "Still blocked by wider phase-two/release work, actual OS coverage and full above-90 assessment", "state": "blocked"}], "notes": ["Implementation runs serially because files and outcome contracts overlap.", "No git repository, PR, installation, publication or real-secret migration is authorized.", "Storage migration, rotation/history and stale time-derived status are separate work units.", "The graph supports code delivery, not a separate analytical artifact."]}, "models": {"openai/gpt-6.1-sol": ["GPT-6.1 Sol", "Main session", "self"], "openai/gpt-6.1-terra": ["GPT-6.1 Terra", "Fresh read-only review", "0"]}, "modes": {"parallel": "Parallel", "sequence": "In sequence", "single": "One node"}, "states": {"planned": "Planned", "running": "Running", "done": "Done", "failed": "Failed", "blocked": "Blocked", "skipped": "Skipped"}, "stamp": "31 Oct 2026, 19:48 IST"}</script>
+<script>
+(() => {
+  const D = JSON.parse(document.getElementById('data').textContent);
+  const P = D.plan, M = D.models, MODES = D.modes, ST = D.states;
+  const NS = 'http://www.w3.org/2000/svg';
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const pill = s => `<span class="pill label s-${s}">${esc(ST[s])}</span>`;
+  const stages = P.stages.map((s, i) => ({...s, i, mode: s.mode || 'single',
+    nodes: s.nodes.map((n, j) => ({...n, i, j, state: n.state || 'planned', id: `n${i}-${j}`}))}));
+  const all = stages.flatMap(s => s.nodes);
+  const gates = (P.gates || []).map((g, k) => ({...g, state: g.state || 'planned', id: `g${k}`}));
+
+  // Header
+  $('title').textContent = P.title; $('goal').textContent = P.goal; $('tier').innerHTML = P.tier.replace(/\d+/g, (m) => '<span class="num">' + m + '</span>');
+  $('status').innerHTML = pill(P.status || 'planned');
+  const par = stages.filter(s => s.mode === 'parallel').length;
+  $('shape').innerHTML = `${stages.length} stages · ${all.length} nodes · ${par} parallel · ${gates.length} gates`.replace(/\d+/g, (m) => '<span class="num">' + m + '</span>');
+  const done = all.filter(n => n.state === 'done').length;
+  $('pnum').innerHTML = `${done}<span> of ${all.length} nodes done</span>`;
+  $('pbar').style.width = `${Math.round(100 * done / all.length)}%`;
+  const counts = {}; all.forEach(n => counts[n.model] = (counts[n.model] || 0) + 1);
+  $('legend').innerHTML = Object.keys(M).filter(m => counts[m]).map(m =>
+    `<li class="m-${M[m][2]}"><span class="sw"></span><b>${counts[m]}</b> ${esc(M[m][0])}<span class="use">${esc(M[m][1])}</span></li>`).join('');
+  $('stamp').textContent = `Rendered ${D.stamp}`;
+
+  // Layout
+  const svg = $('graph');
+  const el = (tag, attrs = {}, parent = svg) => { const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; };
+  function wrap(text, px, max, lines) { const per = px * 0.56, n = Math.max(4, Math.floor(max / per)), out = []; let rest = String(text);
+    while (rest.length && out.length < lines) { if (rest.length <= n) { out.push(rest); rest = ''; break; }
+      let cut = rest.lastIndexOf(' ', n); if (cut <= 0) cut = n; out.push(rest.slice(0, cut).trim()); rest = rest.slice(cut).trim(); }
+    if (rest.length) out[out.length - 1] = fit(out[out.length - 1] + ' ' + rest, px, max);
+    return out; }
+  function fit(text, px, max) { const per = px * 0.56; const n = Math.floor(max / per);
+    return text.length <= n ? text : text.slice(0, Math.max(1, n - 1)).trimEnd() + '…'; }
+
+  let selected = null, pos = {};
+  function draw() {
+    svg.innerHTML = '';
+    const avail = svg.parentElement.clientWidth - 16;
+    const PAD = 18, NH = 74, VG = 14, TOP = 72, CG = 76, MINW = 150;
+    const n = stages.length;
+    const vertical = avail < n * MINW + (n - 1) * CG + PAD * 2;
+    let W, H;
+    pos = {};
+    const junctions = [];
+    const CAP = 62;  // room under the graph for hand-off captions (horizontal layout)
+    let spineL = 0, spineR = 0;
+    if (!vertical) {
+      const NW = Math.min(240, Math.floor((avail - PAD * 2 - (n - 1) * CG) / n));
+      const maxN = Math.max(...stages.map(s => s.nodes.length));
+      const colH = maxN * NH + (maxN - 1) * VG;
+      W = PAD * 2 + stages.length * NW + (stages.length - 1) * CG; H = TOP + colH + PAD + 14 + CAP;
+      stages.forEach(s => {
+        const x = PAD + s.i * (NW + CG), h = s.nodes.length * NH + (s.nodes.length - 1) * VG;
+        const y0 = TOP + (colH - h) / 2;
+        s.box = {x, y: y0, w: NW, h};
+        s.nodes.forEach(n => pos[n.id] = {x, y: y0 + n.j * (NH + VG), w: NW, h: NH});
+        if (s.i < stages.length - 1) junctions.push({i: s.i, x: x + NW + CG / 2, y: TOP + colH / 2,
+          cap: {x: x + NW + CG / 2, y: TOP + colH + 30, w: NW + CG - 24}});
+      });
+    } else {
+      // One column per stage; edges run on a left spine (in) and a right spine (out), so none crosses a node.
+      const RG = 104, GUT = 26, inner = Math.max(280, avail) - PAD * 2;
+      spineL = PAD + 8; spineR = PAD + inner - 8;
+      let y = PAD;
+      W = inner + PAD * 2;
+      stages.forEach(s => {
+        const top = y + 56, nw = inner - GUT * 2;
+        s.box = {x: PAD + GUT, y: top, w: nw, h: s.nodes.length * NH + (s.nodes.length - 1) * VG};
+        s.label = {x: PAD + GUT, y};
+        s.nodes.forEach(n => pos[n.id] = {x: PAD + GUT, y: top + n.j * (NH + VG), w: nw, h: NH});
+        y = top + s.box.h;
+        if (s.i < stages.length - 1) {
+          const jx = PAD + inner / 2, jy = y + 40;
+          junctions.push({i: s.i, x: jx, y: jy, cap: {x: spineL + 8, y: jy + 26, w: spineR - spineL - 16, left: true}});
+          y += RG;
+        }
+      });
+      H = y + PAD;
+    }
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', W); svg.setAttribute('height', H);
+
+    // Lanes and stage labels
+    stages.forEach(s => {
+      const b = s.box;
+      if (s.mode !== 'single') el('rect', {class: 'lane', x: b.x - 9, y: b.y - 9, width: b.w + 18, height: b.h + 18, rx: 14});
+      const lx = vertical ? s.label.x : b.x, ly = vertical ? s.label.y : 6;
+      const mode = s.mode === 'parallel' ? `Parallel × ${s.nodes.length}` : MODES[s.mode];
+      el('text', {class: 'stage-no', x: lx, y: ly + 11}).textContent = `STAGE ${s.i + 1} · ${mode.toUpperCase()}`;
+      wrap(s.name, 14, b.w, 2).forEach((line, k) => el('text', {class: 'stage-name', x: lx, y: ly + 30 + k * 17}).textContent = line);
+    });
+
+    // Edges through hand-off points
+    const edges = [];
+    const curve = (x1, y1, x2, y2) => vertical
+      ? `M${x1},${y1} C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2} ${x2},${y2}`
+      : `M${x1},${y1} C${(x1 + x2) / 2},${y1} ${(x1 + x2) / 2},${y2} ${x2},${y2}`;
+    const R = 8;  // corner radius of spine routes
+    const outRoute = (p, j) => { const cy = p.y + p.h / 2, ty = j.y - 16;
+      return `M${p.x + p.w},${cy} H${spineR - R} Q${spineR},${cy} ${spineR},${cy + R} V${ty - R} Q${spineR},${ty} ${spineR - R},${ty} H${j.x + R} Q${j.x},${ty} ${j.x},${ty + R} V${j.y}`; };
+    const inRoute = (j, p) => { const cy = p.y + p.h / 2;
+      return `M${j.x},${j.y} H${spineL + R} Q${spineL},${j.y} ${spineL},${j.y + R} V${cy - R} Q${spineL},${cy} ${spineL + R},${cy} H${p.x}`; };
+    junctions.forEach(j => {
+      stages[j.i].nodes.forEach(n => { const p = pos[n.id];
+        const d = vertical ? outRoute(p, j) : curve(p.x + p.w, p.y + p.h / 2, j.x, j.y);
+        edges.push({el: el('path', {class: 'edge', d}), node: n.id, j: j.i}); });
+      stages[j.i + 1].nodes.forEach(n => { const p = pos[n.id];
+        const d = vertical ? inRoute(j, p) : curve(j.x, j.y, p.x, p.y + p.h / 2);
+        edges.push({el: el('path', {class: 'edge', d}), node: n.id, j: j.i}); });
+    });
+    // Hand-off captions: what passes between the stages, written on the graph
+    junctions.forEach(j => {
+      const text = stages[j.i].output || stages[j.i + 1].input;
+      if (!text || !j.cap) return;
+      const c = j.cap, lines = wrap(text, 13, c.w, 3);
+      if (!vertical) el('line', {class: 'cap-rule', x1: j.x, y1: j.y + 12, x2: j.x, y2: c.y - 12});
+      lines.forEach((line, k) => el('text', {class: 'handoff', x: c.x, y: c.y + k * 17,
+        'text-anchor': vertical ? 'start' : 'middle'}).textContent = line);
+    });
+    junctions.forEach(j => {
+      const g = el('g', {class: 'junction', tabindex: 0, role: 'button', 'aria-label': `Hand-off after stage ${j.i + 1}`});
+      el('circle', {cx: j.x, cy: j.y, r: 9}, g); el('circle', {class: 'core', cx: j.x, cy: j.y, r: 3.5}, g);
+      g.dataset.id = `j${j.i}`;
+      g.addEventListener('click', () => select(`j${j.i}`));
+      g.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(`j${j.i}`); } });
+      g.addEventListener('mouseenter', ev => tip(ev, 'Hand-off', stages[j.i].output || stages[j.i + 1].input));
+      g.addEventListener('mouseleave', () => tip());
+    });
+
+    // Nodes
+    all.forEach(n => {
+      const p = pos[n.id];
+      const g = el('g', {class: `node m-${M[n.model][2]}`, tabindex: 0, role: 'button',
+        'aria-label': `${n.name}, ${M[n.model][0]}, ${ST[n.state]}`});
+      g.dataset.id = n.id;
+      el('rect', {class: 'box', x: p.x, y: p.y, width: p.w, height: p.h, rx: 12}, g);
+      el('rect', {class: 'band', x: p.x + 7, y: p.y + 10, width: 4, height: p.h - 20, rx: 2}, g);
+      const nl = wrap(n.name, 13, p.w - 50, 2);
+      nl.forEach((line, k) => el('text', {class: 'nm', x: p.x + 20, y: p.y + (nl.length > 1 ? 22 : 30) + k * 16}, g).textContent = line);
+      const md = el('text', {class: 'md', x: p.x + 20, y: p.y + (nl.length > 1 ? 58 : 50)}, g);
+      const t1 = el('tspan', {class: 'mdl'}, md); t1.textContent = M[n.model][0];
+      el('tspan', {}, md).textContent = ` · ${fit(n.effort, 12, p.w - 110)}`;
+      const sx = p.x + p.w - 17, sy = p.y + 17;
+      el('circle', {class: `st-${n.state}`, cx: sx, cy: sy, r: 6}, g);
+      if (n.state === 'done') el('path', {d: `M${sx - 3},${sy} l2,2.2 l4,-4.4`, fill: 'none', stroke: 'var(--card)', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round'}, g);
+      g.addEventListener('mouseenter', ev => { light(n.id); tip(ev, n.name, n.role || n.reason); });
+      g.addEventListener('mousemove', ev => tip(ev));
+      g.addEventListener('mouseleave', () => { light(selected && selected.startsWith('n') ? selected : null, false); tip(); });
+      g.addEventListener('click', () => select(n.id));
+      g.addEventListener('focus', () => light(n.id, false));
+      g.addEventListener('keydown', ev => keys(ev, n));
+    });
+    draw.edges = edges;
+    if (selected) mark(selected);
+  }
+
+  function light(id, dim = true) {
+    svg.classList.toggle('focus', !!id && dim);
+    svg.querySelectorAll('.node').forEach(g => g.classList.remove('near'));
+    (draw.edges || []).forEach(e => e.el.classList.remove('hot'));
+    if (!id || !id.startsWith('n')) return;
+    const n = all.find(x => x.id === id);
+    svg.querySelector(`.node[data-id="${id}"]`).classList.add('near');
+    (draw.edges || []).filter(e => e.node === id).forEach(e => {
+      e.el.classList.add('hot');
+      const other = e.j === n.i ? n.i + 1 : n.i - 1;  // the stage on the far side of this hand-off
+      (draw.edges || []).filter(f => f.j === e.j && f.node !== id).forEach(f => {
+        const fn = all.find(x => x.id === f.node);
+        if (fn.i === other) { f.el.classList.add('hot'); svg.querySelector(`.node[data-id="${fn.id}"]`).classList.add('near'); }
+      });
+    });
+  }
+
+  const tipEl = $('tip');
+  function tip(ev, head, body) {
+    if (!ev) { tipEl.hidden = true; return; }
+    if (head !== undefined) tipEl.innerHTML = `<b>${esc(head)}</b>${esc(body || '')}`;
+    tipEl.hidden = false;
+    const x = Math.min(ev.clientX + 14, window.innerWidth - tipEl.offsetWidth - 8);
+    tipEl.style.left = `${x}px`; tipEl.style.top = `${ev.clientY + 16}px`;
+  }
+
+  function keys(ev, n) {
+    let t = null;
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(n.id); return; }
+    if (ev.key === 'ArrowDown') t = stages[n.i].nodes[n.j + 1];
+    if (ev.key === 'ArrowUp') t = stages[n.i].nodes[n.j - 1];
+    if (ev.key === 'ArrowRight' && stages[n.i + 1]) t = stages[n.i + 1].nodes[Math.min(n.j, stages[n.i + 1].nodes.length - 1)];
+    if (ev.key === 'ArrowLeft' && stages[n.i - 1]) t = stages[n.i - 1].nodes[Math.min(n.j, stages[n.i - 1].nodes.length - 1)];
+    if (t) { ev.preventDefault(); svg.querySelector(`.node[data-id="${t.id}"]`).focus(); select(t.id); }
+  }
+
+  function mark(id) {
+    svg.querySelectorAll('.node, .junction').forEach(g => g.classList.toggle('sel', g.dataset.id === id));
+    document.querySelectorAll('.gate').forEach(g => g.classList.toggle('sel', g.dataset.id === id));
+    light(id.startsWith('n') ? id : null, false);
+  }
+
+  function row(k, v, cls = '') { return v ? `<dt class="label">${k}</dt><dd class="${cls}">${v}</dd>` : ''; }
+  function select(id) {
+    selected = id; mark(id);
+    const box = $('detail');
+    if (id.startsWith('n')) {
+      const n = all.find(x => x.id === id), s = stages[n.i];
+      box.style.setProperty('--mc', `var(--c${M[n.model][2]})`);
+      const files = (n.owns || []).length ? `<div class="files">${n.owns.map(f => `<code class="mono">${esc(f)}</code>`).join('')}</div>` : '';
+      const mode = s.mode === 'parallel' ? `Parallel × ${s.nodes.length}` : MODES[s.mode];
+      box.innerHTML = `<div class="d-head"><p class="label">Stage ${s.i + 1} · ${esc(s.name)} · ${esc(mode)}</p>
+        <h2>${esc(n.name)}</h2>${n.role ? `<p class="role">${esc(n.role)}</p>` : ''}
+        <div class="badges"><span class="mchip label m-${M[n.model][2]}"><i></i>${esc(M[n.model][0])}<span>effort ${esc(n.effort)}</span></span>${pill(n.state)}</div></div>
+        <dl class="d-body">${row('Why this model', esc(n.reason), 'prose')}${row('Owns', files)}${row('Done when', esc(n.check || ''))}
+        ${row('Receives', esc(s.input || 'The plan'))}${row('Hands on', esc(s.output || ''))}${row(s.mode === 'parallel' ? 'Why parallel' : '', esc(s.why || ''), 'prose')}</dl>`;
+    } else if (id.startsWith('j')) {
+      const i = +id.slice(1), a = stages[i], b = stages[i + 1];
+      box.style.setProperty('--mc', 'var(--fg)');
+      box.innerHTML = `<div class="d-head"><p class="label">Hand-off</p><h2>${esc(a.name)} → ${esc(b.name)}</h2>
+        <p class="role">${a.nodes.length} node${a.nodes.length > 1 ? 's' : ''} hand on to ${b.nodes.length} node${b.nodes.length > 1 ? 's' : ''}.</p></div>
+        <dl class="d-body">${row('Leaves stage ' + (i + 1), esc(a.output || ''), 'prose')}${row('Enters stage ' + (i + 2), esc(b.input), 'prose')}
+        ${row(b.mode === 'parallel' ? 'Why parallel next' : '', esc(b.why || ''), 'prose')}</dl>`;
+    } else {
+      const g = gates.find(x => x.id === id);
+      box.style.setProperty('--mc', 'var(--ok)');
+      box.innerHTML = `<div class="d-head"><p class="label">Gate after the graph</p><h2>${esc(g.name)}</h2>
+        <div class="badges">${pill(g.state)}</div></div>
+        <dl class="d-body">${row('Who acts', esc(g.who || ''))}${row('Passes when', esc(g.rule || ''), 'prose')}</dl>`;
+    }
+  }
+
+  // Gates and notes
+  $('gates').innerHTML = gates.map(g => `<li><button type="button" class="gate st-g-${g.state}" data-id="${g.id}">
+      <span class="rail"><span class="dot"></span><span class="line"></span></span>
+      <strong>${esc(g.name)}</strong><span class="who label">${esc(g.who || '')}</span></button></li>`).join('');
+  document.querySelectorAll('.gate').forEach(b => b.addEventListener('click', () => select(b.dataset.id)));
+  if (!gates.length) $('gates-block').hidden = true;
+  $('notes').innerHTML = (P.notes || []).map(t => `<li>${esc(t)}</li>`).join('');
+  if (!(P.notes || []).length) $('notes').hidden = true;
+
+  draw();
+  select(all[0].id);
+  let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(draw, 120); });
+})();
+</script>
+<script>
+// Navigation bar: section links (the current one gets a dot) and the light and dark switch.
+// A section the plan does not show loses its link too.
+['gates-block'].forEach((id) => {
+  const s = document.getElementById(id);
+  const a = document.querySelector(".navbar nav a[href='#" + id + "']");
+  if (s && s.hidden && a) a.closest('li').hidden = true;
+});
+(() => {
+  const root = document.documentElement;
+  const btn = document.getElementById('theme-toggle');
+  const dark = window.matchMedia('(prefers-color-scheme: dark)');
+  const shown = () => root.getAttribute('data-theme') || (dark.matches ? 'dark' : 'light');
+  const paint = () => {
+    const next = shown() === 'dark' ? 'light' : 'dark';
+    btn.textContent = next === 'dark' ? 'Dark mode' : 'Light mode';
+    btn.setAttribute('aria-label', 'Switch to ' + next + ' mode');
+  };
+  try {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'light' || saved === 'dark') root.setAttribute('data-theme', saved);
+  } catch (e) { /* storage refused: the system setting applies */ }
+  btn.addEventListener('click', () => {
+    const next = shown() === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('theme', next); } catch (e) { /* storage refused */ }
+    paint();
+  });
+  if (dark.addEventListener) dark.addEventListener('change', () => { if (!root.getAttribute('data-theme')) paint(); });
+  paint();
+  document.getElementById('bar-name').textContent = document.getElementById('title').textContent;
+  const links = [...document.querySelectorAll('.navbar nav a')];
+  if ('IntersectionObserver' in window) {
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((e) => {
+        if (e.isIntersecting) links.forEach((a) => a.setAttribute('aria-current', a.hash === '#' + e.target.id ? 'true' : 'false'));
+      });
+    }, { rootMargin: '-40% 0px -55% 0px' });
+    links.forEach((a) => { const t = document.getElementById(a.hash.slice(1)); if (t) io.observe(t); });
+  }
+})();
+</script>

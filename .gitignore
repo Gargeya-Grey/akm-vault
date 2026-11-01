@@ -1,0 +1,74 @@
+/target
+**/target
+node_modules
+dist
+playwright-report
+test-results
+__pycache__
+
+# Tauri regenerates these on every build
+desktop/src-tauri/gen/schemas
+
+# Vaults, backups, locks and audit logs never belong in a repo.
+# (Vault locks are <vault>.kdbx.lock; Cargo.lock must stay committed.)
+*.kdbx
+*.kdbx.*
+*.audit.jsonl
+*.audit.jsonl.lock
+
+# Synthetic interoperability fixtures only; never add a real vault here.
+!crates/akm-core/tests/fixtures/kdbx3.kdbx
+!crates/akm-core/tests/fixtures/kdbx40.kdbx
+
+# Credentials and plaintext environment exports are never source files.
+.env
+.env.*
+*.env
+*.env.*
+*.key
+*.pem
+*.pfx
+*.p12
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+
+# Build products, crash dumps and local backups.
+*.exe
+*.dll
+*.msi
+*.pdb
+*.dmp
+*.bak
+*.backup
+*.tmp
+
+# Raw evidence is retained locally, not silently discarded or uploaded.
+# Markdown findings and safe JSON manifests remain versioned; see docs/REPOSITORY.md.
+*.log
+*.jsonl
+*.zip
+*.7z
+*.tar
+*.gz
+/docs/**/*.png
+/docs/**/*.jpg
+/docs/**/*.jpeg
+/docs/**/*.webp
+/docs/**/*.txt
+
+# Settings preimages and process/UI recovery records stay on this computer.
+**/settings-before*
+**/recovery.json
+**/recovery-*.json
+**/*-identity.json
+**/runtime-cleanup.json
+**/native-diagnostics*
+**/fake-ui-names*
+*.bin
+
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

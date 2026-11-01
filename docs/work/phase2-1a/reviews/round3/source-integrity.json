@@ -1,0 +1,1238 @@
+{
+  "observedUtc": "2026-10-31T08:59:07.702332+00:00",
+  "inputManifestSha256": "b52d434f7e22132f5619800571f5b1e810e9eba2eea7d186474fc20bf4ddf4e4",
+  "inputs": {
+    "PLAN.md": {
+      "expected": "624980c0417411b3140b829820d351ce229926dc5a6e882ade4fa544bee42a36",
+      "actual": "624980c0417411b3140b829820d351ce229926dc5a6e882ade4fa544bee42a36",
+      "matches": true
+    },
+    "source-sha256.json": {
+      "expected": "28926546f3b1b604bbf99ea81086443bd060cf622c042f82d21685465222af44",
+      "actual": "28926546f3b1b604bbf99ea81086443bd060cf622c042f82d21685465222af44",
+      "matches": true
+    },
+    "changes.diff": {
+      "expected": "c36bd135c78dcaaa071f6d78ad1fcaec1b46cb8f0878f352ce4f3c320d0dace7",
+      "actual": "c36bd135c78dcaaa071f6d78ad1fcaec1b46cb8f0878f352ce4f3c320d0dace7",
+      "matches": true
+    }
+  },
+  "pinnedSourceCount": 145,
+  "pinnedSource": [
+    {
+      "path": ".github/workflows/build.yml",
+      "category": "application-build-test",
+      "expected": "191ad9845661cfde8a9b6d412d15d75ffda8dc6b511e6d162d968a24b4511387",
+      "actual": "191ad9845661cfde8a9b6d412d15d75ffda8dc6b511e6d162d968a24b4511387",
+      "matches": true
+    },
+    {
+      "path": ".gitignore",
+      "category": "application-build-test",
+      "expected": "afb43e563b52ec94eeb9e0579891df3ed8c8d73a95bbacddf6d50f2d66937439",
+      "actual": "afb43e563b52ec94eeb9e0579891df3ed8c8d73a95bbacddf6d50f2d66937439",
+      "matches": true
+    },
+    {
+      "path": "AGENTS.md",
+      "category": "documentation",
+      "expected": "6cc8cee5f0b18f53a9d95921ed015a8b9540a7cfc1d35565e57aa436b704adc3",
+      "actual": "6cc8cee5f0b18f53a9d95921ed015a8b9540a7cfc1d35565e57aa436b704adc3",
+      "matches": true
+    },
+    {
+      "path": "Cargo.lock",
+      "category": "application-build-test",
+      "expected": "c77fde7fd62e48605b84c31c4d5bf6ed1b1fb9d270892fbaf83f007f505c0ac2",
+      "actual": "c77fde7fd62e48605b84c31c4d5bf6ed1b1fb9d270892fbaf83f007f505c0ac2",
+      "matches": true
+    },
+    {
+      "path": "Cargo.toml",
+      "category": "application-build-test",
+      "expected": "4b0168c5685171a96a72f78927ae536ad7a7c2652e8cece94a0eef65819c5979",
+      "actual": "4b0168c5685171a96a72f78927ae536ad7a7c2652e8cece94a0eef65819c5979",
+      "matches": true
+    },
+    {
+      "path": "PHASE1.md",
+      "category": "documentation",
+      "expected": "be559ac150a2242b05674e24b70f38101d4bbce4335a31b63f5a4d4156ce73b1",
+      "actual": "be559ac150a2242b05674e24b70f38101d4bbce4335a31b63f5a4d4156ce73b1",
+      "matches": true
+    },
+    {
+      "path": "PHASE2.md",
+      "category": "documentation",
+      "expected": "f9649109b152d47c7650b99dd766d655fd34f46d6eddd22029e59248c99e8d4d",
+      "actual": "f9649109b152d47c7650b99dd766d655fd34f46d6eddd22029e59248c99e8d4d",
+      "matches": true
+    },
+    {
+      "path": "README.md",
+      "category": "documentation",
+      "expected": "745d0974043d4f69cb105fbb245caa484e8131da62d7018acf5708a6540cc4ae",
+      "actual": "745d0974043d4f69cb105fbb245caa484e8131da62d7018acf5708a6540cc4ae",
+      "matches": true
+    },
+    {
+      "path": "REVIEW.md",
+      "category": "documentation",
+      "expected": "1fe54f1c187b8b05e4abb8ea17a8d6ae8e310c4d6d02ae9fea90c94311305c54",
+      "actual": "1fe54f1c187b8b05e4abb8ea17a8d6ae8e310c4d6d02ae9fea90c94311305c54",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-cli/Cargo.toml",
+      "category": "application-build-test",
+      "expected": "f61cb97f04d288f0ec928521693239a526737574b3d5db54b78ead60d1a8601a",
+      "actual": "f61cb97f04d288f0ec928521693239a526737574b3d5db54b78ead60d1a8601a",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-cli/README.md",
+      "category": "documentation",
+      "expected": "712720a915474b9861817027699d2fb97fc39732e5fb1a5ef7d9a978eba1a2b0",
+      "actual": "712720a915474b9861817027699d2fb97fc39732e5fb1a5ef7d9a978eba1a2b0",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-cli/src/child.rs",
+      "category": "application-build-test",
+      "expected": "7589c786da77a16f285db0aa637394aa907d10a33b66a91425cacdaa404cc7ab",
+      "actual": "7589c786da77a16f285db0aa637394aa907d10a33b66a91425cacdaa404cc7ab",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-cli/src/export.rs",
+      "category": "application-build-test",
+      "expected": "24d5404f3f45a4ff8ca964399ca9e561a50b9bbd451846cbf633b63cc6f15608",
+      "actual": "24d5404f3f45a4ff8ca964399ca9e561a50b9bbd451846cbf633b63cc6f15608",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-cli/src/main.rs",
+      "category": "application-build-test",
+      "expected": "d007b6cf9f6d0406d62498e7a5070b7aa45e8ac1ad4f5a476b0f68511dbd7ab9",
+      "actual": "d007b6cf9f6d0406d62498e7a5070b7aa45e8ac1ad4f5a476b0f68511dbd7ab9",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-cli/tests/security.rs",
+      "category": "application-build-test",
+      "expected": "30022c129cb38a4399aa822aa20346aee3320c00ad0b0ef8f010df17542e08f3",
+      "actual": "30022c129cb38a4399aa822aa20346aee3320c00ad0b0ef8f010df17542e08f3",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/Cargo.toml",
+      "category": "application-build-test",
+      "expected": "eb6c471cf66dbde90dadbfb081bc43e6186e156b34b0c7ce8a1cb88c0c233445",
+      "actual": "eb6c471cf66dbde90dadbfb081bc43e6186e156b34b0c7ce8a1cb88c0c233445",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/src/audit.rs",
+      "category": "application-build-test",
+      "expected": "eb7f67af7f7b9ea25d6f54d127b87810456be21edc7275df39b91408660d1cb3",
+      "actual": "eb7f67af7f7b9ea25d6f54d127b87810456be21edc7275df39b91408660d1cb3",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/src/dotenv.rs",
+      "category": "application-build-test",
+      "expected": "940ce4e3bc6bd5209dea7a4353b1c00f2a13677f2896096c702aaf8d143f09f3",
+      "actual": "940ce4e3bc6bd5209dea7a4353b1c00f2a13677f2896096c702aaf8d143f09f3",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/src/error.rs",
+      "category": "application-build-test",
+      "expected": "b80c0b2a792d8e768dc6b16f9c2051272ddc6f4e65ff648ff3d9e299380d44ea",
+      "actual": "b80c0b2a792d8e768dc6b16f9c2051272ddc6f4e65ff648ff3d9e299380d44ea",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/src/lib.rs",
+      "category": "application-build-test",
+      "expected": "f81b0fdf53524189adbf881ede0e4349b80971732f24649cb89e0f98dacfe3d2",
+      "actual": "f81b0fdf53524189adbf881ede0e4349b80971732f24649cb89e0f98dacfe3d2",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/src/model.rs",
+      "category": "application-build-test",
+      "expected": "66f0cc821319afccdb919496b8d43797b9078ee3df8053c6d547b0e057d35634",
+      "actual": "66f0cc821319afccdb919496b8d43797b9078ee3df8053c6d547b0e057d35634",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/src/vault.rs",
+      "category": "application-build-test",
+      "expected": "a9069552518c769368de3545251d268ae750f6e28a39a7625b26e4c8fd6d8e61",
+      "actual": "a9069552518c769368de3545251d268ae750f6e28a39a7625b26e4c8fd6d8e61",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/tests/audit_concurrency.rs",
+      "category": "application-build-test",
+      "expected": "89d07d5d79d8ed5ede38fe713706ce965a967b29850b71bdfc58662286cfce02",
+      "actual": "89d07d5d79d8ed5ede38fe713706ce965a967b29850b71bdfc58662286cfce02",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/tests/audit_states.rs",
+      "category": "application-build-test",
+      "expected": "394975120d508a7f7730421bbb4e7cf36758bf9ca5af5a202a4a2d55ab1e1132",
+      "actual": "394975120d508a7f7730421bbb4e7cf36758bf9ca5af5a202a4a2d55ab1e1132",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/tests/fixtures/README.md",
+      "category": "documentation",
+      "expected": "f02ec10ef2e2589807dd749a532cfdf73469f1f9e9d06c50c15b5316e7eeacb7",
+      "actual": "f02ec10ef2e2589807dd749a532cfdf73469f1f9e9d06c50c15b5316e7eeacb7",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/tests/fixtures/generate.cjs",
+      "category": "application-build-test",
+      "expected": "aaa288d4ae3923758da916d1b287661bc685ab2b5e37920cae708ddb3f43b861",
+      "actual": "aaa288d4ae3923758da916d1b287661bc685ab2b5e37920cae708ddb3f43b861",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/tests/fixtures/kdbx3.kdbx",
+      "category": "application-build-test",
+      "expected": "55cbb657659ef97077147c67bb7ba14b0efcc6812a74a0a8b72b506086f0537c",
+      "actual": "55cbb657659ef97077147c67bb7ba14b0efcc6812a74a0a8b72b506086f0537c",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/tests/fixtures/kdbx40.kdbx",
+      "category": "application-build-test",
+      "expected": "ea34e603d06542d20d50c2e30e3d07e73b6a273b277464b075e9529df4de42e2",
+      "actual": "ea34e603d06542d20d50c2e30e3d07e73b6a273b277464b075e9529df4de42e2",
+      "matches": true
+    },
+    {
+      "path": "crates/akm-core/tests/vault.rs",
+      "category": "application-build-test",
+      "expected": "44cb1041ec347b3a345dc1991e01c4c2dee61aecf3806763fa52decf0496378d",
+      "actual": "44cb1041ec347b3a345dc1991e01c4c2dee61aecf3806763fa52decf0496378d",
+      "matches": true
+    },
+    {
+      "path": "desktop/e2e/journal-ui.spec.ts",
+      "category": "application-build-test",
+      "expected": "15ba597fc676a1ce95ddc57f1f19f1d971f96c66ce14b07c7bad3f894b223c5f",
+      "actual": "15ba597fc676a1ce95ddc57f1f19f1d971f96c66ce14b07c7bad3f894b223c5f",
+      "matches": true
+    },
+    {
+      "path": "desktop/e2e/native-boundary.ts",
+      "category": "application-build-test",
+      "expected": "9c4e0490d822926076e1cf47dd35951ce8162cb578ca859b947ea719c85c9bb9",
+      "actual": "9c4e0490d822926076e1cf47dd35951ce8162cb578ca859b947ea719c85c9bb9",
+      "matches": true
+    },
+    {
+      "path": "desktop/e2e/security-ui.spec.ts",
+      "category": "application-build-test",
+      "expected": "639394e8674fcaa9d3e4c7969643d4b482bf91d43a15cab5dfe68514a04f6f0c",
+      "actual": "639394e8674fcaa9d3e4c7969643d4b482bf91d43a15cab5dfe68514a04f6f0c",
+      "matches": true
+    },
+    {
+      "path": "desktop/index.html",
+      "category": "application-build-test",
+      "expected": "c2eb8195f979d4031d4a0be3ab80be2e692108b58b8172271f1f4e2ef47c83ac",
+      "actual": "c2eb8195f979d4031d4a0be3ab80be2e692108b58b8172271f1f4e2ef47c83ac",
+      "matches": true
+    },
+    {
+      "path": "desktop/package-lock.json",
+      "category": "application-build-test",
+      "expected": "384a3b39f671e910c1f18a9a974384bf084f3c36b6f09ddea759668c77bdba34",
+      "actual": "384a3b39f671e910c1f18a9a974384bf084f3c36b6f09ddea759668c77bdba34",
+      "matches": true
+    },
+    {
+      "path": "desktop/package.json",
+      "category": "application-build-test",
+      "expected": "6ff058cecb303e85ed4c40d6b0d35db8a264bdd301b3c0c1a8eb53dbe90dbd8a",
+      "actual": "6ff058cecb303e85ed4c40d6b0d35db8a264bdd301b3c0c1a8eb53dbe90dbd8a",
+      "matches": true
+    },
+    {
+      "path": "desktop/playwright.config.ts",
+      "category": "application-build-test",
+      "expected": "4de47904efee8237ec0a25b9b6e71905bd8e5c00c1d2a6f38bbc563469f7eb72",
+      "actual": "4de47904efee8237ec0a25b9b6e71905bd8e5c00c1d2a6f38bbc563469f7eb72",
+      "matches": true
+    },
+    {
+      "path": "desktop/public/theme-boot.js",
+      "category": "application-build-test",
+      "expected": "9a8b9a54a8c267dda359aabf1aeeac00944cb894641104623db159f9d32166f0",
+      "actual": "9a8b9a54a8c267dda359aabf1aeeac00944cb894641104623db159f9d32166f0",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/Cargo.toml",
+      "category": "application-build-test",
+      "expected": "44de823bb7a6f9270d5074f37ed511cbeb40035198e99104a077c64ec5e06742",
+      "actual": "44de823bb7a6f9270d5074f37ed511cbeb40035198e99104a077c64ec5e06742",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/build.rs",
+      "category": "application-build-test",
+      "expected": "487059eaf8a947b80f20a9aacac038a5047b2ad69d2401b827376c67d6fe847f",
+      "actual": "487059eaf8a947b80f20a9aacac038a5047b2ad69d2401b827376c67d6fe847f",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/capabilities/default.json",
+      "category": "application-build-test",
+      "expected": "246307b4b3fb9dc4a5ce3c2c6a3672b63df848423b405dcf095c67f5a173ed09",
+      "actual": "246307b4b3fb9dc4a5ce3c2c6a3672b63df848423b405dcf095c67f5a173ed09",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/128x128.png",
+      "category": "application-build-test",
+      "expected": "b211f2dd18e1e1352c8449c92a9b2e70cdfdc1c7d3062e31ca4ab16ecf6e86f5",
+      "actual": "b211f2dd18e1e1352c8449c92a9b2e70cdfdc1c7d3062e31ca4ab16ecf6e86f5",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/128x128@2x.png",
+      "category": "application-build-test",
+      "expected": "29eaba111bc64bf062f20fc862c9ae0dc516aed53fbf149bbe90f45d371304a0",
+      "actual": "29eaba111bc64bf062f20fc862c9ae0dc516aed53fbf149bbe90f45d371304a0",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/32x32.png",
+      "category": "application-build-test",
+      "expected": "c7ff1e86cf0d95bf99c1a507c3d8c926d18c85520ae368c4b704934d363d82d6",
+      "actual": "c7ff1e86cf0d95bf99c1a507c3d8c926d18c85520ae368c4b704934d363d82d6",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/64x64.png",
+      "category": "application-build-test",
+      "expected": "7807484e4551a88733fa1104d306b5f8ce5b37ff2477b67701dd1779a8826fef",
+      "actual": "7807484e4551a88733fa1104d306b5f8ce5b37ff2477b67701dd1779a8826fef",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/Square107x107Logo.png",
+      "category": "application-build-test",
+      "expected": "08aeb13bc13aea42f3359fadf800797e3f5b6e956fa039444fb54b69bc7330f5",
+      "actual": "08aeb13bc13aea42f3359fadf800797e3f5b6e956fa039444fb54b69bc7330f5",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/Square142x142Logo.png",
+      "category": "application-build-test",
+      "expected": "805b5a0865baab1dbba1eddbaba35adc01d0683091831daaf68a4780aa176122",
+      "actual": "805b5a0865baab1dbba1eddbaba35adc01d0683091831daaf68a4780aa176122",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/Square150x150Logo.png",
+      "category": "application-build-test",
+      "expected": "80893b34048473bb35c37091a1c1640c3357c85c94d1b516716adf29148fa2c1",
+      "actual": "80893b34048473bb35c37091a1c1640c3357c85c94d1b516716adf29148fa2c1",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/Square284x284Logo.png",
+      "category": "application-build-test",
+      "expected": "627609af99c1fc712e94cd4be735ea2c56234ba7b6c4c10ca23602e3238019f4",
+      "actual": "627609af99c1fc712e94cd4be735ea2c56234ba7b6c4c10ca23602e3238019f4",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/Square30x30Logo.png",
+      "category": "application-build-test",
+      "expected": "183d97230a50da54369706a625712b3d8de5b382cf066620fc9c9bcbf7e35ca5",
+      "actual": "183d97230a50da54369706a625712b3d8de5b382cf066620fc9c9bcbf7e35ca5",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/Square310x310Logo.png",
+      "category": "application-build-test",
+      "expected": "1d218b3a70712473caf1c3901f9fa102c2c316ce8a6a61c509bb2a7cb755b000",
+      "actual": "1d218b3a70712473caf1c3901f9fa102c2c316ce8a6a61c509bb2a7cb755b000",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/Square44x44Logo.png",
+      "category": "application-build-test",
+      "expected": "3e4407b6548dd252bc0c48251949664d018ededaafc0e6e962531ecec4272f8f",
+      "actual": "3e4407b6548dd252bc0c48251949664d018ededaafc0e6e962531ecec4272f8f",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/Square71x71Logo.png",
+      "category": "application-build-test",
+      "expected": "0bb70d64b98d9d1f4ff3c2d2eb20a419d9cf151aadeda7da131ef64e22a05ef4",
+      "actual": "0bb70d64b98d9d1f4ff3c2d2eb20a419d9cf151aadeda7da131ef64e22a05ef4",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/Square89x89Logo.png",
+      "category": "application-build-test",
+      "expected": "76c56251c869c82c830dfc5d811e05ab7af24550a96ab2ebdd8e4584493b15a5",
+      "actual": "76c56251c869c82c830dfc5d811e05ab7af24550a96ab2ebdd8e4584493b15a5",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/StoreLogo.png",
+      "category": "application-build-test",
+      "expected": "05538f11f6dde5f729be0a58207e8fd800cc9c603b20d9ca5c3f76cab244e5f8",
+      "actual": "05538f11f6dde5f729be0a58207e8fd800cc9c603b20d9ca5c3f76cab244e5f8",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-anydpi-v26/ic_launcher.xml",
+      "category": "application-build-test",
+      "expected": "760d4b8a06bf7163dd010c33ad2cac9e4a75fa0177afaba042f83e311eef0c3e",
+      "actual": "760d4b8a06bf7163dd010c33ad2cac9e4a75fa0177afaba042f83e311eef0c3e",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-hdpi/ic_launcher.png",
+      "category": "application-build-test",
+      "expected": "ed0a632830a3d91d85ec9fe517531dde793d0d505e9c25e65ee9c401a49a485d",
+      "actual": "ed0a632830a3d91d85ec9fe517531dde793d0d505e9c25e65ee9c401a49a485d",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-hdpi/ic_launcher_foreground.png",
+      "category": "application-build-test",
+      "expected": "5e928332e14743445e9b6420996c1681788cad1062a7d25aeb1123d42e98c061",
+      "actual": "5e928332e14743445e9b6420996c1681788cad1062a7d25aeb1123d42e98c061",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-hdpi/ic_launcher_round.png",
+      "category": "application-build-test",
+      "expected": "dc0c23f6c723b2ab2928da5c7e4d0e0c2c923a959550995c8b0e90e873f8b321",
+      "actual": "dc0c23f6c723b2ab2928da5c7e4d0e0c2c923a959550995c8b0e90e873f8b321",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-mdpi/ic_launcher.png",
+      "category": "application-build-test",
+      "expected": "f0e06f03d7ba0872b500a1f531dc0253f85f590b40d01b86dd162f6ea8c9b7e9",
+      "actual": "f0e06f03d7ba0872b500a1f531dc0253f85f590b40d01b86dd162f6ea8c9b7e9",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-mdpi/ic_launcher_foreground.png",
+      "category": "application-build-test",
+      "expected": "8fec4ac2861d2f7a74920af4e078e6979691720fccf394001f9a288ba7103ca8",
+      "actual": "8fec4ac2861d2f7a74920af4e078e6979691720fccf394001f9a288ba7103ca8",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-mdpi/ic_launcher_round.png",
+      "category": "application-build-test",
+      "expected": "0b39b106e39f966d38b066c545587932778714890e36f638cd962be5f489a01f",
+      "actual": "0b39b106e39f966d38b066c545587932778714890e36f638cd962be5f489a01f",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-xhdpi/ic_launcher.png",
+      "category": "application-build-test",
+      "expected": "1a52f658fd66dec70fd9b61e1b1109e2d98908d134c687f42cbeb047471a21b8",
+      "actual": "1a52f658fd66dec70fd9b61e1b1109e2d98908d134c687f42cbeb047471a21b8",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-xhdpi/ic_launcher_foreground.png",
+      "category": "application-build-test",
+      "expected": "5d27d5c1690a3434c6c144c630f657568e42a7213fe174dcdc52dc56ae8b72a1",
+      "actual": "5d27d5c1690a3434c6c144c630f657568e42a7213fe174dcdc52dc56ae8b72a1",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-xhdpi/ic_launcher_round.png",
+      "category": "application-build-test",
+      "expected": "e55554447d58213aaf1b258facdc4bb008fe62c9c5118182c549ccc56f301c13",
+      "actual": "e55554447d58213aaf1b258facdc4bb008fe62c9c5118182c549ccc56f301c13",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher.png",
+      "category": "application-build-test",
+      "expected": "37b60b78375d9733b7cbafbd264d9f0ef095fff0879c70cbfbfa07ed669a398f",
+      "actual": "37b60b78375d9733b7cbafbd264d9f0ef095fff0879c70cbfbfa07ed669a398f",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_foreground.png",
+      "category": "application-build-test",
+      "expected": "9428e8bfa38ede70e1d33879fe0486d4c57f9aa128d4247a01bade5157afbbda",
+      "actual": "9428e8bfa38ede70e1d33879fe0486d4c57f9aa128d4247a01bade5157afbbda",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_round.png",
+      "category": "application-build-test",
+      "expected": "641b5054f23c32fae69193d5ca9eb71de8c2ffa1063a1af2a49798882dee1868",
+      "actual": "641b5054f23c32fae69193d5ca9eb71de8c2ffa1063a1af2a49798882dee1868",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher.png",
+      "category": "application-build-test",
+      "expected": "8c0b4cfc90c46c272c4824beb8c024b64edb0be24ea19e675984a5e9bea3fe6a",
+      "actual": "8c0b4cfc90c46c272c4824beb8c024b64edb0be24ea19e675984a5e9bea3fe6a",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_foreground.png",
+      "category": "application-build-test",
+      "expected": "7876df9bc5612cc14f9c01a4e67d16d504194f0e27f65bddda61e2e85d071401",
+      "actual": "7876df9bc5612cc14f9c01a4e67d16d504194f0e27f65bddda61e2e85d071401",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_round.png",
+      "category": "application-build-test",
+      "expected": "633faac842fc31d4c569a2a2917a976bca7c458636a91bdb64abbc0154adf3fc",
+      "actual": "633faac842fc31d4c569a2a2917a976bca7c458636a91bdb64abbc0154adf3fc",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/android/values/ic_launcher_background.xml",
+      "category": "application-build-test",
+      "expected": "b1c42868a1777ed1cf61108b506ffc91d0a826318d8516e36cf8f76fab8c4ced",
+      "actual": "b1c42868a1777ed1cf61108b506ffc91d0a826318d8516e36cf8f76fab8c4ced",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/icon.icns",
+      "category": "application-build-test",
+      "expected": "25e1f4ea79b8792275feabfa357737eba3d6dfc93fc8d4ed3c2d3c61cabf1c61",
+      "actual": "25e1f4ea79b8792275feabfa357737eba3d6dfc93fc8d4ed3c2d3c61cabf1c61",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/icon.ico",
+      "category": "application-build-test",
+      "expected": "1a3082f74e45e810b55a4033ae511652245a2b28f0e7338802f13bb2d58a9847",
+      "actual": "1a3082f74e45e810b55a4033ae511652245a2b28f0e7338802f13bb2d58a9847",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/icon.png",
+      "category": "application-build-test",
+      "expected": "02e1cf2a46ed6a1fe63552958d87e7ff422f8118813b3eafc1959cf069864f29",
+      "actual": "02e1cf2a46ed6a1fe63552958d87e7ff422f8118813b3eafc1959cf069864f29",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-20x20@1x.png",
+      "category": "application-build-test",
+      "expected": "af4246829951f66bf7112b58194ab82b1a9776bbb37949a6e69cb2e653674fcc",
+      "actual": "af4246829951f66bf7112b58194ab82b1a9776bbb37949a6e69cb2e653674fcc",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-20x20@2x-1.png",
+      "category": "application-build-test",
+      "expected": "28f43de0c202b0e97a4f2f76d5f8bf3db5f4561a51cc4cd18bce3e495fe707d4",
+      "actual": "28f43de0c202b0e97a4f2f76d5f8bf3db5f4561a51cc4cd18bce3e495fe707d4",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-20x20@2x.png",
+      "category": "application-build-test",
+      "expected": "28f43de0c202b0e97a4f2f76d5f8bf3db5f4561a51cc4cd18bce3e495fe707d4",
+      "actual": "28f43de0c202b0e97a4f2f76d5f8bf3db5f4561a51cc4cd18bce3e495fe707d4",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-20x20@3x.png",
+      "category": "application-build-test",
+      "expected": "cc7217cd760946571f61923186df6ec42ab5d0b54d6a19bd112e4c66c1593046",
+      "actual": "cc7217cd760946571f61923186df6ec42ab5d0b54d6a19bd112e4c66c1593046",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-29x29@1x.png",
+      "category": "application-build-test",
+      "expected": "e75d2d9c7b0d3ed9ed570a28fb80fc16b71006bb2d0b3b773ff68f89c7cbd81a",
+      "actual": "e75d2d9c7b0d3ed9ed570a28fb80fc16b71006bb2d0b3b773ff68f89c7cbd81a",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-29x29@2x-1.png",
+      "category": "application-build-test",
+      "expected": "f4fda05714171c0fbb9066af7c9d558fb91c8b3c53d56f75e6918426d588d5b7",
+      "actual": "f4fda05714171c0fbb9066af7c9d558fb91c8b3c53d56f75e6918426d588d5b7",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-29x29@2x.png",
+      "category": "application-build-test",
+      "expected": "f4fda05714171c0fbb9066af7c9d558fb91c8b3c53d56f75e6918426d588d5b7",
+      "actual": "f4fda05714171c0fbb9066af7c9d558fb91c8b3c53d56f75e6918426d588d5b7",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-29x29@3x.png",
+      "category": "application-build-test",
+      "expected": "09afdbf3cecdbdee7a0c7d9a86726a5472010cd96157ce7551b0b07a6e841226",
+      "actual": "09afdbf3cecdbdee7a0c7d9a86726a5472010cd96157ce7551b0b07a6e841226",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-40x40@1x.png",
+      "category": "application-build-test",
+      "expected": "28f43de0c202b0e97a4f2f76d5f8bf3db5f4561a51cc4cd18bce3e495fe707d4",
+      "actual": "28f43de0c202b0e97a4f2f76d5f8bf3db5f4561a51cc4cd18bce3e495fe707d4",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-40x40@2x-1.png",
+      "category": "application-build-test",
+      "expected": "3b3eb12ec58f0591fe89a6d7a07b8e86457fb68ddcc13d8756a6c85c237f8a4e",
+      "actual": "3b3eb12ec58f0591fe89a6d7a07b8e86457fb68ddcc13d8756a6c85c237f8a4e",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-40x40@2x.png",
+      "category": "application-build-test",
+      "expected": "3b3eb12ec58f0591fe89a6d7a07b8e86457fb68ddcc13d8756a6c85c237f8a4e",
+      "actual": "3b3eb12ec58f0591fe89a6d7a07b8e86457fb68ddcc13d8756a6c85c237f8a4e",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-40x40@3x.png",
+      "category": "application-build-test",
+      "expected": "dbe9cd2338f9739083d35cd750cbccedacebdc21f44659f7c9df1e84cf701eb1",
+      "actual": "dbe9cd2338f9739083d35cd750cbccedacebdc21f44659f7c9df1e84cf701eb1",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-512@2x.png",
+      "category": "application-build-test",
+      "expected": "c73ddba889ab61ca03ec98d2d3353856b52f078d41046e801bfc9564899d6dd1",
+      "actual": "c73ddba889ab61ca03ec98d2d3353856b52f078d41046e801bfc9564899d6dd1",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-60x60@2x.png",
+      "category": "application-build-test",
+      "expected": "dbe9cd2338f9739083d35cd750cbccedacebdc21f44659f7c9df1e84cf701eb1",
+      "actual": "dbe9cd2338f9739083d35cd750cbccedacebdc21f44659f7c9df1e84cf701eb1",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-60x60@3x.png",
+      "category": "application-build-test",
+      "expected": "17af5f92e27aff7461c22d712ee4b6e2a019a30e4cd1237c9d2e2b6a86b4ae38",
+      "actual": "17af5f92e27aff7461c22d712ee4b6e2a019a30e4cd1237c9d2e2b6a86b4ae38",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-76x76@1x.png",
+      "category": "application-build-test",
+      "expected": "25112b64bcd672e2908b01d5fb1d3c835c5d6588c02a795487cfdbdcf458bb17",
+      "actual": "25112b64bcd672e2908b01d5fb1d3c835c5d6588c02a795487cfdbdcf458bb17",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-76x76@2x.png",
+      "category": "application-build-test",
+      "expected": "11f934934af7b809f7fc667b9e0aeeb1da3b77553b477715078859118d95fea2",
+      "actual": "11f934934af7b809f7fc667b9e0aeeb1da3b77553b477715078859118d95fea2",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/icons/ios/AppIcon-83.5x83.5@2x.png",
+      "category": "application-build-test",
+      "expected": "e0e20a6414a402d5713434426c4d14c7df433f42cf9a874e5cdcefd633b3ac3e",
+      "actual": "e0e20a6414a402d5713434426c4d14c7df433f42cf9a874e5cdcefd633b3ac3e",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/src/clipboard.rs",
+      "category": "application-build-test",
+      "expected": "cad4b6b510af70ae1338479018ddf9bd237e32dc474ba6761b0a9df62d1f51b7",
+      "actual": "cad4b6b510af70ae1338479018ddf9bd237e32dc474ba6761b0a9df62d1f51b7",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/src/commands.rs",
+      "category": "application-build-test",
+      "expected": "971b67a23104e381ee43e9c01706a3a722aa4993f2d4f560eff23f2ff7cffc1a",
+      "actual": "971b67a23104e381ee43e9c01706a3a722aa4993f2d4f560eff23f2ff7cffc1a",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/src/error.rs",
+      "category": "application-build-test",
+      "expected": "2f8a55ec8d85582a3613de74222d57adac090aefcc6dfc75581b190041a505b3",
+      "actual": "2f8a55ec8d85582a3613de74222d57adac090aefcc6dfc75581b190041a505b3",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/src/lib.rs",
+      "category": "application-build-test",
+      "expected": "f59f7303ffad78e56981e5854cef90ac9a4b6f257d52a3c447b633db6ed0b85a",
+      "actual": "f59f7303ffad78e56981e5854cef90ac9a4b6f257d52a3c447b633db6ed0b85a",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/src/main.rs",
+      "category": "application-build-test",
+      "expected": "3a6fb1722936c0cc4a33d046c3dbe8dd3642abf21f51e79a53936a804652ed46",
+      "actual": "3a6fb1722936c0cc4a33d046c3dbe8dd3642abf21f51e79a53936a804652ed46",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/src/pending.rs",
+      "category": "application-build-test",
+      "expected": "630dabd02168f6f7871a5b4aad715bc3bb809f096449c99cf11094c6444fb24f",
+      "actual": "630dabd02168f6f7871a5b4aad715bc3bb809f096449c99cf11094c6444fb24f",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/src/policy.rs",
+      "category": "application-build-test",
+      "expected": "3f53fe7e1f015c763a87e2cd423357d971b44f900a5736517b220cd52d13d822",
+      "actual": "3f53fe7e1f015c763a87e2cd423357d971b44f900a5736517b220cd52d13d822",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/src/private_export.rs",
+      "category": "application-build-test",
+      "expected": "2d6d1dc03991c7a7d9ea2efbe05b04b4c33d295cfe0bfd30ffa5951a605c7bd6",
+      "actual": "2d6d1dc03991c7a7d9ea2efbe05b04b4c33d295cfe0bfd30ffa5951a605c7bd6",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/src/session.rs",
+      "category": "application-build-test",
+      "expected": "4d5a1bf28c834198d37746a8e650a43a3eda69a77baf4ddd5c3fd6c1fc1040ef",
+      "actual": "4d5a1bf28c834198d37746a8e650a43a3eda69a77baf4ddd5c3fd6c1fc1040ef",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/src/settings.rs",
+      "category": "application-build-test",
+      "expected": "6a85fc07247fc106cd099d38cf2c230b4819f90b7bc932e076351dd7185c8a53",
+      "actual": "6a85fc07247fc106cd099d38cf2c230b4819f90b7bc932e076351dd7185c8a53",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/src/views.rs",
+      "category": "application-build-test",
+      "expected": "cf0dcef30f6f4ae056cac5e32f54fce0392c7247696772577cf9debc762cca2e",
+      "actual": "cf0dcef30f6f4ae056cac5e32f54fce0392c7247696772577cf9debc762cca2e",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/src/windows_session.rs",
+      "category": "application-build-test",
+      "expected": "fd258441c5aa949b40001b17eb055bdb6f43c3a6835ae7b8fb2eb9773dc0e656",
+      "actual": "fd258441c5aa949b40001b17eb055bdb6f43c3a6835ae7b8fb2eb9773dc0e656",
+      "matches": true
+    },
+    {
+      "path": "desktop/src-tauri/tauri.conf.json",
+      "category": "application-build-test",
+      "expected": "e3643ddf1bbc9b624417466e7c47dbfd5fac928ec53233eaf31c43be797d5d25",
+      "actual": "e3643ddf1bbc9b624417466e7c47dbfd5fac928ec53233eaf31c43be797d5d25",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/App.security.test.tsx",
+      "category": "application-build-test",
+      "expected": "d8efb0769ecbe3a9a7c00e4eb1b2f9acbf18d50e269777e10c76a6fbccde046b",
+      "actual": "d8efb0769ecbe3a9a7c00e4eb1b2f9acbf18d50e269777e10c76a6fbccde046b",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/App.tsx",
+      "category": "application-build-test",
+      "expected": "88fe1aee8b58a3aa1df2551c9fae98962bd385d38ca4e7eccf7ae79ebabbd9de",
+      "actual": "88fe1aee8b58a3aa1df2551c9fae98962bd385d38ca4e7eccf7ae79ebabbd9de",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/DeleteOutcome.security.test.tsx",
+      "category": "application-build-test",
+      "expected": "16ebc59a40481f5cfa0ba2912f265cea6bdf00635ae221adb81d621a5a418639",
+      "actual": "16ebc59a40481f5cfa0ba2912f265cea6bdf00635ae221adb81d621a5a418639",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/SessionReceipt.security.test.tsx",
+      "category": "application-build-test",
+      "expected": "a32d0c427b9cab574883c3f66368215b4ee831d720303a7a5b02c4c4691d8626",
+      "actual": "a32d0c427b9cab574883c3f66368215b4ee831d720303a7a5b02c4c4691d8626",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/Unlock.security.test.tsx",
+      "category": "application-build-test",
+      "expected": "21ae6ad005ca121b6860d6aa8b0027c5c07a6dcef6d3e88fbf91a2a04089e018",
+      "actual": "21ae6ad005ca121b6860d6aa8b0027c5c07a6dcef6d3e88fbf91a2a04089e018",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/Warnings.security.test.tsx",
+      "category": "application-build-test",
+      "expected": "aef283b8ae8b5630a7aaa0ff70193f62626d400c97ccf4384daa9a507f69ee83",
+      "actual": "aef283b8ae8b5630a7aaa0ff70193f62626d400c97ccf4384daa9a507f69ee83",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/api.security.test.ts",
+      "category": "application-build-test",
+      "expected": "9efd366b5746a90483e90406abc1702e96d973e6f3e106ab29692ab8648a05c3",
+      "actual": "9efd366b5746a90483e90406abc1702e96d973e6f3e106ab29692ab8648a05c3",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/api.ts",
+      "category": "application-build-test",
+      "expected": "765a9f612f27d61dde96053e7a2e79a4582e2fc6f0eca8e226d4334334822ed0",
+      "actual": "765a9f612f27d61dde96053e7a2e79a4582e2fc6f0eca8e226d4334334822ed0",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/Activity.security.test.tsx",
+      "category": "application-build-test",
+      "expected": "06310e69768b689f4c2dd2014622b3415958f83c7c8b538f9bff0a959ce82eb9",
+      "actual": "06310e69768b689f4c2dd2014622b3415958f83c7c8b538f9bff0a959ce82eb9",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/Activity.tsx",
+      "category": "application-build-test",
+      "expected": "1552a22dfd6a3a52e6c619a2e415f37cf3c0614b93d65ac32d91f0b38f16441b",
+      "actual": "1552a22dfd6a3a52e6c619a2e415f37cf3c0614b93d65ac32d91f0b38f16441b",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/Dialog.security.test.tsx",
+      "category": "application-build-test",
+      "expected": "af795dee5fbb4de3b6542abbc61b39b5ddf5e565ae1e9ac73fe289e11cbf3058",
+      "actual": "af795dee5fbb4de3b6542abbc61b39b5ddf5e565ae1e9ac73fe289e11cbf3058",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/FilterSelect.tsx",
+      "category": "application-build-test",
+      "expected": "16e741471edee0c6c7b606bf4339d42763d9a0a2986db92e0b4c77c4045a28ae",
+      "actual": "16e741471edee0c6c7b606bf4339d42763d9a0a2986db92e0b4c77c4045a28ae",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/KeyDetail.tsx",
+      "category": "application-build-test",
+      "expected": "a4eaad696aac8ac7a1825d21a08acc919bd9d206be39724766724dd81defa275",
+      "actual": "a4eaad696aac8ac7a1825d21a08acc919bd9d206be39724766724dd81defa275",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/KeyForm.security.test.tsx",
+      "category": "application-build-test",
+      "expected": "612c12a77e337687340b74e12162544baebd1fec5fd07a31bff839ba42e64a90",
+      "actual": "612c12a77e337687340b74e12162544baebd1fec5fd07a31bff839ba42e64a90",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/KeyForm.tsx",
+      "category": "application-build-test",
+      "expected": "93d5519ddeae69d1cd305a0984f60eccfcf89a2a9dce1ca93b59e1ef28e47f97",
+      "actual": "93d5519ddeae69d1cd305a0984f60eccfcf89a2a9dce1ca93b59e1ef28e47f97",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/KeysView.tsx",
+      "category": "application-build-test",
+      "expected": "6785789bc1fb0bc7d190dfc3eea120d9fd7bd6325c317b5f874c2259e7937398",
+      "actual": "6785789bc1fb0bc7d190dfc3eea120d9fd7bd6325c317b5f874c2259e7937398",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/NavBar.tsx",
+      "category": "application-build-test",
+      "expected": "302ab43933ec719d80748020584ec0880d80a11ddb1f65dd64a5cd8672e21bc3",
+      "actual": "302ab43933ec719d80748020584ec0880d80a11ddb1f65dd64a5cd8672e21bc3",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/Notice.tsx",
+      "category": "application-build-test",
+      "expected": "c981a496570bd4e4c6824a8ba6d1fef392d2c18d9d18494a5ce9f57c3a857b0f",
+      "actual": "c981a496570bd4e4c6824a8ba6d1fef392d2c18d9d18494a5ce9f57c3a857b0f",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/Settings.security.test.tsx",
+      "category": "application-build-test",
+      "expected": "8b5a86a89d56a2ecf912dc94adfbd2d7cfa110875f5ce52266b7488b9dddfb25",
+      "actual": "8b5a86a89d56a2ecf912dc94adfbd2d7cfa110875f5ce52266b7488b9dddfb25",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/Settings.tsx",
+      "category": "application-build-test",
+      "expected": "281ac87a705047a23624a5fcd75b8342d9ef6b7f851722edffd062ad3c702680",
+      "actual": "281ac87a705047a23624a5fcd75b8342d9ef6b7f851722edffd062ad3c702680",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/Unlock.tsx",
+      "category": "application-build-test",
+      "expected": "1746b0cced7676016c7f9411691563c06088ec79116bdb0b516e19579026afbd",
+      "actual": "1746b0cced7676016c7f9411691563c06088ec79116bdb0b516e19579026afbd",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/components/useDialogFocus.ts",
+      "category": "application-build-test",
+      "expected": "393447325fb9584eab7d9601a813341ec3ce37a622ea5f9fdd9501d7c5553564",
+      "actual": "393447325fb9584eab7d9601a813341ec3ce37a622ea5f9fdd9501d7c5553564",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/format.ts",
+      "category": "application-build-test",
+      "expected": "c08a1f1367342afdd1d6c123dac1c1914abd8d0f47a137133a1126bd2cdd71db",
+      "actual": "c08a1f1367342afdd1d6c123dac1c1914abd8d0f47a137133a1126bd2cdd71db",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/main.tsx",
+      "category": "application-build-test",
+      "expected": "f88beba40a1547b31283c4e7178b2b80082c90f663f1f7311d29962c74d338a5",
+      "actual": "f88beba40a1547b31283c4e7178b2b80082c90f663f1f7311d29962c74d338a5",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/operationNotices.ts",
+      "category": "application-build-test",
+      "expected": "989e5beb63bd2a1cee96f531363332fbf4d60b1a9522c69e131e141c408ce9e5",
+      "actual": "989e5beb63bd2a1cee96f531363332fbf4d60b1a9522c69e131e141c408ce9e5",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/sessionBoundary.ts",
+      "category": "application-build-test",
+      "expected": "6509136f9258e43a0afde5ee0c42c4435051765c866040be49285e76ce2e23b7",
+      "actual": "6509136f9258e43a0afde5ee0c42c4435051765c866040be49285e76ce2e23b7",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/styles.css",
+      "category": "application-build-test",
+      "expected": "d95e2d0fd773d77854955838746a8c85989331985cda91557d23addaf11f8fcd",
+      "actual": "d95e2d0fd773d77854955838746a8c85989331985cda91557d23addaf11f8fcd",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/theme.ts",
+      "category": "application-build-test",
+      "expected": "0e37c40f2fd2b4ca876d339537e003d2ff34e05ca03d14f7a67345b9d5d88777",
+      "actual": "0e37c40f2fd2b4ca876d339537e003d2ff34e05ca03d14f7a67345b9d5d88777",
+      "matches": true
+    },
+    {
+      "path": "desktop/src/types.ts",
+      "category": "application-build-test",
+      "expected": "0bf59e0649fcfd3d8476ba905e23bb7cacc8392ab6f526395bf191fd10aa5c31",
+      "actual": "0bf59e0649fcfd3d8476ba905e23bb7cacc8392ab6f526395bf191fd10aa5c31",
+      "matches": true
+    },
+    {
+      "path": "desktop/tsconfig.json",
+      "category": "application-build-test",
+      "expected": "f2a068c09992a7696139e01927f5e4ab6353e4e3c4073de60439cfbaeb0a4f87",
+      "actual": "f2a068c09992a7696139e01927f5e4ab6353e4e3c4073de60439cfbaeb0a4f87",
+      "matches": true
+    },
+    {
+      "path": "desktop/vite.config.ts",
+      "category": "application-build-test",
+      "expected": "0ca459e8ac64707aa8360879efc72e3ce1b9994323f7caba729a660d3a64cafa",
+      "actual": "0ca459e8ac64707aa8360879efc72e3ce1b9994323f7caba729a660d3a64cafa",
+      "matches": true
+    },
+    {
+      "path": "desktop/vitest.config.ts",
+      "category": "application-build-test",
+      "expected": "8f95fb071a4258b3897d32359e1606a1fcf5daa491e43d4c8bfe7dd449a6ed7a",
+      "actual": "8f95fb071a4258b3897d32359e1606a1fcf5daa491e43d4c8bfe7dd449a6ed7a",
+      "matches": true
+    },
+    {
+      "path": "docs/PROJECT.md",
+      "category": "documentation",
+      "expected": "0f661e8488caeb13543bb327cf9083464be781eadc210bf05675bfb8ca310e50",
+      "actual": "0f661e8488caeb13543bb327cf9083464be781eadc210bf05675bfb8ca310e50",
+      "matches": true
+    },
+    {
+      "path": "docs/REVIEW_LEDGER.md",
+      "category": "documentation",
+      "expected": "b7bdb615384e21ff38f4bdfd8abfa27e201cb89605db61e957cc7c4f73955041",
+      "actual": "b7bdb615384e21ff38f4bdfd8abfa27e201cb89605db61e957cc7c4f73955041",
+      "matches": true
+    },
+    {
+      "path": "docs/STATE.md",
+      "category": "documentation",
+      "expected": "22421cd14e399ff9ed186574983acd1eed6b526169b18691ff3de1cb9723c8ef",
+      "actual": "6edf1adc04be30a588e5bf8ae76be567846adfacad3007817f2e0e96d401bba8",
+      "matches": false
+    },
+    {
+      "path": "docs/VERIFICATION.md",
+      "category": "documentation",
+      "expected": "26eccab9080062d865e78aedc7ba35d7583f75f5a9414af87e5bda9a3b41d77f",
+      "actual": "26eccab9080062d865e78aedc7ba35d7583f75f5a9414af87e5bda9a3b41d77f",
+      "matches": true
+    },
+    {
+      "path": "docs/work/phase2-1a/PLAN.md",
+      "category": "documentation",
+      "expected": "624980c0417411b3140b829820d351ce229926dc5a6e882ade4fa544bee42a36",
+      "actual": "624980c0417411b3140b829820d351ce229926dc5a6e882ade4fa544bee42a36",
+      "matches": true
+    },
+    {
+      "path": "tools/prepare_gui_fixture.py",
+      "category": "proof-harness",
+      "expected": "b1f5196b3794bcafa883662fef423fdc5d6fef15fb1895c7c207b5e4c95dc822",
+      "actual": "b1f5196b3794bcafa883662fef423fdc5d6fef15fb1895c7c207b5e4c95dc822",
+      "matches": true
+    },
+    {
+      "path": "tools/verify_keepassxc.py",
+      "category": "proof-harness",
+      "expected": "e66505d65dac03415a3ee85a02464954445a33cd69b21c7dc767433e11edf055",
+      "actual": "e66505d65dac03415a3ee85a02464954445a33cd69b21c7dc767433e11edf055",
+      "matches": true
+    },
+    {
+      "path": "tools/verify_windows_app.ps1",
+      "category": "proof-harness",
+      "expected": "44e40bc34e4435005a2e3dd555b410e03367df97e32c418feac751e55303cc26",
+      "actual": "44e40bc34e4435005a2e3dd555b410e03367df97e32c418feac751e55303cc26",
+      "matches": true
+    }
+  ],
+  "mismatchesByCategory": {
+    "application-build-test": [],
+    "documentation": [
+      "docs/STATE.md"
+    ],
+    "proof-harness": []
+  },
+  "applicationInventoryUnpinned": [],
+  "baselineArchive": {
+    "sha256": "f11c41ebb482e1b43c266980125809d0b888e0c07a499fecfaf2ddab8587b8e4",
+    "manifestEntries": 139,
+    "archiveEntries": 139,
+    "hashMismatches": [],
+    "missing": [],
+    "extra": []
+  },
+  "diffCoverage": {
+    "manifestChangedCount": 29,
+    "diffPathCount": 29,
+    "missingFromDiff": [],
+    "extraInDiff": [],
+    "verifiedCount": 29,
+    "reconstructionMismatches": []
+  },
+  "probeCopy": {
+    "count": 29,
+    "mismatches": [],
+    "files": {
+      "desktop/src/App.security.test.tsx": {
+        "expected": "d8efb0769ecbe3a9a7c00e4eb1b2f9acbf18d50e269777e10c76a6fbccde046b",
+        "actual": "d8efb0769ecbe3a9a7c00e4eb1b2f9acbf18d50e269777e10c76a6fbccde046b",
+        "matches": true
+      },
+      "desktop/src/App.tsx": {
+        "expected": "88fe1aee8b58a3aa1df2551c9fae98962bd385d38ca4e7eccf7ae79ebabbd9de",
+        "actual": "88fe1aee8b58a3aa1df2551c9fae98962bd385d38ca4e7eccf7ae79ebabbd9de",
+        "matches": true
+      },
+      "desktop/src/DeleteOutcome.security.test.tsx": {
+        "expected": "16ebc59a40481f5cfa0ba2912f265cea6bdf00635ae221adb81d621a5a418639",
+        "actual": "16ebc59a40481f5cfa0ba2912f265cea6bdf00635ae221adb81d621a5a418639",
+        "matches": true
+      },
+      "desktop/src/SessionReceipt.security.test.tsx": {
+        "expected": "a32d0c427b9cab574883c3f66368215b4ee831d720303a7a5b02c4c4691d8626",
+        "actual": "a32d0c427b9cab574883c3f66368215b4ee831d720303a7a5b02c4c4691d8626",
+        "matches": true
+      },
+      "desktop/src/Unlock.security.test.tsx": {
+        "expected": "21ae6ad005ca121b6860d6aa8b0027c5c07a6dcef6d3e88fbf91a2a04089e018",
+        "actual": "21ae6ad005ca121b6860d6aa8b0027c5c07a6dcef6d3e88fbf91a2a04089e018",
+        "matches": true
+      },
+      "desktop/src/Warnings.security.test.tsx": {
+        "expected": "aef283b8ae8b5630a7aaa0ff70193f62626d400c97ccf4384daa9a507f69ee83",
+        "actual": "aef283b8ae8b5630a7aaa0ff70193f62626d400c97ccf4384daa9a507f69ee83",
+        "matches": true
+      },
+      "desktop/src/api.security.test.ts": {
+        "expected": "9efd366b5746a90483e90406abc1702e96d973e6f3e106ab29692ab8648a05c3",
+        "actual": "9efd366b5746a90483e90406abc1702e96d973e6f3e106ab29692ab8648a05c3",
+        "matches": true
+      },
+      "desktop/src/api.ts": {
+        "expected": "765a9f612f27d61dde96053e7a2e79a4582e2fc6f0eca8e226d4334334822ed0",
+        "actual": "765a9f612f27d61dde96053e7a2e79a4582e2fc6f0eca8e226d4334334822ed0",
+        "matches": true
+      },
+      "desktop/src/components/Activity.security.test.tsx": {
+        "expected": "06310e69768b689f4c2dd2014622b3415958f83c7c8b538f9bff0a959ce82eb9",
+        "actual": "06310e69768b689f4c2dd2014622b3415958f83c7c8b538f9bff0a959ce82eb9",
+        "matches": true
+      },
+      "desktop/src/components/Activity.tsx": {
+        "expected": "1552a22dfd6a3a52e6c619a2e415f37cf3c0614b93d65ac32d91f0b38f16441b",
+        "actual": "1552a22dfd6a3a52e6c619a2e415f37cf3c0614b93d65ac32d91f0b38f16441b",
+        "matches": true
+      },
+      "desktop/src/components/Dialog.security.test.tsx": {
+        "expected": "af795dee5fbb4de3b6542abbc61b39b5ddf5e565ae1e9ac73fe289e11cbf3058",
+        "actual": "af795dee5fbb4de3b6542abbc61b39b5ddf5e565ae1e9ac73fe289e11cbf3058",
+        "matches": true
+      },
+      "desktop/src/components/FilterSelect.tsx": {
+        "expected": "16e741471edee0c6c7b606bf4339d42763d9a0a2986db92e0b4c77c4045a28ae",
+        "actual": "16e741471edee0c6c7b606bf4339d42763d9a0a2986db92e0b4c77c4045a28ae",
+        "matches": true
+      },
+      "desktop/src/components/KeyDetail.tsx": {
+        "expected": "a4eaad696aac8ac7a1825d21a08acc919bd9d206be39724766724dd81defa275",
+        "actual": "a4eaad696aac8ac7a1825d21a08acc919bd9d206be39724766724dd81defa275",
+        "matches": true
+      },
+      "desktop/src/components/KeyForm.security.test.tsx": {
+        "expected": "612c12a77e337687340b74e12162544baebd1fec5fd07a31bff839ba42e64a90",
+        "actual": "612c12a77e337687340b74e12162544baebd1fec5fd07a31bff839ba42e64a90",
+        "matches": true
+      },
+      "desktop/src/components/KeyForm.tsx": {
+        "expected": "93d5519ddeae69d1cd305a0984f60eccfcf89a2a9dce1ca93b59e1ef28e47f97",
+        "actual": "93d5519ddeae69d1cd305a0984f60eccfcf89a2a9dce1ca93b59e1ef28e47f97",
+        "matches": true
+      },
+      "desktop/src/components/KeysView.tsx": {
+        "expected": "6785789bc1fb0bc7d190dfc3eea120d9fd7bd6325c317b5f874c2259e7937398",
+        "actual": "6785789bc1fb0bc7d190dfc3eea120d9fd7bd6325c317b5f874c2259e7937398",
+        "matches": true
+      },
+      "desktop/src/components/NavBar.tsx": {
+        "expected": "302ab43933ec719d80748020584ec0880d80a11ddb1f65dd64a5cd8672e21bc3",
+        "actual": "302ab43933ec719d80748020584ec0880d80a11ddb1f65dd64a5cd8672e21bc3",
+        "matches": true
+      },
+      "desktop/src/components/Notice.tsx": {
+        "expected": "c981a496570bd4e4c6824a8ba6d1fef392d2c18d9d18494a5ce9f57c3a857b0f",
+        "actual": "c981a496570bd4e4c6824a8ba6d1fef392d2c18d9d18494a5ce9f57c3a857b0f",
+        "matches": true
+      },
+      "desktop/src/components/Settings.security.test.tsx": {
+        "expected": "8b5a86a89d56a2ecf912dc94adfbd2d7cfa110875f5ce52266b7488b9dddfb25",
+        "actual": "8b5a86a89d56a2ecf912dc94adfbd2d7cfa110875f5ce52266b7488b9dddfb25",
+        "matches": true
+      },
+      "desktop/src/components/Settings.tsx": {
+        "expected": "281ac87a705047a23624a5fcd75b8342d9ef6b7f851722edffd062ad3c702680",
+        "actual": "281ac87a705047a23624a5fcd75b8342d9ef6b7f851722edffd062ad3c702680",
+        "matches": true
+      },
+      "desktop/src/components/Unlock.tsx": {
+        "expected": "1746b0cced7676016c7f9411691563c06088ec79116bdb0b516e19579026afbd",
+        "actual": "1746b0cced7676016c7f9411691563c06088ec79116bdb0b516e19579026afbd",
+        "matches": true
+      },
+      "desktop/src/components/useDialogFocus.ts": {
+        "expected": "393447325fb9584eab7d9601a813341ec3ce37a622ea5f9fdd9501d7c5553564",
+        "actual": "393447325fb9584eab7d9601a813341ec3ce37a622ea5f9fdd9501d7c5553564",
+        "matches": true
+      },
+      "desktop/src/format.ts": {
+        "expected": "c08a1f1367342afdd1d6c123dac1c1914abd8d0f47a137133a1126bd2cdd71db",
+        "actual": "c08a1f1367342afdd1d6c123dac1c1914abd8d0f47a137133a1126bd2cdd71db",
+        "matches": true
+      },
+      "desktop/src/main.tsx": {
+        "expected": "f88beba40a1547b31283c4e7178b2b80082c90f663f1f7311d29962c74d338a5",
+        "actual": "f88beba40a1547b31283c4e7178b2b80082c90f663f1f7311d29962c74d338a5",
+        "matches": true
+      },
+      "desktop/src/operationNotices.ts": {
+        "expected": "989e5beb63bd2a1cee96f531363332fbf4d60b1a9522c69e131e141c408ce9e5",
+        "actual": "989e5beb63bd2a1cee96f531363332fbf4d60b1a9522c69e131e141c408ce9e5",
+        "matches": true
+      },
+      "desktop/src/sessionBoundary.ts": {
+        "expected": "6509136f9258e43a0afde5ee0c42c4435051765c866040be49285e76ce2e23b7",
+        "actual": "6509136f9258e43a0afde5ee0c42c4435051765c866040be49285e76ce2e23b7",
+        "matches": true
+      },
+      "desktop/src/styles.css": {
+        "expected": "d95e2d0fd773d77854955838746a8c85989331985cda91557d23addaf11f8fcd",
+        "actual": "d95e2d0fd773d77854955838746a8c85989331985cda91557d23addaf11f8fcd",
+        "matches": true
+      },
+      "desktop/src/theme.ts": {
+        "expected": "0e37c40f2fd2b4ca876d339537e003d2ff34e05ca03d14f7a67345b9d5d88777",
+        "actual": "0e37c40f2fd2b4ca876d339537e003d2ff34e05ca03d14f7a67345b9d5d88777",
+        "matches": true
+      },
+      "desktop/src/types.ts": {
+        "expected": "0bf59e0649fcfd3d8476ba905e23bb7cacc8392ab6f526395bf191fd10aa5c31",
+        "actual": "0bf59e0649fcfd3d8476ba905e23bb7cacc8392ab6f526395bf191fd10aa5c31",
+        "matches": true
+      }
+    }
+  },
+  "artifacts": {
+    "target/release/akm.exe": {
+      "expected": "0024f9005a68bf5b5ab9d32297c9d6eb4043ee5616a7ae6c465a054adfddcdc0",
+      "actual": "0024f9005a68bf5b5ab9d32297c9d6eb4043ee5616a7ae6c465a054adfddcdc0",
+      "matches": true
+    },
+    "target/release/akm-desktop.exe": {
+      "expected": "42f3f63afae5c6dfa426c92da7635972d5e0642c2d6e8482681588dfc14510c8",
+      "actual": "42f3f63afae5c6dfa426c92da7635972d5e0642c2d6e8482681588dfc14510c8",
+      "matches": true
+    },
+    "target/release/bundle/msi/AKM_0.1.0_x64_en-US.msi": {
+      "expected": "6a71166761a87b86238110c482004857ffe8729fb3ed4fe23c1bdb3a8b39fb3b",
+      "actual": "6a71166761a87b86238110c482004857ffe8729fb3ed4fe23c1bdb3a8b39fb3b",
+      "matches": true
+    },
+    "target/release/bundle/nsis/AKM_0.1.0_x64-setup.exe": {
+      "expected": "a93bdc1f0b30b772d49d71e2bce6f1fa02155b97b3dbf24bc522158fd639d888",
+      "actual": "a93bdc1f0b30b772d49d71e2bce6f1fa02155b97b3dbf24bc522158fd639d888",
+      "matches": true
+    }
+  },
+  "probeTestSha256": "d32750c3a3ffb0705de24fde81c0bff0ec24ca42e99e8e826313340a2b4469b6",
+  "probeOutputSha256": "b47c99a95264f942b3b29d932df831975bdf0290e3f64ac7f139dd8f01dc61d5"
+}

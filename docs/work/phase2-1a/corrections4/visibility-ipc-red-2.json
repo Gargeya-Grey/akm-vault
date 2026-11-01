@@ -1,0 +1,17 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "akm-desktop",
+    "--lib",
+    "--offline",
+    "--locked",
+    "ipc_vault_reads_release"
+  ],
+  "cwd": "W:\\API Keys Manager",
+  "started": "2026-10-31T14:53:42.036698+00:00",
+  "finished": "2026-10-31T14:54:02.752901+00:00",
+  "exit": 101,
+  "logSha256": "1879b845c0b3e90d4928858fa903eecfa4a73a681c7549108de9c096b1950508"
+}

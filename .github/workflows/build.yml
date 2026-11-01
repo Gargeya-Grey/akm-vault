@@ -1,0 +1,78 @@
+name: Windows development build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+      - name: Frontend regressions
+        working-directory: desktop
+        run: npm test
+      - name: Build frontend for the native crate
+        working-directory: desktop
+        run: npm run build
+      - name: Browser UI regressions (mocked native boundary)
+        working-directory: desktop
+        run: npm run test:ui
+      - name: Native and executable regressions
+        run: cargo test --workspace --locked
+      - name: Rust lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Rust format
+        run: cargo fmt --all -- --check
+      - name: Build Windows installers
+        working-directory: desktop
+        run: npm run tauri -- build -- --locked
+      - name: Build CLI
+        run: cargo build --release --locked -p akm-cli
+      - name: Fetch pinned independent KDBX implementation
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'KeePassXC-2.8.0-x64.zip'
+          Invoke-WebRequest 'https://github.com/keepassxreboot/keepassxc/releases/download/2.8.0/KeePassXC-2.8.0-x64.zip' -OutFile $zip
+          $expected = '48ff4f088e9ce70e241da1270e5081528dba77c38b17dae4aa6690ffc50fc828'
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'KeePassXC checksum mismatch' }
+          $dir = Join-Path $env:RUNNER_TEMP 'akm-keepassxc'
+          Expand-Archive $zip -DestinationPath $dir
+          $cli = Get-ChildItem $dir -Recurse -Filter keepassxc-cli.exe | Select-Object -First 1
+          "KPXC_CLI=$($cli.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Independent reader and writer interoperability
+        run: python tools/verify_keepassxc.py --akm target/release/akm.exe --keepassxc "$env:KPXC_CLI"
+      - name: Collect development artifacts and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory out | Out-Null
+          Copy-Item target/release/akm.exe out/
+          Copy-Item target/release/bundle/msi/*.msi out/
+          Copy-Item target/release/bundle/nsis/*-setup.exe out/
+          $lines = Get-ChildItem out -File | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          }
+          $lines | Set-Content out/SHA256SUMS.txt -Encoding utf8NoBOM
+      - uses: actions/upload-artifact@v4
+        with:
+          name: akm-windows-x64-untrusted-development
+          path: out/*
+          if-no-files-found: error

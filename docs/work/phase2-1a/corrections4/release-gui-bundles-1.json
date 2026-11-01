@@ -1,0 +1,20 @@
+{
+  "command": [
+    "cmd.exe",
+    "/d",
+    "/c",
+    "npm",
+    "run",
+    "tauri",
+    "--",
+    "build",
+    "--",
+    "--locked",
+    "--offline"
+  ],
+  "cwd": "W:\\API Keys Manager\\desktop",
+  "started": "2026-10-31T13:16:51.275032+00:00",
+  "finished": "2026-10-31T13:19:13.351050+00:00",
+  "exit": 0,
+  "logSha256": "19fe907b17e1643e5439f3489d7cb85eb30f265a7603bd8d5e3e4fbbdaa80314"
+}

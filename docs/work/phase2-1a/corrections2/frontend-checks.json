@@ -1,0 +1,67 @@
+[
+  {
+    "command": [
+      "cmd.exe",
+      "/d",
+      "/c",
+      "npm.cmd",
+      "test"
+    ],
+    "cwd": "W:\\API Keys Manager\\desktop",
+    "exitCode": 0,
+    "output": "frontend-tests.log"
+  },
+  {
+    "command": [
+      "cmd.exe",
+      "/d",
+      "/c",
+      "npm.cmd",
+      "run",
+      "build"
+    ],
+    "cwd": "W:\\API Keys Manager\\desktop",
+    "exitCode": 2,
+    "output": "frontend-build.log"
+  },
+  {
+    "command": [
+      "cmd.exe",
+      "/d",
+      "/c",
+      "npx.cmd",
+      "vitest",
+      "run",
+      "src/DeleteOutcome.security.test.tsx"
+    ],
+    "cwd": "W:\\API Keys Manager\\desktop",
+    "exitCode": 0,
+    "output": "delete-test-fixed.log"
+  },
+  {
+    "command": [
+      "cmd.exe",
+      "/d",
+      "/c",
+      "npm.cmd",
+      "run",
+      "build"
+    ],
+    "cwd": "W:\\API Keys Manager\\desktop",
+    "exitCode": 0,
+    "output": "frontend-build-fixed.log"
+  },
+  {
+    "command": [
+      "cmd.exe",
+      "/d",
+      "/c",
+      "npm.cmd",
+      "run",
+      "test:ui"
+    ],
+    "cwd": "W:\\API Keys Manager\\desktop",
+    "exitCode": 0,
+    "output": "browser.log"
+  }
+]

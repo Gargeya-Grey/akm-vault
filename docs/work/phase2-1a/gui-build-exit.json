@@ -1,0 +1,19 @@
+{
+  "command": [
+    "cmd.exe",
+    "/d",
+    "/c",
+    "npm.cmd",
+    "run",
+    "tauri",
+    "--",
+    "build",
+    "--",
+    "--locked",
+    "--offline"
+  ],
+  "exitCode": 0,
+  "guiSha256": "223b033bb09de3272e3fd9ea7159ecd36b1bb0215660629109468e5ec328531a",
+  "sameGuiAsEarlierNativeProof": false,
+  "output": "release-build-clean.log"
+}

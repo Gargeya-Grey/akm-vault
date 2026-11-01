@@ -1,0 +1,16 @@
+{
+  "command": [
+    "cmd.exe",
+    "/d",
+    "/c",
+    "npm",
+    "test",
+    "--",
+    "--maxWorkers=1"
+  ],
+  "cwd": "W:\\API Keys Manager\\desktop",
+  "started": "2026-10-31T15:37:42.443203+00:00",
+  "finished": "2026-10-31T15:38:53.493052+00:00",
+  "exit": 0,
+  "logSha256": "a0183e3b8b6055830dcf46d7aa18a5d600f1516b084a9866a7d2ae1fe0adc02e"
+}
