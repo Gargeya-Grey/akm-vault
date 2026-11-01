@@ -818,6 +818,163 @@ fn corrupt_audit_is_reported_without_repairing_or_echoing_damaged_bytes() {
     assert_eq!(fs::read(log.path()).unwrap(), bytes);
 }
 
+/// A pipe whose reader is already gone: every write to it fails, deterministically.
+fn closed_pipe() -> Stdio {
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    Stdio::from(writer)
+}
+
+fn status_with(
+    mut command: Command,
+    stdout_closed: bool,
+    stderr_closed: bool,
+    stdin: Option<&[u8]>,
+) -> std::process::ExitStatus {
+    command.stdout(if stdout_closed {
+        closed_pipe()
+    } else {
+        Stdio::null()
+    });
+    command.stderr(if stderr_closed {
+        closed_pipe()
+    } else {
+        Stdio::null()
+    });
+    match stdin {
+        Some(input) => {
+            command.stdin(Stdio::piped());
+            let mut child = command.spawn().unwrap();
+            child.stdin.take().unwrap().write_all(input).unwrap();
+            child.wait().unwrap()
+        }
+        None => command.status().unwrap(),
+    }
+}
+
+// 1A-R7-01, the class: after a saved change, closed output pipes never change the exit.
+// Every post-commit journal append fails too, so each command also has a warning to print.
+#[test]
+fn committed_changes_exit_zero_with_closed_output_pipes() {
+    const LEGACY_PASSWORD: &str = "correct horse battery staple";
+    for (stdout_closed, stderr_closed) in [(true, false), (false, true), (true, true)] {
+        let case = format!("stdout_closed={stdout_closed} stderr_closed={stderr_closed}");
+        let fixture = Fixture::new();
+        fs::create_dir(AuditLog::for_vault(&fixture.vault).path()).unwrap();
+
+        let mut add = fixture.cli();
+        add.args([
+            "add",
+            "Added",
+            "--project",
+            "demo",
+            "--env",
+            "dev",
+            "--secret-stdin",
+        ]);
+        let add = status_with(
+            add,
+            stdout_closed,
+            stderr_closed,
+            Some(b"fake-added-secret\n"),
+        );
+        assert_eq!(add.code(), Some(0), "add: {case}");
+        let saved = Vault::open(&fixture.vault, PASSWORD).unwrap();
+        assert_eq!(saved.find("Added").unwrap().secret, "fake-added-secret");
+
+        let mut rm = fixture.cli();
+        rm.args(["rm", "Added", "--yes"]);
+        assert_eq!(
+            status_with(rm, stdout_closed, stderr_closed, None).code(),
+            Some(0),
+            "rm: {case}"
+        );
+        assert!(Vault::open(&fixture.vault, PASSWORD)
+            .unwrap()
+            .find("Added")
+            .is_err());
+
+        let created = fixture.directory.path().join("created.kdbx");
+        fs::create_dir(AuditLog::for_vault(&created).path()).unwrap();
+        let mut init = cli();
+        init.env("AKM_PASSWORD", PASSWORD)
+            .arg("--vault")
+            .arg(&created)
+            .arg("init");
+        assert_eq!(
+            status_with(init, stdout_closed, stderr_closed, None).code(),
+            Some(0),
+            "init: {case}"
+        );
+        assert!(Vault::open(&created, PASSWORD).is_ok());
+
+        let older = fixture.directory.path().join("older.kdbx");
+        fs::write(
+            &older,
+            include_bytes!("../../akm-core/tests/fixtures/kdbx40.kdbx"),
+        )
+        .unwrap();
+        fs::create_dir(AuditLog::for_vault(&older).path()).unwrap();
+        let mut upgrade = cli();
+        upgrade
+            .env("AKM_PASSWORD", LEGACY_PASSWORD)
+            .arg("--vault")
+            .arg(&older)
+            .args(["upgrade", "--yes"]);
+        assert_eq!(
+            status_with(upgrade, stdout_closed, stderr_closed, None).code(),
+            Some(0),
+            "upgrade: {case}"
+        );
+        assert!(!Vault::open(&older, LEGACY_PASSWORD)
+            .unwrap()
+            .needs_upgrade());
+    }
+}
+
+// 1A-R7-01, the other side: a failed primary output is an ordinary error, never a panic (101).
+#[test]
+fn failed_primary_output_is_an_error_not_a_panic() {
+    let fixture = Fixture::new();
+    for args in [
+        vec!["list"],
+        vec!["list", "--json"],
+        vec!["get", "Demo"],
+        vec!["get", "Demo", "--field", "secret"],
+        vec!["get", "Demo", "--reveal"],
+        vec!["export", "--all"],
+        vec!["audit"],
+    ] {
+        let output = fixture
+            .cli()
+            .args(&args)
+            .stdout(closed_pipe())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).starts_with("error:"),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stderr(&output).contains("fake-intended-secret"));
+        let disclosure =
+            args.contains(&"secret") || args.contains(&"--reveal") || args[0] == "export";
+        assert_eq!(
+            stderr(&output).contains("Some output may already have been written"),
+            disclosure,
+            "{args:?}: {}",
+            stderr(&output)
+        );
+    }
+}
+
 #[test]
 fn committed_mutations_report_audit_warnings_without_false_failure() {
     let fixture = Fixture::new();

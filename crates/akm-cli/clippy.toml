@@ -1,0 +1,9 @@
+# Contract 12: a print after a saved change or a disclosure must never panic on a closed
+# pipe. The std print macros panic there, so this crate bans them. See the output rules
+# at the top of src/main.rs.
+disallowed-macros = [
+    { path = "std::print", reason = "panics on a closed stdout; write to an explicit writer with `?`, or use status!" },
+    { path = "std::println", reason = "panics on a closed stdout; write to an explicit writer with `?`, or use status!" },
+    { path = "std::eprint", reason = "panics on a closed stderr; use warning!" },
+    { path = "std::eprintln", reason = "panics on a closed stderr; use warning!" },
+]

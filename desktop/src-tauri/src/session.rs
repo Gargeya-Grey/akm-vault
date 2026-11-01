@@ -1659,22 +1659,94 @@ mod tests {
             assert_eq!(warnings.len(), 1, "partial={partial}");
             assert_eq!(
                 warnings[0].message,
-                crate::clipboard::uncertain_cleanup(true).message,
+                crate::clipboard::uncertain_cleanup().message,
                 "partial={partial}"
             );
             assert!(!warnings[0].message.contains("Try copying again"));
             assert_eq!(f.clipboard.lock().unwrap().text, "fake-busy-value");
             f.session.tick();
             assert_eq!(application_ids(&f), vec![warnings[0].id.clone()]);
-            // A newer identical user copy, then the clipboard frees up.
-            f.clipboard.lock().unwrap().sequence += 1;
+            // The episode ends by a newer identical user copy, or by AKM's own clear.
+            let newer_copy = partial;
+            if newer_copy {
+                f.clipboard.lock().unwrap().sequence += 1;
+            }
             busy.store(false, Ordering::SeqCst);
             f.session.tick();
-            assert_eq!(f.clipboard.lock().unwrap().text, "fake-busy-value");
-            assert_eq!(f.clipboard.lock().unwrap().clears, 0);
+            let expected = if newer_copy { "fake-busy-value" } else { "" };
+            assert_eq!(f.clipboard.lock().unwrap().text, expected);
+            assert_eq!(f.clipboard.lock().unwrap().clears, usize::from(!newer_copy));
             assert_eq!(f.session.gate().unwrap().clipboard.owned_generation(), None);
-            assert_eq!(application_ids(&f), vec![warnings[0].id.clone()]);
+            // The kept warning is history: it never promised a retry that has now ended.
+            let kept = f.session.warnings().unwrap().application;
+            assert_eq!(kept.len(), 1);
+            assert_eq!(kept[0].id, warnings[0].id);
+            assert!(!kept[0].message.contains("try again") && !kept[0].message.contains("will"));
         }
+    }
+
+    struct RollbackAfterLease {
+        data: Arc<Mutex<FakeData>>,
+        roll_back: Arc<AtomicBool>,
+        clear_calls: Arc<AtomicUsize>,
+    }
+    impl ClipboardBackend for RollbackAfterLease {
+        fn set_private(
+            &mut self,
+            text: &str,
+        ) -> Result<crate::clipboard::CopyAttempt, CommandError> {
+            if self.roll_back.load(Ordering::SeqCst) {
+                // The publication emptied the clipboard, failed, and rolled back.
+                let mut data = self.data.lock().unwrap();
+                data.sequence += 2;
+                data.text.clear();
+                return Ok(crate::clipboard::CopyAttempt {
+                    sequence: data.sequence,
+                    failure: Some(CommandError::new(
+                        "clipboard",
+                        "Fake rolled-back publication",
+                    )),
+                    rolled_back: true,
+                });
+            }
+            FakeClipboard(self.data.clone()).set_private(text)
+        }
+        fn clear_matching(&mut self, _sequence: u32, _text: &str) -> Result<bool, CommandError> {
+            self.clear_calls.fetch_add(1, Ordering::SeqCst);
+            Err(CommandError::new(
+                "clipboard",
+                "The clipboard is busy. Try copying again.",
+            ))
+        }
+    }
+
+    // 1A-R7-02: a rolled-back publication also ends the earlier lease; nothing is left to retry.
+    #[test]
+    fn a_rolled_back_publication_after_an_owned_copy_leaves_no_lease_retry_or_warning() {
+        let f = fixture();
+        let roll_back = Arc::new(AtomicBool::new(false));
+        let clear_calls = Arc::new(AtomicUsize::new(0));
+        f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(RollbackAfterLease {
+            data: f.clipboard.clone(),
+            roll_back: roll_back.clone(),
+            clear_calls: clear_calls.clone(),
+        }));
+        let ticket = f.session.snapshot().unwrap().ticket;
+        f.session
+            .copy(ticket, Zeroizing::new("fake-first-copy".into()))
+            .unwrap();
+        roll_back.store(true, Ordering::SeqCst);
+        let error = f
+            .session
+            .copy(ticket, Zeroizing::new("fake-second-copy".into()))
+            .unwrap_err();
+        assert_eq!(error.message, "Fake rolled-back publication");
+        assert_eq!(f.session.gate().unwrap().clipboard.owned_generation(), None);
+        f.clock.set(30);
+        f.session.tick();
+        f.session.lock().unwrap();
+        assert_eq!(clear_calls.load(Ordering::SeqCst), 0);
+        assert!(application_ids(&f).is_empty());
     }
 
     struct CleanupFault {
