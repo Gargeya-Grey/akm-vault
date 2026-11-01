@@ -26,9 +26,22 @@ entry to run a project-local executable. Batch files use Rust's escaped argument
 handling rather than a hand-built shell command.
 
 The vault and master-password buffer are dropped before a child starts. The
-child's exit code is preserved. A `run-start` audit event records a launch request,
-not successful execution or completion. Reveal and export audit events are also
-written before disclosure. An audit failure prevents disclosure or launch.
+child's exit code is preserved.
+
+The activity log records these actions:
+- `run-requested`, before the child starts. It records a launch request, not
+  successful execution or completion.
+- `reveal-requested`, before `get --reveal` or `get --field secret` shows a secret.
+- `export-requested`, before any export byte is written.
+- `export-completed`, after the export is written. If this record cannot be
+  confirmed, the export still succeeded: AKM prints a warning and exits 0. Do not
+  repeat the export.
+
+A failure to record a request prevents the disclosure or the launch.
+
+The default `get` view shows `Secret:      ********` for every secret. It shows no
+character and no length of the secret.
+
 Audit warnings after a committed vault mutation are printed without turning the
 successful mutation into an error.
 

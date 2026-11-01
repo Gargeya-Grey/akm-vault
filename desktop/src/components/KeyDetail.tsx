@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, errorText } from "../api";
+import { clipboardCopyText } from "../clipboardText";
 import { formatDate, formatDateTime, keyState, rotationLabel } from "../format";
 import type { KeyView } from "../types";
 import { Notice } from "./Notice";
@@ -99,7 +100,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
     setError(null);
     try {
       const clear = await api.copy(item.id);
-      if (view === presentation.current) setCopied(`Copied. AKM clears this copy after ${clear} seconds, on lock, or on normal exit. A crash can prevent cleanup.`);
+      if (view === presentation.current) setCopied(clipboardCopyText(clear));
     } catch (cause) {
       if (view === presentation.current) setError(errorText(cause));
     }

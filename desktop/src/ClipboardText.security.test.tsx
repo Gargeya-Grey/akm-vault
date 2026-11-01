@@ -47,9 +47,14 @@ function respond() {
   });
 }
 
+// Every rendered sentence about the clipboard or a copy: no promise of cleanup or of a retry.
 function promisesNothing(text: string) {
-  expect(text).not.toMatch(/\bclears\b/);
-  expect(text).not.toMatch(/\bwill\b[^.]*\b(try|retry|again)\b/);
+  const sentences = text.split(/(?<=\.)/).filter((sentence) => /clipboard|cop(y|ied)/i.test(sentence));
+  expect(sentences.length).toBeGreaterThan(0);
+  for (const sentence of sentences) {
+    expect(sentence).not.toMatch(/\bclears\b/);
+    expect(sentence).not.toMatch(/\bwill\b/);
+  }
 }
 
 test("the key copy text says that cleanup is an attempt and that the copy may remain", async () => {

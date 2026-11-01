@@ -221,7 +221,7 @@ One frontend module, `desktop/src/clipboardText.ts`, holds the two texts. `KeyDe
 
 ### 2.5 CLI default view (1A-R8-01)
 
-- `KeyMetadata`, built `From<&ApiKey>`, has every field except the secret.
+- `KeyMetadata`, built `From<&ApiKey>`, has the fields that the views print, and no secret field.
 - The default `get` view and every non-secret `--field` receive only `KeyMetadata`. The default view prints the line `Secret:      ********` for every value and every length.
 - `get --reveal` and `get --field secret` keep their record-first, fail-closed path and receive the `ApiKey`.
 - `mask()` and its fragment test are deleted.

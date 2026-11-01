@@ -53,9 +53,10 @@ The owner authorized implementation of unit 1a only. Each other unit needs its o
    **Status, 2026-11-01:**
    - Step 1 is done. The repair design ([design](design/unit1a-repair.md)) failed two design reviews ([review 1](reviews/2026-11-01-unit1a-repair-design-review1.md): 10 blocking; [review 2](reviews/2026-11-01-unit1a-repair-design-review2.md): 9 blocking), so the work stopped (AGENTS.md).
    - **Owner decision, 2026-11-01: split.** Unit 1a closes 1A-R8-01 to 1A-R8-05 narrowly, each through its production caller (design revision 3). The wider hardening moves to the new unit 1h (FINDINGS.md, 1H-01 to 1H-08), with its own design and authorization. The owner's narrowed lock rule is built in 1h. There is no third design review: the acceptance review judges 1a against revision 3.
-   - Next, from revision 3, section 5:
-     1. Commit 1: the test-support move and the failing tests; run them on today's production code. Each defect test must fail as stated.
-     2. Commit 2: the fix, the text and action-name sweep, the `run_with` seam; then the mutants.
+   - Done, from revision 3, section 5:
+     1. Commit 1 (`3e53e63`): the test-support move and the failing tests. On the unchanged production code, every defect test failed as stated (the `copy_stamped` table for the four 1A-R8-03 cases and the messages, the changed-sequence cleanup, both frontend text tests, the CLI mask test at the 9-character secret, the README action test on `run-start`).
+     2. Commit 2: the fix (publisher outcomes from the `tx` phase, the lease transitions, `clipboardLost`, `KeyMetadata` and the fixed mask, `run_with` with `Io`), the text and action-name sweep (`clipboardText.ts`, both READMEs), and the tests. All 10 design mutants (section 3.3) fail a test. Mutant 2 survived at first; the new table case "rollback fails after the first secret set" catches it. Its expected row keeps the lease, because cleanup cannot read the empty frame formats and retries with the uncertainty warning.
+   - Next:
      3. The full check run and the final build with its hashes.
      4. The owner-gated Windows evidence, each with the owner's yes, or reported as not checked.
      5. One acceptance review. If it rejects, stop and ask the owner.

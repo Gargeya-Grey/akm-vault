@@ -5,11 +5,181 @@ use crate::error::CommandError;
 
 pub const CLEAR_AFTER: Duration = Duration::from_secs(30);
 
-pub struct CopyAttempt {
-    pub sequence: u32,
-    pub failure: Option<CommandError>,
-    /// After a failure: AKM emptied the clipboard in the same open interval.
-    pub rolled_back: bool,
+/// What a publication did, as AKM observed it (unit 1a repair design, section 2.1). Only the
+/// publication transaction in [`tx`] builds one, from the phase it reached, so no exit of the
+/// publisher can claim an outcome its phase does not support.
+pub struct Publication(Outcome);
+
+pub enum Outcome {
+    /// No clipboard change was observed. An earlier lease stays.
+    Untouched(CommandError),
+    /// `EmptyClipboard` failed and the sequence changed: the effect is unknown.
+    EarlierCopyUncertain(CommandError),
+    /// The first `EmptyClipboard` succeeded, and no byte of the new value remains.
+    Emptied(CommandError),
+    /// Published and verified.
+    Published(LeaseEvidence),
+    /// A secret was written, the rollback failed, and the sequence did not change.
+    Residual(CommandError, LeaseEvidence),
+    /// A secret was written, the rollback failed, and the sequence changed or was 0.
+    ResidualUntracked(CommandError),
+}
+
+/// A nonzero clipboard sequence sampled in the publication's own open interval.
+pub struct LeaseEvidence(std::num::NonZeroU32);
+
+impl Publication {
+    pub fn into_outcome(self) -> Outcome {
+        self.0
+    }
+
+    /// A verified publication, for the fake backends of the integration tests. Debug
+    /// builds only: a release build has no way to build a publication outside [`tx`].
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    #[allow(dead_code)] // Called only by `tests/ipc_dispatch.rs`, which includes this file.
+    pub fn fake_published(sequence: u32) -> Self {
+        let sequence = std::num::NonZeroU32::new(sequence).expect("fake evidence is nonzero");
+        Self(Outcome::Published(LeaseEvidence(sequence)))
+    }
+}
+
+#[cfg(test)]
+impl Publication {
+    /// Test backends only: production outcomes come from [`tx::Tx`].
+    pub(crate) fn for_test(outcome: Outcome) -> Self {
+        Self(outcome)
+    }
+}
+
+#[cfg(test)]
+impl Publication {
+    /// The published sequence; panics on any failure.
+    pub(crate) fn published_for_test(self) -> u32 {
+        match self.0 {
+            Outcome::Published(evidence) => evidence.0.get(),
+            _ => panic!("expected a publication, got {}", self.name_for_test()),
+        }
+    }
+
+    /// The failure's error; panics on a publication.
+    pub(crate) fn error_for_test(self) -> CommandError {
+        match self.0 {
+            Outcome::Untouched(e)
+            | Outcome::EarlierCopyUncertain(e)
+            | Outcome::Emptied(e)
+            | Outcome::Residual(e, _)
+            | Outcome::ResidualUntracked(e) => e,
+            Outcome::Published(_) => panic!("expected a failure, got a publication"),
+        }
+    }
+
+    pub(crate) fn name_for_test(&self) -> &'static str {
+        match &self.0 {
+            Outcome::Untouched(_) => "Untouched",
+            Outcome::EarlierCopyUncertain(_) => "EarlierCopyUncertain",
+            Outcome::Emptied(_) => "Emptied",
+            Outcome::Published(_) => "Published",
+            Outcome::Residual(..) => "Residual",
+            Outcome::ResidualUntracked(_) => "ResidualUntracked",
+        }
+    }
+}
+
+#[cfg(test)]
+impl LeaseEvidence {
+    pub(crate) fn for_test(sequence: u32) -> Self {
+        Self(std::num::NonZeroU32::new(sequence).expect("test evidence is nonzero"))
+    }
+}
+
+pub(crate) mod tx {
+    use super::{CommandError, LeaseEvidence, Outcome, Publication};
+    use std::num::NonZeroU32;
+
+    enum Phase {
+        Preparing,
+        Open { sequence: u32 },
+        Emptied,
+        Written,
+    }
+
+    /// The result of the second `EmptyClipboard` that a failure after the first one tries.
+    pub(crate) struct Rollback {
+        pub(crate) emptied: bool,
+        /// The sequence just before the second empty, and just after it.
+        pub(crate) before: u32,
+        pub(crate) after: u32,
+    }
+
+    /// The phase a publication reached. Every failure goes through [`Tx::fail`] or
+    /// [`Tx::empty_failed`], which derive the outcome from that phase; the caller never
+    /// names an outcome.
+    pub(crate) struct Tx(Phase);
+
+    impl Tx {
+        pub(crate) fn new() -> Self {
+            Self(Phase::Preparing)
+        }
+
+        /// The clipboard is open; `sequence` was sampled before any change.
+        pub(crate) fn opened(&mut self, sequence: u32) {
+            self.0 = Phase::Open { sequence };
+        }
+
+        /// The first `EmptyClipboard` failed; `after` was sampled in the same open interval.
+        pub(crate) fn empty_failed(self, error: CommandError, after: u32) -> Publication {
+            match self.0 {
+                Phase::Open { sequence } if after == sequence && after != 0 => {
+                    Publication(Outcome::Untouched(error))
+                }
+                _ => Publication(Outcome::EarlierCopyUncertain(error)),
+            }
+        }
+
+        pub(crate) fn emptied(&mut self) {
+            self.0 = Phase::Emptied;
+        }
+
+        /// Set before the first secret format, so that every later failure rolls back.
+        pub(crate) fn writing(&mut self) {
+            self.0 = Phase::Written;
+        }
+
+        /// A failure. After the first empty, `rollback` runs the second empty.
+        pub(crate) fn fail(
+            self,
+            error: CommandError,
+            rollback: impl FnOnce() -> Rollback,
+        ) -> Publication {
+            match self.0 {
+                Phase::Preparing | Phase::Open { .. } => Publication(Outcome::Untouched(error)),
+                Phase::Emptied => {
+                    // No byte of the value was written, so the second empty's result does not matter.
+                    let _ = rollback();
+                    Publication(Outcome::Emptied(error))
+                }
+                Phase::Written => {
+                    let result = rollback();
+                    if result.emptied {
+                        return Publication(Outcome::Emptied(error));
+                    }
+                    match NonZeroU32::new(result.before) {
+                        Some(sequence) if result.after == result.before => {
+                            Publication(Outcome::Residual(error, LeaseEvidence(sequence)))
+                        }
+                        _ => Publication(Outcome::ResidualUntracked(error)),
+                    }
+                }
+            }
+        }
+
+        /// Verified in the `Written` phase, with a sequence from the same open interval.
+        pub(crate) fn published(self, sequence: NonZeroU32) -> Publication {
+            debug_assert!(matches!(self.0, Phase::Written));
+            Publication(Outcome::Published(LeaseEvidence(sequence)))
+        }
+    }
 }
 
 /// Cleanup could not prove whether AKM's copy is still on the clipboard (unit 1a design,
@@ -20,6 +190,19 @@ pub fn uncertain_cleanup() -> CommandError {
         "clipboardUncertain",
         "AKM could not confirm that its clipboard copy was cleared. Check the clipboard before you paste, and clear it if the copy is still there.",
     )
+}
+
+/// The error kind a backend returns when a failed cleanup empty changed the sequence.
+pub const LOST: &str = "clipboardLost";
+
+const EARLIER_REMAINS: &str = "AKM's earlier copy is still on the clipboard and may remain.";
+const EMPTIED: &str =
+    "The earlier clipboard content was removed, and the new value was not copied. Copy again.";
+const RESIDUAL: &str =
+    "AKM could not remove the partial copy. Check the clipboard before you paste.";
+
+fn with(error: CommandError, suffix: &str) -> CommandError {
+    CommandError::new(&error.kind, format!("{} {suffix}", error.message))
 }
 
 pub struct CleanupFailure {
@@ -42,15 +225,13 @@ impl From<CommandError> for CopyFailure {
 }
 
 pub trait ClipboardBackend: Send {
-    fn set_private(&mut self, text: &str) -> Result<CopyAttempt, CommandError>;
+    fn set_private(&mut self, text: &str) -> Publication;
     fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError>;
 }
 
 struct Lease {
     generation: u64,
     sequence: u32,
-    // A zero sequence with contents possibly left behind: ownership cannot be proved.
-    unverifiable: bool,
     text: Zeroizing<String>,
     expires: Duration,
 }
@@ -87,63 +268,90 @@ impl ClipboardLease {
         now: Duration,
     ) -> Result<u64, CopyFailure> {
         if text.contains('\0') {
-            return Err(CommandError::new(
-                "clipboard",
-                "Clipboard text cannot contain a NUL character.",
-            )
-            .into());
+            return Err(self
+                .untouched(CommandError::new(
+                    "clipboard",
+                    "Clipboard text cannot contain a NUL character.",
+                ))
+                .into());
         }
-        // A preparation failure (`Err`) changed nothing, so an earlier lease stays.
-        let mut attempt = self.backend.set_private(&text)?;
-        if attempt.rolled_back {
-            if let Some(error) = attempt.failure.take() {
-                // Emptied in the publication's own open interval: that also removed any
-                // earlier AKM copy, so no lease remains to clean up.
+        match self.backend.set_private(&text).into_outcome() {
+            Outcome::Untouched(error) => Err(self.untouched(error).into()),
+            Outcome::Emptied(error) => {
+                // The first empty removed any earlier AKM copy, so no lease remains to clean up.
                 self.owned = None;
-                return Err(error.into());
+                Err(with(error, EMPTIED).into())
+            }
+            Outcome::EarlierCopyUncertain(error) => {
+                // Contract 10: never adopt the changed sequence. The earlier lease ends here.
+                let cleanup = self.owned.take().map(|lease| CleanupFailure {
+                    lease_generation: lease.generation,
+                    error: uncertain_cleanup(),
+                });
+                Err(CopyFailure {
+                    error: with(error, &uncertain_cleanup().message),
+                    cleanup,
+                })
+            }
+            Outcome::ResidualUntracked(error) => {
+                self.owned = None;
+                self.generation = self.generation.wrapping_add(1);
+                Err(CopyFailure {
+                    error: with(error, &uncertain_cleanup().message),
+                    cleanup: Some(CleanupFailure {
+                        lease_generation: self.generation,
+                        error: uncertain_cleanup(),
+                    }),
+                })
+            }
+            Outcome::Published(evidence) => {
+                self.own(evidence, text, now + CLEAR_AFTER);
+                Ok(self.generation)
+            }
+            Outcome::Residual(error, evidence) => {
+                // A partial OS write still needs an owned lease if immediate cleanup finds a busy clipboard.
+                self.own(evidence, text, now);
+                let lease_generation = self.generation;
+                let cleanup = self.clear().err().map(|error| CleanupFailure {
+                    lease_generation,
+                    error,
+                });
+                Err(CopyFailure {
+                    error: with(error, RESIDUAL),
+                    cleanup,
+                })
             }
         }
+    }
+
+    fn untouched(&self, error: CommandError) -> CommandError {
+        if self.owned.is_some() {
+            with(error, EARLIER_REMAINS)
+        } else {
+            error
+        }
+    }
+
+    fn own(&mut self, evidence: LeaseEvidence, text: Zeroizing<String>, expires: Duration) {
         self.generation = self.generation.wrapping_add(1);
         self.owned = Some(Lease {
             generation: self.generation,
-            sequence: attempt.sequence,
-            unverifiable: attempt.sequence == 0 && !attempt.rolled_back,
+            sequence: evidence.0.get(),
             text,
-            expires: if attempt.failure.is_some() {
-                now
-            } else {
-                now + CLEAR_AFTER
-            },
+            expires,
         });
-        if let Some(error) = attempt.failure {
-            // A partial OS write still needs an owned lease if immediate cleanup finds a busy clipboard.
-            let lease_generation = self.generation;
-            let cleanup = self.clear().err().map(|error| CleanupFailure {
-                lease_generation,
-                error,
-            });
-            return Err(CopyFailure { error, cleanup });
-        }
-        Ok(self.generation)
     }
 
     pub fn clear(&mut self) -> Result<(), CommandError> {
         if let Some(lease) = &self.owned {
-            if lease.unverifiable {
-                // Never clear on a zero sequence: a newer identical user copy is indistinguishable.
-                self.owned = None;
+            // Any cleanup failure (busy, refused) leaves the copy possibly in place.
+            if let Err(error) = self.backend.clear_matching(lease.sequence, &lease.text) {
+                if error.kind == LOST {
+                    // A failed empty changed the sequence: never adopt it (contract 10).
+                    self.owned = None;
+                }
                 return Err(uncertain_cleanup());
             }
-            // Any cleanup failure (busy, refused) leaves the copy possibly in place.
-            self.backend
-                .clear_matching(lease.sequence, &lease.text)
-                .map_err(|error| {
-                    if error.kind == "clipboardUncertain" {
-                        error
-                    } else {
-                        uncertain_cleanup()
-                    }
-                })?;
         }
         self.owned = None;
         Ok(())
@@ -343,89 +551,110 @@ mod windows {
         }
     }
 
-    fn publish<A: ClipboardApi>(
-        api: &mut A,
-        text: &str,
-        require_empty: bool,
-    ) -> Result<CopyAttempt, CommandError> {
+    fn publish<A: ClipboardApi>(api: &mut A, text: &str, require_empty: bool) -> Publication {
+        let tx = tx::Tx::new();
+        macro_rules! check {
+            ($tx:ident, $result:expr) => {
+                match $result {
+                    Ok(value) => value,
+                    Err(error) => return $tx.fail(error, || unreachable!("no empty yet")),
+                }
+            };
+        }
         let mut exclusions = Vec::with_capacity(PRIVATE_FORMATS.len());
         for name in PRIVATE_FORMATS {
-            exclusions.push((api.register(name)?, api.allocate(&0u32.to_ne_bytes())?));
+            let format = check!(tx, api.register(name));
+            exclusions.push((format, check!(tx, api.allocate(&0u32.to_ne_bytes()))));
         }
         // CF_LOCALE explicitly describes both legacy encodings, independent of the input language.
-        let encoded = TextFormats::new(text, unsafe { GetSystemDefaultLCID() })?;
+        let encoded = check!(
+            tx,
+            TextFormats::new(text, unsafe { GetSystemDefaultLCID() })
+        );
         let mut frame = [
-            (UNICODE_TEXT, api.allocate(&0u16.to_ne_bytes())?),
-            (ANSI_TEXT, api.allocate(&[0])?),
-            (OEM_TEXT, api.allocate(&[0])?),
-            (TEXT_LOCALE, api.allocate(&encoded.locale.to_ne_bytes())?),
+            (UNICODE_TEXT, check!(tx, api.allocate(&0u16.to_ne_bytes()))),
+            (ANSI_TEXT, check!(tx, api.allocate(&[0]))),
+            (OEM_TEXT, check!(tx, api.allocate(&[0]))),
+            (
+                TEXT_LOCALE,
+                check!(tx, api.allocate(&encoded.locale.to_ne_bytes())),
+            ),
         ];
         let mut values = Vec::with_capacity(encoded.values.len());
         for (format, bytes) in &encoded.values {
-            values.push((*format, api.allocate(bytes)?));
+            values.push((*format, check!(tx, api.allocate(bytes))));
         }
-        let owner = api.owner()?;
-        let open = Open::acquire(api, Some(&owner))?;
+        let owner = check!(tx, api.owner());
+        let open = check!(tx, Open::acquire(api, Some(&owner)));
+        let mut tx = tx;
+        // Sampled before any change, so a failed empty can be compared in this open interval.
+        tx.opened(open.api.sequence());
         if require_empty && !open.api.is_empty() {
-            return Err(CommandError::new(
-                "clipboard",
-                "Refusing to overwrite the user's clipboard.",
-            ));
+            return tx.fail(
+                CommandError::new("clipboard", "Refusing to overwrite the user's clipboard."),
+                || unreachable!("no empty yet"),
+            );
         }
-        open.api.empty()?;
+        if let Err(error) = open.api.empty() {
+            let after = open.api.sequence();
+            return tx.empty_failed(error, after);
+        }
+        tx.emptied();
+        let api = &mut *open.api;
         // Never publish text if an exclusion could not be installed.
         for (format, memory) in &mut exclusions {
-            if let Err(error) = open.api.set(*format, memory) {
-                let _ = open.api.empty();
-                return Err(error);
+            if let Err(error) = api.set(*format, memory) {
+                return tx.fail(error, || roll_back(api));
             }
         }
         if exclusions
             .iter()
-            .any(|(format, _)| !open.api.matches_zero(*format))
+            .any(|(format, _)| !api.matches_zero(*format))
         {
-            let _ = open.api.empty();
-            return Err(CommandError::new(
-                "clipboard",
-                "Windows did not apply clipboard history/cloud/monitoring exclusions. The copy was cancelled.",
-            ));
+            return tx.fail(
+                CommandError::new(
+                    "clipboard",
+                    "Windows did not apply clipboard history/cloud/monitoring exclusions. The copy was cancelled.",
+                ),
+                || roll_back(api),
+            );
         }
         // CloseClipboard adds missing text/locale formats and changes the sequence.
         // Install the complete, empty format set before any secret bytes. Even a later
         // failed SetClipboardData plus a failed rollback then leaves no synthesis work.
         // Unicode is first so consumers enumerating formats prefer the lossless value.
         for (format, memory) in &mut frame {
-            if let Err(error) = open.api.set(*format, memory) {
-                let _ = open.api.empty();
-                return Err(error);
+            if let Err(error) = api.set(*format, memory) {
+                return tx.fail(error, || roll_back(api));
             }
         }
-        let mut failure = None;
+        tx.writing();
         for (format, memory) in &mut values {
-            if let Err(error) = open.api.set(*format, memory) {
-                failure = Some(error);
-                break;
+            if let Err(error) = api.set(*format, memory) {
+                return tx.fail(error, || roll_back(api));
             }
         }
         // No other writer can publish between our SetClipboardData and this ownership sample.
-        let verified = open.api.read_text(text) == TextMatch::Same;
-        let sequence = open.api.sequence();
-        if failure.is_none() && (sequence == 0 || !verified) {
-            failure = Some(CommandError::new(
-                "clipboard",
-                "The clipboard changed while copying. Copy again.",
-            ));
+        let verified = api.read_text(text) == TextMatch::Same;
+        match std::num::NonZeroU32::new(api.sequence()) {
+            Some(sequence) if verified => tx.published(sequence),
+            _ => tx.fail(
+                CommandError::new("clipboard", "Windows did not confirm the copy."),
+                || roll_back(api),
+            ),
         }
-        let mut rolled_back = false;
-        if failure.is_some() {
-            // Retain the captured lease if Windows refuses this rollback and later cleanup is busy.
-            rolled_back = open.api.empty().is_ok();
+    }
+
+    /// The second `EmptyClipboard`, with the sequence sampled before and after it.
+    fn roll_back<A: ClipboardApi>(api: &mut A) -> tx::Rollback {
+        let before = api.sequence();
+        let emptied = api.empty().is_ok();
+        let after = api.sequence();
+        tx::Rollback {
+            emptied,
+            before,
+            after,
         }
-        Ok(CopyAttempt {
-            sequence,
-            failure,
-            rolled_back,
-        })
     }
 
     fn clear<A: ClipboardApi>(
@@ -450,7 +679,13 @@ mod windows {
         }
         match open.api.read_text(text) {
             TextMatch::Same => {
-                open.api.empty()?;
+                if let Err(error) = open.api.empty() {
+                    if open.api.sequence() != sequence {
+                        // The failed empty changed the sequence: its effect is unknown.
+                        return Err(CommandError::new(LOST, error.message));
+                    }
+                    return Err(error);
+                }
                 Ok(true)
             }
             TextMatch::Different | TextMatch::Unreadable => Err(uncertain_cleanup()),
@@ -650,7 +885,7 @@ mod windows {
     }
 
     impl ClipboardBackend for NativeClipboard {
-        fn set_private(&mut self, text: &str) -> Result<CopyAttempt, CommandError> {
+        fn set_private(&mut self, text: &str) -> Publication {
             publish(&mut Win32, text, false)
         }
 
@@ -665,11 +900,9 @@ mod windows {
         const FAKE_VALUE: &str = "AKM fake clipboard verification secret";
         assert_eq!(std::env::var("AKM_TEST_REAL_CLIPBOARD").as_deref(), Ok("1"));
         // Check the precondition inside the production transaction's open interval.
-        let attempt = publish(&mut Win32, FAKE_VALUE, true).unwrap();
+        let seq = publish(&mut Win32, FAKE_VALUE, true).published_for_test();
         let mut backend = NativeClipboard;
-        let seq = attempt.sequence;
         let result = std::panic::catch_unwind(|| {
-            assert!(attempt.failure.is_none());
             let mut api = Win32;
             let open = Open::acquire(&mut api, None).unwrap();
             assert_eq!(
@@ -1041,7 +1274,10 @@ mod windows {
                     state.blocked_copies += 1;
                     state.pending_user_copy = Some(text);
                 }
-                if state.fail(Fault::Sequence) {
+                // Not the publisher's sample before its first empty (an owned open with no
+                // change yet): that sample only detects a failed empty's effect.
+                let before_first_empty = state.open_with_owner && !state.changed;
+                if !before_first_empty && state.fail(Fault::Sequence) {
                     return 0;
                 }
                 state.sequence
@@ -1075,7 +1311,7 @@ mod windows {
 
         pub(crate) struct TransactionBackend(pub(crate) FakeApi);
         impl ClipboardBackend for TransactionBackend {
-            fn set_private(&mut self, text: &str) -> Result<CopyAttempt, CommandError> {
+            fn set_private(&mut self, text: &str) -> Publication {
                 publish(&mut self.0, text, false)
             }
 
@@ -1088,18 +1324,17 @@ mod windows {
         fn captured_lease_survives_windows_close_synthesis_and_owner_destruction() {
             let state = Arc::new(Mutex::new(FakeState::default()));
             let mut backend = TransactionBackend(FakeApi(state.clone()));
-            let attempt = backend.set_private(FAKE_TEXT).unwrap();
-            assert!(attempt.failure.is_none());
+            let published = backend.set_private(FAKE_TEXT).published_for_test();
             {
                 let state = state.lock().unwrap();
                 assert_eq!(
-                    attempt.sequence, state.sequence,
+                    published, state.sequence,
                     "the sequence captured under OpenClipboard must still identify this publication after close"
                 );
                 assert_eq!(state.text(), FAKE_TEXT);
                 assert!(!state.owner_alive);
             }
-            assert!(backend.clear_matching(attempt.sequence, FAKE_TEXT).unwrap());
+            assert!(backend.clear_matching(published, FAKE_TEXT).unwrap());
             assert_eq!(state.lock().unwrap().text(), "");
         }
 
@@ -1108,12 +1343,11 @@ mod windows {
             for text in ["", "\u{03bb}\u{1f512}", "e\u{301}\r\nfake"] {
                 let state = Arc::new(Mutex::new(FakeState::default()));
                 let mut backend = TransactionBackend(FakeApi(state.clone()));
-                let attempt = backend.set_private(text).unwrap();
-                assert!(attempt.failure.is_none());
+                let published = backend.set_private(text).published_for_test();
                 {
                     let state = state.lock().unwrap();
                     assert_eq!(state.text(), text);
-                    assert_eq!(state.sequence, attempt.sequence);
+                    assert_eq!(state.sequence, published);
                     assert_eq!(state.synthesized, 0);
                     assert_eq!(state.formats.len(), 7);
                     if text.is_empty() {
@@ -1122,7 +1356,7 @@ mod windows {
                         assert_eq!(state.formats[&OEM_TEXT], [0]);
                     }
                 }
-                assert!(backend.clear_matching(attempt.sequence, text).unwrap());
+                assert!(backend.clear_matching(published, text).unwrap());
                 assert!(state.lock().unwrap().formats.is_empty());
             }
         }
@@ -1151,7 +1385,7 @@ mod windows {
             data.formats.insert(0xc100, b"unrelated user data".to_vec());
             let state = Arc::new(Mutex::new(data));
             let mut api = FakeApi(state.clone());
-            let error = publish(&mut api, FAKE_TEXT, true).err().unwrap();
+            let error = publish(&mut api, FAKE_TEXT, true).error_for_test();
             assert_eq!(error.message, "Refusing to overwrite the user's clipboard.");
             let state = state.lock().unwrap();
             assert_eq!(state.formats[&0xc100], b"unrelated user data");
@@ -1171,15 +1405,14 @@ mod windows {
                 ..FakeState::default()
             }));
             let mut backend = TransactionBackend(FakeApi(state.clone()));
-            let attempt = backend.set_private(FAKE_TEXT).unwrap();
+            let published = backend.set_private(FAKE_TEXT).published_for_test();
             assert_eq!(
-                attempt.sequence, 111,
+                published, 111,
                 "must capture AKM's publication, not the user's"
             );
-            assert!(attempt.failure.is_none());
             assert_eq!(state.lock().unwrap().blocked_copies, 1);
             assert_eq!(state.lock().unwrap().user_sequence, Some(112));
-            assert!(!backend.clear_matching(attempt.sequence, FAKE_TEXT).unwrap());
+            assert!(!backend.clear_matching(published, FAKE_TEXT).unwrap());
             let state = state.lock().unwrap();
             assert_eq!(state.text(), FAKE_TEXT);
             assert_eq!(state.clears, 0);
@@ -1193,10 +1426,7 @@ mod windows {
                     ..FakeState::default()
                 }));
                 let mut backend = TransactionBackend(FakeApi(state.clone()));
-                let error = match backend.set_private(FAKE_TEXT) {
-                    Err(error) => error,
-                    Ok(attempt) => attempt.failure.expect("a failed write must not succeed"),
-                };
+                let error = backend.set_private(FAKE_TEXT).error_for_test();
                 assert_eq!(error.message, "injected SetClipboardData failure");
                 let state = state.lock().unwrap();
                 assert_eq!(state.text(), "");
@@ -1223,10 +1453,10 @@ mod windows {
                     ..FakeState::default()
                 }));
                 let mut backend = TransactionBackend(FakeApi(state.clone()));
-                match backend.set_private(FAKE_TEXT) {
-                    Err(error) => assert_eq!(error.kind, "clipboard"),
-                    Ok(attempt) => assert!(attempt.failure.is_some()),
-                }
+                assert_eq!(
+                    backend.set_private(FAKE_TEXT).error_for_test().kind,
+                    "clipboard"
+                );
                 let state = state.lock().unwrap();
                 assert_eq!(state.text(), "");
                 for format in [UNICODE_TEXT, ANSI_TEXT, OEM_TEXT] {
@@ -1257,7 +1487,7 @@ mod windows {
                     }));
                     let mut backend = TransactionBackend(FakeApi(state.clone()));
                     assert!(
-                        backend.set_private(FAKE_TEXT).is_err(),
+                        backend.set_private(FAKE_TEXT).name_for_test() == "Emptied",
                         "an unverified exclusion must not publish text"
                     );
                     let state = state.lock().unwrap();
@@ -1281,12 +1511,8 @@ mod windows {
                     ..FakeState::default()
                 }));
                 let mut backend = TransactionBackend(FakeApi(state.clone()));
-                let attempt = backend.set_private(FAKE_TEXT).unwrap();
-                assert!(attempt.failure.is_some());
-                assert_eq!(
-                    attempt.sequence,
-                    if fault == Fault::Sequence { 0 } else { 111 }
-                );
+                // Rolled back in the publication's own open interval: no lease evidence remains.
+                assert_eq!(backend.set_private(FAKE_TEXT).name_for_test(), "Emptied");
                 let state = state.lock().unwrap();
                 assert_eq!(
                     state.text(),
@@ -1307,9 +1533,10 @@ mod windows {
         fn success_publishes_utf16_and_all_three_zero_exclusions_in_one_interval() {
             let state = Arc::new(Mutex::new(FakeState::default()));
             let mut backend = TransactionBackend(FakeApi(state.clone()));
-            let attempt = backend.set_private("\u{03bb}\u{1f512}").unwrap();
-            assert!(attempt.failure.is_none());
-            assert_eq!(attempt.sequence, 111);
+            let published = backend
+                .set_private("\u{03bb}\u{1f512}")
+                .published_for_test();
+            assert_eq!(published, 111);
             {
                 let state = state.lock().unwrap();
                 assert_eq!(
@@ -1343,14 +1570,14 @@ mod windows {
             // An unchanged sequence with other text is no proof of a newer owner (1A-R5-02).
             assert_eq!(
                 backend
-                    .clear_matching(attempt.sequence, "different fake text")
+                    .clear_matching(published, "different fake text")
                     .unwrap_err()
                     .kind,
                 "clipboardUncertain"
             );
             assert_eq!(state.lock().unwrap().text(), "\u{03bb}\u{1f512}");
             assert!(backend
-                .clear_matching(attempt.sequence, "\u{03bb}\u{1f512}")
+                .clear_matching(published, "\u{03bb}\u{1f512}")
                 .unwrap());
             let state = state.lock().unwrap();
             assert_eq!(state.text(), "");
@@ -1386,7 +1613,7 @@ mod windows {
                     .insert(13, vec![b'u', 0, b's', 0, b'e', 0, b'r', 0, 0, 0]);
                 let state = Arc::new(Mutex::new(data));
                 let mut backend = TransactionBackend(FakeApi(state.clone()));
-                let error = backend.set_private(FAKE_TEXT).err().unwrap();
+                let error = backend.set_private(FAKE_TEXT).error_for_test();
                 assert_eq!(error.kind, "clipboard");
                 assert!(!error.message.contains(FAKE_TEXT));
                 let state = state.lock().unwrap();
@@ -1550,7 +1777,8 @@ mod windows {
             for rollback_fails in [true, false] {
                 let mut faults = vec![Fault::Sequence];
                 if rollback_fails {
-                    faults.push(Fault::Empty(2));
+                    // The rollback samples the sequence again; zero there too means untracked.
+                    faults.extend([Fault::Sequence, Fault::Empty(2)]);
                 }
                 let state = Arc::new(Mutex::new(FakeState {
                     faults,
@@ -1608,13 +1836,8 @@ mod windows {
         #[test]
         fn partial_publication_with_an_unreadable_cleanup_keeps_its_lease_and_reports_it() {
             let state = Arc::new(Mutex::new(FakeState {
-                // Publication verification reads once, then the immediate cleanup reads.
-                faults: vec![
-                    Fault::Set(10),
-                    Fault::Empty(2),
-                    Fault::TextRead,
-                    Fault::TextRead,
-                ],
+                // A failed set rolls back at once (no read-back); the immediate cleanup reads.
+                faults: vec![Fault::Set(10), Fault::Empty(2), Fault::TextRead],
                 ..FakeState::default()
             }));
             let mut lease =
@@ -1687,15 +1910,11 @@ pub(crate) mod tests {
     }
     pub struct FakeClipboard(pub Arc<Mutex<FakeData>>);
     impl ClipboardBackend for FakeClipboard {
-        fn set_private(&mut self, text: &str) -> Result<CopyAttempt, CommandError> {
+        fn set_private(&mut self, text: &str) -> Publication {
             let mut data = self.0.lock().unwrap();
             data.sequence += 1;
             data.text = text.into();
-            Ok(CopyAttempt {
-                sequence: data.sequence,
-                failure: None,
-                rolled_back: false,
-            })
+            Publication::for_test(Outcome::Published(LeaseEvidence::for_test(data.sequence)))
         }
         fn clear_matching(&mut self, seq: u32, text: &str) -> Result<bool, CommandError> {
             let mut data = self.0.lock().unwrap();
@@ -1754,10 +1973,13 @@ pub(crate) mod tests {
         busy_once: bool,
     }
     impl ClipboardBackend for PartialFailure {
-        fn set_private(&mut self, text: &str) -> Result<CopyAttempt, CommandError> {
-            let mut attempt = self.fake.set_private(text)?;
-            attempt.failure = Some(CommandError::new("clipboard", "injected exclusion failure"));
-            Ok(attempt)
+        fn set_private(&mut self, text: &str) -> Publication {
+            // A partial write whose rollback failed: the value may remain under this sequence.
+            let sequence = self.fake.set_private(text).published_for_test();
+            Publication::for_test(Outcome::Residual(
+                CommandError::new("clipboard", "injected exclusion failure"),
+                LeaseEvidence::for_test(sequence),
+            ))
         }
         fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
             if self.busy_once {
@@ -1770,15 +1992,15 @@ pub(crate) mod tests {
 
     /// Scripted results for the lease state table. Each call takes the next scripted result.
     struct Scripted {
-        publish: Arc<Mutex<Vec<Result<CopyAttempt, CommandError>>>>,
+        publish: Arc<Mutex<Vec<Outcome>>>,
         clears: Arc<Mutex<Vec<Result<bool, CommandError>>>>,
         publish_calls: Arc<Mutex<usize>>,
         clear_calls: Arc<Mutex<usize>>,
     }
     impl ClipboardBackend for Scripted {
-        fn set_private(&mut self, _text: &str) -> Result<CopyAttempt, CommandError> {
+        fn set_private(&mut self, _text: &str) -> Publication {
             *self.publish_calls.lock().unwrap() += 1;
-            self.publish.lock().unwrap().remove(0)
+            Publication::for_test(self.publish.lock().unwrap().remove(0))
         }
         fn clear_matching(&mut self, _sequence: u32, _text: &str) -> Result<bool, CommandError> {
             *self.clear_calls.lock().unwrap() += 1;
@@ -1797,7 +2019,10 @@ pub(crate) mod tests {
         CopyOk,
         CopyRefused,
         CopyNul,
-        CopyFailed { sequence: u32, rolled_back: bool },
+        CopyEarlierUncertain,
+        CopyEmptied,
+        CopyResidual,
+        CopyResidualUntracked,
         TickDue,
         TickEarly,
     }
@@ -1813,6 +2038,7 @@ pub(crate) mod tests {
         NotOurs,
         Busy,
         Uncertain,
+        Lost,
     }
 
     fn scripted_clear(clear: Clear) -> Result<bool, CommandError> {
@@ -1824,6 +2050,7 @@ pub(crate) mod tests {
                 "The clipboard is busy. Try copying again.",
             )),
             Clear::Uncertain => Err(uncertain_cleanup()),
+            Clear::Lost => Err(CommandError::new(LOST, "injected EmptyClipboard failure")),
         }
     }
 
@@ -1847,19 +2074,23 @@ pub(crate) mod tests {
         use Clear::*;
         use Event::*;
         use Owner::*;
-        let failed = |sequence, rolled_back| CopyFailed {
-            sequence,
-            rolled_back,
-        };
         let rows: Vec<CopyRow> = vec![
             (CopyOk, None, New, None, None, 0),
             (CopyRefused, None, Prior, Some("clipboard"), None, 0),
             (CopyNul, None, Prior, Some("clipboard"), None, 0),
             // The publication emptied the clipboard first, so an earlier lease owns nothing.
-            (failed(7, true), None, Nothing, Some("clipboard"), None, 0),
-            (failed(0, true), None, Nothing, Some("clipboard"), None, 0),
+            (CopyEmptied, None, Nothing, Some("clipboard"), None, 0),
+            // A failed first empty changed the sequence: the earlier lease ends with a warning.
             (
-                failed(7, false),
+                CopyEarlierUncertain,
+                None,
+                Nothing,
+                Some("clipboard"),
+                Some("clipboardUncertain"),
+                0,
+            ),
+            (
+                CopyResidual,
                 Some(Cleared),
                 Nothing,
                 Some("clipboard"),
@@ -1867,7 +2098,7 @@ pub(crate) mod tests {
                 1,
             ),
             (
-                failed(7, false),
+                CopyResidual,
                 Some(NotOurs),
                 Nothing,
                 Some("clipboard"),
@@ -1875,7 +2106,7 @@ pub(crate) mod tests {
                 1,
             ),
             (
-                failed(7, false),
+                CopyResidual,
                 Some(Busy),
                 New,
                 Some("clipboard"),
@@ -1883,7 +2114,7 @@ pub(crate) mod tests {
                 1,
             ),
             (
-                failed(7, false),
+                CopyResidual,
                 Some(Uncertain),
                 New,
                 Some("clipboard"),
@@ -1891,7 +2122,15 @@ pub(crate) mod tests {
                 1,
             ),
             (
-                failed(0, false),
+                CopyResidual,
+                Some(Lost),
+                Nothing,
+                Some("clipboard"),
+                Some("clipboardUncertain"),
+                1,
+            ),
+            (
+                CopyResidualUntracked,
                 None,
                 Nothing,
                 Some("clipboard"),
@@ -1910,11 +2149,18 @@ pub(crate) mod tests {
                 Some("clipboardUncertain"),
                 1,
             ),
+            (TickDue, Some(Lost), Nothing, Some("clipboardUncertain"), 1),
             (TickEarly, None, Prior, None, 0),
         ];
         let mut cases = Vec::new();
         for prior in [false, true] {
             for row in &rows {
+                // With no earlier lease, a changed failed empty has no lease to end or warn about.
+                let cleanup = if !prior && matches!(row.0, CopyEarlierUncertain) {
+                    None
+                } else {
+                    row.4
+                };
                 cases.push((
                     prior,
                     row.0,
@@ -1925,7 +2171,7 @@ pub(crate) mod tests {
                         row.2
                     },
                     row.3,
-                    row.4,
+                    cleanup,
                     row.5,
                 ));
             }
@@ -1956,11 +2202,10 @@ pub(crate) mod tests {
                 clear_calls: clear_calls.clone(),
             }));
             let before = if prior {
-                publish.lock().unwrap().push(Ok(CopyAttempt {
-                    sequence: 3,
-                    failure: None,
-                    rolled_back: false,
-                }));
+                publish
+                    .lock()
+                    .unwrap()
+                    .push(Outcome::Published(LeaseEvidence::for_test(3)));
                 Some(
                     lease
                         .copy(Zeroizing::new("fake-prior".into()), Duration::ZERO)
@@ -1975,18 +2220,20 @@ pub(crate) mod tests {
             let text = || Zeroizing::new("fake-table-value".to_string());
             let (returned, reported) = match event {
                 CopyOk => {
-                    publish.lock().unwrap().push(Ok(CopyAttempt {
-                        sequence: 9,
-                        failure: None,
-                        rolled_back: false,
-                    }));
+                    publish
+                        .lock()
+                        .unwrap()
+                        .push(Outcome::Published(LeaseEvidence::for_test(9)));
                     (lease.copy_reported(text(), Duration::ZERO).err(), None)
                 }
                 CopyRefused => {
                     publish
                         .lock()
                         .unwrap()
-                        .push(Err(CommandError::new("clipboard", "fake refused open")));
+                        .push(Outcome::Untouched(CommandError::new(
+                            "clipboard",
+                            "fake refused open",
+                        )));
                     (lease.copy_reported(text(), Duration::ZERO).err(), None)
                 }
                 CopyNul => (
@@ -1995,15 +2242,14 @@ pub(crate) mod tests {
                         .err(),
                     None,
                 ),
-                CopyFailed {
-                    sequence,
-                    rolled_back,
-                } => {
-                    publish.lock().unwrap().push(Ok(CopyAttempt {
-                        sequence,
-                        failure: Some(CommandError::new("clipboard", "fake partial publication")),
-                        rolled_back,
-                    }));
+                CopyEarlierUncertain | CopyEmptied | CopyResidual | CopyResidualUntracked => {
+                    let error = CommandError::new("clipboard", "fake partial publication");
+                    publish.lock().unwrap().push(match event {
+                        CopyEarlierUncertain => Outcome::EarlierCopyUncertain(error),
+                        CopyEmptied => Outcome::Emptied(error),
+                        CopyResidual => Outcome::Residual(error, LeaseEvidence::for_test(7)),
+                        _ => Outcome::ResidualUntracked(error),
+                    });
                     (lease.copy_reported(text(), Duration::ZERO).err(), None)
                 }
                 TickDue => (None, lease.tick(CLEAR_AFTER).err()),

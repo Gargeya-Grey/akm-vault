@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "../api";
+import { CLIPBOARD_LOCK_TEXT, clipboardCopyText } from "../clipboardText";
 import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
 import { formatBytes, formatDateTime, plural } from "../format";
 import type { BackupInfo, ImportPreview, KeyView, Status } from "../types";
@@ -196,7 +197,7 @@ export function Settings({ status, onLocked }: Props) {
       if (currentRequest !== sideEffectRequest.current) return;
       setMessage({
         tone: "ok",
-        text: `Copied. AKM clears its clipboard copy after ${seconds} seconds, on lock, or on normal exit.`,
+        text: clipboardCopyText(seconds),
       });
     } catch (cause) {
       if (currentRequest === sideEffectRequest.current) setMessage({ tone: "error", text: errorText(cause) });
@@ -345,8 +346,8 @@ export function Settings({ status, onLocked }: Props) {
         </div>
         <p className="field-note">
           The vault locks after 10 minutes without activity, on Windows session
-          lock, and on suspend. Locking closes the current session and clears
-          AKM’s clipboard copy. You will need the master password again.
+          lock, and on suspend. {CLIPBOARD_LOCK_TEXT} You will need the master
+          password again.
         </p>
       </section>
 

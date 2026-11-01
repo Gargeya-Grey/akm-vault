@@ -1610,18 +1610,22 @@ mod tests {
         partial: bool,
     }
     impl ClipboardBackend for BusyCleanup {
-        fn set_private(
-            &mut self,
-            text: &str,
-        ) -> Result<crate::clipboard::CopyAttempt, CommandError> {
-            let mut attempt = FakeClipboard(self.data.clone()).set_private(text)?;
+        fn set_private(&mut self, text: &str) -> crate::clipboard::Publication {
+            let sequence = FakeClipboard(self.data.clone())
+                .set_private(text)
+                .published_for_test();
             if self.partial {
-                attempt.failure = Some(CommandError::new(
-                    "clipboard",
-                    "Fake partial publication error",
-                ));
+                // A partial write whose rollback failed: the value may remain under this sequence.
+                return crate::clipboard::Publication::for_test(
+                    crate::clipboard::Outcome::Residual(
+                        CommandError::new("clipboard", "Fake partial publication error"),
+                        crate::clipboard::LeaseEvidence::for_test(sequence),
+                    ),
+                );
             }
-            Ok(attempt)
+            crate::clipboard::Publication::for_test(crate::clipboard::Outcome::Published(
+                crate::clipboard::LeaseEvidence::for_test(sequence),
+            ))
         }
         fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
             if self.busy.load(Ordering::SeqCst) {
@@ -1691,23 +1695,18 @@ mod tests {
         clear_calls: Arc<AtomicUsize>,
     }
     impl ClipboardBackend for RollbackAfterLease {
-        fn set_private(
-            &mut self,
-            text: &str,
-        ) -> Result<crate::clipboard::CopyAttempt, CommandError> {
+        fn set_private(&mut self, text: &str) -> crate::clipboard::Publication {
             if self.roll_back.load(Ordering::SeqCst) {
                 // The publication emptied the clipboard, failed, and rolled back.
                 let mut data = self.data.lock().unwrap();
                 data.sequence += 2;
                 data.text.clear();
-                return Ok(crate::clipboard::CopyAttempt {
-                    sequence: data.sequence,
-                    failure: Some(CommandError::new(
+                return crate::clipboard::Publication::for_test(
+                    crate::clipboard::Outcome::Emptied(CommandError::new(
                         "clipboard",
                         "Fake rolled-back publication",
                     )),
-                    rolled_back: true,
-                });
+                );
             }
             FakeClipboard(self.data.clone()).set_private(text)
         }
@@ -1740,7 +1739,10 @@ mod tests {
             .session
             .copy(ticket, Zeroizing::new("fake-second-copy".into()))
             .unwrap_err();
-        assert_eq!(error.message, "Fake rolled-back publication");
+        assert_eq!(
+            error.message,
+            "Fake rolled-back publication The earlier clipboard content was removed, and the new value was not copied. Copy again."
+        );
         assert_eq!(f.session.gate().unwrap().clipboard.owned_generation(), None);
         f.clock.set(30);
         f.session.tick();
@@ -1755,10 +1757,7 @@ mod tests {
         attempts: Arc<AtomicUsize>,
     }
     impl ClipboardBackend for CleanupFault {
-        fn set_private(
-            &mut self,
-            text: &str,
-        ) -> Result<crate::clipboard::CopyAttempt, CommandError> {
+        fn set_private(&mut self, text: &str) -> crate::clipboard::Publication {
             FakeClipboard(self.data.clone()).set_private(text)
         }
         fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
@@ -1958,18 +1957,22 @@ mod tests {
         fail_clear: Arc<AtomicBool>,
     }
     impl ClipboardBackend for PartialCleanupFault {
-        fn set_private(
-            &mut self,
-            text: &str,
-        ) -> Result<crate::clipboard::CopyAttempt, CommandError> {
-            let mut attempt = FakeClipboard(self.data.clone()).set_private(text)?;
+        fn set_private(&mut self, text: &str) -> crate::clipboard::Publication {
+            let sequence = FakeClipboard(self.data.clone())
+                .set_private(text)
+                .published_for_test();
             if self.partial.load(Ordering::SeqCst) {
-                attempt.failure = Some(CommandError::new(
-                    "clipboard",
-                    "Fake partial publication error",
-                ));
+                // A partial write whose rollback failed: the value may remain under this sequence.
+                return crate::clipboard::Publication::for_test(
+                    crate::clipboard::Outcome::Residual(
+                        CommandError::new("clipboard", "Fake partial publication error"),
+                        crate::clipboard::LeaseEvidence::for_test(sequence),
+                    ),
+                );
             }
-            Ok(attempt)
+            crate::clipboard::Publication::for_test(crate::clipboard::Outcome::Published(
+                crate::clipboard::LeaseEvidence::for_test(sequence),
+            ))
         }
         fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
             if self.fail_clear.load(Ordering::SeqCst) {
@@ -2002,7 +2005,10 @@ mod tests {
             .session
             .copy(ticket, Zeroizing::new("fake-partial-value".into()))
             .unwrap_err();
-        assert_eq!(error.message, "Fake partial publication error");
+        assert_eq!(
+            error.message,
+            "Fake partial publication error AKM could not remove the partial copy. Check the clipboard before you paste."
+        );
         assert_eq!(f.clipboard.lock().unwrap().text, "fake-partial-value");
         let first = application_ids(&f);
         assert_eq!(
@@ -2619,10 +2625,7 @@ mod tests {
         block_on: usize,
     }
     impl ClipboardBackend for BlockingClipboard {
-        fn set_private(
-            &mut self,
-            text: &str,
-        ) -> Result<crate::clipboard::CopyAttempt, CommandError> {
+        fn set_private(&mut self, text: &str) -> crate::clipboard::Publication {
             self.calls += 1;
             if self.calls == self.block_on {
                 self.started.send(()).unwrap();
@@ -2897,6 +2900,18 @@ mod tests {
                     remains: "",
                     warns: false,
                 },
+                // Design 3.3, mutant 2: the written phase starts before the first secret set.
+                // Only the empty frame formats remain; cleanup cannot read them, so the
+                // lease stays for a retry and the uncertainty warning shows.
+                Case {
+                    name: "rollback fails after the first secret set",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 8), Fault::Empty(b.empties + 2)],
+                    lease: Lease::New,
+                    said: Said::Residual,
+                    remains: "",
+                    warns: true,
+                },
                 Case {
                     name: "rollback fails, sequence unchanged",
                     text: B,
@@ -2940,7 +2955,7 @@ mod tests {
                             .cloned()
                             .or_else(|| panic.downcast_ref::<&str>().map(|t| t.to_string()))
                             .unwrap_or_default();
-                        failures.push(format!("{}", text.lines().next().unwrap_or(name)));
+                        failures.push(text.lines().next().unwrap_or(name).to_string());
                     }
                 }
             }

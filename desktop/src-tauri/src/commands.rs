@@ -923,11 +923,10 @@ mod tests {
     ) {
         struct RefusingClipboard;
         impl crate::clipboard::ClipboardBackend for RefusingClipboard {
-            fn set_private(
-                &mut self,
-                _text: &str,
-            ) -> Result<crate::clipboard::CopyAttempt, CommandError> {
-                Err(CommandError::new("clipboard", "Fake clipboard refusal"))
+            fn set_private(&mut self, _text: &str) -> crate::clipboard::Publication {
+                crate::clipboard::Publication::for_test(crate::clipboard::Outcome::Untouched(
+                    CommandError::new("clipboard", "Fake clipboard refusal"),
+                ))
             }
             fn clear_matching(
                 &mut self,
