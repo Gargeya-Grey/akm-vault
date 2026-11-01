@@ -460,12 +460,16 @@ select {
     color: var(--ink);
   }
 
-  .btn:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--forest) 86%, var(--paper));
+  /* Filled buttons keep their token fill. The hover cue is an underline in the label colour. */
+  .btn:hover:not(:disabled),
+  .btn-danger:hover:not(:disabled) {
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 4px;
   }
 
-  .btn-danger:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--clay) 86%, var(--ink));
+  .filter select:hover:not(:disabled):not(:has(option[value=""]:checked)) {
+    border-color: var(--ink);
   }
 
   .btn-secondary:hover:not(:disabled),
@@ -493,17 +497,29 @@ select {
 
   .key-row:hover .row-arrow {
     color: var(--leaf-ink);
+  }
+}
+
+/* Movement on hover and press runs only when the user allows motion. */
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .key-row:hover .row-arrow {
     transform: translateX(2px);
   }
 }
 
-.btn:active:not(:disabled),
-.btn-secondary:active:not(:disabled),
-.btn-danger:active:not(:disabled),
-.theme:active,
-.icon-button:active:not(:disabled) {
-  transform: scale(0.97);
-  transition-duration: var(--dur-press);
+@media (prefers-reduced-motion: no-preference) {
+  .btn:active:not(:disabled),
+  .btn-secondary:active:not(:disabled),
+  .btn-danger:active:not(:disabled),
+  .theme:active,
+  .icon-button:active:not(:disabled) {
+    transform: scale(0.97);
+    transition-duration: var(--dur-press);
+  }
+
+  .key-row:active .row-arrow {
+    transform: translateX(4px);
+  }
 }
 
 .key-row:active {
@@ -512,7 +528,6 @@ select {
 
 .key-row:active .row-arrow {
   color: var(--leaf-ink);
-  transform: translateX(4px);
 }
 
 .nav-link {
@@ -1636,32 +1651,22 @@ textarea:disabled {
   }
 }
 
-/* Motion: entry only, transform and opacity only. No exit animation. */
-@keyframes akm-fade {
-  from { opacity: 0; }
-}
-
+/* Motion: entry only, transform only. No exit animation. Dialogs and their
+   notices stay fully opaque from the first frame, so no notice is ever hidden. */
 @keyframes akm-rise {
-  from { opacity: 0; transform: translateY(8px) scale(0.985); }
-}
-
-@keyframes akm-drain {
-  to { transform: scaleX(0); }
+  from { transform: translateY(8px); }
 }
 
 @keyframes akm-dot {
   from { transform: scale(0); }
 }
 
-.overlay {
-  animation: akm-fade 140ms var(--ease-out);
-}
-
 .overlay > [role="dialog"] {
   animation: akm-rise var(--dur-enter) var(--ease-out);
 }
 
-/* Decorative drain bar. The script timer and the "Hides in N seconds" text stay the authority. */
+/* Remaining-time bar. Key Detail sets its scale from the same countdown state
+   as the "Hides in N seconds" text, so the two always agree. */
 .secret-box {
   position: relative;
 }
@@ -1674,7 +1679,7 @@ textarea:disabled {
   height: 2px;
   background: var(--leaf-ink);
   transform-origin: left center;
-  animation: akm-drain 30s linear forwards;
+  transition: transform 1s linear;
 }
 
 .nav-link[aria-current="page"]::after {
@@ -1684,14 +1689,6 @@ textarea:disabled {
 @media (prefers-reduced-motion: reduce) {
   .secret-timer {
     display: none;
-  }
-
-  .btn:active,
-  .btn-secondary:active,
-  .btn-danger:active,
-  .theme:active,
-  .icon-button:active {
-    transform: none;
   }
 }
 
