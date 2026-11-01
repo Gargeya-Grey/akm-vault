@@ -1,6 +1,7 @@
 # Unit 1a: frontend–native state protocol
 
-- Status: revision 2 for review, 2026-11-01. Revision 1 (`dc64e43`) failed its design review with 13 findings ([design review](../reviews/2026-11-01-unit1a-design-review.md)). The table in section 9 maps each finding to its change.
+- Outcome, 2026-11-01: revision 2 failed its second design review ([design review 2](../reviews/2026-11-01-unit1a-design-review2.md)). The owner then split the unit (option A). Sections 4 to 6 are implemented in unit 1a, with the changes listed under "Implemented in unit 1a" below. Sections 2 and 3 move to unit 1c ([ROADMAP.md](../ROADMAP.md)), together with the open findings of both design reviews. Sections 1, 7 and 8 still describe the whole protocol; unit 1c revisits them.
+- Status of revision 2: reviewed, not ready, 2026-11-01. Revision 1 (`dc64e43`) failed its design review with 13 findings ([design review](../reviews/2026-11-01-unit1a-design-review.md)). The table in section 9 maps each finding to its change.
 - Owner decision, 2026-11-01: design first (option B in STATE.md), after the fifth unit 1a review ([round 5](../reviews/2026-11-01-unit1a-review5.md)).
 - Scope: the six round-5 findings, 1A-R5-01 to 1A-R5-06 ([FINDINGS.md](../FINDINGS.md)), and the rules that stop the same class of defect. Nothing else in unit 1a changes.
 - Public API change: yes. `env_import_preview` changes shape. Two IPC commands are added: `env_import_open` and `env_import_close` (section 3). The CLI gains one journal record (section 5). The journal file format and the KDBX format do not change.
@@ -154,6 +155,15 @@ The frontend does not promise that a confirm dispatched before the close will im
 - Clipboard sequence wrap (section 4) and cleanup after process exit are not covered.
 - A webview reload loses document-level state, as today (1A-R1-03 and related limits). The native page-load hook clears the import review; outcome records held in document memory are still lost.
 - The 3-second status poll is part of the bound in section 2. It is a second defence behind the event, not a replacement for it.
+
+## Implemented in unit 1a
+
+These differences from sections 4 to 6 answer design review 2 or simplify the change:
+
+- **Section 4, warnings.** A successful retry ends the cleanup episode; it does not remove the warning. The warning stays until the user acknowledges it, and a later episode gets its own warning ID (the R4-03 behaviour, unchanged). A publication that failed but emptied the clipboard in its own open interval (`rolled_back`) holds no unverifiable lease.
+- **Section 5, failed file export.** "No file at the destination" means no new destination file: a pre-existing destination keeps its exact bytes. A failed delete request for the owned plaintext temporary file is still not reported; it is finding 1A-D2-09 (unit 3).
+- **Section 6, field.** The declared sequence uses the existing `broken_at` field and its decimal-string IPC field `brokenAt`, not a new `problem_declared_seq` field. Every damaged record's sequence is unverified, so the CLI and the Activity view now both say "declared sequence N (not verified)". The IPC shape does not change.
+- **Section 7, checks.** The release-CLI checks for sections 5 and 6 ran against the final `akm.exe`, between two matching hash runs. The cases that need an injected fault (a partial stdout write, a failed completion append) are unit tests of the CLI functions, not release-binary checks.
 
 ## 9. Design review findings and changes
 

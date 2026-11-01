@@ -11,7 +11,18 @@ Phase two fixes the remaining privacy, history and compatibility problems withou
 - A requested action and its known outcome are recorded separately. Verify and display use one locked snapshot.
 - Logging before a disclosure, export or launch still fails closed. A logging failure after a commit or publication is a warning with a truthful, non-retryable result.
 
+On 2026-11-01 the owner split the session-event and import-review findings into unit 1c. Unit 1a keeps the clipboard, CLI export and journal-sequence findings.
+
 Status: [STATE.md](STATE.md) and [FINDINGS.md](FINDINGS.md).
+
+## Unit 1c: session events and import reviews (split from unit 1a)
+
+- The frontend reads the session status only after its lock and view-expiry listeners are ready. A lost or late event, a failed or hung registration, and a replaced React root never leave a stale unlocked or unexpired view, within a stated best-effort bound.
+- An import review that the frontend abandons is revoked natively, on every path: close, edit, hide, reload, lock, and a failed or hung cancel. A delayed request never installs a review in a later session, presentation or attempt. A stale token never consumes a valid review.
+- A confirmation that was dispatched keeps a truthful outcome record, also when its reply is lost.
+- Two design reviews rejected a two-step frontend-native protocol for this ([design](design/unit1a-protocol.md), sections 2 and 3). Start with the design question: a native confirm dialog that leaves no pending review state, or another design that a review accepts.
+
+Acceptance: the findings in the unit 1c table of [FINDINGS.md](FINDINGS.md), with real dispatch through the production command handler. Implementation needs the owner's authorization, like every unit.
 
 ## Unit 1b: private per-device journal
 
