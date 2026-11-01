@@ -11,27 +11,26 @@ Updated 2026-11-01. Replace this file's sections when they change. History lives
 
 ## Last full check run
 
-This run checked branch `fix/unit1a-sound-findings` with the round 8 fixes (1A-R7-01 to 1A-R7-04) on 2026-11-01. All data was fake.
+This run checked branch `fix/unit1a-sound-findings` at `2664e51` (unit 1a repair, commit 2) on 2026-11-01, in a separate check session. All data was fake.
 
-- Rust: `cargo test --workspace --offline --locked` passed 215 tests, with 2 gated tests ignored. Clippy (`-D warnings`) and `cargo fmt --check` were clean. The release CLI was rebuilt with `--locked` after the last source change. A first test run failed to link (`LNK1104`) because an earlier check run held the same test binary; the run alone passed.
-- Frontend: `npm ci` passed. `npm test` passed 190 cases in 15 files. The production build passed. `npm run test:ui` passed 32 mocked-native cases.
-- Build: `npm run tauri -- build -- --locked --offline` built the GUI and the unsigned MSI and NSIS installers. None is installed. The installers do not bundle the CLI.
+- Rust: `cargo fmt --all -- --check` and Clippy (`-D warnings`) were clean. `cargo test --workspace --offline --locked` passed 224 tests, with 2 gated tests ignored. The release CLI was rebuilt with `--locked` after the GUI build.
+- Frontend: `npm ci` passed. `npm test` passed 192 cases in 16 files. The production build passed. `npm run test:ui` passed 32 mocked-native cases.
+- Build: `npm run tauri -- build -- --locked --offline` built the GUI and the unsigned MSI and NSIS installers. None is installed.
 - Final-build checks, between two hash runs that matched:
-  - Release CLI, fake vault (`.scratch` script, not committed): 39 of 39 checks passed. The 15 new checks: `add` and `rm` with stdout closed, stderr closed, or both, while every journal append fails, exit 0 and the change persists; `get --field secret` with stdout closed exits 1 (not 101), warns of partial output and does not show the secret.
-  - Native GUI proofs `-JournalOnly` (28 checks) and `-JournalExportOnly` (8 checks) passed. They used fake vaults, did not touch the clipboard and did not minimize or hide the window. The settings file was byte-identical before and after, and no `akm-desktop` process remained.
-- Round 8 regression tests, each run on the unfixed code first: `committed_changes_exit_zero_with_closed_output_pipes` and `failed_primary_output_is_an_error_not_a_panic` (1A-R7-01) failed on `496aa23`; `the_lease_state_table_holds_for_every_event_from_every_state` and `a_rolled_back_publication_after_an_owned_copy_leaves_no_lease_retry_or_warning` (1A-R7-02) failed with only the wording fix applied. The 1A-R7-03 and 1A-R7-04 tests cannot compile on the old code (changed signature, new seam); mutants stand in for them.
-- Mutant checks, each restored after its run: a reinserted `println!` fails clippy; `unwrap` in `status!` fails the CLI class test; the old "It will try again" text, a removed relinquish, and a lease that expires at once each fail at least one lease test.
-- Own sibling sweep before the review: no print macro remains in CLI or desktop application code (one `eprintln!` is in the opt-in real-clipboard test); clap help, version and usage errors exit 0 or 2 with closed pipes; no other kept warning promises a later action.
-- Not run: KeePassXC interchange (no KDBX format change), the full native GUI proof (it uses the clipboard), the real clipboard test, and R4-04 (deferred).
+  - Release CLI, fake vaults (`.scratch` scripts, not committed): the earlier script passed 39 of 39; the unit 1a script passed 49 of 49: the default `get` view prints `Secret:      ********` and identical output for secrets of 1, 8, 9 and 40 characters and a non-ASCII secret, with no secret fragment of 3 or more characters and no journal record; every non-secret `--field` prints no secret fragment; `--field secret` and `--reveal` record `reveal-requested` first; `run`, `export` and `--reveal` record `run-requested`, `export-requested`, `export-completed`, `reveal-requested`, the names in the CLI README.
+  - Native GUI proofs `-JournalOnly` (27 checks) and `-JournalExportOnly` (9 checks) passed. They used fake vaults, did not touch the clipboard and did not minimize or hide the window. The settings file was byte-identical before and after, and no `akm-desktop` process remained.
+- Commit 1 defect tests failed at `3e53e63` and pass at `2664e51`. The 10 design mutants (repair design, section 3.3) each fail a test.
+- Not run: KeePassXC interchange (no KDBX format change), the full native GUI proof and the real clipboard test (they use the clipboard and need the owner present), `-OutcomeOnly` (owner gate), and R4-04 (deferred).
+- CI: GitHub Actions is off, so no CI ran (`CI RESULT: none`).
 
 ## Unit 1a build under test
 
-- Source: branch `fix/unit1a-sound-findings`. Its application files differ from `cfeb1b0` only by the unit 1a fixes of rounds 6 to 8, their tests, the `uuid` dependency of `akm-cli` (already in the workspace), and `crates/akm-cli/clippy.toml`.
+- Source: branch `fix/unit1a-sound-findings` at `2664e51`.
 - Builds in `target/release`, all unsigned and not installed, SHA-256:
-  - `akm-desktop.exe` `0efbacf7120b1818860a401daf0e7bbcbeaab4100777b49edd79599450709a0b`
-  - `akm.exe` `ea4fc82b0000e465380ceb77e84279c82925981de547a1c3370b947b7483cf8f`
-  - `bundle/msi/AKM_0.1.0_x64_en-US.msi` `1aa51ae69fc2d136fd1399c5ceb8fc9d2335fba4b71dd5b9dead25da247f3411`
-  - `bundle/nsis/AKM_0.1.0_x64-setup.exe` `35f3d9e3193bdb941e90821d18e3e7a00e1ffc637ecef4b1f5e6876b7401c509`
+  - `akm-desktop.exe` `243b5997bb98d1c537834aa05ee1c3fad2e8b148a7ffdf083968a2dacfc8f48b`
+  - `akm.exe` `8cfd85c702ccbc1168844745698a318d618315f78aec0b2053887a57f5c93819`
+  - `bundle/msi/AKM_0.1.0_x64_en-US.msi` `d1d6af127d96a915a5611667c5cb2e89a0554a6f34b1637ff9f1b9795880e978`
+  - `bundle/nsis/AKM_0.1.0_x64-setup.exe` `5caeb532e8061b9f04ac0a166ae96993cc84f0aa8a897d34720b52d644b1b817`
 - The R4-04 pass conditions in FINDINGS.md still name `cfeb1b0`; update them to the accepted source before R4-04 runs.
 - Before you use a build for a proof, check its hash against this list. A different hash needs a rebuild and a new check run.
 
@@ -56,13 +55,17 @@ The owner authorized implementation of unit 1a only. Each other unit needs its o
    - Done, from revision 3, section 5:
      1. Commit 1 (`3e53e63`): the test-support move and the failing tests. On the unchanged production code, every defect test failed as stated (the `copy_stamped` table for the four 1A-R8-03 cases and the messages, the changed-sequence cleanup, both frontend text tests, the CLI mask test at the 9-character secret, the README action test on `run-start`).
      2. Commit 2: the fix (publisher outcomes from the `tx` phase, the lease transitions, `clipboardLost`, `KeyMetadata` and the fixed mask, `run_with` with `Io`), the text and action-name sweep (`clipboardText.ts`, both READMEs), and the tests. All 10 design mutants (section 3.3) fail a test. Mutant 2 survived at first; the new table case "rollback fails after the first secret set" catches it. Its expected row keeps the lease, because cleanup cannot read the empty frame formats and retries with the uncertainty warning.
+     3. The full check run and the final build with its hashes (above).
    - Next:
-     3. The full check run and the final build with its hashes.
      4. The owner-gated Windows evidence, each with the owner's yes, or reported as not checked.
      5. One acceptance review. If it rejects, stop and ask the owner.
 3. **R4-04** stays deferred until the owner chooses option A or B for it (item 1).
 
-**UI work unit (draft PR #2, worktree `W:\akm-worktrees\ui-refine`).** It failed review twice (raw reviews in `docs/reviews/2026-11-01-ui-review.md` and `-ui-review-round2.md` on that branch). The owner then decided, on 2026-11-01: remove the Key Detail timer bar, make colour changes instant (only transform animates), and keep clay destructive buttons as a recorded exception to the house forest rule. Commit `6aa3ee3` applies the decisions. Review round 3 confirmed them and found one P3: press and hover feedback eases back. The owner decided to keep the ease-back (2026-11-01), and `57909a7` records the rule in the CSS comments. Its checks: 191 unit tests, the build, 40 browser tests and the e2e type check passed, and the two changed tests fail on `496205c`. The PR stays a draft until R4-04 and the unit 1a review are done, because a rebuild would change the pinned build. The first review also found P3-REVEAL-CLOCK, which predates the UI work.
+**Pull requests, 2026-11-01.** The owner asked that the open PRs be landed, not left as unfinished work ("Just make sure they are landed and we are not sitting on incomplete work"). This is read as the owner's yes to merge each PR that is complete: reviewed, with its checks passing. A separate session merged:
+- PR #1 (docs cleanup) as `d46bcce`. Its review loop stopped after round 2 by the AGENTS.md rule, with the round 2 fixes in `e8f2f18`.
+- PR #2 (UI look) as `4656b0c`, after a merge of `main` with no conflicts: 191 unit tests, the build and 40 browser tests passed in its worktree. Its review round 3 confirmed the owner's decisions; the one P3 (ease-back) is the owner's choice. It never touched `target/` of this checkout, so the unit 1a build above is unchanged. The first UI review also found P3-REVEAL-CLOCK, which predates the UI work.
+- Deleting PR #1's branch closed PR #3; the session reopened it on base `main`. Before PR #3 lands, retarget PR #4 to `main`, and PR #5 before PR #4 lands.
+- PRs #3, #4 and #5 (the R4-04 script, the unit 1a protocol design, unit 1a) land in that order only after the unit 1a acceptance review accepts.
 
 ## Local state outside the repository
 
