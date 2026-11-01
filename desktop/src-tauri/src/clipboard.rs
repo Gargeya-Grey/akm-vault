@@ -96,7 +96,13 @@ impl ClipboardLease {
             )
             .into());
         }
-        let attempt = self.backend.set_private(&text)?;
+        let mut attempt = self.backend.set_private(&text)?;
+        if attempt.rolled_back {
+            if let Some(error) = attempt.failure.take() {
+                // Emptied in the publication's own open interval: AKM owns nothing to clean up.
+                return Err(error.into());
+            }
+        }
         self.generation = self.generation.wrapping_add(1);
         self.owned = Some(Lease {
             generation: self.generation,
@@ -128,7 +134,16 @@ impl ClipboardLease {
                 self.owned = None;
                 return Err(uncertain_cleanup(false));
             }
-            self.backend.clear_matching(lease.sequence, &lease.text)?;
+            // Any cleanup failure (busy, refused) leaves the copy possibly in place.
+            self.backend
+                .clear_matching(lease.sequence, &lease.text)
+                .map_err(|error| {
+                    if error.kind == "clipboardUncertain" {
+                        error
+                    } else {
+                        uncertain_cleanup(true)
+                    }
+                })?;
         }
         self.owned = None;
         Ok(())
@@ -1453,7 +1468,12 @@ mod windows {
                         })
                     );
                     assert_eq!(state.clears, if rollback_fails { 0 } else { 1 });
-                    assert_eq!((state.open_calls, state.opens, state.closes), (2, 2, 2));
+                    // A rolled-back publication owns nothing, so it never reopens (1A-R6-03).
+                    let opens = if rollback_fails { 2 } else { 1 };
+                    assert_eq!(
+                        (state.open_calls, state.opens, state.closes),
+                        (opens, opens, opens)
+                    );
                 }
             }
         }
@@ -1545,6 +1565,29 @@ mod windows {
                     assert!(failure.cleanup.is_none());
                     assert_eq!(state.text(), "");
                 }
+            }
+        }
+
+        // 1A-R6-03: a publication that rolled back owns nothing, so a busy reopen is no failure.
+        #[test]
+        fn a_rolled_back_publication_keeps_no_lease_even_when_the_next_open_is_busy() {
+            for fault in [Fault::Sequence, Fault::TextRead] {
+                let state = Arc::new(Mutex::new(FakeState {
+                    faults: vec![fault, Fault::Open(2)],
+                    ..FakeState::default()
+                }));
+                let mut lease =
+                    ClipboardLease::new(Box::new(TransactionBackend(FakeApi(state.clone()))));
+                let failure = lease
+                    .copy_reported(Zeroizing::new(FAKE_TEXT.into()), Duration::ZERO)
+                    .err()
+                    .unwrap();
+                assert_eq!(failure.error.kind, "clipboard");
+                assert!(failure.cleanup.is_none());
+                assert_eq!(lease.owned_generation(), None);
+                let state = state.lock().unwrap();
+                assert_eq!(state.text(), "");
+                assert_eq!(state.clears, 1);
             }
         }
 

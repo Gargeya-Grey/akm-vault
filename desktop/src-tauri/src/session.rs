@@ -1604,6 +1604,79 @@ mod tests {
         );
     }
 
+    struct BusyCleanup {
+        data: Arc<Mutex<FakeData>>,
+        busy: Arc<AtomicBool>,
+        partial: bool,
+    }
+    impl ClipboardBackend for BusyCleanup {
+        fn set_private(
+            &mut self,
+            text: &str,
+        ) -> Result<crate::clipboard::CopyAttempt, CommandError> {
+            let mut attempt = FakeClipboard(self.data.clone()).set_private(text)?;
+            if self.partial {
+                attempt.failure = Some(CommandError::new(
+                    "clipboard",
+                    "Fake partial publication error",
+                ));
+            }
+            Ok(attempt)
+        }
+        fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
+            if self.busy.load(Ordering::SeqCst) {
+                // The production OpenClipboard failure text, which is written for copying.
+                return Err(CommandError::new(
+                    "clipboard",
+                    "The clipboard is busy. Try copying again.",
+                ));
+            }
+            FakeClipboard(self.data.clone()).clear_matching(sequence, text)
+        }
+    }
+
+    // 1A-R6-02: a busy cleanup warns that the copy may remain, retries, and keeps a newer copy.
+    #[test]
+    fn a_busy_cleanup_warns_that_the_copy_may_remain_and_retries_in_one_episode() {
+        for partial in [false, true] {
+            let f = fixture();
+            let busy = Arc::new(AtomicBool::new(true));
+            f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(BusyCleanup {
+                data: f.clipboard.clone(),
+                busy: busy.clone(),
+                partial,
+            }));
+            let ticket = f.session.snapshot().unwrap().ticket;
+            let copied = f
+                .session
+                .copy(ticket, Zeroizing::new("fake-busy-value".into()));
+            assert_eq!(copied.is_err(), partial);
+            if !partial {
+                f.clock.set(30);
+                f.session.tick();
+            }
+            let warnings = f.session.warnings().unwrap().application;
+            assert_eq!(warnings.len(), 1, "partial={partial}");
+            assert_eq!(
+                warnings[0].message,
+                crate::clipboard::uncertain_cleanup(true).message,
+                "partial={partial}"
+            );
+            assert!(!warnings[0].message.contains("Try copying again"));
+            assert_eq!(f.clipboard.lock().unwrap().text, "fake-busy-value");
+            f.session.tick();
+            assert_eq!(application_ids(&f), vec![warnings[0].id.clone()]);
+            // A newer identical user copy, then the clipboard frees up.
+            f.clipboard.lock().unwrap().sequence += 1;
+            busy.store(false, Ordering::SeqCst);
+            f.session.tick();
+            assert_eq!(f.clipboard.lock().unwrap().text, "fake-busy-value");
+            assert_eq!(f.clipboard.lock().unwrap().clears, 0);
+            assert_eq!(f.session.gate().unwrap().clipboard.owned_generation(), None);
+            assert_eq!(application_ids(&f), vec![warnings[0].id.clone()]);
+        }
+    }
+
     struct CleanupFault {
         data: Arc<Mutex<FakeData>>,
         fail: Arc<AtomicBool>,

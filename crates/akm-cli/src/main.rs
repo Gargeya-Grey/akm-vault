@@ -393,7 +393,8 @@ fn run() -> Result<i32> {
             if let Some(warning) =
                 record_export_completed(&AuditLog::for_vault(&path), &operation, envs.len())
             {
-                eprintln!("warning: {warning}");
+                // The export happened: an unwritable stderr must not turn it into a failed exit.
+                let _ = writeln!(std::io::stderr(), "warning: {warning}");
             }
         }
 

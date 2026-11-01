@@ -274,7 +274,7 @@ impl AuditLog {
         if snapshot.state == AuditState::Corrupt {
             let sequence = snapshot
                 .broken_at
-                .map(|seq| format!(", sequence {seq}"))
+                .map(|seq| format!(", declared sequence {seq} (not verified)"))
                 .unwrap_or_default();
             return Err(Error::Invalid(format!(
                 "Activity journal data is damaged at physical line {}{sequence}; append refused and original bytes preserved.",

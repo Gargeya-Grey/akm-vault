@@ -592,6 +592,83 @@ fn audit_shows_a_damaged_records_declared_sequence_without_its_contents() {
     assert_eq!(fs::read(log.path()).unwrap(), bytes);
 }
 
+// 1A-R6-01: a completed export exits 0 even when its warning cannot be printed.
+#[test]
+fn an_unconfirmed_completion_keeps_a_successful_exit_even_without_stderr() {
+    use std::io::Read as _;
+    let big = "f".repeat(1 << 20);
+    for stderr_open in [false, true] {
+        let fixture = Fixture::with_keys(&[("Big", "BIG_SECRET", &big, "demo", "dev")]);
+        let log = AuditLog::for_vault(&fixture.vault);
+        let mut child = fixture
+            .cli()
+            .args(["export", "--all"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdout = child.stdout.take().unwrap();
+        let mut stderr_pipe = child.stderr.take().unwrap();
+        let reader = if stderr_open {
+            Some(std::thread::spawn(move || {
+                let mut text = String::new();
+                stderr_pipe.read_to_string(&mut text).unwrap();
+                text
+            }))
+        } else {
+            drop(stderr_pipe);
+            None
+        };
+        // The CLI now blocks on the unread stdout pipe, after its request record.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !fs::read_to_string(log.path())
+            .unwrap_or_default()
+            .contains("export-requested")
+        {
+            assert!(Instant::now() < deadline, "no request record");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut journal = fs::OpenOptions::new()
+            .append(true)
+            .open(log.path())
+            .unwrap();
+        journal.write_all(b"not-json\n").unwrap();
+        drop(journal);
+        let damaged = fs::read(log.path()).unwrap();
+        let mut output = Vec::new();
+        stdout.read_to_end(&mut output).unwrap();
+        let status = child.wait().unwrap();
+        assert!(output.len() > big.len(), "the whole export was delivered");
+        assert_eq!(status.code(), Some(0), "stderr_open={stderr_open}");
+        assert_eq!(fs::read(log.path()).unwrap(), damaged);
+        if let Some(reader) = reader {
+            let text = reader.join().unwrap();
+            assert!(text.contains("could not be confirmed"), "{text}");
+            assert!(text.contains("Do not repeat the export"), "{text}");
+            assert!(!text.contains("ffffffffffffffff"));
+        }
+    }
+}
+
+// 1A-R6-04: an append refused for a damaged journal labels its sequence as declared.
+#[test]
+fn refused_appends_label_a_damaged_records_sequence_as_declared() {
+    let fixture = Fixture::new();
+    let log = AuditLog::for_vault(&fixture.vault);
+    let bytes = b"{\"seq\":7,\"ts\":\"bad\",\"detail\":\"fake-hidden-detail\"}\n";
+    fs::write(log.path(), bytes).unwrap();
+    let output = fixture.cli().args(["export", "--all"]).output().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let text = stderr(&output);
+    assert!(
+        text.contains("physical line 1, declared sequence 7 (not verified)"),
+        "{text}"
+    );
+    assert!(!text.contains("fake-hidden-detail") && !text.contains("fake-intended-secret"));
+    assert_eq!(fs::read(log.path()).unwrap(), bytes);
+}
+
 // 1A-R5-04: a known export outcome is recorded and paired with its request.
 #[test]
 fn exports_pair_requested_and_completed_records_by_operation_without_the_destination() {
