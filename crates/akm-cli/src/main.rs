@@ -944,6 +944,26 @@ mod tests {
     }
 
     fn export_through_run_with(complete: fn(&AuditLog, &str) -> Result<()>) -> Exported {
+        let (_directory, path) = fake_export_vault();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run_with(
+            export_cli(&path),
+            &mut Io {
+                out: &mut out,
+                err: &mut err,
+                complete,
+            },
+        );
+        Exported {
+            code,
+            out: String::from_utf8(out).unwrap(),
+            err: String::from_utf8(err).unwrap(),
+            journal: export_journal(&path),
+        }
+    }
+
+    /// A fake vault with one key in demo/dev, and `AKM_PASSWORD` set for it.
+    fn fake_export_vault() -> (tempfile::TempDir, std::path::PathBuf) {
         // Every caller sets the same fake value, so tests that run in parallel agree.
         std::env::set_var("AKM_PASSWORD", PASSWORD);
         let directory = tempfile::tempdir().unwrap();
@@ -960,30 +980,29 @@ mod tests {
             })
             .unwrap();
         drop(vault);
-        let vault = path.to_str().unwrap();
-        let cli = Cli::try_parse_from([
+        (directory, path)
+    }
+
+    /// `akm export --project demo --env dev`, to stdout.
+    fn export_cli(path: &std::path::Path) -> Cli {
+        Cli::try_parse_from([
             "akm",
             "--vault",
-            vault,
+            path.to_str().unwrap(),
             "export",
             "--project",
             "demo",
             "--env",
             "dev",
         ])
-        .unwrap();
-        let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = run_with(
-            cli,
-            &mut Io {
-                out: &mut out,
-                err: &mut err,
-                complete,
-            },
-        );
-        let mut entries = AuditLog::for_vault(&path).read(100).unwrap();
+        .unwrap()
+    }
+
+    /// The export records in journal order, each with its operation ID.
+    fn export_journal(path: &std::path::Path) -> Vec<(String, String)> {
+        let mut entries = AuditLog::for_vault(path).read(100).unwrap();
         entries.sort_by_key(|entry| entry.seq);
-        let journal = entries
+        entries
             .into_iter()
             .filter(|entry| entry.action.starts_with("export-"))
             .map(|entry| {
@@ -991,13 +1010,54 @@ mod tests {
                 let operation = detail.split(';').next().unwrap_or_default().to_string();
                 (entry.action, operation)
             })
-            .collect();
-        Exported {
-            code,
-            out: String::from_utf8(out).unwrap(),
-            err: String::from_utf8(err).unwrap(),
-            journal,
+            .collect()
+    }
+
+    /// An export sink that reads the journal at every write (1A-A1-04).
+    struct JournalAtEachWrite {
+        path: std::path::PathBuf,
+        written: Vec<u8>,
+        seen: Vec<Vec<String>>,
+    }
+
+    impl Write for JournalAtEachWrite {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let actions = export_journal(&self.path).into_iter().map(|(a, _)| a);
+            self.seen.push(actions.collect());
+            self.written.extend_from_slice(buf);
+            Ok(buf.len())
         }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_export_records_its_request_before_the_first_byte_and_its_completion_after_the_last() {
+        let (_directory, path) = fake_export_vault();
+        let mut out = JournalAtEachWrite {
+            path: path.clone(),
+            written: Vec::new(),
+            seen: Vec::new(),
+        };
+        let mut err = Vec::new();
+        let code = run_with(
+            export_cli(&path),
+            &mut Io {
+                out: &mut out,
+                err: &mut err,
+                complete: append_completion,
+            },
+        );
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&out.written).contains(SECRET));
+        assert!(!out.seen.is_empty(), "the export wrote through the sink");
+        for (write, seen) in out.seen.iter().enumerate() {
+            assert_eq!(seen, &["export-requested"], "journal at write {write}");
+        }
+        let after: Vec<String> = export_journal(&path).into_iter().map(|(a, _)| a).collect();
+        assert_eq!(after, ["export-requested", "export-completed"]);
     }
 
     fn actions(run: &Exported) -> Vec<&str> {

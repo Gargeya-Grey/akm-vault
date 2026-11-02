@@ -1945,4 +1945,26 @@ fn the_readme_names_the_recorded_audit_actions_in_their_order() {
         named, expected,
         "the README must name exactly the recorded actions"
     );
+    // 1A-A1-04: the README states when each record is written, in the order above.
+    let line = |action: &str| {
+        let name = format!("`{action}`");
+        readme
+            .lines()
+            .find(|line| line.contains(&name))
+            .unwrap_or_else(|| panic!("the README names {action}"))
+            .to_string()
+    };
+    for (action, timing) in [
+        ("run-requested", "before the child starts"),
+        ("reveal-requested", "before `get --reveal`"),
+        ("export-requested", "before any export byte is written"),
+        ("export-completed", "after the export is written"),
+    ] {
+        assert!(line(action).contains(timing), "{action}: {timing}");
+    }
+    let at = |action: &str| readme.find(&format!("`{action}`")).unwrap();
+    assert!(
+        at("export-requested") < at("export-completed"),
+        "the README lists the request before the completion"
+    );
 }
