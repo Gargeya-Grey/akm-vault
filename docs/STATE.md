@@ -11,26 +11,28 @@ Updated 2026-11-02. Replace this file's sections when they change. History lives
 
 ## Last full check run
 
-This run checked branch `fix/unit1a-sound-findings` at `2664e51` (unit 1a repair, commit 2) on 2026-11-01, in a separate check session. All data was fake.
+This run checked branch `fix/unit1a-sound-findings` at `94d8008` (unit 1a, round A1 fix) on 2026-11-02, in a separate check session. All data was fake.
 
-- Rust: `cargo fmt --all -- --check` and Clippy (`-D warnings`) were clean. `cargo test --workspace --offline --locked` passed 224 tests, with 2 gated tests ignored. The release CLI was rebuilt with `--locked` after the GUI build.
+- Rust: `cargo fmt --all -- --check` and Clippy (`-D warnings`) were clean. `cargo test --workspace --offline --locked` passed 230 tests, with 2 gated tests ignored. The release CLI was rebuilt with `--locked` after the GUI build.
 - Frontend: `npm ci` passed. `npm test` passed 192 cases in 16 files. The production build passed. `npm run test:ui` passed 32 mocked-native cases.
 - Build: `npm run tauri -- build -- --locked --offline` built the GUI and the unsigned MSI and NSIS installers. None is installed.
 - Final-build checks, between two hash runs that matched:
-  - Release CLI, fake vaults (`.scratch` scripts, not committed): the earlier script passed 39 of 39; the unit 1a script passed 49 of 49: the default `get` view prints `Secret:      ********` and identical output for secrets of 1, 8, 9 and 40 characters and a non-ASCII secret, with no secret fragment of 3 or more characters and no journal record; every non-secret `--field` prints no secret fragment; `--field secret` and `--reveal` record `reveal-requested` first; `run`, `export` and `--reveal` record `run-requested`, `export-requested`, `export-completed`, `reveal-requested`, the names in the CLI README.
-  - Native GUI proofs `-JournalOnly` (27 checks) and `-JournalExportOnly` (9 checks) passed. They used fake vaults, did not touch the clipboard and did not minimize or hide the window. The settings file was byte-identical before and after, and no `akm-desktop` process remained.
-- Commit 1 defect tests failed at `3e53e63` and pass at `2664e51`. The 10 design mutants (repair design, section 3.3) each fail a test.
-- Not run: KeePassXC interchange (no KDBX format change), the full native GUI proof and the real clipboard test (they use the clipboard and need the owner present), `-OutcomeOnly` (owner gate), and R4-04 (deferred).
+  - Release CLI, fake vaults (`.scratch` scripts, not committed): the earlier script passed 39 of 39, and the unit 1a script passed 49 of 49.
+  - Native GUI proof `-JournalOnly` passed 27 checks.
+  - **Native GUI proof `-JournalExportOnly` failed twice, at the same step**: `Missing select option in the test process: Environment / prod` (`tools/verify_windows_app.ps1:303`), right after the Project filter was set. No export check ran. At the failure, UI Automation showed only the WebView document node, with no child controls. It passed 9 checks at `2664e51`. Between `2664e51` and `94d8008`, the frontend and `tools/` did not change; the production change is the clipboard error texts and `clear_observed` in `clipboard.rs`, which an export does not use. Not checked: the cause. The owner was using the PC during this run, and the earlier passes ran while the owner was away; a focus change can close the dropdown that the step opens. This is a guess.
+  - Both proofs used fake vaults, did not touch the clipboard and did not minimize or hide the window. The settings file was byte-identical before and after (SHA-256 `dacba49a…9115`), and no `akm-desktop` process remained.
+- Round A1 tests (`836fc8c`): the four text tests and the copy table failed on the old production code and pass at `94d8008`. Mutants (`.scratch/mutants_a1.py`): 5 of 5 caught.
+- Not run: KeePassXC interchange (no KDBX format change; the portable KeePassXC path was not found), the full native GUI proof and the real clipboard test (they use the clipboard and need the owner present), `-OutcomeOnly` (owner gate), and R4-04 (deferred).
 - CI: GitHub Actions is off, so no CI ran (`CI RESULT: none`).
 
 ## Unit 1a build under test
 
-- Source: branch `fix/unit1a-sound-findings` at `2664e51`.
+- Source: branch `fix/unit1a-sound-findings` at `94d8008`.
 - Builds in `target/release`, all unsigned and not installed, SHA-256:
-  - `akm-desktop.exe` `243b5997bb98d1c537834aa05ee1c3fad2e8b148a7ffdf083968a2dacfc8f48b`
-  - `akm.exe` `8cfd85c702ccbc1168844745698a318d618315f78aec0b2053887a57f5c93819`
-  - `bundle/msi/AKM_0.1.0_x64_en-US.msi` `d1d6af127d96a915a5611667c5cb2e89a0554a6f34b1637ff9f1b9795880e978`
-  - `bundle/nsis/AKM_0.1.0_x64-setup.exe` `5caeb532e8061b9f04ac0a166ae96993cc84f0aa8a897d34720b52d644b1b817`
+  - `akm-desktop.exe` `32f591a7d197ed93e7aba57d6c7a3ff8548ce44172a3b27f183222c0578c9104`
+  - `akm.exe` `ad2ec01b491de883493b12d0aad802084ad8831b45083083a8e77ef8c6ceafc1`
+  - `bundle/msi/AKM_0.1.0_x64_en-US.msi` `d7c457b92d98e730db56e211eee6ebf716aee157f95fc20514d13a26427c852c`
+  - `bundle/nsis/AKM_0.1.0_x64-setup.exe` `05f8124b441f96c2c086151961e9487fd40b48c946b25b3bee7d8f97085ea3cf`
 - The R4-04 pass conditions in FINDINGS.md still name `cfeb1b0`; update them to the accepted source before R4-04 runs.
 - Before you use a build for a proof, check its hash against this list. A different hash needs a rebuild and a new check run.
 
@@ -58,7 +60,8 @@ The owner authorized implementation of unit 1a only. Each other unit needs its o
      3. The full check run and the final build with its hashes (above).
      4. The owner-gated Windows evidence: not run. The owner was asleep; the real clipboard test and the full native GUI copy proof need the owner present.
      5. The acceptance review ([raw](reviews/2026-11-01-unit1a-acceptance-review.md), GPT-6.1 Terra max) rejected the unit: **source acceptance NO, work unit complete NO**, with 4 P3 findings, 1A-A1-01 to 1A-A1-04. No P0, P1 or P2. The reviewer's own probe of the release CLI passed the fixed mask and the damaged-journal fail-closed cases. Work stopped here, as the rule says. Nothing is uncommitted.
-   - **Owner question (open).** Two findings are wrong texts: a failed copy says "AKM's earlier copy is still on the clipboard" when AKM only holds a lease (1A-A1-01), and "AKM could not remove the partial copy" after the immediate cleanup succeeded (1A-A1-02). Both sentences come from revision 3 itself, so the design, not the code, claimed more than AKM observes. The other two are coverage gaps (1A-A1-03, 1A-A1-04). Options:
+   - **Owner decision, 2026-11-02: option A.** Round A1: commit 1 (`836fc8c`) adds the tests; commit 2 (`94d8008`) fixes the two texts (FINDINGS.md, 1A-A1-01 to A1-04). The full check run is above. Next: rerun `-JournalExportOnly` once while the PC is idle; if it passes, one acceptance review, judged by the pass rule.
+   - **Owner question (answered: A).** Two findings are wrong texts: a failed copy says "AKM's earlier copy is still on the clipboard" when AKM only holds a lease (1A-A1-01), and "AKM could not remove the partial copy" after the immediate cleanup succeeded (1A-A1-02). Both sentences come from revision 3 itself, so the design, not the code, claimed more than AKM observes. The other two are coverage gaps (1A-A1-03, 1A-A1-04). Options:
      - **A (recommended).** One small round: make those two texts depend on what AKM observed ("may still be on the clipboard"; a separate text when the immediate cleanup succeeded), with tests through `copy_stamped` that fail first; add the tick-and-lock cleanup matrix and the order test. Then one acceptance review, judged by the [pass rule](REVIEWING.md#pass-rule).
      - **B.** Accept unit 1a with these four P3 findings open, moved to unit 1h, and land PRs #3, #4 and #5. Landing does not close a finding.
      - **C.** Pause unit 1a.
