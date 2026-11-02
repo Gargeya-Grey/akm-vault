@@ -1,45 +1,86 @@
 # Current state
 
-Updated 2026-11-01. Replace this file's sections when they change. History lives in Git.
+Updated 2026-11-02. Replace this file's sections when they change. History lives in Git.
 
 ## Status
 
 - **Phase one is complete.** Its review rounds accepted the fixes for the original critical and high findings. H9 (rotation) is still open, and H6 is partial: real Windows lock and suspend delivery is not tested.
-- **Phase two, unit 1a, is in progress.** Unit 1a covers warning ownership and honest journal outcomes ([ROADMAP.md](ROADMAP.md)). Its fourth review rejected it, with findings R4-01, R4-02 and R4-03 and one missing proof, R4-04 ([FINDINGS.md](FINDINGS.md)).
-- **The fixes for R4-01, R4-02 and R4-03 are in the source on `main`.** They have regression tests. No review has checked them yet.
+- **Phase two, unit 1a, is in progress.** Unit 1a covers warning ownership and honest journal outcomes ([ROADMAP.md](ROADMAP.md)). Its fifth review ([round 5](reviews/2026-11-01-unit1a-review5.md)) rejected it and found 1A-R5-01 to 1A-R5-06. A protocol design then failed two design reviews. On 2026-11-01 the owner split the unit (option A): the session-event and import-review findings (R4-02, 1A-R5-01, 1A-R5-03, 1A-R5-05) moved to the new unit 1c. Unit 1a now has fixes for 1A-R5-02, 1A-R5-04 and 1A-R5-06 on branch `fix/unit1a-sound-findings`. Review round 6 rejected them with 4 new findings (1A-R6-01 to 1A-R6-04). The owner chose one more fix round (option A); review round 7 rejected it with 1A-R7-01 to 1A-R7-04. The owner then chose "fix by class" (option A): one round that closes each class at its root, then one review; if it fails, patching stops again. Round 8 was that round: the CLI output class and the clipboard lease lifecycle were fixed structurally (design note, "Implemented in unit 1a"), with 1A-R7-01 to 1A-R7-04. Review round 8 ([raw](reviews/2026-11-01-unit1a-review8.md)) rejected it: source acceptance NO, work unit complete NO, with 1A-R8-01 to 1A-R8-05. The CLI closed-pipe class and the journal findings were supported; the clipboard lifecycle was not. The owner chose a design-first repair, then split the wider hardening into unit 1h. The repair (`2664e51`) was rejected by its [acceptance review](reviews/2026-11-01-unit1a-acceptance-review.md) with 4 P3 findings (1A-A1-01 to 1A-A1-04); the owner question is under Next action. R4-04 is deferred by the owner ([FINDINGS.md](FINDINGS.md)).
+- **Round 5 accepted the source seam of R4-01** and 8 of the round 1 to 3 findings. No finding closes before the unit passes its review.
 - **No new score exists.** The only measured score is 40.5/100 ([baseline review](reviews/2026-10-30-baseline.md)).
 
 ## Last full check run
 
-This run checked the application source that is now on `main`. Later commits changed only documentation and Git rules.
+This run checked branch `fix/unit1a-sound-findings` at `94d8008` (unit 1a, round A1 fix) on 2026-11-02, in a separate check session. All data was fake.
 
-- Rust: 196 tests passed, and 2 gated tests were ignored. 9 generated IPC tests passed separately. Clippy (`-D warnings`) and rustfmt were clean.
-- Frontend: 190 cases passed, in two runs. The full run passed 181 cases and then stopped on a Vitest worker start-up timeout. The 9 Settings cases that did not run then passed on their own.
-- Browser: 32 mocked-native cases passed. The production and e2e type checks passed.
-- Builds: the GUI and the unsigned MSI and NSIS installers built. None is installed.
-- Native, with fake data: the exact-GUI journal and export proofs passed (`-JournalOnly`, `-JournalExportOnly`). Both needed the harness's UI Automation root refresh at start-up. Settings were restored.
-- KeePassXC interchange: the last pass was on the same CLI binary. It was not run again.
+- Rust: `cargo fmt --all -- --check` and Clippy (`-D warnings`) were clean. `cargo test --workspace --offline --locked` passed 230 tests, with 2 gated tests ignored. The release CLI was rebuilt with `--locked` after the GUI build.
+- Frontend: `npm ci` passed. `npm test` passed 192 cases in 16 files. The production build passed. `npm run test:ui` passed 32 mocked-native cases.
+- Build: `npm run tauri -- build -- --locked --offline` built the GUI and the unsigned MSI and NSIS installers. None is installed.
+- Final-build checks, between two hash runs that matched:
+  - Release CLI, fake vaults (`.scratch` scripts, not committed): the earlier script passed 39 of 39, and the unit 1a script passed 49 of 49.
+  - Native GUI proof `-JournalOnly` passed 27 checks.
+  - Native GUI proof `-JournalExportOnly` passed 9 checks on its fourth run. Runs 1 to 3 failed in the filter step of the proof script: twice `Missing select option in the test process: Environment / prod` (`tools/verify_windows_app.ps1:303`), once `Unsupported Pattern` at the Project filter's Expand call (line 270). The cause is timing in the proof script, not AKM: the same binary then passed; the frontend bundle is byte-identical to the one built from `2664e51`; and a build of `2664e51` passed the same proof in the same conditions. `Select-FilterOnce` calls Expand once, with no wait or retry when UI Automation does not yet expose the combo box pattern or its options. Making that step robust is open tool work (TESTING.md).
+  - Both proofs used fake vaults, did not touch the clipboard and did not minimize or hide the window. The settings file was byte-identical before and after (SHA-256 `dacba49a…9115`), and no `akm-desktop` process remained.
+- Round A1 tests (`836fc8c`): the four text tests and the copy table failed on the old production code and pass at `94d8008`. Mutants (`.scratch/mutants_a1.py`): 5 of 5 caught.
+- Not run: KeePassXC interchange (no KDBX format change; the portable KeePassXC path was not found), the full native GUI proof and the real clipboard test (they use the clipboard and need the owner present), `-OutcomeOnly` (owner gate), and R4-04 (deferred).
+- CI: GitHub Actions is off, so no CI ran (`CI RESULT: none`).
 
 ## Unit 1a build under test
 
-- Source: the application files on `main` at `cfeb1b0`, unchanged since. `git diff baseline/pre-unit-1a main -- crates desktop tools .github Cargo.toml Cargo.lock` compares them with the 139-file pre-unit snapshot: 30 changed files, and 18 files absent from the snapshot. An absent file is not necessarily new in unit 1a. For example, `desktop/icon.svg` existed before phase one with its current hash ([REVIEWING.md](REVIEWING.md#unit-1a-inputs)).
+- Source: branch `fix/unit1a-sound-findings` at `94d8008`.
 - Builds in `target/release`, all unsigned and not installed, SHA-256:
-  - `akm-desktop.exe` `bc393ed9a5081aac2d30e4999e1537bb806c047e9a22bd025e06d2b78d3e6ea8`
-  - `akm.exe` `495d72976b552746ebe170f1ab1f25280272b54bff5365b251d3cf546342011b`
-  - `bundle/msi/AKM_0.1.0_x64_en-US.msi` `e29139eadb113da5d998a173ea05d7ddf10ae29f8d1bcb72798f3a7e61b6f3ac`
-  - `bundle/nsis/AKM_0.1.0_x64-setup.exe` `b0455b8912350d6d1c98f271364257f47e7f6340b19e2ed6a80cbfb3c2c2f7cb`
+  - `akm-desktop.exe` `32f591a7d197ed93e7aba57d6c7a3ff8548ce44172a3b27f183222c0578c9104`
+  - `akm.exe` `ad2ec01b491de883493b12d0aad802084ad8831b45083083a8e77ef8c6ceafc1`
+  - `bundle/msi/AKM_0.1.0_x64_en-US.msi` `d7c457b92d98e730db56e211eee6ebf716aee157f95fc20514d13a26427c852c`
+  - `bundle/nsis/AKM_0.1.0_x64-setup.exe` `05f8124b441f96c2c086151961e9487fd40b48c946b25b3bee7d8f97085ea3cf`
+- The R4-04 pass conditions in FINDINGS.md still name `cfeb1b0`; update them to the accepted source before R4-04 runs.
 - Before you use a build for a proof, check its hash against this list. A different hash needs a rebuild and a new check run.
 
 ## Next action
 
 The owner authorized implementation of unit 1a only. Each other unit needs its own authorization ([ROADMAP.md](ROADMAP.md)).
 
-1. **Owner decision: the R4-04 proof script.** The script cannot prove all five R4-04 pass conditions ([FINDINGS.md](FINDINGS.md#r4-04-pass-conditions)). The owner chooses one option:
-   - Extend `tools/verify_windows_app.ps1` first. It must count the outcome records, include the cancellation in the no-resurrection check, and check Key Detail if that is in scope. The extension changes no application code, so the existing GUI build and its hashes stay valid. Test the script change in a mode that does not minimize (`-JournalOnly`) before the owner-present attempt.
-   - Narrow the pass conditions to what the script proves today, and record the limit.
-2. **R4-04 needs the owner present.** After that decision, ask the owner whether they are ready to watch. The last attempt minimized the window and then failed its import-dialog-expiry check. The cause was not proved. Since then, a correction moved view expiry into native code, apart from lock handling. That change targets the failed check, but no window run has tested it.
-3. **Then review unit 1a.** Prepare the review inputs now ([REVIEWING.md](REVIEWING.md#unit-1a-inputs)). Request the one fresh review only after R4-04 passes, or after the owner gives an explicit decision about a failed or deferred attempt. The review gives two separate verdicts: source acceptance, and work-unit completion.
-4. Unit 1a has failed review four times. If this review rejects it again, apply the AGENTS.md rule: stop and take the design question to the owner.
+1. **R4-04 is deferred** (owner decision, 2026-11-01, option C). The proof script (PR #3) failed review twice ([round 1](reviews/2026-11-01-r4-04-script-review.md), [round 2](reviews/2026-11-01-r4-04-script-review-round2.md)). Polling UI Automation from outside cannot show two things on the pinned build: that no outcome came back just before a dismissal click, and that a delayed reveal reply was delivered and discarded (R4-04-SCRIPT in [FINDINGS.md](FINDINGS.md)). The options that remain for later: **A**, a fake-data-only proof log in the app, which needs a rebuild and must stay off in release builds; **B**, a stronger script that watches UI Automation events, with the two gaps as written limits. R4-04 must pass before the release gate.
+2. **Unit 1a: design first, then one acceptance review.** Round 8 ([raw](reviews/2026-11-01-unit1a-review8.md)) rejected the unit with 1A-R8-01 to 1A-R8-05. The owner then asked GPT-6 Astra once for guidance ([advisory](reviews/2026-11-01-unit1a-advisory.md); advice, not a review). **Owner decisions, 2026-11-01:**
+   - Design first, in unit 1a. The clipboard lifecycle, its texts, the CLI disclosure policy, caller-level tests and the action-name docs stay in 1a. Units 1b and 1c keep their scope.
+   - The CLI default view uses a fixed mask with no secret characters and no length (1A-R8-01). `--reveal` and `--field secret` stay the only disclosures, and they record the request first.
+   - Clipboard cleanup is best effort (1A-R8-02). Every clipboard text says so and says that the copy may remain. Lock rule, narrowed after design review 1: lock sends its notice first, then makes one cleanup attempt that never retries and never waits for a busy clipboard; it may wait for a copy in progress (built in unit 1h).
+
+   Steps, in order:
+   1. Inventories, from the real code: every exit of `publish` and `clear` and what it did to the clipboard; every CLI output and disclosure sink; every user-facing clipboard text (Rust, TSX, README); a map from each acceptance claim to the caller-level test that proves it.
+   2. A design note (section 10 of `docs/design/unit1a-protocol.md`, or a new file) from those inventories: explicit publisher outcomes, the lease invariants, the output-intent type, and the injectable CLI run. One design review.
+   3. Tests that fail first through the real callers (the real publisher with the fake Win32 API, through `Session`; the CLI run function), then the implementation, then the text and action-name sweep.
+   4. The full check run on the final build, then one acceptance review. If it rejects, stop and ask the owner.
+   **Status, 2026-11-01:**
+   - Step 1 is done. The repair design ([design](design/unit1a-repair.md)) failed two design reviews ([review 1](reviews/2026-11-01-unit1a-repair-design-review1.md): 10 blocking; [review 2](reviews/2026-11-01-unit1a-repair-design-review2.md): 9 blocking), so the work stopped (AGENTS.md).
+   - **Owner decision, 2026-11-01: split.** Unit 1a closes 1A-R8-01 to 1A-R8-05 narrowly, each through its production caller (design revision 3). The wider hardening moves to the new unit 1h (FINDINGS.md, 1H-01 to 1H-08), with its own design and authorization. The owner's narrowed lock rule is built in 1h. There is no third design review: the acceptance review judges 1a against revision 3.
+   - Done, from revision 3, section 5:
+     1. Commit 1 (`3e53e63`): the test-support move and the failing tests. On the unchanged production code, every defect test failed as stated (the `copy_stamped` table for the four 1A-R8-03 cases and the messages, the changed-sequence cleanup, both frontend text tests, the CLI mask test at the 9-character secret, the README action test on `run-start`).
+     2. Commit 2: the fix (publisher outcomes from the `tx` phase, the lease transitions, `clipboardLost`, `KeyMetadata` and the fixed mask, `run_with` with `Io`), the text and action-name sweep (`clipboardText.ts`, both READMEs), and the tests. All 10 design mutants (section 3.3) fail a test. Mutant 2 survived at first; the new table case "rollback fails after the first secret set" catches it. Its expected row keeps the lease, because cleanup cannot read the empty frame formats and retries with the uncertainty warning.
+     3. The full check run and the final build with its hashes (above).
+     4. The owner-gated Windows evidence: not run. The owner was asleep; the real clipboard test and the full native GUI copy proof need the owner present.
+     5. The acceptance review ([raw](reviews/2026-11-01-unit1a-acceptance-review.md), GPT-6.1 Terra max) rejected the unit: **source acceptance NO, work unit complete NO**, with 4 P3 findings, 1A-A1-01 to 1A-A1-04. No P0, P1 or P2. The reviewer's own probe of the release CLI passed the fixed mask and the damaged-journal fail-closed cases. Work stopped here, as the rule says. Nothing is uncommitted.
+   - **Owner decision, 2026-11-02: option A.** Round A1: commit 1 (`836fc8c`) adds the tests; commit 2 (`94d8008`) fixes the two texts (FINDINGS.md, 1A-A1-01 to A1-04). The full check run is above.
+     - **Acceptance review 2** ([raw](reviews/2026-11-02-unit1a-acceptance-review2.md), GPT-6.1 Terra max, the first review under the pass rule) rejected the unit: **source acceptance NO, work unit complete NO; result under the pass rule: fail.** It found 1 P2 and 4 P3 (1A-A2-01 to 1A-A2-05). Its own probes supported the four round A1 claims. It checked the earlier in-scope P2 findings and found none unresolved. This is the tenth rejection of unit 1a, so work stopped. Nothing is uncommitted.
+   - **Owner question (answered: A, 2026-11-02).** The P2 (1A-A2-01) is a race in the vault-opening command: an older opening can overwrite the newer vault's saved path. It is real (the check and the settings write in `commands.rs` have no fence between them). The reviewer reports that it is also in the pre-unit baseline; that is not checked. It is not part of unit 1a's subject (warning ownership and honest journal outcomes). Options:
+     - **A (recommended).** An owner-approved scope split (pass rule, "Earlier findings"): move 1A-A2-01 to unit 1c, whose subject is session ownership across events. Then this review has no in-scope P0 to P2 finding, and its result is pending until the P3 findings move: 1A-A2-02 and A2-03 to unit 1h (clipboard and disclosure); 1A-A2-04 (proof-script cause) and A2-05 (one trailing space) to a unit that the owner names, or A2-05 fixed now, because it changes no behaviour. Then record the pass and land PRs #3, #4 and #5 (each merge is an owner gate). Work unit complete stays NO until R4-04 passes.
+     - **B.** Fix 1A-A2-01 in unit 1a (a fence between the ownership check and the settings write, with the reviewer's interleaving test failing first), then one more acceptance review.
+     - **C.** Pause unit 1a.
+   - **Done (option A).** 1A-A2-01 moved to unit 1c; A2-02 and A2-03 to unit 1h; A2-04 to unit 1b, whose journal work relies on that proof; A2-05 fixed (whitespace only). The review result is recorded as **pass**. The unit 1a findings are closed in review (FINDINGS.md). **Work unit complete: NO** until R4-04 passes.
+   - **Owner decision, 2026-11-02: land, with less mess.** PR #5 is retargeted to `main` and merged with a merge commit. It contains the commits of PRs #3 and #4, so those land with it and close as landed through #5. Their content stays a record: R4-04-SCRIPT (P1) stays open, and unit 1c replaces the protocol design. Before the merge, `main` merged into a test branch with no conflicts; on that tree `npm test` passed 193 cases in 17 files, the build passed, and `npm run test:ui` passed 40 cases. `main` changed no Rust file.
+   - **Owner question (answered: A).** Two findings are wrong texts: a failed copy says "AKM's earlier copy is still on the clipboard" when AKM only holds a lease (1A-A1-01), and "AKM could not remove the partial copy" after the immediate cleanup succeeded (1A-A1-02). Both sentences come from revision 3 itself, so the design, not the code, claimed more than AKM observes. The other two are coverage gaps (1A-A1-03, 1A-A1-04). Options:
+     - **A (recommended).** One small round: make those two texts depend on what AKM observed ("may still be on the clipboard"; a separate text when the immediate cleanup succeeded), with tests through `copy_stamped` that fail first; add the tick-and-lock cleanup matrix and the order test. Then one acceptance review, judged by the [pass rule](REVIEWING.md#pass-rule).
+     - **B.** Accept unit 1a with these four P3 findings open, moved to unit 1h, and land PRs #3, #4 and #5. Landing does not close a finding.
+     - **C.** Pause unit 1a.
+     **Pass rule (owner decision, 2026-11-02).** The owner adopted the rule by decision (option A), with the round 2 fixes as proposed, after two reviews rejected earlier text ([round 1](reviews/2026-11-02-pass-rule-review1.md), [round 2](reviews/2026-11-02-pass-rule-review2.md)). It is in [REVIEWING.md](REVIEWING.md#pass-rule) and applies from the next review. The unit 1a acceptance review above keeps its NO result. Option B for unit 1a is a separate owner override of that verdict and of the landing condition below. The work-unit verdict stays NO until R4-04 passes.
+3. **R4-04** stays deferred until the owner chooses option A or B for it (item 1).
+4. **Security proposals** (owner request, 2026-11-02) are in [ROADMAP.md](ROADMAP.md#security-proposals-not-authorized). None is authorized. The suggested first two, a threat model and a no-network check, add no product code. Group D adds agent-safety ideas from existing free tools (kdbx, kprun, fnox, secretspec, dotenvx), found in a market check on 2026-11-02. That check also found that small free tools already inject KeePass-stored keys into one child process for coding agents; what they lack, from their pages, is a desktop app and key expiry and rotation tracking.
+
+**Pull requests, 2026-11-01.** The owner asked that the open PRs be landed, not left as unfinished work ("Just make sure they are landed and we are not sitting on incomplete work"). This is read as the owner's yes to merge each PR that is complete: reviewed, with its checks passing. A separate session merged:
+- PR #1 (docs cleanup) as `d46bcce`. Its review loop stopped after round 2 by the AGENTS.md rule, with the round 2 fixes in `e8f2f18`.
+- PR #2 (UI look) as `4656b0c`, after a merge of `main` with no conflicts: 191 unit tests, the build and 40 browser tests passed in its worktree. Its review round 3 confirmed the owner's decisions; the one P3 (ease-back) is the owner's choice. It never touched `target/` of this checkout, so the unit 1a build above is unchanged. The first UI review also found P3-REVEAL-CLOCK, which predates the UI work.
+- Deleting PR #1's branch closed PR #3; the session reopened it on base `main`. Before PR #3 lands, retarget PR #4 to `main`, and PR #5 before PR #4 lands.
+- PRs #3, #4 and #5 (the R4-04 script, the unit 1a protocol design, unit 1a) landed together on 2026-11-02, through one merge of #5 into `main`, after the unit 1a acceptance review passed.
 
 ## Local state outside the repository
 

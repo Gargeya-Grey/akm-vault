@@ -7,16 +7,19 @@ param(
   [switch]$JournalOnly,
   [switch]$JournalExportOnly,
   [switch]$OutcomeOnly,
+  [switch]$OutcomeRehearsal,
   [switch]$OwnerReadyForVisibility
 )
 
 $ErrorActionPreference = 'Stop'
 if ($OutcomeOnly -and !$OwnerReadyForVisibility) { throw 'Outcome visibility proof requires the owner to confirm readiness first; then pass -OwnerReadyForVisibility. No unattended minimize attempt is permitted.' }
 if ($OutcomeOnly -and $JournalExportOnly) { throw 'Choose either -OutcomeOnly or -JournalExportOnly.' }
-if ($JournalExportOnly -or $OutcomeOnly) { $JournalOnly = $true }
+if ($OutcomeRehearsal -and ($OutcomeOnly -or $JournalExportOnly -or $OwnerReadyForVisibility)) { throw 'The rehearsal never minimizes: use -OutcomeRehearsal alone.' }
+if ($JournalExportOnly -or $OutcomeOnly -or $OutcomeRehearsal) { $JournalOnly = $true }
 if ($JournalOnly -and $RemainingOnly) { throw 'Choose either -JournalOnly or -RemainingOnly, not both.' }
 if ($JournalOnly) { $SkipClipboard = $true }
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+Import-Module (Join-Path $PSScriptRoot 'ProofSnapshot.psm1') -Force
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
@@ -124,6 +127,13 @@ $process = $null
 $success = $false
 $AE = [System.Windows.Automation.AutomationElement]
 $TS = [System.Windows.Automation.TreeScope]
+# One cached read of the whole owned tree (raw view), so a snapshot never reads a removed element live.
+$script:treeRequest = New-Object System.Windows.Automation.CacheRequest
+# Managed UI Automation has no ARIA role property. WebView2 reports the role of a status, alert or
+# dialog element as its localized control type, so the snapshot reads that as the role.
+foreach ($property in @($AE::NameProperty, $AE::ControlTypeProperty, $AE::LocalizedControlTypeProperty, $AE::IsEnabledProperty)) { $script:treeRequest.Add([System.Windows.Automation.AutomationProperty]$property) }
+$script:treeRequest.TreeScope = $TS::Subtree
+$script:treeRequest.TreeFilter = [System.Windows.Automation.Condition]::TrueCondition
 
 function Assert-Proof([bool]$condition, [string]$description) {
   if (!$condition) { throw "FAIL: $description" }
@@ -140,7 +150,7 @@ function Save-ProofDiagnostics([string]$stage) {
     foreach ($window in $AE::RootElement.FindAll($TS::Children, $condition)) {
       $details.Add("window: name=$($window.Current.Name); class=$($window.Current.ClassName); handle=$($window.Current.NativeWindowHandle)")
       foreach ($element in $window.FindAll($TS::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
-        $details.Add("  $($element.Current.ControlType.ProgrammaticName): $($element.Current.Name); class=$($element.Current.ClassName); id=$($element.Current.AutomationId); handle=$($element.Current.NativeWindowHandle)")
+        $details.Add("  $($element.Current.ControlType.ProgrammaticName) [$($element.Current.LocalizedControlType)]: $($element.Current.Name); class=$($element.Current.ClassName); id=$($element.Current.AutomationId); handle=$($element.Current.NativeWindowHandle)")
       }
     }
   }
@@ -175,6 +185,8 @@ function Set-Field([string]$name, [string]$value) {
 }
 
 function Click-Control([string]$name) {
+  # After an outcome is dismissed, every later step first checks that it has not returned.
+  if (@(Get-ProofDismissed).Count -gt 0) { Read-ProofSample { Read-OwnedSnapshot '' } | Out-Null }
   $element = Find-Control $name ([System.Windows.Automation.ControlType]::Button)
   $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
@@ -230,7 +242,30 @@ function Send-TestSignal([uint32]$message, [uint32]$wparam) {
   Assert-Proof ([AkmProofClipboard]::PostMessage($monitor, $message, [UIntPtr]$wparam, [IntPtr]::Zero)) 'synthetic notification was sent only to the test process'
 }
 
+function Get-ComboValue($combo) {
+  $pattern = $null
+  if ($combo.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { return $pattern.Current.Value }
+  if ($combo.TryGetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern, [ref]$pattern)) { return (@($pattern.Current.GetSelection() | ForEach-Object { $_.Current.Name }) -join '|') }
+  return $null
+}
+
+# A view can load its options after it opens, so a selection made too early does not stick.
+# Select, then confirm the combo box shows the value; retry up to 3 times.
 function Select-Filter([string]$label, [string]$value) {
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    Select-FilterOnce $label $value
+    $combo = Find-Control $label ([System.Windows.Automation.ControlType]::ComboBox)
+    $until = [DateTime]::UtcNow.AddSeconds(3)
+    do {
+      if ((Get-ComboValue $combo) -eq $value) { return }
+      Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $until)
+    Write-Output "RETRY: the $label selection did not show '$value' (attempt $attempt)"
+  }
+  throw "The $label combo box did not keep the value '$value' after 3 attempts"
+}
+
+function Select-FilterOnce([string]$label, [string]$value) {
   $combo = Find-Control $label ([System.Windows.Automation.ControlType]::ComboBox)
   $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
   $ownedIds = New-Object 'System.Collections.Generic.HashSet[int]'
@@ -368,17 +403,141 @@ function Minimize-RestoreOwnedWindow {
   $script:root = $AE::FromHandle($handle)
 }
 
+# R4-04 checks. Each one reads complete snapshots of the owned window (tools/ProofSnapshot.psm1):
+# text matches stay inside one element or one outcome record, a UI Automation error is never
+# read as absence, and every sample also fails if a dismissed outcome has returned.
+$OutcomeText = '(Import|File export|Operation) (is awaiting an outcome|completed\.|reported an error|outcome could not be confirmed)|File export was cancelled|its originating session is no longer available'
+$FakeSecret = 'fake-prod-must-stay'
+
+function ConvertFrom-CachedElement($element) {
+  $children = @(foreach ($child in $element.CachedChildren) { ConvertFrom-CachedElement $child })
+  [pscustomobject]@{
+    Name     = $element.Cached.Name
+    Role     = "$($element.Cached.LocalizedControlType)".ToLowerInvariant()
+    Type     = $element.Cached.ControlType.ProgrammaticName.Replace('ControlType.', '').ToLowerInvariant()
+    Enabled  = $element.Cached.IsEnabled
+    Children = $children
+  }
+}
+
+function Read-OwnedSnapshot([string]$sentinel) {
+  if ($script:root.Current.ProcessId -ne $process.Id) { throw 'The UI Automation root no longer belongs to the proof process.' }
+  $cached = $script:root.GetUpdatedCache($script:treeRequest)
+  ConvertTo-ProofSnapshot (ConvertFrom-CachedElement $cached) $sentinel
+}
+
+function Wait-Owned([string]$sentinel, [scriptblock]$predicate, [int]$milliseconds = 15000) {
+  Wait-ProofSnapshot -Reader { Read-OwnedSnapshot $sentinel } -Predicate $predicate -Milliseconds $milliseconds
+}
+
+function Assert-OwnedStable([string]$sentinel, [scriptblock]$predicate, [int]$milliseconds, [string]$description) {
+  Assert-ProofStable -Reader { Read-OwnedSnapshot $sentinel } -Predicate $predicate -Milliseconds $milliseconds -Description $description
+}
+
+function Assert-GoneAndStable([string]$sentinel, [scriptblock]$predicate, [string]$description, [int]$stableMs = 2000) {
+  Assert-Proof (Wait-Owned $sentinel $predicate 5000) $description
+  Assert-OwnedStable $sentinel $predicate $stableMs "$description, and it stays so"
+}
+
+function Get-RevealCount {
+  @(Get-Content -LiteralPath ($vault + '.audit.jsonl') | Where-Object { $_ } | ForEach-Object { ($_ | ConvertFrom-Json).action } | Where-Object { $_ -eq 'reveal-requested' }).Count
+}
+
 function Assert-OutcomeRegion([string]$pattern) {
-  Assert-Proof (Wait-Text $pattern) 'the application-owned classified outcome is visible after view handoff'
-  $region = Find-Control 'Operation outcomes'
-  $text = (@($region.FindAll($TS::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }) -join ' ')
-  Assert-Proof ($text -match $pattern) 'the retained outcome belongs to the application-level region'
+  Assert-Proof (Wait-Owned 'Keys' { param($s) @(Get-ProofRecords $s $pattern).Count -ge 1 }) 'the application-owned classified outcome is visible after view handoff'
+  $snapshot = Read-ProofSample { Read-OwnedSnapshot 'Keys' }
+  Assert-Proof ($snapshot.Sentinel -and $snapshot.Region) 'the retained outcome belongs to the application-level region'
+  Assert-Proof ($snapshot.Records.Count -eq 1 -and "$($snapshot.Records[0].Text)" -match $pattern) "exactly one application outcome record is retained, and it is the expected one (found $($snapshot.Records.Count))"
+  $text = (@($snapshot.Records | ForEach-Object { $_.Text }) -join ' ')
   foreach ($private in @($work, 'HANDOFF_TOKEN', 'fake-outcome-import-value', 'outcome-import-project', 'outcome-import-env', 'handoff-export.env')) {
     Assert-Proof (!$text.Contains($private)) 'the retained outcome contains no fake protected path, input or scope'
   }
 }
 
+# Dismisses exactly the expected record(s), waits for the removal, and only then adds the
+# pattern to the dismissed list, so a correct but slow removal never fails the proof.
+function Dismiss-Outcome([string]$pattern, [int]$count = 1) {
+  $snapshot = Read-ProofSample { Read-OwnedSnapshot 'Keys' }
+  Assert-Proof ($snapshot.Sentinel -and $snapshot.Records.Count -eq $count -and @(Get-ProofRecords $snapshot $pattern).Count -eq $count) "just before dismissal, the region holds exactly $count expected outcome record(s)"
+  Click-Control 'Dismiss operation outcomes'
+  Assert-Proof (Wait-Owned 'Keys' { param($s) !$s.Region } 5000) 'the dismissed outcome region is removed'
+  Add-ProofDismissed $pattern
+  Assert-OwnedStable 'Keys' { param($s) !$s.Region } 2000 'the dismissed outcome stays absent through later polls'
+}
+
+function Test-KeyDetailExpiry([switch]$Rehearse) {
+  $shown = { param($s) Test-ProofText $s $FakeSecret }
+  $masked = { param($s)
+    !(Test-ProofText $s $FakeSecret) -and
+    @($s.Dialog | Where-Object { $_.Name -ceq 'Reveal' -and $_.Type -eq 'button' -and $_.Enabled }).Count -eq 1 -and
+    @($s.Dialog | Where-Object { $_.Role -eq 'alert' }).Count -eq 0
+  }
+  Click-Control 'Keys'
+  Click-Control 'Open OpenAI prod proof'
+
+  # 1. A displayed secret.
+  Click-Control 'Reveal'
+  Assert-Proof (Wait-Owned 'Copy' $shown) 'Key Detail reveals the fake secret'
+  if ($Rehearse) { Click-Control 'Hide'; $how = 'rehearsal: Hide' }
+  else { Minimize-RestoreOwnedWindow; $how = 'actual minimize/restore' }
+  Assert-Proof (Wait-Owned 'Copy' $masked 5000) "$how masks the displayed fake secret, and Key Detail can reveal again"
+  Assert-OwnedStable 'Copy' $masked 5000 "Key Detail stays open and masked after $how"
+
+  # 2. A reveal that is still pending at the hide. The test-owned journal lock delays it.
+  $before = Get-RevealCount
+  $hold = Hold-TestJournal
+  try {
+    Click-Control 'Reveal'
+    Assert-Proof (Wait-Owned 'Copy' { param($s) @($s.Dialog | Where-Object { $_.Name -ceq ('Revealing' + [char]0x2026) }).Count -eq 1 } 5000) 'the fake reveal is pending on the test-owned journal lock'
+    Assert-OwnedStable 'Copy' { param($s) !(Test-ProofText $s $FakeSecret) } 1000 'the pending fake reveal discloses nothing while the lock is held'
+    if (!$Rehearse) { Minimize-RestoreOwnedWindow }
+  } finally { $hold.Unlock(0, [Int64]::MaxValue); $hold.Dispose() }
+  if ($Rehearse) {
+    Assert-Proof (Wait-Owned 'Copy' $shown) 'rehearsal: the delayed fake reveal completes after the lock is released, so the delay works'
+    Click-Control 'Hide'
+    Assert-Proof (Wait-Owned 'Copy' $masked 5000) 'rehearsal: Hide masks the delayed fake secret'
+  } else {
+    Assert-Proof (Wait-Owned 'Copy' $masked 5000) 'after minimize/restore, the pending reveal leaves Key Detail masked and ready'
+    Assert-OwnedStable 'Copy' $masked 5000 'Key Detail stays open, and the late reveal result shows neither the fake secret nor a stale error'
+  }
+  $until = [DateTime]::UtcNow.AddSeconds(5)
+  while ((Get-RevealCount) -lt ($before + 1) -and [DateTime]::UtcNow -lt $until) { Start-Sleep -Milliseconds 100 }
+  Assert-Proof ((Get-RevealCount) -eq ($before + 1)) 'the native side completed the delayed reveal request during the observation'
+
+  Click-Control 'Close'
+  Assert-GoneAndStable 'Keys' { param($s) $s.Dialog.Count -eq 0 -and !(Test-ProofText $s $FakeSecret) } 'the closed Key Detail leaves no fake secret on screen'
+}
+
+function Test-CancelledOutcome([int]$Count = 1) {
+  $pattern = 'File export was cancelled\. No file was saved by this request\.'
+  Click-Control 'Settings'
+  Select-Filter 'Project' 'demo'
+  Select-Filter 'Environment' 'prod'
+  for ($i = 1; $i -le $Count; $i++) {
+    Click-Control ('Save .env' + [char]0x2026)
+    $mainRoot = $script:root
+    $script:root = Wait-SaveDialog
+    Click-NativeDialog '2' 'Cancel'
+    $script:root = $mainRoot
+    Assert-Proof (Wait-Owned 'Keys' { param($s) @(Get-ProofRecords $s $pattern).Count -eq $i }) "native Cancel $i retains its own cancellation record"
+  }
+  if ($Count -eq 1) { Assert-OutcomeRegion $pattern }
+  else {
+    $snapshot = Read-ProofSample { Read-OwnedSnapshot 'Keys' }
+    Assert-Proof ($snapshot.Records.Count -eq $Count) "the record count sees $Count separate outcome records in the real window (found $($snapshot.Records.Count))"
+    $rejected = $false
+    try { Assert-OutcomeRegion $pattern } catch { $rejected = $_.Exception.Message -match 'exactly one application outcome record' }
+    Assert-Proof $rejected "the exactly-one check rejects $Count retained records"
+  }
+  Dismiss-Outcome 'File export was cancelled' $Count
+}
+
+function Assert-NoOutcomeResurrection {
+  Assert-OwnedStable 'Keys' { param($s) !$s.Region -and !(Test-ProofText $s $OutcomeText) } 3500 'every dismissed outcome (success, cancellation, error, pending, unconfirmed, completed while locked) stays absent through later status and warning polls'
+}
+
 function Test-OutcomeHandoff {
+  Test-KeyDetailExpiry
   Click-Control 'Settings'
   Click-Control ('Import .env' + [char]0x2026)
   Set-Field 'Paste the .env contents' 'HANDOFF_TOKEN=fake-outcome-import-value'
@@ -390,7 +549,7 @@ function Test-OutcomeHandoff {
   $hold = Hold-TestJournal
   try {
     Click-Control 'Confirm import'
-    Assert-Proof (Wait-Text 'Import is awaiting an outcome') 'dispatched import creates a pending application-owned outcome'
+    Assert-Proof (Wait-Owned 'Keys' { param($s) @(Get-ProofRecords $s 'Import is awaiting an outcome').Count -eq 1 }) 'dispatched import creates a pending application-owned outcome'
     $until = [DateTime]::UtcNow.AddSeconds(20)
     do {
       $changed = (Get-FileHash -LiteralPath $vault -Algorithm SHA256).Hash -ne $before
@@ -398,15 +557,15 @@ function Test-OutcomeHandoff {
     } while (!$changed -and [DateTime]::UtcNow -lt $until)
     Assert-Proof $changed 'the fake encrypted import commits while its reply waits on the test-owned journal lock'
     Minimize-RestoreOwnedWindow
-    Assert-Proof (!(Wait-Text 'Import keys' 300)) 'actual minimize/restore expired the local import dialog'
+    Assert-GoneAndStable 'Keys' { param($s) !(Test-ProofText $s '^Import keys$') } 'actual minimize/restore expired the local import dialog'
     Assert-Proof (Find-Control ('Import .env' + [char]0x2026) ([System.Windows.Automation.ControlType]::Button)).Current.IsEnabled 'the hidden confirmation does not leave Settings busy'
     Click-Control 'Keys'
   } finally { $hold.Unlock(0, [Int64]::MaxValue); $hold.Dispose() }
   Assert-OutcomeRegion 'Import completed\.'
-  Assert-Proof (!(Wait-Text 'Imported: 1 added' 300)) 'obsolete Settings details do not reappear on Keys'
+  Assert-OwnedStable 'Keys' { param($s) !(Test-ProofText $s 'Imported: 1 added') } 2000 'obsolete Settings details do not reappear on Keys'
   $keys = Invoke-TestCli @('list', '--json') | Out-String | ConvertFrom-Json
   Assert-Proof (@($keys | Where-Object { $_.env_var -eq 'HANDOFF_TOKEN' -and $_.project -eq 'outcome-import-project' -and $_.environment -eq 'outcome-import-env' }).Count -eq 1) 'the actual CLI confirms the dispatched import saved once in its reviewed scope'
-  Click-Control 'Dismiss operation outcomes'
+  Dismiss-Outcome 'Import completed\.'
 
   Click-Control 'Settings'
   Select-Filter 'Project' 'demo'
@@ -420,26 +579,18 @@ function Test-OutcomeHandoff {
     Set-NativeDialogValue (Native-FilenameControl) $exportPath
     Click-NativeDialog '1' 'Save'
     $script:root = $mainRoot
-    Assert-Proof (Wait-Text 'File export is awaiting an outcome') 'native-dialog file save has a pending application-owned outcome'
+    Assert-Proof (Wait-Owned 'Keys' { param($s) @(Get-ProofRecords $s 'File export is awaiting an outcome').Count -eq 1 }) 'native-dialog file save has a pending application-owned outcome'
     Minimize-RestoreOwnedWindow
     Assert-Proof (Find-Control ('Save .env' + [char]0x2026) ([System.Windows.Automation.ControlType]::Button)).Current.IsEnabled 'actual minimize/restore expired the local file-save continuation'
     Click-Control 'Keys'
   } finally { $hold.Unlock(0, [Int64]::MaxValue); $hold.Dispose() }
   Assert-OutcomeRegion 'File export completed\.'
   Assert-Proof ([IO.File]::ReadAllText($exportPath) -eq "OPENAI_API_KEY=fake-prod-must-stay`n") 'handoff export published exactly the selected fake scope to the approved destination'
-  Assert-Proof (!(Wait-Text ('Saved plaintext secrets to ' + [regex]::Escape($exportPath)) 300)) 'the export destination is not replayed outside its originating Settings view'
-  Click-Control 'Dismiss operation outcomes'
+  $savedTo = 'Saved plaintext secrets to ' + [regex]::Escape($exportPath)
+  Assert-OwnedStable 'Keys' { param($s) !(Test-ProofText $s $savedTo) } 2000 'the export destination is not replayed outside its originating Settings view'
+  Dismiss-Outcome 'File export completed\.'
 
-  Click-Control 'Settings'
-  Select-Filter 'Project' 'demo'
-  Select-Filter 'Environment' 'prod'
-  Click-Control ('Save .env' + [char]0x2026)
-  $mainRoot = $script:root
-  $script:root = Wait-SaveDialog
-  Click-NativeDialog '2' 'Cancel'
-  $script:root = $mainRoot
-  Assert-OutcomeRegion 'File export was cancelled\. No file was saved by this request\.'
-  Click-Control 'Dismiss operation outcomes'
+  Test-CancelledOutcome
 
   # Delay a real pre-disclosure error too; an error outcome must not claim nothing was saved.
   $journal = $vault + '.audit.jsonl'
@@ -462,8 +613,8 @@ function Test-OutcomeHandoff {
     Assert-OutcomeRegion 'File export reported an error\. This does not confirm that nothing was saved\.'
     Assert-Proof (!(Test-Path -LiteralPath $refusedPath)) 'the induced request-journal failure did not publish a plaintext file'
   } finally { Remove-Item -LiteralPath $journal; [IO.File]::WriteAllBytes($journal, $journalBefore) }
-  Click-Control 'Dismiss operation outcomes'
-  Assert-Proof (!(Wait-Text 'Import completed\.|File export completed\.|File export reported an error' 3500)) 'explicitly acknowledged outcomes stay dismissed through later status and warning polls'
+  Dismiss-Outcome 'File export reported an error'
+  Assert-NoOutcomeResurrection
 }
 
 try {
@@ -520,6 +671,16 @@ try {
     catch { Click-Control 'I already have a vault' }
     Unlock-FakeVault
     if ($JournalOnly) {
+      if ($OutcomeRehearsal) {
+        Test-KeyDetailExpiry -Rehearse
+        Test-CancelledOutcome -Count 2
+        Assert-NoOutcomeResurrection
+        $script:root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
+        Assert-Proof ($process.WaitForExit(10000)) 'the outcome rehearsal exited normally'
+        Write-Output 'REHEARSAL ONLY: no minimize, clipboard or OS signal. This does not pass R4-04.'
+        $success = $true
+        return
+      }
       if ($OutcomeOnly) {
         Test-OutcomeHandoff
         $script:root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()

@@ -83,10 +83,11 @@ always available in the navigation bar while unlocked.
 
 Revealed values and export previews hide after 30 seconds. Windows clipboard
 copies request exclusion from clipboard history, cloud clipboard and monitoring.
-AKM clears its current copy after 30 seconds, on lock and on normal exit, without
-deliberately clearing a later user copy. A crash, forced termination, another
-clipboard reader or a third-party clipboard manager can defeat cleanup. Exclusion
-flags cannot remove secrets copied by older AKM builds from existing Win+V history.
+AKM tries to clear its copy after 30 seconds, on lock and on normal exit. It
+leaves a later user copy in place. The copy may remain if the clipboard is busy,
+or if AKM stops unexpectedly. Another clipboard reader or a third-party clipboard
+manager can also keep a copy. Exclusion flags cannot remove secrets copied by
+older AKM builds from existing Win+V history.
 
 The window requests screen-capture protection. This is defense in depth for
 supported Windows capture APIs, not protection from malware, cameras or every

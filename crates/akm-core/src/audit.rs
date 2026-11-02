@@ -1,11 +1,13 @@
 use std::collections::VecDeque;
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
-use serde::{Deserialize, Serialize};
+use serde::de::{IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
@@ -202,6 +204,8 @@ impl AuditLog {
                 Err(_) => {
                     snapshot.state = AuditState::Corrupt;
                     snapshot.problem_line = Some(physical_line);
+                    // Untrusted, like every damaged record's sequence; displays say so.
+                    snapshot.broken_at = declared_seq(&buffer);
                     break;
                 }
             };
@@ -270,7 +274,7 @@ impl AuditLog {
         if snapshot.state == AuditState::Corrupt {
             let sequence = snapshot
                 .broken_at
-                .map(|seq| format!(", sequence {seq}"))
+                .map(|seq| format!(", declared sequence {seq} (not verified)"))
                 .unwrap_or_default();
             return Err(Error::Invalid(format!(
                 "Activity journal data is damaged at physical line {}{sequence}; append refused and original bytes preserved.",
@@ -283,6 +287,58 @@ impl AuditLog {
             .last()
             .map(|entry| (entry.seq, entry.hash)))
     }
+}
+
+/// The `seq` a record declares when typed parsing failed (1A-R5-06). `Some` only for a
+/// top-level JSON object with exactly one `seq` member (names compared after unescaping)
+/// whose value is an integer literal in `0..=u64::MAX`. Nothing else is read or kept.
+fn declared_seq(line: &[u8]) -> Option<u64> {
+    struct Declared(Option<u64>);
+
+    impl<'de> Deserialize<'de> for Declared {
+        fn deserialize<D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> std::result::Result<Self, D::Error> {
+            struct Members;
+
+            impl<'de> Visitor<'de> for Members {
+                type Value = Declared;
+
+                fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("a JSON object")
+                }
+
+                fn visit_map<A: MapAccess<'de>>(
+                    self,
+                    mut map: A,
+                ) -> std::result::Result<Declared, A::Error> {
+                    // Count every `seq` before deciding: a map would keep only one duplicate.
+                    let mut count = 0usize;
+                    let mut value = None;
+                    while let Some(name) = map.next_key::<String>()? {
+                        if name == "seq" {
+                            count += 1;
+                            value = match map.next_value::<serde_json::Value>()? {
+                                serde_json::Value::Number(number) if number.is_u64() => {
+                                    number.as_u64()
+                                }
+                                _ => None,
+                            };
+                        } else {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                    Ok(Declared(if count == 1 { value } else { None }))
+                }
+            }
+
+            deserializer.deserialize_map(Members)
+        }
+    }
+
+    serde_json::from_slice::<Declared>(line)
+        .ok()
+        .and_then(|declared| declared.0)
 }
 
 #[cfg(test)]

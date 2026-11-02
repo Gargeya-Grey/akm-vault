@@ -1604,16 +1604,160 @@ mod tests {
         );
     }
 
+    struct BusyCleanup {
+        data: Arc<Mutex<FakeData>>,
+        busy: Arc<AtomicBool>,
+        partial: bool,
+    }
+    impl ClipboardBackend for BusyCleanup {
+        fn set_private(&mut self, text: &str) -> crate::clipboard::Publication {
+            let sequence = FakeClipboard(self.data.clone())
+                .set_private(text)
+                .published_for_test();
+            if self.partial {
+                // A partial write whose rollback failed: the value may remain under this sequence.
+                return crate::clipboard::Publication::for_test(
+                    crate::clipboard::Outcome::Residual(
+                        CommandError::new("clipboard", "Fake partial publication error"),
+                        crate::clipboard::LeaseEvidence::for_test(sequence),
+                    ),
+                );
+            }
+            crate::clipboard::Publication::for_test(crate::clipboard::Outcome::Published(
+                crate::clipboard::LeaseEvidence::for_test(sequence),
+            ))
+        }
+        fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
+            if self.busy.load(Ordering::SeqCst) {
+                // The production OpenClipboard failure text, which is written for copying.
+                return Err(CommandError::new(
+                    "clipboard",
+                    "The clipboard is busy. Try copying again.",
+                ));
+            }
+            FakeClipboard(self.data.clone()).clear_matching(sequence, text)
+        }
+    }
+
+    // 1A-R6-02: a busy cleanup warns that the copy may remain, retries, and keeps a newer copy.
+    #[test]
+    fn a_busy_cleanup_warns_that_the_copy_may_remain_and_retries_in_one_episode() {
+        for partial in [false, true] {
+            let f = fixture();
+            let busy = Arc::new(AtomicBool::new(true));
+            f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(BusyCleanup {
+                data: f.clipboard.clone(),
+                busy: busy.clone(),
+                partial,
+            }));
+            let ticket = f.session.snapshot().unwrap().ticket;
+            let copied = f
+                .session
+                .copy(ticket, Zeroizing::new("fake-busy-value".into()));
+            assert_eq!(copied.is_err(), partial);
+            if !partial {
+                f.clock.set(30);
+                f.session.tick();
+            }
+            let warnings = f.session.warnings().unwrap().application;
+            assert_eq!(warnings.len(), 1, "partial={partial}");
+            assert_eq!(
+                warnings[0].message,
+                crate::clipboard::uncertain_cleanup().message,
+                "partial={partial}"
+            );
+            assert!(!warnings[0].message.contains("Try copying again"));
+            assert_eq!(f.clipboard.lock().unwrap().text, "fake-busy-value");
+            f.session.tick();
+            assert_eq!(application_ids(&f), vec![warnings[0].id.clone()]);
+            // The episode ends by a newer identical user copy, or by AKM's own clear.
+            let newer_copy = partial;
+            if newer_copy {
+                f.clipboard.lock().unwrap().sequence += 1;
+            }
+            busy.store(false, Ordering::SeqCst);
+            f.session.tick();
+            let expected = if newer_copy { "fake-busy-value" } else { "" };
+            assert_eq!(f.clipboard.lock().unwrap().text, expected);
+            assert_eq!(f.clipboard.lock().unwrap().clears, usize::from(!newer_copy));
+            assert_eq!(f.session.gate().unwrap().clipboard.owned_generation(), None);
+            // The kept warning is history: it never promised a retry that has now ended.
+            let kept = f.session.warnings().unwrap().application;
+            assert_eq!(kept.len(), 1);
+            assert_eq!(kept[0].id, warnings[0].id);
+            assert!(!kept[0].message.contains("try again") && !kept[0].message.contains("will"));
+        }
+    }
+
+    struct RollbackAfterLease {
+        data: Arc<Mutex<FakeData>>,
+        roll_back: Arc<AtomicBool>,
+        clear_calls: Arc<AtomicUsize>,
+    }
+    impl ClipboardBackend for RollbackAfterLease {
+        fn set_private(&mut self, text: &str) -> crate::clipboard::Publication {
+            if self.roll_back.load(Ordering::SeqCst) {
+                // The publication emptied the clipboard, failed, and rolled back.
+                let mut data = self.data.lock().unwrap();
+                data.sequence += 2;
+                data.text.clear();
+                return crate::clipboard::Publication::for_test(
+                    crate::clipboard::Outcome::Emptied(CommandError::new(
+                        "clipboard",
+                        "Fake rolled-back publication",
+                    )),
+                );
+            }
+            FakeClipboard(self.data.clone()).set_private(text)
+        }
+        fn clear_matching(&mut self, _sequence: u32, _text: &str) -> Result<bool, CommandError> {
+            self.clear_calls.fetch_add(1, Ordering::SeqCst);
+            Err(CommandError::new(
+                "clipboard",
+                "The clipboard is busy. Try copying again.",
+            ))
+        }
+    }
+
+    // 1A-R7-02: a rolled-back publication also ends the earlier lease; nothing is left to retry.
+    #[test]
+    fn a_rolled_back_publication_after_an_owned_copy_leaves_no_lease_retry_or_warning() {
+        let f = fixture();
+        let roll_back = Arc::new(AtomicBool::new(false));
+        let clear_calls = Arc::new(AtomicUsize::new(0));
+        f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(RollbackAfterLease {
+            data: f.clipboard.clone(),
+            roll_back: roll_back.clone(),
+            clear_calls: clear_calls.clone(),
+        }));
+        let ticket = f.session.snapshot().unwrap().ticket;
+        f.session
+            .copy(ticket, Zeroizing::new("fake-first-copy".into()))
+            .unwrap();
+        roll_back.store(true, Ordering::SeqCst);
+        let error = f
+            .session
+            .copy(ticket, Zeroizing::new("fake-second-copy".into()))
+            .unwrap_err();
+        assert_eq!(
+            error.message,
+            "Fake rolled-back publication The earlier clipboard content was removed, and the new value was not copied. Copy again."
+        );
+        assert_eq!(f.session.gate().unwrap().clipboard.owned_generation(), None);
+        f.clock.set(30);
+        f.session.tick();
+        f.session.lock().unwrap();
+        assert_eq!(clear_calls.load(Ordering::SeqCst), 0);
+        assert!(application_ids(&f).is_empty());
+    }
+
     struct CleanupFault {
         data: Arc<Mutex<FakeData>>,
         fail: Arc<AtomicBool>,
         attempts: Arc<AtomicUsize>,
     }
     impl ClipboardBackend for CleanupFault {
-        fn set_private(
-            &mut self,
-            text: &str,
-        ) -> Result<crate::clipboard::CopyAttempt, CommandError> {
+        fn set_private(&mut self, text: &str) -> crate::clipboard::Publication {
             FakeClipboard(self.data.clone()).set_private(text)
         }
         fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
@@ -1813,18 +1957,22 @@ mod tests {
         fail_clear: Arc<AtomicBool>,
     }
     impl ClipboardBackend for PartialCleanupFault {
-        fn set_private(
-            &mut self,
-            text: &str,
-        ) -> Result<crate::clipboard::CopyAttempt, CommandError> {
-            let mut attempt = FakeClipboard(self.data.clone()).set_private(text)?;
+        fn set_private(&mut self, text: &str) -> crate::clipboard::Publication {
+            let sequence = FakeClipboard(self.data.clone())
+                .set_private(text)
+                .published_for_test();
             if self.partial.load(Ordering::SeqCst) {
-                attempt.failure = Some(CommandError::new(
-                    "clipboard",
-                    "Fake partial publication error",
-                ));
+                // A partial write whose rollback failed: the value may remain under this sequence.
+                return crate::clipboard::Publication::for_test(
+                    crate::clipboard::Outcome::Residual(
+                        CommandError::new("clipboard", "Fake partial publication error"),
+                        crate::clipboard::LeaseEvidence::for_test(sequence),
+                    ),
+                );
             }
-            Ok(attempt)
+            crate::clipboard::Publication::for_test(crate::clipboard::Outcome::Published(
+                crate::clipboard::LeaseEvidence::for_test(sequence),
+            ))
         }
         fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
             if self.fail_clear.load(Ordering::SeqCst) {
@@ -1857,7 +2005,10 @@ mod tests {
             .session
             .copy(ticket, Zeroizing::new("fake-partial-value".into()))
             .unwrap_err();
-        assert_eq!(error.message, "Fake partial publication error");
+        assert_eq!(
+            error.message,
+            "Fake partial publication error AKM could not confirm that the partial copy was removed. Check the clipboard before you paste."
+        );
         assert_eq!(f.clipboard.lock().unwrap().text, "fake-partial-value");
         let first = application_ids(&f);
         assert_eq!(
@@ -2474,10 +2625,7 @@ mod tests {
         block_on: usize,
     }
     impl ClipboardBackend for BlockingClipboard {
-        fn set_private(
-            &mut self,
-            text: &str,
-        ) -> Result<crate::clipboard::CopyAttempt, CommandError> {
+        fn set_private(&mut self, text: &str) -> crate::clipboard::Publication {
             self.calls += 1;
             if self.calls == self.block_on {
                 self.started.send(()).unwrap();
@@ -2549,5 +2697,790 @@ mod tests {
         f.clock.set(50);
         f.session.tick();
         assert_eq!(f.clipboard.lock().unwrap().text, "");
+    }
+
+    /// Unit 1a, design revision 3, section 3.1: the real publisher and cleanup over the fake
+    /// Win32 API, through `copy_stamped` (the function both production copy commands call).
+    #[cfg(windows)]
+    mod real_publisher {
+        use super::*;
+        use crate::clipboard::win32_fake::{FakeApi, FakeState, Fault, TransactionBackend};
+
+        const A: &str = "fake-copy-A";
+        const B: &str = "fake-copy-B";
+        // 1A-A1-01: AKM holds a lease, but does not observe that its copy is still there.
+        const EARLIER_MAY_REMAIN: &str = "AKM's earlier copy may still be on the clipboard.";
+        const EMPTIED: &str =
+            "The earlier clipboard content was removed, and the new value was not copied. Copy again.";
+        // 1A-A1-02: one text for each result of the immediate cleanup after a failed rollback.
+        const RESIDUAL: &str = "AKM could not confirm that the partial copy was removed. Check the clipboard before you paste.";
+        const RESIDUAL_REMOVED: &str = "AKM then removed the partial copy. Copy again.";
+        const RESIDUAL_REPLACED: &str =
+            "The clipboard changed after the partial copy, and AKM left the newer content in place. Copy again.";
+        const USER: &str = "fake-user-copy";
+
+        /// The Unicode text bytes that a user copy puts on the fake clipboard.
+        fn units(text: &str) -> Vec<u8> {
+            text.encode_utf16()
+                .chain(Some(0))
+                .flat_map(u16::to_ne_bytes)
+                .collect()
+        }
+
+        fn install(f: &Fixture) -> Arc<Mutex<FakeState>> {
+            let state = Arc::new(Mutex::new(FakeState::default()));
+            f.session.gate().unwrap().clipboard =
+                ClipboardLease::new(Box::new(TransactionBackend(FakeApi(state.clone()))));
+            state
+        }
+
+        fn copy(f: &Fixture, text: &str) -> Result<(), CommandError> {
+            f.session.copy_stamped(Stamped {
+                snapshot: f.session.snapshot().unwrap(),
+                value: Zeroizing::new(text.into()),
+            })
+        }
+
+        fn generation(f: &Fixture) -> Option<u64> {
+            f.session.gate().unwrap().clipboard.owned_generation()
+        }
+
+        fn uncertain() -> String {
+            crate::clipboard::uncertain_cleanup().message
+        }
+
+        fn application_messages(f: &Fixture) -> Vec<String> {
+            f.session
+                .warnings()
+                .unwrap()
+                .application
+                .into_iter()
+                .map(|n| n.message)
+                .collect()
+        }
+
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        enum Lease {
+            Kept,
+            Gone,
+            New,
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum Said {
+            Untouched,
+            Emptied,
+            Uncertain,
+            Residual,
+            ResidualRemoved,
+            Ok,
+        }
+
+        struct Base {
+            registered: usize,
+            allocations: usize,
+            opens: usize,
+            empties: usize,
+            sets: usize,
+        }
+
+        struct Case {
+            name: &'static str,
+            text: &'static str,
+            faults: fn(&Base) -> Vec<Fault>,
+            lease: Lease,
+            said: Said,
+            remains: &'static str,
+            warns: bool,
+        }
+
+        fn cases() -> Vec<Case> {
+            vec![
+                Case {
+                    name: "NUL in the value",
+                    text: "fake\0copy",
+                    faults: |_| vec![],
+                    lease: Lease::Kept,
+                    said: Said::Untouched,
+                    remains: A,
+                    warns: false,
+                },
+                Case {
+                    name: "register",
+                    text: B,
+                    faults: |b| vec![Fault::Register(b.registered + 1)],
+                    lease: Lease::Kept,
+                    said: Said::Untouched,
+                    remains: A,
+                    warns: false,
+                },
+                Case {
+                    name: "allocate",
+                    text: B,
+                    faults: |b| vec![Fault::Allocate(b.allocations + 1)],
+                    lease: Lease::Kept,
+                    said: Said::Untouched,
+                    remains: A,
+                    warns: false,
+                },
+                Case {
+                    name: "owner",
+                    text: B,
+                    faults: |_| vec![Fault::Owner],
+                    lease: Lease::Kept,
+                    said: Said::Untouched,
+                    remains: A,
+                    warns: false,
+                },
+                Case {
+                    name: "open busy",
+                    text: B,
+                    faults: |b| vec![Fault::Open(b.opens + 1)],
+                    lease: Lease::Kept,
+                    said: Said::Untouched,
+                    remains: A,
+                    warns: false,
+                },
+                Case {
+                    name: "empty fails, sequence unchanged",
+                    text: B,
+                    faults: |b| vec![Fault::Empty(b.empties + 1)],
+                    lease: Lease::Kept,
+                    said: Said::Untouched,
+                    remains: A,
+                    warns: false,
+                },
+                Case {
+                    name: "empty fails, sequence changed",
+                    text: B,
+                    faults: |b| vec![Fault::EmptyChanged(b.empties + 1)],
+                    lease: Lease::Gone,
+                    said: Said::Uncertain,
+                    remains: A,
+                    warns: true,
+                },
+                Case {
+                    name: "exclusion set",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 1)],
+                    lease: Lease::Gone,
+                    said: Said::Emptied,
+                    remains: "",
+                    warns: false,
+                },
+                Case {
+                    name: "exclusion check",
+                    text: B,
+                    faults: |_| vec![Fault::ZeroRead(0xc000)],
+                    lease: Lease::Gone,
+                    said: Said::Emptied,
+                    remains: "",
+                    warns: false,
+                },
+                Case {
+                    name: "empty frame set",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 4)],
+                    lease: Lease::Gone,
+                    said: Said::Emptied,
+                    remains: "",
+                    warns: false,
+                },
+                Case {
+                    name: "first secret set",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 8)],
+                    lease: Lease::Gone,
+                    said: Said::Emptied,
+                    remains: "",
+                    warns: false,
+                },
+                Case {
+                    name: "later secret set",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 9)],
+                    lease: Lease::Gone,
+                    said: Said::Emptied,
+                    remains: "",
+                    warns: false,
+                },
+                Case {
+                    name: "read-back unreadable",
+                    text: B,
+                    faults: |_| vec![Fault::TextRead],
+                    lease: Lease::Gone,
+                    said: Said::Emptied,
+                    remains: "",
+                    warns: false,
+                },
+                // Design 3.3, mutant 2: the written phase starts before the first secret set.
+                // Only the empty frame formats remain; cleanup cannot read them, so the
+                // lease stays for a retry and the uncertainty warning shows.
+                Case {
+                    name: "rollback fails after the first secret set",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 8), Fault::Empty(b.empties + 2)],
+                    lease: Lease::New,
+                    said: Said::Residual,
+                    remains: "",
+                    warns: true,
+                },
+                Case {
+                    name: "rollback fails, sequence unchanged",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 9), Fault::Empty(b.empties + 2)],
+                    lease: Lease::Gone,
+                    said: Said::ResidualRemoved,
+                    remains: "",
+                    warns: false,
+                },
+                Case {
+                    name: "rollback fails, sequence changed",
+                    text: B,
+                    faults: |b| vec![Fault::Set(b.sets + 9), Fault::EmptyChanged(b.empties + 2)],
+                    lease: Lease::Gone,
+                    said: Said::Uncertain,
+                    remains: B,
+                    warns: true,
+                },
+                Case {
+                    name: "success",
+                    text: B,
+                    faults: |_| vec![],
+                    lease: Lease::New,
+                    said: Said::Ok,
+                    remains: B,
+                    warns: false,
+                },
+            ]
+        }
+
+        #[test]
+        fn every_copy_outcome_through_copy_stamped_matches_the_lease_table() {
+            let mut failures = Vec::new();
+            for earlier in [true, false] {
+                for case in cases() {
+                    let name = case.name;
+                    let run = std::panic::AssertUnwindSafe(|| run_case(case, earlier));
+                    if let Err(panic) = std::panic::catch_unwind(run) {
+                        let text = panic
+                            .downcast_ref::<String>()
+                            .cloned()
+                            .or_else(|| panic.downcast_ref::<&str>().map(|t| t.to_string()))
+                            .unwrap_or_default();
+                        failures.push(text.lines().next().unwrap_or(name).to_string());
+                    }
+                }
+            }
+            assert!(
+                failures.is_empty(),
+                "failing cases:
+{}",
+                failures.join(
+                    "
+"
+                )
+            );
+        }
+
+        fn run_case(case: Case, earlier: bool) {
+            let label = format!("{} (earlier lease: {earlier})", case.name);
+            let f = fixture();
+            let state = install(&f);
+            if earlier {
+                copy(&f, A).unwrap();
+            }
+            let before = generation(&f);
+            {
+                let mut s = state.lock().unwrap();
+                let base = Base {
+                    registered: s.registered_names.len(),
+                    allocations: s.allocations,
+                    opens: s.open_calls,
+                    empties: s.empty_calls,
+                    sets: s.set_calls,
+                };
+                s.faults = (case.faults)(&base);
+            }
+            let result = copy(&f, case.text);
+            assert!(
+                state.lock().unwrap().faults.is_empty(),
+                "{label}: the fault was not reached"
+            );
+            let after = generation(&f);
+            let lease = match (before, after) {
+                (_, None) => Lease::Gone,
+                (Some(a), Some(b)) if a == b => Lease::Kept,
+                _ => Lease::New,
+            };
+            let expected = match (case.lease, earlier) {
+                (Lease::Kept, false) => Lease::Gone,
+                (other, _) => other,
+            };
+            assert_eq!(lease, expected, "{label}: lease");
+            let remains = if !earlier && case.remains == A {
+                ""
+            } else {
+                case.remains
+            };
+            assert_eq!(
+                state.lock().unwrap().text(),
+                remains,
+                "{label}: clipboard text"
+            );
+            match (case.said, result) {
+                (Said::Ok, Ok(())) => {}
+                (Said::Untouched, Err(e)) => {
+                    assert_eq!(
+                        e.message.ends_with(EARLIER_MAY_REMAIN),
+                        earlier,
+                        "{label}: {}",
+                        e.message
+                    )
+                }
+                (Said::Emptied, Err(e)) => {
+                    assert!(e.message.ends_with(EMPTIED), "{label}: {}", e.message);
+                    if case.name == "read-back unreadable" {
+                        assert!(
+                            e.message.starts_with("Windows did not confirm the copy."),
+                            "{label}: {}",
+                            e.message
+                        );
+                    }
+                }
+                (Said::Residual, Err(e)) => {
+                    assert!(e.message.ends_with(RESIDUAL), "{label}: {}", e.message)
+                }
+                (Said::ResidualRemoved, Err(e)) => {
+                    assert!(
+                        e.message.ends_with(RESIDUAL_REMOVED),
+                        "{label}: {}",
+                        e.message
+                    )
+                }
+                (Said::Uncertain, Err(e)) => {
+                    assert!(e.message.ends_with(&uncertain()), "{label}: {}", e.message)
+                }
+                (said, result) => panic!(
+                    "{label}: expected {said:?}, got {:?}",
+                    result.err().map(|e| e.message)
+                ),
+            }
+            let warned = application_messages(&f).iter().any(|m| m == &uncertain());
+            assert_eq!(
+                warned,
+                case.warns && (earlier || case.name.starts_with("rollback")),
+                "{label}: warning"
+            );
+            // Later cleanup: a lease that is gone causes no further clipboard calls.
+            let empties = state.lock().unwrap().empty_calls;
+            f.clock.set(30);
+            f.session.tick();
+            f.session.lock().unwrap();
+            let s = state.lock().unwrap();
+            match expected {
+                Lease::Gone => assert_eq!(
+                    s.empty_calls, empties,
+                    "{label}: cleanup after the lease ended"
+                ),
+                Lease::Kept | Lease::New => {
+                    assert_eq!(s.text(), "", "{label}: the lease was cleaned up")
+                }
+            }
+        }
+
+        #[test]
+        fn a_failed_cleanup_empty_that_changed_the_sequence_ends_the_lease_with_one_warning() {
+            let f = fixture();
+            let state = install(&f);
+            copy(&f, A).unwrap();
+            let next = state.lock().unwrap().empty_calls + 1;
+            state.lock().unwrap().faults = vec![Fault::EmptyChanged(next)];
+            f.clock.set(30);
+            f.session.tick();
+            assert!(state.lock().unwrap().faults.is_empty());
+            assert_eq!(
+                generation(&f),
+                None,
+                "the lease must not wait for a later sequence"
+            );
+            assert_eq!(application_messages(&f), vec![uncertain()]);
+            let empties = state.lock().unwrap().empty_calls;
+            f.clock.set(31);
+            f.session.tick();
+            f.session.lock().unwrap();
+            assert_eq!(state.lock().unwrap().empty_calls, empties);
+            assert_eq!(application_messages(&f), vec![uncertain()]);
+        }
+
+        #[test]
+        fn a_failed_cleanup_empty_with_the_sequence_unchanged_is_retried() {
+            let f = fixture();
+            let state = install(&f);
+            copy(&f, A).unwrap();
+            let next = state.lock().unwrap().empty_calls + 1;
+            state.lock().unwrap().faults = vec![Fault::Empty(next)];
+            f.clock.set(30);
+            f.session.tick();
+            assert!(generation(&f).is_some());
+            assert_eq!(application_messages(&f), vec![uncertain()]);
+            f.clock.set(31);
+            f.session.tick();
+            assert_eq!(generation(&f), None);
+            assert_eq!(state.lock().unwrap().text(), "");
+        }
+
+        #[test]
+        fn cleanup_keeps_a_newer_identical_user_copy() {
+            let f = fixture();
+            let state = install(&f);
+            copy(&f, A).unwrap();
+            let mut units: Vec<u8> = A
+                .encode_utf16()
+                .chain(Some(0))
+                .flat_map(u16::to_ne_bytes)
+                .collect();
+            state.lock().unwrap().user_copy(std::mem::take(&mut units));
+            f.clock.set(30);
+            f.session.tick();
+            assert_eq!(generation(&f), None);
+            assert_eq!(state.lock().unwrap().text(), A);
+            assert!(application_messages(&f).is_empty());
+        }
+
+        #[test]
+        fn a_busy_clipboard_at_expiry_lock_and_exit_leaves_the_copy_and_one_warning() {
+            let f = fixture();
+            let state = install(&f);
+            copy(&f, A).unwrap();
+            let opens = state.lock().unwrap().open_calls;
+            state.lock().unwrap().faults = vec![
+                Fault::Open(opens + 1),
+                Fault::Open(opens + 2),
+                Fault::Open(opens + 3),
+            ];
+            f.clock.set(30);
+            f.session.tick();
+            f.session.lock().unwrap();
+            assert_eq!(application_messages(&f), vec![uncertain()]);
+            drop(f);
+            let s = state.lock().unwrap();
+            assert!(
+                s.faults.is_empty(),
+                "expiry, lock and exit each made one attempt"
+            );
+            assert_eq!(s.text(), A, "best effort: the copy remains");
+        }
+
+        /// 1A-A1-01: the user replaced copy A, then copy B failed before any clipboard
+        /// change. AKM still holds A's lease, but it did not observe A on the clipboard.
+        #[test]
+        fn a_failed_copy_after_a_user_copy_states_uncertainty_and_keeps_the_user_copy() {
+            let f = fixture();
+            let state = install(&f);
+            copy(&f, A).unwrap();
+            state.lock().unwrap().user_copy(units(USER));
+            let opens = state.lock().unwrap().open_calls;
+            state.lock().unwrap().faults = vec![Fault::Open(opens + 1)];
+            let error = copy(&f, B).unwrap_err();
+            assert!(
+                state.lock().unwrap().faults.is_empty(),
+                "the busy open was reached"
+            );
+            assert!(
+                error.message.ends_with(EARLIER_MAY_REMAIN),
+                "{}",
+                error.message
+            );
+            assert!(
+                !error.message.contains("is still on the clipboard"),
+                "{}",
+                error.message
+            );
+            assert_eq!(state.lock().unwrap().text(), USER);
+            f.clock.set(30);
+            f.session.tick();
+            f.session.lock().unwrap();
+            assert_eq!(
+                state.lock().unwrap().text(),
+                USER,
+                "cleanup keeps the user copy"
+            );
+            assert_eq!(generation(&f), None);
+            assert!(application_messages(&f).is_empty());
+        }
+
+        fn fail_rollback(state: &Arc<Mutex<FakeState>>) {
+            let mut s = state.lock().unwrap();
+            // The second secret format fails after the Unicode value is set, and the rollback
+            // empty fails with the sequence unchanged: outcome `Residual`.
+            s.faults = vec![Fault::Set(s.set_calls + 9), Fault::Empty(s.empty_calls + 2)];
+        }
+
+        /// 1A-A1-02: the immediate cleanup after a failed rollback removed the partial copy.
+        #[test]
+        fn a_failed_rollback_whose_immediate_cleanup_succeeds_says_the_copy_was_removed() {
+            for earlier in [false, true] {
+                let f = fixture();
+                let state = install(&f);
+                if earlier {
+                    copy(&f, A).unwrap();
+                }
+                fail_rollback(&state);
+                let clears = state.lock().unwrap().clears;
+                let error = copy(&f, B).unwrap_err();
+                let s = state.lock().unwrap();
+                assert!(
+                    s.faults.is_empty(),
+                    "earlier {earlier}: the faults were reached"
+                );
+                // The publication's first empty removes A; the immediate cleanup removes B.
+                assert_eq!(
+                    s.clears,
+                    clears + 1 + usize::from(earlier),
+                    "earlier {earlier}: the cleanup emptied B"
+                );
+                assert_eq!(s.text(), "");
+                drop(s);
+                assert!(
+                    error.message.ends_with(RESIDUAL_REMOVED),
+                    "earlier {earlier}: {}",
+                    error.message
+                );
+                assert_eq!(generation(&f), None);
+                assert!(application_messages(&f).is_empty());
+            }
+        }
+
+        /// 1A-A1-02: a user copy replaced the partial copy before the immediate cleanup.
+        #[test]
+        fn a_failed_rollback_then_a_newer_user_copy_says_akm_left_it() {
+            let f = fixture();
+            let state = install(&f);
+            fail_rollback(&state);
+            // Applied when the publication closes the clipboard, before the cleanup opens it.
+            state.lock().unwrap().pending_user_copy = Some(units(USER));
+            let error = copy(&f, B).unwrap_err();
+            assert!(state.lock().unwrap().faults.is_empty());
+            assert!(
+                error.message.ends_with(RESIDUAL_REPLACED),
+                "{}",
+                error.message
+            );
+            assert_eq!(state.lock().unwrap().text(), USER);
+            assert_eq!(generation(&f), None);
+            assert!(application_messages(&f).is_empty());
+        }
+
+        /// 1A-A1-02: the immediate cleanup is busy, so the partial copy may remain.
+        #[test]
+        fn a_failed_rollback_with_a_busy_immediate_cleanup_warns_and_retries() {
+            let f = fixture();
+            let state = install(&f);
+            fail_rollback(&state);
+            {
+                let mut s = state.lock().unwrap();
+                let opens = s.open_calls;
+                s.faults.push(Fault::Open(opens + 2));
+            }
+            let error = copy(&f, B).unwrap_err();
+            assert!(state.lock().unwrap().faults.is_empty());
+            assert!(error.message.ends_with(RESIDUAL), "{}", error.message);
+            assert_eq!(
+                state.lock().unwrap().text(),
+                B,
+                "best effort: the partial copy remains"
+            );
+            assert!(generation(&f).is_some(), "the lease stays for a retry");
+            assert_eq!(application_messages(&f), vec![uncertain()]);
+            f.session.tick();
+            assert_eq!(state.lock().unwrap().text(), "", "the due retry removed it");
+            assert_eq!(generation(&f), None);
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum At {
+            Tick,
+            Lock,
+        }
+
+        fn attempt(f: &Fixture, at: At) {
+            match at {
+                At::Tick => {
+                    f.clock.set(30);
+                    f.session.tick();
+                }
+                At::Lock => f.session.lock().unwrap(),
+            }
+        }
+
+        struct Cleanup {
+            name: &'static str,
+            setup: fn(&mut FakeState),
+            /// The lease stays, and the next tick tries again.
+            retried: bool,
+            warns: bool,
+            /// The sequence change that the attempt itself made.
+            sequence_step: u32,
+            remains: &'static str,
+            /// The text after the next tick.
+            after_retry: &'static str,
+        }
+
+        fn cleanups() -> Vec<Cleanup> {
+            vec![
+                Cleanup {
+                    name: "busy open",
+                    setup: |s| s.faults = vec![Fault::Open(s.open_calls + 1)],
+                    retried: true,
+                    warns: true,
+                    sequence_step: 0,
+                    remains: A,
+                    after_retry: "",
+                },
+                Cleanup {
+                    name: "current sequence 0",
+                    setup: |s| s.faults = vec![Fault::Sequence],
+                    retried: true,
+                    warns: true,
+                    sequence_step: 0,
+                    remains: A,
+                    after_retry: "",
+                },
+                Cleanup {
+                    name: "text different, same sequence",
+                    setup: |s| {
+                        s.formats.insert(13, units("fake-other"));
+                    },
+                    retried: true,
+                    warns: true,
+                    sequence_step: 0,
+                    remains: "fake-other",
+                    after_retry: "fake-other",
+                },
+                Cleanup {
+                    name: "text unreadable",
+                    setup: |s| s.faults = vec![Fault::TextRead],
+                    retried: true,
+                    warns: true,
+                    sequence_step: 0,
+                    remains: A,
+                    after_retry: "",
+                },
+                Cleanup {
+                    name: "empty fails, sequence unchanged",
+                    setup: |s| s.faults = vec![Fault::Empty(s.empty_calls + 1)],
+                    retried: true,
+                    warns: true,
+                    sequence_step: 0,
+                    remains: A,
+                    after_retry: "",
+                },
+                Cleanup {
+                    name: "empty fails, sequence changed (clipboardLost)",
+                    setup: |s| s.faults = vec![Fault::EmptyChanged(s.empty_calls + 1)],
+                    retried: false,
+                    warns: true,
+                    sequence_step: 1,
+                    remains: A,
+                    after_retry: A,
+                },
+                Cleanup {
+                    name: "newer identical user copy",
+                    setup: |s| s.user_copy(units(A)),
+                    retried: false,
+                    warns: false,
+                    sequence_step: 0,
+                    remains: A,
+                    after_retry: A,
+                },
+                Cleanup {
+                    name: "success",
+                    setup: |_| {},
+                    retried: false,
+                    warns: false,
+                    sequence_step: 1,
+                    remains: "",
+                    after_retry: "",
+                },
+            ]
+        }
+
+        /// 1A-A1-03: every cleanup case of design revision 3, section 3.1, through the real
+        /// cleanup over fake Win32, at a due tick and at lock.
+        #[test]
+        fn every_cleanup_case_at_a_due_tick_and_at_lock_matches_the_table() {
+            let mut failures = Vec::new();
+            for at in [At::Tick, At::Lock] {
+                for case in cleanups() {
+                    let run = std::panic::AssertUnwindSafe(|| run_cleanup(&case, at));
+                    if let Err(panic) = std::panic::catch_unwind(run) {
+                        let text = panic
+                            .downcast_ref::<String>()
+                            .cloned()
+                            .or_else(|| panic.downcast_ref::<&str>().map(|t| t.to_string()))
+                            .unwrap_or_default();
+                        failures.push(format!(
+                            "{} at {at:?}: {}",
+                            case.name,
+                            text.lines().next().unwrap_or("")
+                        ));
+                    }
+                }
+            }
+            assert!(
+                failures.is_empty(),
+                "failing cases:\n{}",
+                failures.join("\n")
+            );
+        }
+
+        fn run_cleanup(case: &Cleanup, at: At) {
+            let label = format!("{} at {at:?}", case.name);
+            let f = fixture();
+            let state = install(&f);
+            copy(&f, A).unwrap();
+            let lease = generation(&f);
+            (case.setup)(&mut state.lock().unwrap());
+            let sequence = state.lock().unwrap().sequence;
+            attempt(&f, at);
+            let s = state.lock().unwrap();
+            assert!(s.faults.is_empty(), "{label}: the fault was reached");
+            assert_eq!(
+                s.sequence,
+                sequence + case.sequence_step,
+                "{label}: sequence"
+            );
+            assert_eq!(s.text(), case.remains, "{label}: clipboard text");
+            let opens = s.open_calls;
+            drop(s);
+            let expected_lease = if case.retried { lease } else { None };
+            assert_eq!(generation(&f), expected_lease, "{label}: lease");
+            let warnings = f.session.warnings().unwrap().application;
+            let messages: Vec<_> = warnings.iter().map(|n| n.message.clone()).collect();
+            let expected: Vec<String> = if case.warns {
+                vec![uncertain()]
+            } else {
+                vec![]
+            };
+            assert_eq!(messages, expected, "{label}: warnings");
+            let ids: Vec<_> = warnings.iter().map(|n| n.id.clone()).collect();
+            // The retry: a due tick while unlocked, a locked tick after lock.
+            f.clock.set(31);
+            f.session.tick();
+            let s = state.lock().unwrap();
+            assert_eq!(s.open_calls > opens, case.retried, "{label}: retry");
+            assert_eq!(s.text(), case.after_retry, "{label}: text after the retry");
+            drop(s);
+            let after: Vec<_> = f
+                .session
+                .warnings()
+                .unwrap()
+                .application
+                .into_iter()
+                .map(|n| n.id)
+                .collect();
+            assert_eq!(after, ids, "{label}: one warning ID for the episode");
+        }
     }
 }

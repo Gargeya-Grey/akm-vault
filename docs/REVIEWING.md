@@ -41,14 +41,33 @@ Git started after unit 1a was written, so `main` alone does not show the unit. S
 **Return format.**
 
 1. Ranked findings. Each one has a severity (P0 to P3), a file and line, the exact scenario, whether it was reproduced or found by inspection, and the test that would close it.
-2. **Source acceptance: YES or NO**, and the reason.
+2. **Source acceptance: YES (provisional) or NO**, and the reason, by the [pass rule](#pass-rule). Name each earlier P0 to P2 finding that you checked. A design review reports NO, "implementation not reviewed", and gives its design verdict here.
 3. **Work unit complete: YES or NO**, with any missing runtime proof.
 4. What the review did not cover.
 
 Do not give a numerical score. A unit review is not the full rescore and not a professional audit.
 
+## Pass rule
+
+Owner decision, 2026-11-02. Two reviews rejected earlier text ([round 1](reviews/2026-11-02-pass-rule-review1.md), [round 2](reviews/2026-11-02-pass-rule-review2.md)). The owner then adopted the rule by decision, with the round 2 fixes as proposed. It applies from the next review.
+
+- **Subject.** The rule applies to every new work-unit review, design reviews included. A review accepts only the subject that it reviewed. A design review gives a design verdict and reports source acceptance NO, "implementation not reviewed". It cannot complete a work unit or close a source defect.
+- **Severity.** Rate each finding by its demonstrated effect, as if this rule did not exist. A finding is **P2 or higher** when it can disclose a secret, lose or corrupt vault data, change vault or app state that the user did not ask for, break a [contract](PROJECT.md#contracts-every-change-keeps), or cause a material loss of a required workflow, availability, reliability, privacy or correctness. **P3** is for low-impact defects, and for coverage or documentation gaps that do not block.
+- **Earlier findings.** Before a source pass, verify the fix and the required regression evidence for every in-scope P0 to P2 finding, from earlier rounds too. An unresolved one blocks the pass. Missing required evidence makes the review incomplete. An owner-approved scope split can move a finding out of the unit.
+- **Fail.** A review that establishes a P0, P1 or P2 finding fails, even when other scope or evidence is missing. It also records the missing coverage. The AGENTS.md stop rule ("fails review twice") counts failed reviews only.
+- **Incomplete.** A review that could not see its required scope or evidence, and established no P0 to P2 finding, is incomplete. It reports source acceptance NO and names what was missing. It counts as neither a pass nor a failure.
+- **Pending, then pass.** A complete review of the final source with no P0 to P2 finding reports source acceptance YES (provisional). Its result is **pending** until these steps are done, in order:
+  1. Record its findings in FINDINGS.md.
+  2. Move every P3 finding (below).
+  3. Settle every severity dispute (below).
+
+  Then record the **pass**. Only a pass counts for defect closure or landing.
+- **Disputes.** The raw review keeps the reviewer's words and severities. When a severity is below the P2 floor above, or the implementer disputes it, the result stays pending until the owner decides. Record the decision next to the review, never inside it.
+- **Moving a P3.** Move it to the later unit whose ROADMAP.md scope covers the affected behaviour. When no unit or more than one unit fits, ask the owner; the result stays pending until the owner names one. List the finding under that unit in FINDINGS.md with its status word (Open, or Gap for a missing proof), and in that unit's ROADMAP.md entry. It closes by the AGENTS.md rule, in that unit. A move does not authorize work on that unit.
+- **Two verdicts.** A pass accepts the source. "Work unit complete" is a separate verdict: it needs a passing source review and every runtime proof that the unit's records require. A deferred proof stays unproved. For example, unit 1a stays incomplete until R4-04 passes.
+
 ## After the review
 
-1. Commit the raw review text, unchanged, to `docs/reviews/<date>-<scope>.md`. Put a header above it that gives the model, the requested effort, the reviewed commit and build hashes, and the date. Never rewrite a rejected review into an approval.
-2. Add each new finding to FINDINGS.md, with an ID like `1A-R5-01` and a link to that review file.
+1. Commit the raw review text, unchanged, to `docs/reviews/<date>-<scope>.md`. Put a header above it that gives the model, the requested effort, the reviewed commit and build hashes, the date, and the result under the pass rule: pass, pending, fail or incomplete. Update only that result line when a pending result becomes a pass. Never rewrite a rejected review into an approval.
+2. Add each new finding to FINDINGS.md, with an ID like `1A-R5-01` and a link to that review file. For a pending result, move each P3 finding and settle each dispute as the pass rule says, then record the pass.
 3. Update STATE.md.

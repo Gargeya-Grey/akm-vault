@@ -91,7 +91,7 @@ export function Activity() {
         {report?.state === "corrupt" && (
           <div className="ledger-message">
             <Notice tone="error">
-              Damage was found at physical line <span className="mono">{report.problemLine}</span>{report.brokenAt === null ? "." : <>, sequence <span className="mono">{report.brokenAt}</span>.</>}
+              Damage was found at physical line <span className="mono">{report.problemLine}</span>{report.brokenAt === null ? "." : <>, declared sequence <span className="mono">{report.brokenAt}</span> (not verified).</>}
               Original bytes were preserved. The displayed prefix is not authenticated; missing records and the cause of damage are unknown.
             </Notice>
           </div>

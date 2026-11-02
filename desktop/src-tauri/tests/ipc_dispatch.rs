@@ -40,11 +40,8 @@ use tauri::{
 
 struct FakeClipboard;
 impl clipboard::ClipboardBackend for FakeClipboard {
-    fn set_private(&mut self, _: &str) -> Result<clipboard::CopyAttempt, error::CommandError> {
-        Ok(clipboard::CopyAttempt {
-            sequence: 1,
-            failure: None,
-        })
+    fn set_private(&mut self, _: &str) -> clipboard::Publication {
+        clipboard::Publication::fake_published(1)
     }
     fn clear_matching(&mut self, _: u32, _: &str) -> Result<bool, error::CommandError> {
         Ok(true)

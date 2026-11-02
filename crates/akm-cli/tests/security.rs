@@ -551,7 +551,11 @@ fn new_exports_emit_requested_events_and_corrupt_audit_displays_known_sequence()
     let fixture = Fixture::new();
     let log = AuditLog::for_vault(&fixture.vault);
     assert_success(&fixture.cli().args(["export", "--all"]).output().unwrap());
-    assert_eq!(log.read(1).unwrap()[0].action, "export-requested");
+    assert!(log
+        .read(2)
+        .unwrap()
+        .iter()
+        .any(|entry| entry.seq == 1 && entry.action == "export-requested"));
     let bytes =
         fs::read_to_string(log.path())
             .unwrap()
@@ -565,6 +569,184 @@ fn new_exports_emit_requested_events_and_corrupt_audit_displays_known_sequence()
         "{text}"
     );
     assert_eq!(fs::read_to_string(log.path()).unwrap(), bytes);
+}
+
+// 1A-R5-06: the release CLI shows a damaged record's declared sequence as unverified.
+#[test]
+fn audit_shows_a_damaged_records_declared_sequence_without_its_contents() {
+    let fixture = Fixture::new();
+    let log = AuditLog::for_vault(&fixture.vault);
+    let bytes = b"{\"seq\":7,\"ts\":\"bad\",\"detail\":\"fake-hidden-detail\"}
+";
+    fs::write(log.path(), bytes).unwrap();
+    let output = fixture.cli().args(["audit", "--verify"]).output().unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        text.contains("physical line 1, declared sequence 7 (not verified)"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("fake-hidden-detail") && !stderr(&output).contains("fake-hidden-detail")
+    );
+    assert_eq!(fs::read(log.path()).unwrap(), bytes);
+}
+
+// 1A-R6-01: a completed export exits 0 even when its warning cannot be printed.
+#[test]
+fn an_unconfirmed_completion_keeps_a_successful_exit_even_without_stderr() {
+    use std::io::Read as _;
+    let big = "f".repeat(1 << 20);
+    for stderr_open in [false, true] {
+        let fixture = Fixture::with_keys(&[("Big", "BIG_SECRET", &big, "demo", "dev")]);
+        let log = AuditLog::for_vault(&fixture.vault);
+        let mut child = fixture
+            .cli()
+            .args(["export", "--all"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdout = child.stdout.take().unwrap();
+        let mut stderr_pipe = child.stderr.take().unwrap();
+        let reader = if stderr_open {
+            Some(std::thread::spawn(move || {
+                let mut text = String::new();
+                stderr_pipe.read_to_string(&mut text).unwrap();
+                text
+            }))
+        } else {
+            drop(stderr_pipe);
+            None
+        };
+        // The CLI now blocks on the unread stdout pipe, after its request record.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !fs::read_to_string(log.path())
+            .unwrap_or_default()
+            .contains("export-requested")
+        {
+            assert!(Instant::now() < deadline, "no request record");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut journal = fs::OpenOptions::new()
+            .append(true)
+            .open(log.path())
+            .unwrap();
+        journal.write_all(b"not-json\n").unwrap();
+        drop(journal);
+        let damaged = fs::read(log.path()).unwrap();
+        let mut output = Vec::new();
+        stdout.read_to_end(&mut output).unwrap();
+        let status = child.wait().unwrap();
+        assert!(output.len() > big.len(), "the whole export was delivered");
+        assert_eq!(status.code(), Some(0), "stderr_open={stderr_open}");
+        assert_eq!(fs::read(log.path()).unwrap(), damaged);
+        if let Some(reader) = reader {
+            let text = reader.join().unwrap();
+            assert!(text.contains("could not be confirmed"), "{text}");
+            assert!(text.contains("Do not repeat the export"), "{text}");
+            assert!(!text.contains("ffffffffffffffff"));
+        }
+    }
+}
+
+// 1A-R6-04: an append refused for a damaged journal labels its sequence as declared.
+#[test]
+fn refused_appends_label_a_damaged_records_sequence_as_declared() {
+    let fixture = Fixture::new();
+    let log = AuditLog::for_vault(&fixture.vault);
+    let bytes = b"{\"seq\":7,\"ts\":\"bad\",\"detail\":\"fake-hidden-detail\"}\n";
+    fs::write(log.path(), bytes).unwrap();
+    let output = fixture.cli().args(["export", "--all"]).output().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let text = stderr(&output);
+    assert!(
+        text.contains("physical line 1, declared sequence 7 (not verified)"),
+        "{text}"
+    );
+    assert!(!text.contains("fake-hidden-detail") && !text.contains("fake-intended-secret"));
+    assert_eq!(fs::read(log.path()).unwrap(), bytes);
+}
+
+// 1A-R5-04: a known export outcome is recorded and paired with its request.
+#[test]
+fn exports_pair_requested_and_completed_records_by_operation_without_the_destination() {
+    let fixture = Fixture::new();
+    let log = AuditLog::for_vault(&fixture.vault);
+    let target = fixture.directory.path().join("paired-export.env");
+    assert_success(&fixture.cli().args(["export", "--all"]).output().unwrap());
+    assert_success(
+        &fixture
+            .cli()
+            .args(["export", "--all", "--output"])
+            .arg(&target)
+            .output()
+            .unwrap(),
+    );
+    assert!(target.exists());
+    let mut entries = log.read(10).unwrap();
+    entries.sort_by_key(|entry| entry.seq);
+    let actions: Vec<&str> = entries.iter().map(|entry| entry.action.as_str()).collect();
+    assert_eq!(
+        actions,
+        [
+            "export-requested",
+            "export-completed",
+            "export-requested",
+            "export-completed"
+        ]
+    );
+    let operation = |detail: &Option<String>| {
+        let detail = detail.as_deref().unwrap();
+        let id = detail
+            .strip_prefix("operation ")
+            .and_then(|rest| rest.split(';').next())
+            .unwrap_or_else(|| panic!("no operation ID in {detail:?}"));
+        assert_eq!(id.len(), 36, "{detail:?}");
+        id.to_string()
+    };
+    for pair in entries.chunks(2) {
+        assert_eq!(operation(&pair[0].detail), operation(&pair[1].detail));
+        assert!(pair[1]
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("export completed; 1 keys"));
+    }
+    assert_ne!(operation(&entries[0].detail), operation(&entries[2].detail));
+    let journal = fs::read_to_string(log.path()).unwrap();
+    assert!(
+        !journal.contains("paired-export"),
+        "the destination must not be journaled"
+    );
+    assert!(!journal.contains("fake-intended-secret"));
+}
+
+#[test]
+fn a_failed_file_export_records_only_its_request() {
+    let fixture = Fixture::new();
+    let log = AuditLog::for_vault(&fixture.vault);
+    let target = fixture.directory.path().join("existing.env");
+    fs::write(&target, b"fake-existing-bytes").unwrap();
+    let output = fixture
+        .cli()
+        .args(["export", "--all", "--output"])
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&target).unwrap(), b"fake-existing-bytes");
+    let actions: Vec<String> = log
+        .read(10)
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.action)
+        .collect();
+    assert!(
+        !actions.iter().any(|action| action == "export-completed"),
+        "{actions:?}"
+    );
 }
 
 #[test]
@@ -634,6 +816,163 @@ fn corrupt_audit_is_reported_without_repairing_or_echoing_damaged_bytes() {
         "a malformed record has no known sequence: {text}"
     );
     assert_eq!(fs::read(log.path()).unwrap(), bytes);
+}
+
+/// A pipe whose reader is already gone: every write to it fails, deterministically.
+fn closed_pipe() -> Stdio {
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    Stdio::from(writer)
+}
+
+fn status_with(
+    mut command: Command,
+    stdout_closed: bool,
+    stderr_closed: bool,
+    stdin: Option<&[u8]>,
+) -> std::process::ExitStatus {
+    command.stdout(if stdout_closed {
+        closed_pipe()
+    } else {
+        Stdio::null()
+    });
+    command.stderr(if stderr_closed {
+        closed_pipe()
+    } else {
+        Stdio::null()
+    });
+    match stdin {
+        Some(input) => {
+            command.stdin(Stdio::piped());
+            let mut child = command.spawn().unwrap();
+            child.stdin.take().unwrap().write_all(input).unwrap();
+            child.wait().unwrap()
+        }
+        None => command.status().unwrap(),
+    }
+}
+
+// 1A-R7-01, the class: after a saved change, closed output pipes never change the exit.
+// Every post-commit journal append fails too, so each command also has a warning to print.
+#[test]
+fn committed_changes_exit_zero_with_closed_output_pipes() {
+    const LEGACY_PASSWORD: &str = "correct horse battery staple";
+    for (stdout_closed, stderr_closed) in [(true, false), (false, true), (true, true)] {
+        let case = format!("stdout_closed={stdout_closed} stderr_closed={stderr_closed}");
+        let fixture = Fixture::new();
+        fs::create_dir(AuditLog::for_vault(&fixture.vault).path()).unwrap();
+
+        let mut add = fixture.cli();
+        add.args([
+            "add",
+            "Added",
+            "--project",
+            "demo",
+            "--env",
+            "dev",
+            "--secret-stdin",
+        ]);
+        let add = status_with(
+            add,
+            stdout_closed,
+            stderr_closed,
+            Some(b"fake-added-secret\n"),
+        );
+        assert_eq!(add.code(), Some(0), "add: {case}");
+        let saved = Vault::open(&fixture.vault, PASSWORD).unwrap();
+        assert_eq!(saved.find("Added").unwrap().secret, "fake-added-secret");
+
+        let mut rm = fixture.cli();
+        rm.args(["rm", "Added", "--yes"]);
+        assert_eq!(
+            status_with(rm, stdout_closed, stderr_closed, None).code(),
+            Some(0),
+            "rm: {case}"
+        );
+        assert!(Vault::open(&fixture.vault, PASSWORD)
+            .unwrap()
+            .find("Added")
+            .is_err());
+
+        let created = fixture.directory.path().join("created.kdbx");
+        fs::create_dir(AuditLog::for_vault(&created).path()).unwrap();
+        let mut init = cli();
+        init.env("AKM_PASSWORD", PASSWORD)
+            .arg("--vault")
+            .arg(&created)
+            .arg("init");
+        assert_eq!(
+            status_with(init, stdout_closed, stderr_closed, None).code(),
+            Some(0),
+            "init: {case}"
+        );
+        assert!(Vault::open(&created, PASSWORD).is_ok());
+
+        let older = fixture.directory.path().join("older.kdbx");
+        fs::write(
+            &older,
+            include_bytes!("../../akm-core/tests/fixtures/kdbx40.kdbx"),
+        )
+        .unwrap();
+        fs::create_dir(AuditLog::for_vault(&older).path()).unwrap();
+        let mut upgrade = cli();
+        upgrade
+            .env("AKM_PASSWORD", LEGACY_PASSWORD)
+            .arg("--vault")
+            .arg(&older)
+            .args(["upgrade", "--yes"]);
+        assert_eq!(
+            status_with(upgrade, stdout_closed, stderr_closed, None).code(),
+            Some(0),
+            "upgrade: {case}"
+        );
+        assert!(!Vault::open(&older, LEGACY_PASSWORD)
+            .unwrap()
+            .needs_upgrade());
+    }
+}
+
+// 1A-R7-01, the other side: a failed primary output is an ordinary error, never a panic (101).
+#[test]
+fn failed_primary_output_is_an_error_not_a_panic() {
+    let fixture = Fixture::new();
+    for args in [
+        vec!["list"],
+        vec!["list", "--json"],
+        vec!["get", "Demo"],
+        vec!["get", "Demo", "--field", "secret"],
+        vec!["get", "Demo", "--reveal"],
+        vec!["export", "--all"],
+        vec!["audit"],
+    ] {
+        let output = fixture
+            .cli()
+            .args(&args)
+            .stdout(closed_pipe())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).starts_with("error:"),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stderr(&output).contains("fake-intended-secret"));
+        let disclosure =
+            args.contains(&"secret") || args.contains(&"--reveal") || args[0] == "export";
+        assert_eq!(
+            stderr(&output).contains("Some output may already have been written"),
+            disclosure,
+            "{args:?}: {}",
+            stderr(&output)
+        );
+    }
 }
 
 #[test]
@@ -1452,4 +1791,180 @@ fn child_probe() {
         .map(|code| code.parse().unwrap())
         .unwrap_or(0);
     std::process::exit(code);
+}
+
+/// Unit 1a, 1A-R8-01: the default view shows a fixed mask, the same for every secret.
+#[test]
+fn the_default_view_and_metadata_fields_print_nothing_derived_from_the_secret() {
+    let secrets = [
+        "*",
+        "fake8chr",
+        "fake9char",
+        "fake-forty-character-secret-value-000000",
+        "fake-ünïcødé-secret-☃",
+    ];
+    let mut fields: Vec<String> = Vec::new();
+    for name in [
+        "id",
+        "title",
+        "project",
+        "env",
+        "environment",
+        "issuer",
+        "url",
+        "notes",
+        "scopes",
+        "env_var",
+        "env-var",
+        "expires",
+    ] {
+        fields.push(name.into());
+        fields.push(name.to_uppercase());
+        fields.push(format!("  {name} "));
+    }
+    let mut views: Vec<Vec<String>> = Vec::new();
+    for secret in secrets {
+        let fixture = Fixture::with_keys(&[("Demo", "DEMO_SECRET", secret, "demo", "dev")]);
+        let id_output = fixture
+            .cli()
+            .args(["get", "Demo", "--field", "id"])
+            .output()
+            .unwrap();
+        assert_success(&id_output);
+        let id = String::from_utf8(id_output.stdout)
+            .unwrap()
+            .trim()
+            .to_owned();
+        let mut view = Vec::new();
+        let default = fixture.cli().args(["get", "Demo"]).output().unwrap();
+        assert_success(&default);
+        let text = String::from_utf8(default.stdout)
+            .unwrap()
+            .replace(&id, "<id>");
+        assert!(
+            text.lines().any(|line| line == "Secret:      ********"),
+            "the mask line for a secret of {} characters:\n{text}",
+            secret.chars().count()
+        );
+        view.push(text);
+        for field in &fields {
+            let output = fixture
+                .cli()
+                .args(["get", "Demo", "--field", field])
+                .output()
+                .unwrap();
+            assert_success(&output);
+            view.push(
+                String::from_utf8(output.stdout)
+                    .unwrap()
+                    .replace(&id, "<id>"),
+            );
+        }
+        let audit = AuditLog::for_vault(&fixture.vault);
+        assert!(
+            audit
+                .read(100)
+                .unwrap_or_default()
+                .iter()
+                .all(|entry| entry.action != "reveal-requested"),
+            "a metadata view records no disclosure"
+        );
+        views.push(view);
+    }
+    for (index, view) in views.iter().enumerate().skip(1) {
+        assert_eq!(view, &views[0], "the output differs for secret {index}");
+    }
+}
+
+/// Unit 1a, 1A-R8-01: the two disclosures still record first and fail closed.
+#[test]
+fn the_secret_disclosures_still_fail_closed_with_a_damaged_journal() {
+    for args in [
+        vec!["get", "Demo", "--reveal"],
+        vec!["get", "Demo", "--field", "secret"],
+        vec!["get", "Demo", "--field", " SECRET "],
+    ] {
+        let fixture = Fixture::new();
+        fs::create_dir_all(AuditLog::for_vault(&fixture.vault).path()).unwrap();
+        let output = fixture.cli().args(&args).output().unwrap();
+        assert!(!output.status.success(), "{args:?}");
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).contains("fake-intended-secret"),
+            "{args:?}"
+        );
+    }
+}
+
+/// Unit 1a, 1A-R8-05: the README names exactly the actions the CLI records, in their order.
+#[test]
+fn the_readme_names_the_recorded_audit_actions_in_their_order() {
+    let fixture = Fixture::new();
+    let path = fixture.report("names.json");
+    let audit = AuditLog::for_vault(&fixture.vault);
+    let run = fixture.probe_command(&path).output().unwrap();
+    assert_success(&run);
+    assert_success(
+        &fixture
+            .cli()
+            .args(["export", "--project", "demo", "--env", "dev"])
+            .output()
+            .unwrap(),
+    );
+    assert_success(
+        &fixture
+            .cli()
+            .args(["get", "Demo", "--reveal"])
+            .output()
+            .unwrap(),
+    );
+    let mut entries = audit.read(100).unwrap();
+    entries.sort_by_key(|entry| entry.seq);
+    let recorded: Vec<&str> = entries.iter().map(|entry| entry.action.as_str()).collect();
+    assert_eq!(
+        recorded,
+        [
+            "run-requested",
+            "export-requested",
+            "export-completed",
+            "reveal-requested"
+        ],
+        "the recorded actions and their order"
+    );
+    let readme =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md")).unwrap();
+    let named: std::collections::BTreeSet<&str> = readme
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|word| {
+            word.ends_with("-requested") || word.ends_with("-completed") || word.ends_with("-start")
+        })
+        .collect();
+    let expected: std::collections::BTreeSet<&str> = recorded.iter().copied().collect();
+    assert_eq!(
+        named, expected,
+        "the README must name exactly the recorded actions"
+    );
+    // 1A-A1-04: the README states when each record is written, in the order above.
+    let line = |action: &str| {
+        let name = format!("`{action}`");
+        readme
+            .lines()
+            .find(|line| line.contains(&name))
+            .unwrap_or_else(|| panic!("the README names {action}"))
+            .to_string()
+    };
+    for (action, timing) in [
+        ("run-requested", "before the child starts"),
+        ("reveal-requested", "before `get --reveal`"),
+        ("export-requested", "before any export byte is written"),
+        ("export-completed", "after the export is written"),
+    ] {
+        assert!(line(action).contains(timing), "{action}: {timing}");
+    }
+    let at = |action: &str| readme.find(&format!("`{action}`")).unwrap();
+    assert!(
+        at("export-requested") < at("export-completed"),
+        "the README lists the request before the completion"
+    );
 }

@@ -184,3 +184,43 @@ fn audit_snapshot_rows_and_verification_stay_consistent_during_concurrent_append
     worker.join().unwrap();
     assert_eq!(log.snapshot(0).unwrap().total_entries, 31);
 }
+
+// 1A-R5-06: a damaged record keeps its declared sequence only when it is unambiguous.
+#[test]
+fn a_damaged_record_reports_only_an_unambiguous_declared_sequence() {
+    let directory = tempfile::tempdir().unwrap();
+    let log = AuditLog::for_vault(&directory.path().join("fake.kdbx"));
+    let cases: [(&str, Option<u64>); 16] = [
+        (
+            r#"{"seq":7,"ts":"bad","detail":"fake-hidden-detail"}"#,
+            Some(7),
+        ),
+        (r#"{"seq":0,"ts":"bad"}"#, Some(0)),
+        (
+            r#"{"ts":"bad","seq":9007199254740993}"#,
+            Some(9_007_199_254_740_993),
+        ),
+        (r#"{"seq":18446744073709551615,"ts":"bad"}"#, Some(u64::MAX)),
+        (r#"{"seq":18446744073709551616,"ts":"bad"}"#, None),
+        (r#"{"seq":7,"seq":8,"ts":"bad"}"#, None),
+        (r#"{"seq":7,"s\u0065q":8,"ts":"bad"}"#, None),
+        (r#"{"seq":"7","ts":"bad"}"#, None),
+        (r#"{"seq":7.0,"ts":"bad"}"#, None),
+        (r#"{"seq":7e0,"ts":"bad"}"#, None),
+        (r#"{"seq":-1,"ts":"bad"}"#, None),
+        (r#"{"ts":"bad"}"#, None),
+        (r#"{"inner":{"seq":3},"ts":"bad"}"#, None),
+        (r#"[{"seq":7}]"#, None),
+        (r#"{"seq":7,"ts":"bad""#, None),
+        ("not-json", None),
+    ];
+    for (line, declared) in cases {
+        let bytes = format!("{line}\n");
+        std::fs::write(log.path(), &bytes).unwrap();
+        let snapshot = log.snapshot(10).unwrap();
+        assert_eq!(snapshot.state, AuditState::Corrupt, "{line}");
+        assert_eq!(snapshot.problem_line, Some(1), "{line}");
+        assert_eq!(snapshot.broken_at, declared, "{line}");
+        assert_eq!(std::fs::read_to_string(log.path()).unwrap(), bytes);
+    }
+}

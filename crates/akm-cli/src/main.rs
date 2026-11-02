@@ -7,6 +7,28 @@ use chrono::{DateTime, NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
 use zeroize::Zeroizing;
 
+// Output rules (contract 12). The std print macros panic when a pipe is closed, so
+// `clippy.toml` bans them in this crate. Every print goes to a writer in `Io` and takes
+// one of two forms:
+// - primary output (a listing, a field, an export) returns its error with `?`, so a
+//   failed write is an ordinary error, never a panic;
+// - text after the result is decided (a saved change, a warning) uses `status!` or
+//   `warning!`. Both are best effort: a closed pipe never changes the exit.
+
+/// Status text after the result is decided. A failed write is ignored.
+macro_rules! status {
+    ($io:expr, $($arg:tt)*) => {{
+        let _ = writeln!($io.out, $($arg)*);
+    }};
+}
+
+/// A warning on stderr. A failed write is ignored.
+macro_rules! warning {
+    ($io:expr, $($arg:tt)*) => {{
+        let _ = writeln!($io.err, "warning: {}", format_args!($($arg)*));
+    }};
+}
+
 mod child;
 mod export;
 
@@ -179,25 +201,49 @@ enum Commands {
     },
 }
 
+/// The process outputs, and the journal append for the export-completion record.
+/// `main` builds the real ones (design `unit1a-repair.md`, section 2.6).
+struct Io<'a> {
+    out: &'a mut dyn Write,
+    err: &'a mut dyn Write,
+    complete: fn(&AuditLog, &str) -> Result<()>,
+}
+
 fn main() {
-    match run() {
-        Ok(code) => std::process::exit(code),
+    let cli = Cli::parse();
+    let (mut out, mut err) = (std::io::stdout(), std::io::stderr());
+    let code = run_with(
+        cli,
+        &mut Io {
+            out: &mut out,
+            err: &mut err,
+            complete: append_completion,
+        },
+    );
+    std::process::exit(code);
+}
+
+/// Runs one command and returns the process exit code.
+fn run_with(cli: Cli, io: &mut Io) -> i32 {
+    match run(cli, io) {
+        Ok(code) => code,
         Err(Error::UpgradeRequired) => {
-            eprintln!("error: this vault needs an explicit format upgrade before writing");
-            eprintln!(
-                "Run `akm upgrade` with the same vault, or `akm upgrade --yes` for automation."
+            let _ = writeln!(
+                io.err,
+                "error: this vault needs an explicit format upgrade before writing\n\
+                 Run `akm upgrade` with the same vault, or `akm upgrade --yes` for automation."
             );
-            std::process::exit(1);
+            1
         }
         Err(error) => {
-            eprintln!("error: {error}");
-            std::process::exit(1);
+            let _ = writeln!(io.err, "error: {error}");
+            1
         }
     }
 }
 
-fn run() -> Result<i32> {
-    let Cli { vault, command } = Cli::parse();
+fn run(cli: Cli, io: &mut Io) -> Result<i32> {
+    let Cli { vault, command } = cli;
 
     let path = vault.unwrap_or_else(default_vault_path);
 
@@ -206,12 +252,14 @@ fn run() -> Result<i32> {
             let password = master_password(true)?;
             let mut vault = Vault::create(&path, &password, name.as_deref())?;
             drop(password);
-            print_warnings(&mut vault);
+            print_warnings(io, &mut vault);
 
-            println!("Created {}", vault.path().display());
-            println!();
-            println!("Back up this file and remember the master password.");
-            println!("There is no recovery path. The file also opens in KeePassXC.");
+            status!(
+                io,
+                "Created {}\n\nBack up this file and remember the master password.\n\
+                 There is no recovery path. The file also opens in KeePassXC.",
+                vault.path().display()
+            );
         }
 
         Commands::Add(args) => {
@@ -253,9 +301,14 @@ fn run() -> Result<i32> {
             };
 
             let key = vault.add(input)?;
-            print_warnings(&mut vault);
-            println!("Added {:?} ({})", key.title, key.id);
-            println!("  env var: {}", key.resolved_env_var());
+            print_warnings(io, &mut vault);
+            status!(
+                io,
+                "Added {:?} ({})\n  env var: {}",
+                key.title,
+                key.id,
+                key.resolved_env_var()
+            );
         }
 
         Commands::List {
@@ -287,11 +340,11 @@ fn run() -> Result<i32> {
                 for key in &mut redacted {
                     key.secret = "***".to_string();
                 }
-                println!("{}", serde_json::to_string_pretty(&redacted)?);
+                writeln!(io.out, "{}", serde_json::to_string_pretty(&redacted)?)?;
                 return Ok(0);
             }
 
-            print_table(&keys);
+            print_table(&mut io.out, &keys)?;
         }
 
         Commands::Get {
@@ -307,13 +360,26 @@ fn run() -> Result<i32> {
             let secret_field = field
                 .as_deref()
                 .is_some_and(|field| field.trim().eq_ignore_ascii_case("secret"));
-            if secret_field || (field.is_none() && reveal) {
+            let disclosure = secret_field || (field.is_none() && reveal);
+            if disclosure {
                 vault.log("reveal-requested", Some(&key), Some("disclosure requested"))?;
             }
 
-            match field.as_deref() {
-                Some(field) => print_field(&key, field)?,
-                None => print_key(&key, reveal),
+            // 1A-R8-01: only the two disclosures read `key.secret`, after their record.
+            // The default view and every other field receive `KeyMetadata`, which has none.
+            let metadata = KeyMetadata::from(&key);
+            let out = &mut *io.out;
+            let shown = match field.as_deref() {
+                Some(_) if secret_field => writeln!(out, "{}", key.secret).map_err(Error::from),
+                Some(field) => print_field(out, &metadata, field),
+                None => print_key(out, &metadata, disclosure.then_some(key.secret.as_str()))
+                    .map_err(Error::from),
+            };
+            match shown {
+                Err(Error::Io(error)) if disclosure => {
+                    return Err(partial_output(error, "show the secret"))
+                }
+                shown => shown?,
             }
         }
 
@@ -329,19 +395,19 @@ fn run() -> Result<i32> {
                         "refusing to delete without confirmation; pass --yes".into(),
                     ));
                 }
-                print!("Delete {:?} ({})? [y/N] ", key.title, key.id);
-                std::io::stdout().flush()?;
+                write!(io.out, "Delete {:?} ({})? [y/N] ", key.title, key.id)?;
+                io.out.flush()?;
                 let mut answer = String::new();
                 std::io::stdin().read_line(&mut answer)?;
                 if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
-                    println!("Cancelled.");
+                    status!(io, "Cancelled.");
                     return Ok(0);
                 }
             }
 
             vault.remove(&key.id)?;
-            print_warnings(&mut vault);
-            println!("Deleted {:?}", key.title);
+            print_warnings(io, &mut vault);
+            status!(io, "Deleted {:?}", key.title);
         }
 
         Commands::Run { selection, command } => {
@@ -373,12 +439,14 @@ fn run() -> Result<i32> {
             let vault = Vault::open(&path, &password)?;
             drop(password);
             let envs = selected_envs(&vault, &selection)?;
+            // Pairs the two records; the destination stays out of the plaintext journal.
+            let operation = uuid::Uuid::new_v4();
 
             vault.log(
                 "export-requested",
                 None,
                 Some(&format!(
-                    "disclosure requested; {} keys selected",
+                    "operation {operation}; disclosure requested; {} keys selected",
                     envs.len()
                 )),
             )?;
@@ -386,7 +454,15 @@ fn run() -> Result<i32> {
 
             match output {
                 Some(path) => export::write_new(&path, &envs)?,
-                None => export::write(&mut std::io::stdout().lock(), &envs)?,
+                None => write_stdout_export(&mut io.out, &envs)?,
+            }
+            if let Some(warning) = record_export_completed(
+                io.complete,
+                &AuditLog::for_vault(&path),
+                &operation,
+                envs.len(),
+            ) {
+                warning!(io, "{warning}");
             }
         }
 
@@ -400,55 +476,66 @@ fn run() -> Result<i32> {
             let mut vault = Vault::open(&path, &password)?;
             drop(password);
             if !vault.needs_upgrade() {
-                println!("Vault is already KDBX 4.1; no upgrade needed.");
+                status!(io, "Vault is already KDBX 4.1; no upgrade needed.");
                 return Ok(0);
             }
             if !yes {
-                print!("Upgrade this vault to KDBX 4.1? Older clients may not open it. [y/N] ");
-                std::io::stdout().flush()?;
+                write!(
+                    io.out,
+                    "Upgrade this vault to KDBX 4.1? Older clients may not open it. [y/N] "
+                )?;
+                io.out.flush()?;
                 let mut answer = String::new();
                 std::io::stdin().read_line(&mut answer)?;
                 if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-                    println!("Cancelled.");
+                    status!(io, "Cancelled.");
                     return Ok(0);
                 }
             }
             vault.upgrade()?;
-            print_warnings(&mut vault);
-            println!("Upgraded to KDBX 4.1.");
+            print_warnings(io, &mut vault);
+            status!(io, "Upgraded to KDBX 4.1.");
         }
 
         Commands::Audit { limit, verify } => {
             let log = AuditLog::for_vault(&path);
             let snapshot = log.snapshot(limit)?;
             use akm_core::audit::AuditState;
+            let out = &mut *io.out;
             match snapshot.state {
-                AuditState::Absent => println!(
+                AuditState::Absent => writeln!(
+                    out,
                     "Journal unavailable: no journal file at {}",
                     log.path().display()
-                ),
-                AuditState::Empty => println!("No records available at {}", log.path().display()),
+                )?,
+                AuditState::Empty => {
+                    writeln!(out, "No records available at {}", log.path().display())?
+                }
                 AuditState::Consistent => {
-                    println!("Recorded chain is consistent, not authenticated.")
+                    writeln!(out, "Recorded chain is consistent, not authenticated.")?
                 }
                 AuditState::Corrupt => {
                     let sequence = snapshot
                         .broken_at
-                        .map(|seq| format!(", sequence {seq}"))
+                        .map(|seq| format!(", declared sequence {seq} (not verified)"))
                         .unwrap_or_default();
-                    println!("Journal data is damaged at physical line {}{sequence}. Original bytes were preserved.", snapshot.problem_line.unwrap_or(0));
+                    writeln!(out, "Journal data is damaged at physical line {}{sequence}. Original bytes were preserved.", snapshot.problem_line.unwrap_or(0))?;
                 }
             }
-            println!("Completeness unknown. Missing records, truncation and rewritten history cannot be ruled out. Requested events do not prove completion; legacy action outcomes are unknown.");
+            writeln!(out, "Completeness unknown. Missing records, truncation and rewritten history cannot be ruled out. Requested events do not prove completion; legacy action outcomes are unknown.")?;
             let bad_status = snapshot.state == AuditState::Corrupt
                 || (verify && snapshot.state != AuditState::Consistent);
             let entries = snapshot.entries;
             if entries.is_empty() {
-                println!("No records displayed. This is not proof of inactivity.");
+                writeln!(
+                    out,
+                    "No records displayed. This is not proof of inactivity."
+                )?;
                 return Ok(if bad_status { 2 } else { 0 });
             }
             for entry in entries {
-                println!(
+                writeln!(
+                    out,
                     "#{:<4} {} {:<8} {}{}",
                     entry.seq,
                     entry.ts.format("%Y-%m-%d %H:%M:%S"),
@@ -458,7 +545,7 @@ fn run() -> Result<i32> {
                         .detail
                         .map(|detail| format!("  ({detail})"))
                         .unwrap_or_default(),
-                );
+                )?;
             }
             return Ok(if bad_status { 2 } else { 0 });
         }
@@ -482,9 +569,9 @@ fn selected_envs(vault: &Vault, selection: &Selection) -> Result<child::Secrets>
     Ok(envs)
 }
 
-fn print_warnings(vault: &mut Vault) {
-    for warning in vault.take_warnings() {
-        eprintln!("warning: {warning}");
+fn print_warnings(io: &mut Io, vault: &mut Vault) {
+    for text in vault.take_warnings() {
+        warning!(io, "{text}");
     }
 }
 
@@ -568,10 +655,9 @@ fn parse_expiry(raw: Option<&str>) -> Result<Option<DateTime<Utc>>> {
     )))
 }
 
-fn print_table(keys: &[ApiKey]) {
+fn print_table(out: &mut impl Write, keys: &[ApiKey]) -> std::io::Result<()> {
     if keys.is_empty() {
-        println!("no keys");
-        return;
+        return writeln!(out, "no keys");
     }
 
     let title_width = keys
@@ -581,10 +667,11 @@ fn print_table(keys: &[ApiKey]) {
         .unwrap_or(4)
         .max(4);
 
-    println!(
+    writeln!(
+        out,
         "{:<title_width$}  {:<12}  {:<10}  {:<24}  {:<10}  ROTATION",
         "TITLE", "PROJECT", "ENV", "ENV VAR", "EXPIRES"
-    );
+    )?;
 
     let now = Utc::now();
     for key in keys {
@@ -610,7 +697,8 @@ fn print_table(keys: &[ApiKey]) {
             })
             .unwrap_or_else(|| "-".to_string());
 
-        println!(
+        writeln!(
+            out,
             "{:<title_width$}  {:<12}  {:<10}  {:<24}  {:<10}  {}",
             key.title,
             key.project.as_deref().unwrap_or("-"),
@@ -618,74 +706,126 @@ fn print_table(keys: &[ApiKey]) {
             key.resolved_env_var(),
             expires,
             rotation,
-        );
+        )?;
     }
 
-    println!("\n{} key(s)", keys.len());
+    writeln!(out, "\n{} key(s)", keys.len())
 }
 
-fn print_key(key: &ApiKey, reveal: bool) {
-    println!("Title:       {}", key.title);
-    println!("ID:          {}", key.id);
-    println!("Project:     {}", key.project.as_deref().unwrap_or("-"));
-    println!("Environment: {}", key.environment.as_deref().unwrap_or("-"));
-    println!("Env var:     {}", key.resolved_env_var());
-    println!("Issuer:      {}", key.issuer.as_deref().unwrap_or("-"));
-    println!(
+/// The default `get` line for the secret: the same for every value and every length.
+const MASK: &str = "********";
+
+/// The key fields that the `get` view and `--field` print. It has no secret field, so
+/// those outputs cannot contain the secret or anything derived from it (1A-R8-01).
+struct KeyMetadata {
+    id: String,
+    title: String,
+    project: Option<String>,
+    environment: Option<String>,
+    env_var: String,
+    issuer: Option<String>,
+    scopes: Vec<String>,
+    url: Option<String>,
+    notes: Option<String>,
+    expires_at: Option<DateTime<Utc>>,
+    rotation_days: Option<u32>,
+    rotation_due_in: Option<i64>,
+}
+
+impl From<&ApiKey> for KeyMetadata {
+    fn from(key: &ApiKey) -> Self {
+        Self {
+            id: key.id.clone(),
+            title: key.title.clone(),
+            project: key.project.clone(),
+            environment: key.environment.clone(),
+            env_var: key.resolved_env_var(),
+            issuer: key.issuer.clone(),
+            scopes: key.scopes.clone(),
+            url: key.url.clone(),
+            notes: key.notes.clone(),
+            expires_at: key.expires_at,
+            rotation_days: key.rotation_days,
+            rotation_due_in: key.rotation_due_in(Utc::now()),
+        }
+    }
+}
+
+/// The `get` view. `revealed` is `Some` only for `--reveal`, after its record.
+fn print_key(
+    out: &mut dyn Write,
+    key: &KeyMetadata,
+    revealed: Option<&str>,
+) -> std::io::Result<()> {
+    writeln!(out, "Title:       {}", key.title)?;
+    writeln!(out, "ID:          {}", key.id)?;
+    writeln!(
+        out,
+        "Project:     {}",
+        key.project.as_deref().unwrap_or("-")
+    )?;
+    writeln!(
+        out,
+        "Environment: {}",
+        key.environment.as_deref().unwrap_or("-")
+    )?;
+    writeln!(out, "Env var:     {}", key.env_var)?;
+    writeln!(out, "Issuer:      {}", key.issuer.as_deref().unwrap_or("-"))?;
+    writeln!(
+        out,
         "Scopes:      {}",
         if key.scopes.is_empty() {
             "-".to_string()
         } else {
             key.scopes.join(", ")
         }
-    );
-    println!("URL:         {}", key.url.as_deref().unwrap_or("-"));
+    )?;
+    writeln!(out, "URL:         {}", key.url.as_deref().unwrap_or("-"))?;
 
     let now = Utc::now();
     match key.expires_at {
-        Some(date) if date <= now => println!("Expires:     {} (EXPIRED)", date.format("%Y-%m-%d")),
-        Some(date) => println!("Expires:     {}", date.format("%Y-%m-%d")),
-        None => println!("Expires:     -"),
+        Some(date) if date <= now => {
+            writeln!(out, "Expires:     {} (EXPIRED)", date.format("%Y-%m-%d"))?
+        }
+        Some(date) => writeln!(out, "Expires:     {}", date.format("%Y-%m-%d"))?,
+        None => writeln!(out, "Expires:     -")?,
     }
 
-    if let Some(days) = key.rotation_due_in(now) {
-        println!(
+    if let Some(days) = key.rotation_due_in {
+        writeln!(
+            out,
             "Rotation:    {} days ({days}d)",
             key.rotation_days.unwrap_or(0)
-        );
+        )?;
     } else {
-        println!("Rotation:    -");
+        writeln!(out, "Rotation:    -")?;
     }
 
     if let Some(notes) = &key.notes {
-        println!("Notes:       {notes}");
+        writeln!(out, "Notes:       {notes}")?;
     }
 
-    if reveal {
-        println!("Secret:      {}", key.secret);
-    } else {
-        println!("Secret:      {}", mask(&key.secret));
-    }
+    writeln!(out, "Secret:      {}", revealed.unwrap_or(MASK))
 }
 
-fn print_field(key: &ApiKey, field: &str) -> Result<()> {
+/// A non-secret field. `--field secret` never reaches this function.
+fn print_field(out: &mut dyn Write, key: &KeyMetadata, field: &str) -> Result<()> {
     match field.trim().to_lowercase().as_str() {
-        "id" => println!("{}", key.id),
-        "title" => println!("{}", key.title),
-        "secret" => println!("{}", key.secret),
-        "project" => println!("{}", key.project.as_deref().unwrap_or("")),
-        "env" | "environment" => println!("{}", key.environment.as_deref().unwrap_or("")),
-        "issuer" => println!("{}", key.issuer.as_deref().unwrap_or("")),
-        "url" => println!("{}", key.url.as_deref().unwrap_or("")),
-        "notes" => println!("{}", key.notes.as_deref().unwrap_or("")),
-        "scopes" => println!("{}", key.scopes.join(",")),
-        "env_var" | "env-var" => println!("{}", key.resolved_env_var()),
-        "expires" => println!(
+        "id" => writeln!(out, "{}", key.id)?,
+        "title" => writeln!(out, "{}", key.title)?,
+        "project" => writeln!(out, "{}", key.project.as_deref().unwrap_or(""))?,
+        "env" | "environment" => writeln!(out, "{}", key.environment.as_deref().unwrap_or(""))?,
+        "issuer" => writeln!(out, "{}", key.issuer.as_deref().unwrap_or(""))?,
+        "url" => writeln!(out, "{}", key.url.as_deref().unwrap_or(""))?,
+        "notes" => writeln!(out, "{}", key.notes.as_deref().unwrap_or(""))?,
+        "scopes" => writeln!(out, "{}", key.scopes.join(","))?,
+        "env_var" | "env-var" => writeln!(out, "{}", key.env_var)?,
+        "expires" => writeln!(out,
             "{}",
             key.expires_at
                 .map(|date| date.to_rfc3339())
                 .unwrap_or_default()
-        ),
+        )?,
         other => {
             return Err(Error::Invalid(format!(
                 "unknown field {other:?}; try id, title, secret, project, env, issuer, url, notes, scopes, env_var, expires"
@@ -695,25 +835,292 @@ fn print_field(key: &ApiKey, field: &str) -> Result<()> {
     Ok(())
 }
 
-fn mask(secret: &str) -> String {
-    let chars: Vec<char> = secret.chars().collect();
-    if chars.len() <= 8 {
-        return "********".to_string();
-    }
+/// The real `Io::complete`: writes the export-completion record and confirms it.
+fn append_completion(log: &AuditLog, detail: &str) -> Result<()> {
+    log.append("export-completed", None, None, None, None, Some(detail))
+}
 
-    let head: String = chars[..4].iter().collect();
-    let tail: String = chars[chars.len() - 4..].iter().collect();
-    format!("{head}...{tail}")
+/// A disclosure write can deliver bytes before a later write or flush fails.
+fn partial_output(error: impl std::fmt::Display, again: &str) -> Error {
+    Error::Invalid(format!(
+        "{error}. Some output may already have been written. Check it before you {again} again."
+    ))
+}
+
+fn write_stdout_export(output: &mut impl Write, envs: &[(String, String)]) -> Result<()> {
+    export::write(output, envs).map_err(|error| partial_output(error, "export"))
+}
+
+/// Runs only after the export is known to be written. A failure is a warning, never a
+/// retryable error: the disclosure happened. The record may exist if only its sync failed.
+fn record_export_completed(
+    complete: fn(&AuditLog, &str) -> Result<()>,
+    log: &AuditLog,
+    operation: &uuid::Uuid,
+    keys: usize,
+) -> Option<String> {
+    complete(log, &format!("operation {operation}; export completed; {keys} keys"))
+        .err()
+        .map(|error| {
+            format!(
+                "The export was written, but its completion record could not be confirmed in the activity log ({error}). Do not repeat the export."
+            )
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    struct FailingWriter {
+        accept: usize,
+        fail_flush: bool,
+        written: Vec<u8>,
+    }
+    impl Write for FailingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.written.len() >= self.accept {
+                return Err(std::io::Error::other("injected pipe failure"));
+            }
+            let count = buf.len().min(self.accept - self.written.len());
+            self.written.extend_from_slice(&buf[..count]);
+            Ok(count)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.fail_flush {
+                return Err(std::io::Error::other("injected flush failure"));
+            }
+            Ok(())
+        }
+    }
+
     #[test]
-    fn masks_short_and_long_secrets() {
-        assert_eq!(mask("short"), "********");
-        assert_eq!(mask("sk-1234567890abcdef"), "sk-1...cdef");
+    fn a_failed_stdout_export_warns_that_output_may_be_partial() {
+        let envs = vec![("FAKE_NAME".to_string(), "fake-partial-secret".to_string())];
+        for (accept, fail_flush) in [(4, false), (usize::MAX, true)] {
+            let mut writer = FailingWriter {
+                accept,
+                fail_flush,
+                written: Vec::new(),
+            };
+            let error = write_stdout_export(&mut writer, &envs)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                !writer.written.is_empty(),
+                "the writer accepted bytes first"
+            );
+            assert!(
+                error.contains("Some output may already have been written"),
+                "{error}"
+            );
+            assert!(!error.contains("fake-partial-secret"));
+        }
+    }
+
+    #[test]
+    fn a_failed_real_completion_append_is_a_non_retryable_warning() {
+        let directory = tempfile::tempdir().unwrap();
+        let blocker = directory.path().join("not-a-directory");
+        std::fs::write(&blocker, b"fake").unwrap();
+        let log = AuditLog::for_vault(&blocker.join("vault.kdbx"));
+        let operation = uuid::Uuid::new_v4();
+        let warning = record_export_completed(append_completion, &log, &operation, 2).unwrap();
+        assert!(warning.contains("could not be confirmed"), "{warning}");
+        assert!(warning.contains("Do not repeat the export"), "{warning}");
+    }
+
+    // 1A-R8-04: the export path through `run_with`, the function `main` calls.
+
+    const PASSWORD: &str = "fake-cli-unit-password";
+    const SECRET: &str = "fake-export-secret";
+
+    struct Exported {
+        code: i32,
+        out: String,
+        err: String,
+        /// The export records, in journal order: (action, operation).
+        journal: Vec<(String, String)>,
+    }
+
+    fn export_through_run_with(complete: fn(&AuditLog, &str) -> Result<()>) -> Exported {
+        let (_directory, path) = fake_export_vault();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run_with(
+            export_cli(&path),
+            &mut Io {
+                out: &mut out,
+                err: &mut err,
+                complete,
+            },
+        );
+        Exported {
+            code,
+            out: String::from_utf8(out).unwrap(),
+            err: String::from_utf8(err).unwrap(),
+            journal: export_journal(&path),
+        }
+    }
+
+    /// A fake vault with one key in demo/dev, and `AKM_PASSWORD` set for it.
+    fn fake_export_vault() -> (tempfile::TempDir, std::path::PathBuf) {
+        // Every caller sets the same fake value, so tests that run in parallel agree.
+        std::env::set_var("AKM_PASSWORD", PASSWORD);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vault.kdbx");
+        let mut vault = Vault::create(&path, PASSWORD, Some("Fake")).unwrap();
+        vault
+            .add(ApiKeyInput {
+                title: "Demo".into(),
+                secret: SECRET.into(),
+                project: Some("demo".into()),
+                environment: Some("dev".into()),
+                env_var: Some("DEMO_SECRET".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        drop(vault);
+        (directory, path)
+    }
+
+    /// `akm export --project demo --env dev`, to stdout.
+    fn export_cli(path: &std::path::Path) -> Cli {
+        Cli::try_parse_from([
+            "akm",
+            "--vault",
+            path.to_str().unwrap(),
+            "export",
+            "--project",
+            "demo",
+            "--env",
+            "dev",
+        ])
+        .unwrap()
+    }
+
+    /// The export records in journal order, each with its operation ID.
+    fn export_journal(path: &std::path::Path) -> Vec<(String, String)> {
+        let mut entries = AuditLog::for_vault(path).read(100).unwrap();
+        entries.sort_by_key(|entry| entry.seq);
+        entries
+            .into_iter()
+            .filter(|entry| entry.action.starts_with("export-"))
+            .map(|entry| {
+                let detail = entry.detail.unwrap_or_default();
+                let operation = detail.split(';').next().unwrap_or_default().to_string();
+                (entry.action, operation)
+            })
+            .collect()
+    }
+
+    /// An export sink that reads the journal at every write (1A-A1-04).
+    struct JournalAtEachWrite {
+        path: std::path::PathBuf,
+        written: Vec<u8>,
+        seen: Vec<Vec<String>>,
+    }
+
+    impl Write for JournalAtEachWrite {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let actions = export_journal(&self.path).into_iter().map(|(a, _)| a);
+            self.seen.push(actions.collect());
+            self.written.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_export_records_its_request_before_the_first_byte_and_its_completion_after_the_last() {
+        let (_directory, path) = fake_export_vault();
+        let mut out = JournalAtEachWrite {
+            path: path.clone(),
+            written: Vec::new(),
+            seen: Vec::new(),
+        };
+        let mut err = Vec::new();
+        let code = run_with(
+            export_cli(&path),
+            &mut Io {
+                out: &mut out,
+                err: &mut err,
+                complete: append_completion,
+            },
+        );
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
+        assert!(String::from_utf8_lossy(&out.written).contains(SECRET));
+        assert!(!out.seen.is_empty(), "the export wrote through the sink");
+        for (write, seen) in out.seen.iter().enumerate() {
+            assert_eq!(seen, &["export-requested"], "journal at write {write}");
+        }
+        let after: Vec<String> = export_journal(&path).into_iter().map(|(a, _)| a).collect();
+        assert_eq!(after, ["export-requested", "export-completed"]);
+    }
+
+    fn actions(run: &Exported) -> Vec<&str> {
+        run.journal
+            .iter()
+            .map(|(action, _)| action.as_str())
+            .collect()
+    }
+
+    fn written_then_unconfirmed(log: &AuditLog, detail: &str) -> Result<()> {
+        append_completion(log, detail)?;
+        Err(std::io::Error::other("injected journal sync failure").into())
+    }
+
+    fn refused(_: &AuditLog, _: &str) -> Result<()> {
+        Err(std::io::Error::other("injected journal failure").into())
+    }
+
+    fn assert_one_completion_warning(run: &Exported, cause: &str) {
+        assert_eq!(run.code, 0, "the export happened: {}", run.err);
+        assert!(run.out.contains(SECRET), "the export reached stdout");
+        assert_eq!(run.err.lines().count(), 1, "{}", run.err);
+        assert!(
+            run.err.starts_with(
+                "warning: The export was written, but its completion record could not be confirmed"
+            ),
+            "{}",
+            run.err
+        );
+        assert!(run.err.contains(cause), "{}", run.err);
+        assert!(run.err.contains("Do not repeat the export."), "{}", run.err);
+        assert!(!run.err.contains(SECRET));
+    }
+
+    #[test]
+    fn an_export_whose_completion_record_was_written_but_not_confirmed_warns_and_exits_zero() {
+        let run = export_through_run_with(written_then_unconfirmed);
+        assert_one_completion_warning(&run, "injected journal sync failure");
+        // The line can remain: the warning says "could not be confirmed", not "was not written".
+        assert_eq!(actions(&run), ["export-requested", "export-completed"]);
+        assert_eq!(run.journal[0].1, run.journal[1].1, "one operation");
+    }
+
+    #[test]
+    fn an_export_whose_completion_record_failed_warns_and_exits_zero() {
+        let run = export_through_run_with(refused);
+        assert_one_completion_warning(&run, "injected journal failure");
+        assert_eq!(actions(&run), ["export-requested"]);
+    }
+
+    #[test]
+    fn a_confirmed_export_completion_pairs_with_its_request_and_warns_nothing() {
+        let run = export_through_run_with(append_completion);
+        assert_eq!(run.code, 0, "{}", run.err);
+        assert!(run.out.contains(SECRET));
+        assert_eq!(run.err, "");
+        assert_eq!(actions(&run), ["export-requested", "export-completed"]);
+        assert_eq!(run.journal[0].1, run.journal[1].1, "one operation");
+        assert!(
+            run.journal[0].1.starts_with("operation "),
+            "{:?}",
+            run.journal
+        );
     }
 
     #[test]
