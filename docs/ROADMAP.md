@@ -108,7 +108,26 @@ The owner asked for security work beyond the open findings (2026-11-02). These a
 11. **Local key proxy.** A program sends its API requests to a local AKM endpoint, and AKM adds the credential. The key never enters the program's environment, so a local agent that the program starts cannot read it. This needs its own threat model: authentication of the local endpoint, the hosts that a key may go to, and request logs without secrets.
 12. **Optional second factor.** First a KDBX key file, which is standard, so KeePassXC can still open the vault. Then YubiKey challenge-response. A FIDO2 passkey is not part of KDBX and would break KeePassXC interchange. Setup must require a backup factor, because a lost factor loses the vault. Check what the pinned `keepass` 0.17.0 supports before the design. A second factor protects the stored file. It does not protect an unlocked vault from malware.
 
-Suggested order: 1 and 2 first; 3 to 5 before the repository becomes public; 6 and 7 as the first features after the release gate; then the rest.
+**D. Agent safety, from existing tools**, after the release gate.
+
+API keys leak easily to AI coding agents that run as the user. Free tools already address this. A market check on 2026-11-02 found [kdbx](https://github.com/yarrasys/kdbx) and [kprun](https://github.com/numikel/kprun) (KeePass vaults, injection into one child process, built for coding agents), and [fnox](https://github.com/jdx/fnox), [secretspec](https://github.com/cachix/secretspec) and [dotenvx](https://github.com/dotenvx/dotenvx). The items below take their ideas. Each names its source. Reuse ideas, not code; any copied code keeps its license and credit. Every item here is a guardrail against an agent that makes mistakes or follows rules. An agent that runs as the same user and decides to read a key can defeat all of them, as kdbx states itself. The real boundary is a separate Windows account, a container, or a broker that holds the keys (item 11).
+
+13. **Agent-safe and human-only commands** (kdbx). Agent-safe: `list`, masked `get`, `check`, and `run` inside its allowlist. Human-only: reveal, copy, export, add, edit, delete, import and policy approval. The CLI alone cannot tell a person from an agent. Enforce the split with item 14, or with a confirmation that a terminal agent cannot answer, for example in the desktop app or a native Windows dialog.
+14. **Guard hook for agent tools** (kdbx `guard`). A pre-tool hook for coding agents that support one, such as Claude Code's `PreToolUse`. It denies human-only AKM commands and direct reads of the vault, its backups and its journal. Decide and state whether the hook fails open or closed; kdbx fails open, so that a broken hook never stops the agent.
+15. **Read-only MCP server** (kdbx `mcp`). Tools for list, check, masked get and run. No reveal, no write and no export.
+16. **Output masking for `run`** (kdbx). When the child's output is captured (a pipe, an agent harness or a log), replace exact copies of injected values with `***`. A terminal still shows raw output. Limit: exact matches only. An encoded value or a changed script defeats it.
+17. **Run allowlist anchored in the vault** (kdbx strict mode). A project policy lists the exact commands that `run` may start. The vault stores the policy's hash, and only a human action approves a new one, so an edit outside AKM is refused at the next `run`.
+18. **Project manifest and `akm check`** (kdbx pointer file, secretspec). A committed file names the project, its environments and the variable names that each one needs, with no values. `akm check` reports missing keys before a run. The manifest selects a scope; it never widens one (contract 7).
+19. **Clean child environment** (kprun `--clean-env`). An option for `run` that starts the child with a minimal environment, so that secrets already in the parent shell do not pass through.
+20. **MCP configs without keys** (kprun). Document how to replace API keys in MCP server config files with `akm run … -- <server>`. `akm scan` (item 6) also checks those config files.
+21. **Pre-commit protection** (dotenvx). Ship the `akm scan` pre-commit hook (item 6) so that a commit that adds a vault secret or a `.env` file is refused.
+
+Rejected ideas, with reasons:
+
+- **Loading keys into the shell on `cd`** (fnox shell integration). It puts keys into the shell environment where agents run. AKM injects only into one child process.
+- **Key-file-only unlock** (kdbx). Anyone who can read the key file opens the vault. AKM keeps the master password and offers a key file only as a second factor (item 12).
+
+Suggested order: 1 and 2 first; 3 to 5 before the repository becomes public. After the release gate: 6, 7, 16 and 19 first, because they are small and stop common leaks; then 13 to 15, 17, 18, 20 and 21; then the rest.
 
 ## Release and open-source work
 
