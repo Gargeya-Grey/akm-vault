@@ -41,7 +41,7 @@ Git started after unit 1a was written, so `main` alone does not show the unit. S
 **Return format.**
 
 1. Ranked findings. Each one has a severity (P0 to P3), a file and line, the exact scenario, whether it was reproduced or found by inspection, and the test that would close it.
-2. **Source acceptance: YES or NO**, and the reason. Apply the [pass rule](#pass-rule): YES when no finding is P0, P1 or P2.
+2. **Source acceptance: YES or NO**, and the reason. Report YES when you could review the whole scope and no finding is P0, P1 or P2. The [pass rule](#pass-rule) then decides the result.
 3. **Work unit complete: YES or NO**, with any missing runtime proof.
 4. What the review did not cover.
 
@@ -51,11 +51,12 @@ Do not give a numerical score. A unit review is not the full rescore and not a p
 
 Owner decision, 2026-11-02.
 
-- A review **passes** when it has no P0, P1 or P2 finding. A review with one or more of them fails. The AGENTS.md stop rule ("fails review twice") counts failed reviews only.
-- Rate each finding by its effect, as if this rule did not exist. A finding that can disclose a secret or lose vault data is P2 or higher.
-- The reviewer's severity counts. The implementer keeps it. A disagreement about a severity goes to the owner, with the reviewer's words.
-- Each P3 finding of a passing review moves to a named later work unit: the unit that owns the affected files, or a unit that the owner names when none fits. The finding stays Open in FINDINGS.md under that unit, and that unit's ROADMAP.md entry lists it. It closes by the AGENTS.md rule, in its new unit.
-- A pass accepts the source. "Work unit complete" still needs the runtime proofs that the review lists, or the owner's decision to defer them.
+- **Scope.** The rule applies to the acceptance review of a work unit's final source. A design review passes or fails the design only. A review that could not see its required scope or evidence is **incomplete**: it reports source acceptance NO and names what was missing. An incomplete review counts as neither a pass nor a failure.
+- **Pass.** A complete review passes when it has no P0, P1 or P2 finding and every P3 finding has moved to a named later unit (below). A complete review with a P0, P1 or P2 finding fails. The AGENTS.md stop rule ("fails review twice") counts failed reviews only.
+- **Severity.** Rate each finding by its effect, as if this rule did not exist. A finding is P2 or higher when it can disclose a secret, lose or corrupt vault data, change vault or app state that the user did not ask for, or break a [contract](PROJECT.md#contracts-every-change-keeps). P3 is for the rest, for example a missing test of correct behaviour, or a doc gap.
+- **Disputes.** The raw review keeps the reviewer's words and severities. When a severity is below that floor, or the implementer disputes it, the review has no result until the owner decides. Record the decision next to the review, never inside it.
+- **Moving a P3.** Move it to the later unit whose ROADMAP.md scope covers the affected behaviour. When no unit or more than one unit fits, ask the owner. List it under that unit in FINDINGS.md with its status word (Open, or Gap for a missing proof), and in that unit's ROADMAP.md entry. It closes by the AGENTS.md rule, in that unit. A move does not authorize work on that unit.
+- **Two verdicts.** A pass accepts the source. "Work unit complete" stays a separate verdict: it needs every runtime proof that the unit's records require. A deferred proof stays unproved. For example, unit 1a stays incomplete until R4-04 passes.
 
 ## After the review
 
