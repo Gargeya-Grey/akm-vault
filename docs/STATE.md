@@ -1,6 +1,6 @@
 # Current state
 
-Updated 2026-11-01. Replace this file's sections when they change. History lives in Git.
+Updated 2026-11-02. Replace this file's sections when they change. History lives in Git.
 
 ## Status
 
@@ -59,10 +59,10 @@ The owner authorized implementation of unit 1a only. Each other unit needs its o
      4. The owner-gated Windows evidence: not run. The owner was asleep; the real clipboard test and the full native GUI copy proof need the owner present.
      5. The acceptance review ([raw](reviews/2026-11-01-unit1a-acceptance-review.md), GPT-6.1 Terra max) rejected the unit: **source acceptance NO, work unit complete NO**, with 4 P3 findings, 1A-A1-01 to 1A-A1-04. No P0, P1 or P2. The reviewer's own probe of the release CLI passed the fixed mask and the damaged-journal fail-closed cases. Work stopped here, as the rule says. Nothing is uncommitted.
    - **Owner question (open).** Two findings are wrong texts: a failed copy says "AKM's earlier copy is still on the clipboard" when AKM only holds a lease (1A-A1-01), and "AKM could not remove the partial copy" after the immediate cleanup succeeded (1A-A1-02). Both sentences come from revision 3 itself, so the design, not the code, claimed more than AKM observes. The other two are coverage gaps (1A-A1-03, 1A-A1-04). Options:
-     - **A (recommended).** One small round: make those two texts depend on what AKM observed ("may still be on the clipboard"; a separate text when the immediate cleanup succeeded), with tests through `copy_stamped` that fail first; add the tick-and-lock cleanup matrix and the order test. Then one acceptance review. If it rejects again, move every P3 to unit 1h and decide on landing.
+     - **A (recommended).** One small round: make those two texts depend on what AKM observed ("may still be on the clipboard"; a separate text when the immediate cleanup succeeded), with tests through `copy_stamped` that fail first; add the tick-and-lock cleanup matrix and the order test. Then one acceptance review, judged by the pass rule below. If it passes with P3 findings, they move to unit 1h.
      - **B.** Accept unit 1a with these four P3 findings open, moved to unit 1h, and land PRs #3, #4 and #5. Landing does not close a finding.
      - **C.** Pause unit 1a.
-     A stop rule for later rounds is also the owner's choice, for example: a round passes when it has no P0 to P2 finding, and its P3 findings move to a named unit.
+     **Pass rule (owner decision, 2026-11-02).** A review passes when it has no P0, P1 or P2 finding, and its P3 findings move to a named later unit ([REVIEWING.md](REVIEWING.md#pass-rule)). It applies from the next review. The owner gave it for later rounds, so the acceptance review above keeps its result. Applying the rule to that review is option B.
 3. **R4-04** stays deferred until the owner chooses option A or B for it (item 1).
 
 **Pull requests, 2026-11-01.** The owner asked that the open PRs be landed, not left as unfinished work ("Just make sure they are landed and we are not sitting on incomplete work"). This is read as the owner's yes to merge each PR that is complete: reviewed, with its checks passing. A separate session merged:
