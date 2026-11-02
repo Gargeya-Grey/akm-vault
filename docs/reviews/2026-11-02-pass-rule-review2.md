@@ -3,7 +3,7 @@
 - Date: 2026-11-02
 - Model: GPT-6.1 Terra (`gpt-6.1-terra`), Codex provider, requested `reasoningEffort: max`
 - Reviewed: `git diff 0268b2f 3109a1c` on `fix/unit1a-sound-findings` (docs only: AGENTS.md, docs/REVIEWING.md, docs/STATE.md, the round 1 raw review)
-- Verdict: **Accept: NO.** 5 P2 and 1 P3 findings. This is the second rejection, so the work stopped (AGENTS.md). The rule is marked as a draft, not in force, and the owner question is in STATE.md.
+- Verdict: **Accept: NO.** 5 P2 and 1 P3 findings. This is the second rejection, so the work stopped (AGENTS.md). The owner then adopted the rule by decision, with these fixes as proposed (STATE.md, option A).
 
 The text below is the reviewer's report. Links to repository files became plain text with the repository path and line. Other differences cannot be excluded.
 
