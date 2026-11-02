@@ -83,6 +83,33 @@ Acceptance: expired, overdue, unknown-date and no-key states; locked and hidden 
 - Run the cross-reader fixtures for history, delete, attachments, the journal and scoped env on the exact rebuilt build.
 - Run a new full review over all nine areas of the baseline rubric, with independent security, architecture and premise, and correctness reviewers. Count each root cause once. State how many reviewers ran.
 
+## Security proposals (not authorized)
+
+The owner asked for security work beyond the open findings (2026-11-02). These are proposals, not units. Each needs the owner's authorization, like every unit. None changes a [project contract](PROJECT.md#contracts-every-change-keeps), and none adds points to the score. Every new feature is new code that reviewers must attack, so features wait for the release gate. Documents and checks that add no product code can start earlier.
+
+**A. Trust documents and checks.** No new product code.
+
+1. **Threat model.** Write `docs/THREAT_MODEL.md` with one row per attacker: a stolen or copied vault file, a synced cloud copy, malware that runs as the same Windows user, a keylogger, an AI coding agent or other local program in the user's shell, screen capture or a person watching the screen, and a hostile `.env` file. For each, state whether AKM stops it, makes it harder or does not help, and name the contract or test. This extends the non-goals in [PROJECT.md](PROJECT.md).
+2. **No-network promise.** State that AKM makes no network connection: no telemetry and no update check. Add a check that fails when a networking crate enters the dependency tree, and check the Tauri capabilities and the webview content security policy. On 2026-11-02 the Rust sources and manifests had no direct use of `reqwest`, `hyper`, `ureq` or `TcpStream`. That is not a full proof.
+3. **Dependency checks.** `cargo audit`, `cargo deny` (advisories, licenses, sources, bans) and `npm audit`. Run them locally first, and in CI after the owner turns on GitHub Actions.
+4. **Reproducible builds.** Publish the SHA-256 of each release build and the steps to rebuild it. The check runs already compare two hash runs of the same build.
+5. **Fuzzing.** `cargo-fuzz` targets for the dotenv parser and for vault opening, the two places that read untrusted input. Each crash becomes a permanent regression test.
+
+**B. Small features**, after the release gate.
+
+6. **`akm scan`, a leak finder.** Find exact copies of the vault's own secrets in a folder, in `.env` files, in Git history and in shell history. Never print a secret: report only the file, the line and the key's title. Offer it as a Git pre-commit hook. Design questions: short secrets that match by chance, encoded copies (Base64, URL encoding), and how long the decrypted secrets stay in memory during a scan.
+7. **Canary keys.** A `canary` tag for a decoy key from an external alert service. An alert shows that the vault or an export leaked. `run` and export never include a canary key unless the user names it.
+8. **Step-up confirmation.** Keys in a chosen environment, for example `prod`, need the master password again before reveal, copy, run or export.
+9. **Compromised-key workflow.** Mark a key as compromised. AKM shows where the journal recorded its use (projects, exports, runs) and a rotation checklist. This depends on unit 1b (journal) and unit 2 (rotation).
+10. **Antivirus status hint.** Warn when Windows reports that real-time antivirus protection is off. AKM cannot detect malware that runs as the same user. This is a hint, not detection.
+
+**C. Larger features**, after the release gate.
+
+11. **Local key proxy.** A program sends its API requests to a local AKM endpoint, and AKM adds the credential. The key never enters the program's environment, so a local agent that the program starts cannot read it. This needs its own threat model: authentication of the local endpoint, the hosts that a key may go to, and request logs without secrets.
+12. **Optional second factor.** First a KDBX key file, which is standard, so KeePassXC can still open the vault. Then YubiKey challenge-response. A FIDO2 passkey is not part of KDBX and would break KeePassXC interchange. Setup must require a backup factor, because a lost factor loses the vault. Check what the pinned `keepass` 0.17.0 supports before the design. A second factor protects the stored file. It does not protect an unlocked vault from malware.
+
+Suggested order: 1 and 2 first; 3 to 5 before the repository becomes public; 6 and 7 as the first features after the release gate; then the rest.
+
 ## Release and open-source work
 
 The owner decides when this starts. It includes:

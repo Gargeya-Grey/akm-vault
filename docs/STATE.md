@@ -64,6 +64,7 @@ The owner authorized implementation of unit 1a only. Each other unit needs its o
      - **C.** Pause unit 1a.
      **Pass rule (owner decision, 2026-11-02).** A review passes when it has no P0, P1 or P2 finding, and its P3 findings move to a named later unit ([REVIEWING.md](REVIEWING.md#pass-rule)). It applies from the next review. The owner gave it for later rounds, so the acceptance review above keeps its result. Option B is a separate owner override of that NO verdict and of the landing condition below. The review record stays NO, and the work-unit verdict stays NO until R4-04 passes.
 3. **R4-04** stays deferred until the owner chooses option A or B for it (item 1).
+4. **Security proposals** (owner request, 2026-11-02) are in [ROADMAP.md](ROADMAP.md#security-proposals-not-authorized). None is authorized. The suggested first two, a threat model and a no-network check, add no product code.
 
 **Pull requests, 2026-11-01.** The owner asked that the open PRs be landed, not left as unfinished work ("Just make sure they are landed and we are not sitting on incomplete work"). This is read as the owner's yes to merge each PR that is complete: reviewed, with its checks passing. A separate session merged:
 - PR #1 (docs cleanup) as `d46bcce`. Its review loop stopped after round 2 by the AGENTS.md rule, with the round 2 fixes in `e8f2f18`.
