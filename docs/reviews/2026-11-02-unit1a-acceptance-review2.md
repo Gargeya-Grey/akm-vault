@@ -5,7 +5,7 @@
 - Reviewed: branch `fix/unit1a-sound-findings` at `9eedfe2` (application source `94d8008`), judged against the repair design revision 3 with its amended section 2.1 messages
 - Build hashes checked by the reviewer (all matched STATE.md, before and after its probes): `akm-desktop.exe` 32f591a7…9104, `akm.exe` ad2ec01b…afc1, MSI d7c457b9…852c, NSIS 05f8124b…a3cf
 - Verdict: **Source acceptance: NO. Work unit complete: NO.** 1 P2 and 4 P3 findings, recorded as 1A-A2-01 to 1A-A2-05 in FINDINGS.md.
-- Result under the pass rule: **fail** (a P2 finding). This is the tenth rejection of unit 1a. Patching stops; the result goes to the owner (STATE.md).
+- Result under the pass rule: **pass**, after the owner's scope split on 2026-11-02 (option A in STATE.md): the one P2, 1A-A2-01, moved to unit 1c, and the P3 findings moved to units 1h and 1b, or were fixed (A2-05). Before the split, the result was fail. The reviewer's text below is unchanged.
 
 The text below is the reviewer's report. The reviewer's links to repository files became plain text with the repository path and line. One link to a file in the reviewer's local temporary folder (a handoff receipt) became "(local temporary file, not kept)". Other differences cannot be excluded.
 

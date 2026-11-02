@@ -4,14 +4,14 @@ Phase two fixes the remaining privacy, history and compatibility problems withou
 
 **Authorization.** The owner has authorized implementation of unit 1a only. Each other unit needs the owner's explicit authorization in chat before implementation starts. Work units run in this order. Units that share `model.rs`, `vault.rs`, the IPC types or the CLI command definitions run one after another, never in parallel. Do not redo the closed findings in [FINDINGS.md](FINDINGS.md).
 
-## Unit 1a: warning ownership and honest journal outcomes (in progress)
+## Unit 1a: warning ownership and honest journal outcomes (source accepted; runtime proof open)
 
 - A warning belongs to the operation and the session that caused it. A post-commit warning from session A never appears in session B. This holds for both ordinary completion and a commit that a lock overtakes. A keeps its secret-free acknowledgment. App-wide warnings (policy, clipboard) are kept apart from vault-session warnings.
 - The journal shows these states: absent, damaged, consistent but unauthenticated, and incomplete or unknown. A missing log does not prove that nothing happened.
 - A requested action and its known outcome are recorded separately. Verify and display use one locked snapshot.
 - Logging before a disclosure, export or launch still fails closed. A logging failure after a commit or publication is a warning with a truthful, non-retryable result.
 
-On 2026-11-01 the owner split the session-event and import-review findings into unit 1c. Unit 1a keeps the clipboard, CLI export and journal-sequence findings.
+On 2026-11-01 the owner split the session-event and import-review findings into unit 1c. Unit 1a keeps the clipboard, CLI export and journal-sequence findings. On 2026-11-02 [acceptance review 2](reviews/2026-11-02-unit1a-acceptance-review2.md) passed the source, after the owner moved its one P2 (1A-A2-01) to unit 1c. The unit is complete when R4-04 passes.
 
 Status: [STATE.md](STATE.md) and [FINDINGS.md](FINDINGS.md).
 
@@ -22,6 +22,8 @@ Status: [STATE.md](STATE.md) and [FINDINGS.md](FINDINGS.md).
 - A confirmation that was dispatched keeps a truthful outcome record, also when its reply is lost.
 - Two design reviews rejected a two-step frontend-native protocol for this ([design](design/unit1a-protocol.md), sections 2 and 3). Start with the design question: a native confirm dialog that leaves no pending review state, or another design that a review accepts.
 
+- The vault-opening command saves the path of the vault it opened only while that opening still owns the session, so an older opening never overwrites a newer one (1A-A2-01, moved from unit 1a).
+
 Acceptance: the findings in the unit 1c table of [FINDINGS.md](FINDINGS.md), with real dispatch through the production command handler. Implementation needs the owner's authorization, like every unit.
 
 ## Unit 1h: clipboard and disclosure hardening (split from unit 1a)
@@ -30,6 +32,8 @@ Acceptance: the findings in the unit 1c table of [FINDINGS.md](FINDINGS.md), wit
 - Cleanup never empties a newer copy, also with delayed rendering and a failed owner destruction. A failed `CloseClipboard` has a defined outcome.
 - The secret reaches a sink only through a capability bound to its journal record, also through `Vault::env_vars` and whole-key serialization.
 - Encoding and the copy-command wrappers are tested with the real publisher.
+
+- The copy table asserts the sequence and the exact warning IDs (1A-A2-02), and a file export is observed at its first byte and at publication (1A-A2-03). Both moved from unit 1a.
 
 Acceptance: the findings in the unit 1h table of [FINDINGS.md](FINDINGS.md). Start with a design. Implementation needs the owner's authorization, like every unit.
 
@@ -43,6 +47,8 @@ Write these decisions down first. Implementation starts only after the owner app
 - **Legacy sidecar.** Detect the old `<vault>.audit.jsonl` and explain that it exposed metadata. Never delete, upload or import it silently. Moving the log does not remove copies that already synced.
 - **Damage.** Keep the original bytes. Report truncation, malformed JSON, damaged records and broken links without claiming a cause. Never accept an altered prefix as complete history.
 - **Integrity claim.** A local hash chain with no independent anchor cannot prove completeness. Say so. Do not write the vault on each read to anchor it.
+
+- The journal export GUI proof (`-JournalExportOnly`) failed 3 times in its filter step before it passed; find the cause before this unit relies on that proof (1A-A2-04, moved from unit 1a).
 
 Acceptance: private location and permission refusal, no plaintext metadata beside a fresh synced vault, the identity cases above, concurrent mapping, append and read, preserved damaged bytes, older-format and read-only vaults, the legacy log left untouched, and both failure policies. Test through the real CLI and Activity callers.
 

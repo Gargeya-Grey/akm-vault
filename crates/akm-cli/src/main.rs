@@ -820,7 +820,7 @@ fn print_field(out: &mut dyn Write, key: &KeyMetadata, field: &str) -> Result<()
         "notes" => writeln!(out, "{}", key.notes.as_deref().unwrap_or(""))?,
         "scopes" => writeln!(out, "{}", key.scopes.join(","))?,
         "env_var" | "env-var" => writeln!(out, "{}", key.env_var)?,
-        "expires" => writeln!(out, 
+        "expires" => writeln!(out,
             "{}",
             key.expires_at
                 .map(|date| date.to_rfc3339())
