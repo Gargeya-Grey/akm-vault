@@ -3234,9 +3234,10 @@ mod tests {
                     s.faults.is_empty(),
                     "earlier {earlier}: the faults were reached"
                 );
+                // The publication's first empty removes A; the immediate cleanup removes B.
                 assert_eq!(
                     s.clears,
-                    clears + 1,
+                    clears + 1 + usize::from(earlier),
                     "earlier {earlier}: the cleanup emptied B"
                 );
                 assert_eq!(s.text(), "");

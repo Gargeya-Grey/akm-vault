@@ -195,14 +195,27 @@ pub fn uncertain_cleanup() -> CommandError {
 /// The error kind a backend returns when a failed cleanup empty changed the sequence.
 pub const LOST: &str = "clipboardLost";
 
-const EARLIER_REMAINS: &str = "AKM's earlier copy is still on the clipboard and may remain.";
+// Each text states only what AKM observed. A lease is not evidence that its copy is still
+// on the clipboard: the user can have replaced it (1A-A1-01).
+const EARLIER_MAY_REMAIN: &str = "AKM's earlier copy may still be on the clipboard.";
 const EMPTIED: &str =
     "The earlier clipboard content was removed, and the new value was not copied. Copy again.";
-const RESIDUAL: &str =
-    "AKM could not remove the partial copy. Check the clipboard before you paste.";
+// After a failed rollback, the immediate cleanup's own result picks the text (1A-A1-02).
+const RESIDUAL: &str = "AKM could not confirm that the partial copy was removed. Check the clipboard before you paste.";
+const RESIDUAL_REMOVED: &str = "AKM then removed the partial copy. Copy again.";
+const RESIDUAL_REPLACED: &str =
+    "The clipboard changed after the partial copy, and AKM left the newer content in place. Copy again.";
 
 fn with(error: CommandError, suffix: &str) -> CommandError {
     CommandError::new(&error.kind, format!("{} {suffix}", error.message))
+}
+
+/// A successful cleanup attempt.
+enum Cleared {
+    /// AKM emptied the clipboard while it still held AKM's copy.
+    Removed,
+    /// The clipboard had changed since AKM's copy, so AKM left it in place.
+    Released,
 }
 
 pub struct CleanupFailure {
@@ -312,12 +325,19 @@ impl ClipboardLease {
                 // A partial OS write still needs an owned lease if immediate cleanup finds a busy clipboard.
                 self.own(evidence, text, now);
                 let lease_generation = self.generation;
-                let cleanup = self.clear().err().map(|error| CleanupFailure {
-                    lease_generation,
-                    error,
-                });
+                let (suffix, cleanup) = match self.clear_observed() {
+                    Ok(Cleared::Removed) => (RESIDUAL_REMOVED, None),
+                    Ok(Cleared::Released) => (RESIDUAL_REPLACED, None),
+                    Err(error) => (
+                        RESIDUAL,
+                        Some(CleanupFailure {
+                            lease_generation,
+                            error,
+                        }),
+                    ),
+                };
                 Err(CopyFailure {
-                    error: with(error, RESIDUAL),
+                    error: with(error, suffix),
                     cleanup,
                 })
             }
@@ -326,7 +346,7 @@ impl ClipboardLease {
 
     fn untouched(&self, error: CommandError) -> CommandError {
         if self.owned.is_some() {
-            with(error, EARLIER_REMAINS)
+            with(error, EARLIER_MAY_REMAIN)
         } else {
             error
         }
@@ -343,18 +363,33 @@ impl ClipboardLease {
     }
 
     pub fn clear(&mut self) -> Result<(), CommandError> {
-        if let Some(lease) = &self.owned {
-            // Any cleanup failure (busy, refused) leaves the copy possibly in place.
-            if let Err(error) = self.backend.clear_matching(lease.sequence, &lease.text) {
+        self.clear_observed().map(|_| ())
+    }
+
+    /// One cleanup attempt, with what it observed. The lease ends unless the attempt
+    /// failed with the sequence unchanged, which keeps it for a retry.
+    fn clear_observed(&mut self) -> Result<Cleared, CommandError> {
+        let Some(lease) = &self.owned else {
+            return Ok(Cleared::Released);
+        };
+        // Any cleanup failure (busy, refused) leaves the copy possibly in place.
+        match self.backend.clear_matching(lease.sequence, &lease.text) {
+            Err(error) => {
                 if error.kind == LOST {
                     // A failed empty changed the sequence: never adopt it (contract 10).
                     self.owned = None;
                 }
-                return Err(uncertain_cleanup());
+                Err(uncertain_cleanup())
+            }
+            Ok(removed) => {
+                self.owned = None;
+                Ok(if removed {
+                    Cleared::Removed
+                } else {
+                    Cleared::Released
+                })
             }
         }
-        self.owned = None;
-        Ok(())
     }
 
     pub fn tick(&mut self, now: Duration) -> Result<(), CommandError> {

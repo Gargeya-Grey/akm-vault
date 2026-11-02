@@ -173,9 +173,12 @@ pub enum Outcome {
 - `ClipboardLease::copy_reported` matches on the `Outcome` and applies the transitions in 2.3.
 
 **Messages.** Each message states only what AKM observed:
-- `Untouched`: the cause. If a lease exists, add: "AKM's earlier copy is still on the clipboard and may remain."
+- `Untouched`: the cause. If a lease exists, add: "AKM's earlier copy may still be on the clipboard." (Changed after the acceptance review, 1A-A1-01: a lease does not show that the copy is still there. Revision 3 said "is still on the clipboard and may remain".)
 - `Emptied`: the cause, then "The earlier clipboard content was removed, and the new value was not copied. Copy again." This does not say that the clipboard is empty: exclusion markers or empty text formats can remain (design review 2, finding 7). It does not say that the earlier content was an AKM copy, because there may have been none.
-- `Residual`: the cause, then "AKM could not remove the partial copy. Check the clipboard before you paste."
+- `Residual`: the cause, then the text for the result of the immediate cleanup (changed after the acceptance review, 1A-A1-02; revision 3 had one text for every result):
+  - removed: "AKM then removed the partial copy. Copy again."
+  - the clipboard changed first, so the cleanup left it: "The clipboard changed after the partial copy, and AKM left the newer content in place. Copy again."
+  - failed: "AKM could not confirm that the partial copy was removed. Check the clipboard before you paste." The cleanup warning and the retry stay.
 - `EarlierCopyUncertain` and `ResidualUntracked`: the cause, then the `uncertain_cleanup` text (`clipboard.rs:18`).
 - Exit 12: the cause is "Windows did not confirm the copy." The old text "The clipboard changed while copying" claimed a cause that AKM did not observe.
 
