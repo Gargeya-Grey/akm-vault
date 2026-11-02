@@ -41,15 +41,15 @@ Git started after unit 1a was written, so `main` alone does not show the unit. S
 **Return format.**
 
 1. Ranked findings. Each one has a severity (P0 to P3), a file and line, the exact scenario, whether it was reproduced or found by inspection, and the test that would close it.
-2. **Source acceptance: YES or NO**, and the reason. Report YES when you could review the whole scope and no finding is P0, P1 or P2. The [pass rule](#pass-rule) then decides the result.
+2. **Source acceptance: YES or NO**, and the reason.
 3. **Work unit complete: YES or NO**, with any missing runtime proof.
 4. What the review did not cover.
 
 Do not give a numerical score. A unit review is not the full rescore and not a professional audit.
 
-## Pass rule
+## Pass rule (draft, not in force)
 
-Owner decision, 2026-11-02.
+**Status.** The owner asked for this rule on 2026-11-02. Two reviews rejected the text ([round 1](reviews/2026-11-02-pass-rule-review1.md), [round 2](reviews/2026-11-02-pass-rule-review2.md)), so the work stopped (AGENTS.md). Do not apply it. Reviews keep the rules above until the owner decides (STATE.md, Next action).
 
 - **Scope.** The rule applies to the acceptance review of a work unit's final source. A design review passes or fails the design only. A review that could not see its required scope or evidence is **incomplete**: it reports source acceptance NO and names what was missing. An incomplete review counts as neither a pass nor a failure.
 - **Pass.** A complete review passes when it has no P0, P1 or P2 finding and every P3 finding has moved to a named later unit (below). A complete review with a P0, P1 or P2 finding fails. The AGENTS.md stop rule ("fails review twice") counts failed reviews only.
@@ -60,6 +60,6 @@ Owner decision, 2026-11-02.
 
 ## After the review
 
-1. Commit the raw review text, unchanged, to `docs/reviews/<date>-<scope>.md`. Put a header above it that gives the model, the requested effort, the reviewed commit and build hashes, the date, and the result under the pass rule. Never rewrite a rejected review into an approval.
-2. Add each new finding to FINDINGS.md, with an ID like `1A-R5-01` and a link to that review file. After a pass, move each P3 finding as the pass rule says.
+1. Commit the raw review text, unchanged, to `docs/reviews/<date>-<scope>.md`. Put a header above it that gives the model, the requested effort, the reviewed commit and build hashes, and the date. Never rewrite a rejected review into an approval.
+2. Add each new finding to FINDINGS.md, with an ID like `1A-R5-01` and a link to that review file.
 3. Update STATE.md.

@@ -3,7 +3,7 @@
 - Date: 2026-11-02
 - Model: GPT-6.1 Terra (`gpt-6.1-terra`), Codex provider, requested `reasoningEffort: max`
 - Reviewed: commit `528f72e` on `fix/unit1a-sound-findings` (docs only: AGENTS.md, docs/REVIEWING.md, docs/STATE.md)
-- Verdict: **Accept: NO.** 4 P2 and 3 P3 findings. All seven are fixed in the next commit. This review is about the process text, so the pass rule does not decide it.
+- Verdict: **Accept: NO.** 4 P2 and 3 P3 findings. The next commit (`3109a1c`) addresses all seven; [round 2](2026-11-02-pass-rule-review2.md) judged 4 of them fixed and 3 partly fixed. This review is about the process text, so the pass rule does not decide it.
 
 The text below is the reviewer's report. Links to repository files became plain text with the repository path and line. Other differences cannot be excluded.
 
