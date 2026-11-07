@@ -703,7 +703,7 @@ fn older_formats_require_explicit_upgrade_and_preserve_the_database_and_kdf() {
 }
 
 #[test]
-fn find_prefers_native_uuid_then_exact_title_before_substring_search() {
+fn find_selects_a_native_uuid_or_an_exact_title_and_never_a_partial_word() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vault.kdbx");
     write_database(&path, &fast_database(), PASSWORD);
@@ -728,8 +728,16 @@ fn find_prefers_native_uuid_then_exact_title_before_substring_search() {
         .add(ApiKeyInput::new("EXACT", "duplicate-title-secret"))
         .unwrap();
     assert!(matches!(vault.find("Exact"), Err(Error::Ambiguous(_, 2))));
-    assert!(matches!(vault.find("exa"), Err(Error::Ambiguous(_, 3))));
-    assert_eq!(vault.find("suffix").unwrap().title, "Exact suffix");
+    assert!(matches!(vault.find("exa"), Err(Error::EntryNotFound(_))));
+    assert!(matches!(vault.find("suffix"), Err(Error::EntryNotFound(_))));
+    assert_eq!(vault.find("exact suffix").unwrap().title, "Exact suffix");
+    let titles: Vec<String> = vault
+        .candidates("exa")
+        .into_iter()
+        .map(|key| key.title)
+        .collect();
+    assert_eq!(titles.len(), 3, "{titles:?}");
+    assert!(vault.candidates("  ").is_empty());
 }
 
 #[test]

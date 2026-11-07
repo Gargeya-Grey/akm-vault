@@ -230,29 +230,36 @@ impl Vault {
             .ok_or_else(|| Error::EntryNotFound(id.to_string()))
     }
 
-    /// Prefer a native UUID, then an exact case-insensitive title, then a
-    /// case-insensitive substring match across searchable metadata.
+    /// Select one key by its native UUID or by its exact case-insensitive title. A partial word
+    /// never selects a key, so a word found in a note or a URL cannot reveal, rotate or delete one
+    /// (L2). Two keys with the same title are refused. Use [`Vault::candidates`] to list near matches.
     pub fn find(&self, query: &str) -> Result<ApiKey> {
         if let Ok(key) = self.get_by_id(query) {
             return Ok(key);
         }
-        let keys = self.list();
-        let exact: Vec<_> = keys
-            .iter()
+        let mut exact: Vec<ApiKey> = self
+            .list()
+            .into_iter()
             .filter(|key| key.title.eq_ignore_ascii_case(query))
             .collect();
         match exact.len() {
-            0 => {}
-            1 => return Ok(exact[0].clone()),
-            n => return Err(Error::Ambiguous(query.to_string(), n)),
-        }
-        let matches: Vec<ApiKey> = keys.into_iter().filter(|key| key.matches(query)).collect();
-
-        match matches.len() {
             0 => Err(Error::EntryNotFound(query.to_string())),
-            1 => Ok(matches.into_iter().next().expect("checked len == 1")),
+            1 => Ok(exact.remove(0)),
             n => Err(Error::Ambiguous(query.to_string(), n)),
         }
+    }
+
+    /// Keys whose metadata contains the word, for a refusal message. It reads no secret and
+    /// grants nothing: it only helps the user pick an exact title or id. A blank word has no
+    /// candidates.
+    pub fn candidates(&self, query: &str) -> Vec<ApiKey> {
+        if query.trim().is_empty() {
+            return Vec::new();
+        }
+        self.list()
+            .into_iter()
+            .filter(|key| key.matches(query))
+            .collect()
     }
 
     pub fn add(&mut self, input: ApiKeyInput) -> Result<ApiKey> {
@@ -455,6 +462,17 @@ impl Vault {
             1 => Ok(exact.into_iter().next().expect("checked len == 1")),
             n => Err(Error::Ambiguous(query.to_string(), n)),
         }
+    }
+
+    /// Recycled keys whose metadata contains the word, for a refusal message. A blank word has none.
+    pub fn recycled_candidates(&self, query: &str) -> Vec<RecycledKey> {
+        if query.trim().is_empty() {
+            return Vec::new();
+        }
+        self.recycled()
+            .into_iter()
+            .filter(|item| item.key.matches(query))
+            .collect()
     }
 
     /// Moves a recycled key back to its group, with its UUID, secret, history and times

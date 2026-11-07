@@ -67,6 +67,11 @@ pub(super) trait ExportIo {
     fn publish(&mut self, file: &File, destination: &Path) -> Result<()> {
         publish_new(file, destination)
     }
+
+    /// Remove the owned plaintext temporary file. `false` means the removal is not confirmed.
+    fn discard(&mut self, file: &File) -> bool {
+        discard(file)
+    }
 }
 
 #[cfg(windows)]
@@ -153,13 +158,29 @@ pub(super) fn write_new_with(
 ) -> Result<()> {
     let path = resolved_destination(path)?;
     let mut temp = PrivateTemp::create(&path, io)?;
+    let outcome = fill_and_publish(&mut temp, &path, envs, io);
+    temp.settled = true;
+    match outcome {
+        Ok(()) => Ok(()),
+        Err(error) if io.discard(&temp.file) => Err(error),
+        Err(error) => Err(Error::Io(std::io::Error::other(format!(
+            "{error}; could not confirm cleanup: the plaintext temporary file {} may still hold the exported values. Delete it yourself",
+            temp.path.display()
+        )))),
+    }
+}
+
+fn fill_and_publish(
+    temp: &mut PrivateTemp,
+    path: &Path,
+    envs: &[(String, String)],
+    io: &mut impl ExportIo,
+) -> Result<()> {
     ensure_private_filesystem(io.filesystem_flags(&temp.file)?)?;
     verify_private_acl(&temp.file)?;
     io.write(&mut temp.file, envs)?;
     io.sync(&temp.file)?;
-    io.publish(&temp.file, &path)?;
-    temp.published = true;
-    Ok(())
+    io.publish(&temp.file, path)
 }
 
 #[cfg(windows)]
@@ -223,7 +244,8 @@ fn verify_private_acl(_file: &File) -> Result<()> {
 
 struct PrivateTemp {
     file: File,
-    published: bool,
+    path: PathBuf,
+    settled: bool,
 }
 
 impl PrivateTemp {
@@ -249,7 +271,8 @@ impl PrivateTemp {
                 Ok(file) => {
                     return Ok(Self {
                         file,
-                        published: false,
+                        path,
+                        settled: false,
                     });
                 }
                 Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -266,14 +289,14 @@ impl PrivateTemp {
 
 impl Drop for PrivateTemp {
     fn drop(&mut self) {
-        if !self.published {
+        if !self.settled {
             discard(&self.file);
         }
     }
 }
 
 #[cfg(windows)]
-fn discard(file: &File) {
+fn discard(file: &File) -> bool {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
@@ -287,7 +310,7 @@ fn discard(file: &File) {
             FileDispositionInfo,
             std::ptr::from_ref(&info).cast(),
             std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
-        );
+        ) != 0
     }
 }
 
@@ -331,7 +354,9 @@ pub(super) fn publish_new(file: &File, destination: &Path) -> Result<()> {
 }
 
 #[cfg(not(windows))]
-fn discard(_file: &File) {}
+fn discard(_file: &File) -> bool {
+    false
+}
 
 #[cfg(not(windows))]
 pub(super) fn publish_new(_file: &File, _destination: &Path) -> Result<()> {

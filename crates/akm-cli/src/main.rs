@@ -412,7 +412,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             let password = master_password(false)?;
             let vault = open_vault(&path, &password)?;
             drop(password);
-            let key = vault.find(&query)?;
+            let key = select(&vault, &query)?;
 
             let secret_field = field
                 .as_deref()
@@ -457,7 +457,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             let password = master_password(false)?;
             let mut vault = open_vault(&path, &password)?;
             drop(password);
-            let key = vault.find(&query)?;
+            let key = select(&vault, &query)?;
 
             if !yes {
                 if !std::io::stdin().is_terminal() {
@@ -492,7 +492,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             let password = master_password(false)?;
             let mut vault = open_vault(&path, &password)?;
             drop(password);
-            let key = vault.find(&query)?;
+            let key = select(&vault, &query)?;
             let secret = secret_value(None, secret_stdin)?;
             let rotation = vault.rotate(&key.id, secret.into())?;
             print_warnings(io, &mut vault);
@@ -515,10 +515,17 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             let (id, title) = match vault.find(&query) {
                 Ok(key) => (key.id, key.title),
                 Err(Error::EntryNotFound(_)) => {
-                    let recycled = vault.find_recycled(&query)?;
+                    let recycled = select_recycled(&vault, &query, "")?;
                     (recycled.key.id, recycled.key.title)
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    return Err(selection_error(
+                        &query,
+                        error,
+                        &vault.candidates(&query),
+                        "",
+                    ))
+                }
             };
             let versions = vault.history(&id)?;
             if versions.is_empty() {
@@ -578,7 +585,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             let password = master_password(false)?;
             let mut vault = open_vault(&path, &password)?;
             drop(password);
-            let recycled = vault.find_recycled(&query)?;
+            let recycled = select_recycled(&vault, &query, "")?;
             let key = vault.restore(&recycled.key.id)?;
             print_warnings(io, &mut vault);
             status!(io, "Restored {:?} ({})", key.title, key.id);
@@ -596,15 +603,14 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             match (query, older_than_days) {
                 (Some(query), None) => {
                     let (id, title) = if live {
-                        let key = vault.find(&query)?;
+                        let key = select(&vault, &query)?;
                         (key.id, key.title)
                     } else {
-                        let recycled = vault.find_recycled(&query).map_err(|error| match error {
-                            Error::EntryNotFound(_) => Error::EntryNotFound(format!(
-                                "{query} in the Recycle Bin (to delete a live key for good, pass --live)"
-                            )),
-                            other => other,
-                        })?;
+                        let recycled = select_recycled(
+                            &vault,
+                            &query,
+                            " in the Recycle Bin (to delete a live key for good, pass --live)",
+                        )?;
                         (recycled.key.id, recycled.key.title)
                     };
                     if !confirmed(
@@ -817,6 +823,63 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
 
 /// Opens the vault. A debug build reads `AKM_TEST_CLOCK` (an RFC 3339 time) so that a test
 /// can fix every time that the vault writes. A release build never reads it.
+const MAX_CANDIDATES: usize = 12;
+
+fn candidate_line(key: &ApiKey) -> String {
+    format!(
+        "  {}  {:?}  project {:?}, env {:?}",
+        key.id,
+        key.title,
+        key.project.as_deref().unwrap_or("-"),
+        key.environment.as_deref().unwrap_or("-")
+    )
+}
+
+/// L2: a refusal names candidates by id, title, project and environment. It never shows a
+/// secret, a note or a URL.
+fn selection_error(query: &str, error: Error, candidates: &[ApiKey], place: &str) -> Error {
+    let mut list = String::new();
+    if !candidates.is_empty() {
+        list.push_str("\nCandidates (select one by its id):");
+        for key in candidates.iter().take(MAX_CANDIDATES) {
+            list.push('\n');
+            list.push_str(&candidate_line(key));
+        }
+        if candidates.len() > MAX_CANDIDATES {
+            list.push_str(&format!(
+                "\n  and {} more",
+                candidates.len() - MAX_CANDIDATES
+            ));
+        }
+    }
+    match error {
+        Error::EntryNotFound(_) => Error::Invalid(format!(
+            "no key has the id or exact title {query:?}{place}; select a key by its exact title or id{list}"
+        )),
+        Error::Ambiguous(_, count) => Error::Invalid(format!(
+            "{query:?} is the exact title of {count} keys; select one by its id{list}"
+        )),
+        other => other,
+    }
+}
+
+fn select(vault: &Vault, query: &str) -> Result<ApiKey> {
+    vault
+        .find(query)
+        .map_err(|error| selection_error(query, error, &vault.candidates(query), ""))
+}
+
+fn select_recycled(vault: &Vault, query: &str, place: &str) -> Result<akm_core::RecycledKey> {
+    vault.find_recycled(query).map_err(|error| {
+        let candidates: Vec<ApiKey> = vault
+            .recycled_candidates(query)
+            .into_iter()
+            .map(|item| item.key)
+            .collect();
+        selection_error(query, error, &candidates, place)
+    })
+}
+
 fn open_vault(path: &Path, password: &str) -> Result<Vault> {
     let vault = Vault::open(path, password)?;
     with_test_clock(vault)
@@ -1572,6 +1635,50 @@ mod tests {
         assert_ne!(code, 0);
         assert_eq!(journal_actions(&path), ["export-requested"]);
         assert!(!target.exists());
+    }
+
+    struct UndeletableTemp;
+    impl export::ExportIo for UndeletableTemp {
+        fn publish(&mut self, _file: &std::fs::File, _destination: &Path) -> Result<()> {
+            Err(std::io::Error::other("injected publication failure").into())
+        }
+
+        fn discard(&mut self, _file: &std::fs::File) -> bool {
+            false
+        }
+    }
+
+    struct UndeletableFiles;
+    impl FilePublisher for UndeletableFiles {
+        fn write_new(&mut self, path: &Path, envs: &[(String, String)]) -> Result<()> {
+            export::write_new_with(path, envs, &mut UndeletableTemp)
+        }
+    }
+
+    // 1A-D2-09: a failed file export that cannot confirm the removal of its plaintext temporary
+    // file says so on stderr, exits non-zero, and records no completion.
+    #[test]
+    fn a_failed_file_export_that_cannot_confirm_cleanup_says_so_and_exits_non_zero() {
+        let (directory, path) = fake_export_vault();
+        let target = directory.path().join("fake-export.env");
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run_with(
+            export_file_cli(&path, &target),
+            &mut Io {
+                out: &mut out,
+                err: &mut err,
+                files: &mut UndeletableFiles,
+                complete: append_completion,
+            },
+        );
+        let err = String::from_utf8_lossy(&err);
+        assert_eq!(code, 1, "{err}");
+        assert!(err.contains("could not confirm cleanup"), "{err}");
+        assert!(err.contains(".akm-export-"), "{err}");
+        assert!(!err.contains(SECRET), "{err}");
+        assert!(out.is_empty());
+        assert!(!target.exists());
+        assert_eq!(journal_actions(&path), ["export-requested"]);
     }
 
     fn actions(run: &Exported) -> Vec<&str> {

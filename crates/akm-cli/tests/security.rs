@@ -1555,6 +1555,69 @@ fn file_export_publication_failure_removes_its_plaintext_temp() {
 }
 
 #[test]
+fn file_export_that_cannot_confirm_removal_of_its_plaintext_temp_says_so_and_names_the_file() {
+    struct FailedDelete;
+    impl export::ExportIo for FailedDelete {
+        fn publish(&mut self, _file: &fs::File, _destination: &Path) -> akm_core::Result<()> {
+            Err(std::io::Error::other("injected publication failure").into())
+        }
+
+        fn discard(&mut self, _file: &fs::File) -> bool {
+            false
+        }
+    }
+
+    let directory = temporary_directory();
+    let target = directory.path().join("out.env");
+    let result = export::write_new_with(
+        &target,
+        &[("EXPORT_SECRET".into(), "fake-test-value".into())],
+        &mut FailedDelete,
+    );
+    let message = result.unwrap_err().to_string();
+    assert!(
+        message.contains("injected publication failure"),
+        "{message}"
+    );
+    assert!(message.contains("could not confirm cleanup"), "{message}");
+    assert!(!message.contains("fake-test-value"), "{message}");
+    let left: Vec<_> = fs::read_dir(directory.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(
+        left.len(),
+        1,
+        "the injected failed delete leaves the temp: {left:?}"
+    );
+    assert!(
+        message.contains(&left[0].display().to_string()),
+        "the message names the leftover file {left:?}: {message}"
+    );
+}
+
+#[test]
+fn file_export_whose_cleanup_is_confirmed_reports_only_its_own_failure() {
+    struct ConfirmedDelete;
+    impl export::ExportIo for ConfirmedDelete {
+        fn publish(&mut self, _file: &fs::File, _destination: &Path) -> akm_core::Result<()> {
+            Err(std::io::Error::other("injected publication failure").into())
+        }
+    }
+
+    let directory = temporary_directory();
+    let message = export::write_new_with(
+        &directory.path().join("out.env"),
+        &[("EXPORT_SECRET".into(), "fake-test-value".into())],
+        &mut ConfirmedDelete,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(!message.contains("could not confirm cleanup"), "{message}");
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
+#[test]
 fn file_export_never_overwrites_a_target_created_after_validation() {
     struct LateTarget;
     impl export::ExportIo for LateTarget {

@@ -113,6 +113,12 @@ akm upgrade --yes                   # explicit older-vault format upgrade
 akm audit --verify
 ```
 
+A key is selected by its entry id or its exact title (any letter case). A partial word,
+or a word found in a note or URL, selects nothing: `get`, `rm`, `rotate`, `history`,
+`restore` and `purge` refuse it and list candidates by id, title, project and
+environment, never a secret, note or URL. Two keys with the same title are refused
+until you pass the id.
+
 `run` and `export` require **both** project and environment, or an explicit `--all`
 without filters. The GUI deliberately offers only scoped exports. No-match and
 duplicate-variable cases fail rather than silently launching with the wrong
@@ -139,7 +145,7 @@ the current Windows account or an administrator from reading an export.
 File exports require Windows storage with persistent ACLs. The CLI verifies its
 private temporary file's permissions before writing and publishes without replacing
 an existing destination. Write/flush/sync/publication failures trigger owned-file
-cleanup. This is not secure erasure or a crash/power-loss cleanup guarantee.
+cleanup. If the CLI cannot confirm that it removed its temporary file, it says "could not confirm cleanup", names the file and exits with a failure, so you can delete it yourself. This is not secure erasure or a crash/power-loss cleanup guarantee.
 Desktop exports prepare outside the lock-state gate and check authorization before
 publication. A lock cancels an export that has not been authorized for publication;
 an already-authorized OS operation may finish and must report its completed outcome.
