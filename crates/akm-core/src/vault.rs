@@ -28,6 +28,8 @@ use crate::model::*;
 /// Entries live under this top-level group so a vault can also hold unrelated
 /// KeePass entries without them showing up as API keys.
 const GROUP_NAME: &str = "API Keys";
+/// How many earlier fingerprints a session keeps for the journal. The first one is always kept.
+const LINEAGE_LIMIT: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VaultWarningKind {
@@ -50,6 +52,11 @@ pub struct Vault {
     /// SHA-256 of the file as it was when opened/last saved. Used to refuse
     /// overwriting a vault that a cloud client replaced underneath us.
     fingerprint: Option<String>,
+    /// The fingerprints this session held before the current one, oldest first: the bytes it
+    /// took from the disk, then each of its own saves. It lets the journal tell which vault
+    /// the current version came from, because a save changes the fingerprint and a clone
+    /// shares the vault ID (unit 1b, D12).
+    lineage: Vec<String>,
     warnings: Vec<VaultWarning>,
     journal: JournalRoot,
     clock: Arc<dyn Clock>,
@@ -105,6 +112,7 @@ impl Vault {
             db,
             key,
             fingerprint: None,
+            lineage: Vec::new(),
             warnings: Vec::new(),
             journal,
             clock: Arc::new(SystemClock),
@@ -136,6 +144,7 @@ impl Vault {
             db,
             key,
             fingerprint,
+            lineage: Vec::new(),
             warnings: Vec::new(),
             journal,
             clock: Arc::new(SystemClock),
@@ -177,6 +186,7 @@ impl Vault {
             .map_err(|error| Error::Open(error.to_string()))?;
         self.db = db;
         self.fingerprint = Some(fingerprint);
+        self.lineage.clear();
         self.state += 1;
         Ok(())
     }
@@ -889,7 +899,8 @@ impl Vault {
                 &self.path,
                 self.fingerprint.clone(),
                 self.db.root().id().uuid().simple().to_string(),
-            ),
+            )
+            .with_lineage(self.lineage.clone()),
         )
     }
 
@@ -973,7 +984,12 @@ impl Vault {
         }
         #[cfg(test)]
         tests::run_save_hook(tests::SaveStage::Committed, &tmp.path, &self.path);
-        self.fingerprint = Some(fingerprint);
+        if let Some(previous) = self.fingerprint.replace(fingerprint) {
+            self.lineage.push(previous);
+            if self.lineage.len() > LINEAGE_LIMIT {
+                self.lineage.remove(1);
+            }
+        }
         self.db = verified;
         self.state += 1;
         if let Some(backup) = &mut backup {
