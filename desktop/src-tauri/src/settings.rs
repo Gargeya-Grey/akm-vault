@@ -6,7 +6,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-use crate::{error::CommandError, policy::Ticket};
+use crate::{error::CommandError, policy::Ticket, session::Held};
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,15 +20,19 @@ pub enum PreferenceSave {
     Superseded,
 }
 
+/// Runs the effect only while the opening that asks still owns the session, and holds the
+/// session gate (the one that lock and a newer opening take) while it runs.
+pub type OwnerFence<'a> = &'a dyn Fn(&mut dyn FnMut(&Held<'_>));
+
 /// Where the last opened vault path lives. A newer opening always wins over an older one.
 pub trait PreferenceStore: Send + Sync {
     fn saved_vault_path(&self) -> Option<String>;
     fn default_vault_path(&self) -> Result<PathBuf, CommandError>;
-    /// `owns` is asked under the store's own lock, immediately before the write.
+    /// The write happens inside `owned`, so the ownership check and the write are one step.
     fn save_vault_path(
         &self,
         ticket: Ticket,
-        owns: &dyn Fn() -> bool,
+        owned: OwnerFence<'_>,
         vault_path: &str,
     ) -> Result<PreferenceSave, CommandError>;
 }
@@ -76,31 +80,41 @@ impl PreferenceStore for FilePreferences {
     fn save_vault_path(
         &self,
         ticket: Ticket,
-        owns: &dyn Fn() -> bool,
+        owned: OwnerFence<'_>,
         vault_path: &str,
     ) -> Result<PreferenceSave, CommandError> {
         let file = self.file.as_ref().ok_or_else(|| {
             CommandError::new("config", "The settings location is not available.")
         })?;
         // A fencing token: tickets only grow, and a newer opening's write is final.
-        // The ownership question and the write happen under one lock, so an older
-        // opening that is released late can neither pass the check after a newer
-        // opening started nor write after a newer opening has written.
+        // Lock order is this lock, then the session gate. The ownership check and the
+        // write are one step under that gate, so a newer opening can neither retire the
+        // owner between them nor write before this write is done.
         let mut newest = self
             .newest
             .lock()
             .map_err(|_| CommandError::internal("The settings state failed. Restart AKM."))?;
-        if ticket.0 <= *newest || !owns() {
+        if ticket.0 <= *newest {
             return Ok(PreferenceSave::Superseded);
         }
-        write_settings_file(
-            file,
-            &Settings {
-                vault_path: Some(vault_path.to_string()),
-            },
-        )?;
-        *newest = ticket.0;
-        Ok(PreferenceSave::Saved)
+        let mut written = None;
+        owned(&mut |held| {
+            written = Some(write_settings_file(
+                held,
+                file,
+                &Settings {
+                    vault_path: Some(vault_path.to_string()),
+                },
+            ));
+        });
+        match written {
+            Some(Ok(())) => {
+                *newest = ticket.0;
+                Ok(PreferenceSave::Saved)
+            }
+            Some(Err(error)) => Err(error),
+            None => Ok(PreferenceSave::Superseded),
+        }
     }
 }
 
@@ -112,7 +126,11 @@ pub fn settings_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, C
     Ok(dir.join("settings.json"))
 }
 
-fn write_settings_file(path: &Path, settings: &Settings) -> Result<(), CommandError> {
+fn write_settings_file(
+    _held: &Held<'_>,
+    path: &Path,
+    settings: &Settings,
+) -> Result<(), CommandError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| CommandError::new("io", error.to_string()))?;
     }
@@ -140,6 +158,12 @@ pub fn current_path(
 mod tests {
     use super::*;
 
+    fn owned(effect: &mut dyn FnMut(&Held<'_>)) {
+        effect(&Held::for_test());
+    }
+
+    fn not_owned(_effect: &mut dyn FnMut(&Held<'_>)) {}
+
     fn saved(file: &Path) -> Option<String> {
         FilePreferences::new(Some(file.to_path_buf()), None).saved_vault_path()
     }
@@ -151,14 +175,14 @@ mod tests {
         let store = FilePreferences::new(Some(file.clone()), None);
         assert_eq!(
             store
-                .save_vault_path(Ticket(7), &|| true, "newer.kdbx")
+                .save_vault_path(Ticket(7), &owned, "newer.kdbx")
                 .unwrap(),
             PreferenceSave::Saved
         );
         for older in [6, 7] {
             assert_eq!(
                 store
-                    .save_vault_path(Ticket(older), &|| true, "older.kdbx")
+                    .save_vault_path(Ticket(older), &owned, "older.kdbx")
                     .unwrap(),
                 PreferenceSave::Superseded
             );
@@ -166,7 +190,7 @@ mod tests {
         assert_eq!(saved(&file).as_deref(), Some("newer.kdbx"));
         assert_eq!(
             store
-                .save_vault_path(Ticket(8), &|| true, "newest.kdbx")
+                .save_vault_path(Ticket(8), &owned, "newest.kdbx")
                 .unwrap(),
             PreferenceSave::Saved
         );
@@ -180,14 +204,14 @@ mod tests {
         let store = FilePreferences::new(Some(file.clone()), None);
         assert_eq!(
             store
-                .save_vault_path(Ticket(3), &|| false, "retired.kdbx")
+                .save_vault_path(Ticket(3), &not_owned, "retired.kdbx")
                 .unwrap(),
             PreferenceSave::Superseded
         );
         assert!(!file.exists());
         assert_eq!(
             store
-                .save_vault_path(Ticket(2), &|| true, "later-but-older.kdbx")
+                .save_vault_path(Ticket(2), &owned, "later-but-older.kdbx")
                 .unwrap(),
             PreferenceSave::Saved,
             "a refused ticket does not advance the fence"
@@ -201,15 +225,11 @@ mod tests {
         fs::write(&blocker, b"fake").unwrap();
         let file = blocker.join("settings.json");
         let store = FilePreferences::new(Some(file), None);
-        assert!(store
-            .save_vault_path(Ticket(5), &|| true, "a.kdbx")
-            .is_err());
+        assert!(store.save_vault_path(Ticket(5), &owned, "a.kdbx").is_err());
         fs::remove_file(&blocker).unwrap();
         fs::create_dir(&blocker).unwrap();
         assert_eq!(
-            store
-                .save_vault_path(Ticket(4), &|| true, "b.kdbx")
-                .unwrap(),
+            store.save_vault_path(Ticket(4), &owned, "b.kdbx").unwrap(),
             PreferenceSave::Saved
         );
     }

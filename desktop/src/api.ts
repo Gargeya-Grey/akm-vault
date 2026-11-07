@@ -106,6 +106,17 @@ export const api = {
     if (current.unlocked) await api.lock();
   },
   activity: () => invoke<void>("vault_activity"),
+  // The document hid and the page discarded its views. Native expires its side of them too
+  // (an open import dialog stops being able to apply). A native refusal other than "locked"
+  // means that the expiry is not certain, so the vault locks.
+  discardView: async () => {
+    try {
+      await nativeInvoke<void>("view_discard");
+    } catch (error) {
+      if (errorKind(error) === "locked") return;
+      try { await api.lockCurrent(); } catch { /* the native fail-closed paths already warn */ }
+    }
+  },
   upgrade: () => invoke<Status>("vault_upgrade"),
   reload: () => invoke<Status>("vault_reload"),
   warnings: async () => {
@@ -154,10 +165,10 @@ export const api = {
   },
   backup: () => invoke<BackupInfo>("backup_info"),
 
-  // The notification text is built natively from this count. The page cannot send any other text.
+  // The notification text is built natively from this count. The page cannot send any other text. The session names the vault the count was made in; native refuses it if that session is no longer the current one.
   remindersStatus: () => invoke<ReminderStatus>("reminders_status"),
   remindersSet: (enabled: boolean) => invoke<ReminderStatus>("reminders_set", { enabled }),
-  remindersNotify: (count: number) => invoke<ReminderStatus>("reminders_notify", { count }),
+  remindersNotify: (count: number, sessionId: string) => invoke<ReminderStatus>("reminders_notify", { sessionId, count }),
 };
 
 export function errorText(error: unknown): string {

@@ -54,6 +54,7 @@ macro_rules! production_handlers {
             env_copy,
             env_save,
             env_import,
+            view_discard,
             backup_info,
             reminders_status,
             reminders_set,
@@ -194,7 +195,9 @@ async fn open_vault(
     if preferences
         .save_vault_path(
             ticket,
-            &|| session.ensure(ticket).is_ok(),
+            &|effect| {
+                let _ = session.while_current(ticket, |held| effect(held));
+            },
             &opened.value.path,
         )
         .is_err()
@@ -764,6 +767,21 @@ fn publish_and_record(
     Ok(saved)
 }
 
+fn ensure_window_live(confirm: &dyn ImportConfirm) -> Result<(), CommandError> {
+    if confirm.window_live() {
+        Ok(())
+    } else {
+        Err(window_hidden())
+    }
+}
+
+fn window_hidden() -> CommandError {
+    CommandError::new(
+        "viewChanged",
+        "The window was hidden while the import waited for confirmation. Nothing was imported. Start it again.",
+    )
+}
+
 /// The whole import in one command. The webview names the session and the data. A
 /// native window shows the names and the scope, and only the user's click there lets
 /// the import run. No review state is kept between the request and the answer, so
@@ -822,9 +840,29 @@ fn run_import(
         reviewed.value,
     )?;
     let ticket = reviewed.snapshot.ticket;
-    if review.changes_anything() && !confirm.confirm(&review) {
-        session.record_import(ticket, &operation, OperationWarningKind::ImportDeclined);
-        return Ok(None);
+    if review.changes_anything() {
+        // A dialog for a window nobody sees, or for a session that already ended, is not shown.
+        // The modal cannot be shown under the session gate, so the write below stays bound
+        // to the snapshot too.
+        ensure_window_live(confirm)?;
+        if session.snapshot()? != reviewed.snapshot {
+            return Err(CommandError::new(
+                "stalePreview",
+                "The vault changed before the confirmation could be shown. Start it again.",
+            ));
+        }
+        if !confirm.confirm(&review) {
+            session.record_import(ticket, &operation, OperationWarningKind::ImportDeclined);
+            return Ok(None);
+        }
+        // The page discards its review when the document hides and tells native with
+        // `view_discard`. This is the native side's own check: an answer that arrives while
+        // the window is hidden or minimized does not apply what the page showed.
+        if ensure_window_live(confirm).is_err() {
+            let refused = window_hidden();
+            session.record_import(ticket, &operation, OperationWarningKind::ImportFailed);
+            return Err(refused);
+        }
     }
     // The write is bound to the snapshot of the request: a lock, a hide, a reload, a
     // page load or another write since then makes it stale. It must also still equal
@@ -858,6 +896,27 @@ fn run_import(
     applied.map(Some)
 }
 
+/// The page tells native that it discarded its protected views (the document was hidden).
+/// Native then does what a minimize does: it expires the presentation, so a result, a
+/// preview or an open import dialog that belongs to the discarded view can no longer
+/// apply. Native view state never depends on a window event alone.
+#[tauri::command]
+pub fn view_discard<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, VaultState>,
+) -> Result<(), CommandError> {
+    discard_view(&state.0, |notice| {
+        tauri::Emitter::emit(&app, "vault-view-expired", notice).map_err(|_| ())
+    })
+}
+
+fn discard_view(
+    session: &Session,
+    emit: impl FnOnce(&crate::session::NativeViewNotice) -> Result<(), ()>,
+) -> Result<(), CommandError> {
+    crate::visibility::expire_and_notify(session, emit).map(|_| ())
+}
+
 #[tauri::command]
 pub fn reminders_status(state: State<'_, ReminderState>) -> Result<ReminderStatus, CommandError> {
     state.0.status()
@@ -871,14 +930,16 @@ pub fn reminders_set(
     state.0.set_enabled(enabled)
 }
 
-/// The page sends a count and nothing else. The text of the notification is built natively.
+/// The page sends a count and the session it counted in, and nothing else. The text of the
+/// notification is built natively, and only while that session is still the current one.
 #[tauri::command]
 pub fn reminders_notify(
     vault: State<'_, VaultState>,
     state: State<'_, ReminderState>,
+    session_id: String,
     count: u32,
 ) -> Result<ReminderStatus, CommandError> {
-    state.0.notify(&vault.0, count)
+    state.0.notify(&vault.0, &session_id, count)
 }
 
 #[tauri::command]
@@ -1483,6 +1544,8 @@ mod tests {
         answer: bool,
         shown: Mutex<Vec<String>>,
         while_open: Box<dyn Fn() + Send + Sync>,
+        window: Arc<std::sync::atomic::AtomicBool>,
+        probe: Box<dyn Fn() + Send + Sync>,
     }
     impl ScriptedConfirm {
         fn new(answer: bool) -> Self {
@@ -1493,7 +1556,19 @@ mod tests {
                 answer,
                 shown: Mutex::new(Vec::new()),
                 while_open: Box::new(while_open),
+                window: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                probe: Box::new(|| {}),
             }
+        }
+        /// The shared flag says whether the window is shown and not minimized.
+        fn on_window(mut self, window: Arc<std::sync::atomic::AtomicBool>) -> Self {
+            self.window = window;
+            self
+        }
+        /// Runs each time native asks about the window: the last moment before the dialog.
+        fn on_probe(mut self, probe: impl Fn() + Send + Sync + 'static) -> Self {
+            self.probe = Box::new(probe);
+            self
         }
         fn shown(&self) -> Vec<String> {
             self.shown.lock().unwrap().clone()
@@ -1504,6 +1579,10 @@ mod tests {
             self.shown.lock().unwrap().push(review.message());
             (self.while_open)();
             self.answer
+        }
+        fn window_live(&self) -> bool {
+            (self.probe)();
+            self.window.load(std::sync::atomic::Ordering::SeqCst)
         }
     }
 
@@ -1735,6 +1814,180 @@ mod tests {
     }
 
     #[test]
+    fn review1_1_a_hidden_document_discards_the_native_view_even_without_a_minimize() {
+        let (session, directory) = test_session();
+        let session = Arc::new(session);
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        let confirm = {
+            let (session, emitted) = (session.clone(), emitted.clone());
+            ScriptedConfirm::during(true, move || {
+                discard_view(&session, |notice| {
+                    emitted.lock().unwrap().push(notice.session_id.clone());
+                    Ok(())
+                })
+                .unwrap();
+            })
+        };
+        let id = owner(&session);
+        let operation = new_operation();
+        let error = run_import(
+            &session,
+            &confirm,
+            &id,
+            &operation,
+            Zeroizing::new("TOKEN=fake-late\n".into()),
+            Some("app".into()),
+            Some("dev".into()),
+        )
+        .err()
+        .expect("the import ran after the document was hidden");
+        assert_eq!(error.kind, "stalePreview");
+        assert_eq!(*emitted.lock().unwrap(), [id]);
+        let record = notices(&session);
+        assert_eq!(record.len(), 1);
+        assert_eq!(record[0]["id"], operation.as_str());
+        assert_eq!(record[0]["kind"], "importFailed");
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
+        assert!(
+            session.snapshot().is_ok(),
+            "discarding a view does not lock the session"
+        );
+    }
+
+    #[test]
+    fn review1_1_a_discard_whose_notice_is_lost_locks_that_owner_and_a_locked_session_ignores_it() {
+        let (session, _directory) = test_session();
+        assert!(discard_view(&session, |_| Err(())).is_err());
+        assert_eq!(session.snapshot().unwrap_err().kind, "locked");
+        let mut emitted = false;
+        discard_view(&session, |_| {
+            emitted = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(!emitted, "a locked session has no view to discard");
+    }
+
+    #[test]
+    fn review1_1_an_approval_from_a_window_that_is_hidden_when_the_dialog_returns_is_refused() {
+        let (session, directory) = test_session();
+        let window = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let hide = window.clone();
+        let confirm = ScriptedConfirm::during(true, move || {
+            hide.store(false, std::sync::atomic::Ordering::SeqCst)
+        })
+        .on_window(window);
+        let operation = new_operation();
+        let error = run_import(
+            &session,
+            &confirm,
+            &owner(&session),
+            &operation,
+            Zeroizing::new("TOKEN=fake-late\n".into()),
+            Some("app".into()),
+            Some("dev".into()),
+        )
+        .err()
+        .expect("the import ran from a hidden window");
+        assert_eq!(error.kind, "viewChanged");
+        assert!(
+            error.message.contains("Nothing was imported"),
+            "{}",
+            error.message
+        );
+        assert_eq!(confirm.shown().len(), 1);
+        let record = notices(&session);
+        assert_eq!(record.len(), 1);
+        assert_eq!(record[0]["id"], operation.as_str());
+        assert_eq!(record[0]["kind"], "importFailed");
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
+    }
+
+    #[test]
+    fn review1_1_a_window_that_is_not_shown_gets_no_dialog_and_leaves_no_record() {
+        let (session, _directory) = test_session();
+        let confirm = ScriptedConfirm::new(true)
+            .on_window(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+        let error = run_import(
+            &session,
+            &confirm,
+            &owner(&session),
+            &new_operation(),
+            Zeroizing::new("TOKEN=fake-late\n".into()),
+            Some("app".into()),
+            Some("dev".into()),
+        )
+        .err()
+        .expect("a dialog for a window nobody sees");
+        assert_eq!(error.kind, "viewChanged");
+        assert!(confirm.shown().is_empty());
+        assert!(notices(&session).is_empty());
+        assert_eq!(exported(&session, "app", "dev"), "");
+    }
+
+    #[test]
+    fn review1_1_a_change_after_the_review_was_read_and_before_the_dialog_shows_no_dialog() {
+        for change in ["lock", "hide", "write"] {
+            let (session, directory) = test_session();
+            let session = Arc::new(session);
+            let confirm = {
+                let session = session.clone();
+                ScriptedConfirm::new(true).on_probe(move || match change {
+                    "lock" => session.lock().unwrap(),
+                    "hide" => {
+                        session.expire_presentation().unwrap();
+                    }
+                    _ => {
+                        session
+                            .access(Access::Write, None, |vault| {
+                                vault.add(akm_core::ApiKeyInput::new("Other", "fake-other"))?;
+                                Ok(())
+                            })
+                            .unwrap();
+                    }
+                })
+            };
+            let error = run_import(
+                &session,
+                &confirm,
+                &owner(&session),
+                &new_operation(),
+                Zeroizing::new("TOKEN=fake-late\n".into()),
+                Some("app".into()),
+                Some("dev".into()),
+            )
+            .err()
+            .unwrap_or_else(|| panic!("{change}: the import ran"));
+            assert_eq!(
+                error.kind,
+                if change == "lock" {
+                    "locked"
+                } else {
+                    "stalePreview"
+                },
+                "{change}"
+            );
+            assert!(confirm.shown().is_empty(), "{change}: a dialog was shown");
+            let reopened = Vault::open(
+                directory.path().join("vault.kdbx"),
+                "fake-test-password-123!",
+            )
+            .unwrap();
+            assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
+        }
+    }
+
+    #[test]
     fn a_request_for_an_older_or_unknown_session_is_refused_without_a_dialog() {
         let (session, directory) = test_session();
         let old = owner(&session);
@@ -1916,7 +2169,7 @@ mod tests {
         fn save_vault_path(
             &self,
             ticket: crate::policy::Ticket,
-            owns: &dyn Fn() -> bool,
+            owned: crate::settings::OwnerFence<'_>,
             vault_path: &str,
         ) -> Result<crate::settings::PreferenceSave, CommandError> {
             if self
@@ -1930,7 +2183,7 @@ mod tests {
                     .recv_timeout(std::time::Duration::from_secs(30))
                     .unwrap();
             }
-            self.inner.save_vault_path(ticket, owns, vault_path)
+            self.inner.save_vault_path(ticket, owned, vault_path)
         }
     }
 
@@ -2003,5 +2256,187 @@ mod tests {
         assert_eq!(session.active_owner(current.ticket).unwrap(), owner_b);
         let report = serde_json::to_value(session.warnings().unwrap()).unwrap();
         assert_eq!(report["operations"].as_array().unwrap().len(), 0);
+    }
+
+    struct BarrierAfterCheck {
+        inner: crate::settings::FilePreferences,
+        armed: std::sync::atomic::AtomicBool,
+        entered: std::sync::mpsc::Sender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+        log: Arc<Mutex<Vec<&'static str>>>,
+    }
+    impl PreferenceStore for BarrierAfterCheck {
+        fn saved_vault_path(&self) -> Option<String> {
+            self.inner.saved_vault_path()
+        }
+        fn default_vault_path(&self) -> Result<PathBuf, CommandError> {
+            self.inner.default_vault_path()
+        }
+        fn save_vault_path(
+            &self,
+            ticket: crate::policy::Ticket,
+            owned: crate::settings::OwnerFence<'_>,
+            vault_path: &str,
+        ) -> Result<crate::settings::PreferenceSave, CommandError> {
+            if !self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return self.inner.save_vault_path(ticket, owned, vault_path);
+            }
+            let saved = self.inner.save_vault_path(
+                ticket,
+                &|effect| {
+                    owned(&mut |held| {
+                        self.entered.send(()).unwrap();
+                        self.release
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(std::time::Duration::from_secs(30))
+                            .unwrap();
+                        effect(held);
+                    });
+                },
+                vault_path,
+            );
+            self.log.lock().unwrap().push("A-saved");
+            saved
+        }
+    }
+
+    #[test]
+    fn review1_2_a_retiring_opening_cannot_interleave_between_the_ownership_check_and_the_settings_write(
+    ) {
+        use crate::{clipboard::tests::FakeData, policy::Signal, session::MonotonicClock};
+        use std::sync::mpsc;
+        let directory = tempfile::tempdir().unwrap();
+        let a_path = directory.path().join("a.kdbx");
+        Vault::create(&a_path, "fake-test-password-123!", None).unwrap();
+        let missing = directory.path().join("missing.kdbx");
+        let settings = directory.path().join("fake-settings").join("settings.json");
+        fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        fs::write(&settings, r#"{"vaultPath":"pre-existing.kdbx"}"#).unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let store = Arc::new(BarrierAfterCheck {
+            inner: crate::settings::FilePreferences::new(Some(settings.clone()), None),
+            armed: std::sync::atomic::AtomicBool::new(true),
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+            log: log.clone(),
+        });
+        let session = Arc::new(Session::new(
+            Arc::new(MonotonicClock::default()),
+            Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
+                Mutex::new(FakeData::default()),
+            ))),
+            Arc::new(|_| {}),
+        ));
+        session.observe(Signal::Available);
+        let open = |session: Arc<Session>, store: Arc<BarrierAfterCheck>, owner: String, path| {
+            tauri::async_runtime::block_on(open_vault(
+                session,
+                store,
+                path,
+                Zeroizing::new("fake-test-password-123!".into()),
+                None,
+                false,
+                &owner,
+            ))
+        };
+        let owner_a = session.prepare_open().unwrap();
+        let first = {
+            let (session, store) = (session.clone(), store.clone());
+            std::thread::spawn(move || open(session, store, owner_a, a_path))
+        };
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap();
+        let (retired_tx, retired_rx) = mpsc::channel();
+        let second = {
+            let (session, store, log) = (session.clone(), store.clone(), log.clone());
+            std::thread::spawn(move || {
+                let owner_b = session.prepare_open().unwrap();
+                log.lock().unwrap().push("B-retired-A");
+                retired_tx.send(()).unwrap();
+                open(session, store, owner_b, missing)
+            })
+        };
+        let _ = retired_rx.recv_timeout(std::time::Duration::from_millis(500));
+        release_tx.send(()).unwrap();
+        let _ = first.join().unwrap();
+        assert!(second.join().unwrap().is_err(), "B must fail to open");
+        let saved: Settings = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
+        let events = log.lock().unwrap().clone();
+        let a_wrote = saved
+            .vault_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with("a.kdbx"));
+        if a_wrote {
+            assert_eq!(
+                events,
+                ["A-saved", "B-retired-A"],
+                "A may write only while it still owns the session, never after B retired it"
+            );
+        } else {
+            assert_eq!(saved.vault_path.as_deref(), Some("pre-existing.kdbx"));
+        }
+    }
+
+    #[test]
+    fn review1_2_an_opening_retired_by_a_failed_newer_opening_leaves_the_earlier_preference() {
+        use crate::{clipboard::tests::FakeData, policy::Signal, session::MonotonicClock};
+        use std::sync::mpsc;
+        let directory = tempfile::tempdir().unwrap();
+        let a_path = directory.path().join("a.kdbx");
+        Vault::create(&a_path, "fake-test-password-123!", None).unwrap();
+        let settings = directory.path().join("fake-settings").join("settings.json");
+        fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        fs::write(&settings, r#"{"vaultPath":"pre-existing.kdbx"}"#).unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let store = Arc::new(PausingPreferences {
+            inner: crate::settings::FilePreferences::new(Some(settings.clone()), None),
+            pause_first: std::sync::atomic::AtomicBool::new(true),
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        });
+        let session = Arc::new(Session::new(
+            Arc::new(MonotonicClock::default()),
+            Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
+                Mutex::new(FakeData::default()),
+            ))),
+            Arc::new(|_| {}),
+        ));
+        session.observe(Signal::Available);
+        let open = |session: Arc<Session>, store: Arc<PausingPreferences>, owner: String, path| {
+            tauri::async_runtime::block_on(open_vault(
+                session,
+                store,
+                path,
+                Zeroizing::new("fake-test-password-123!".into()),
+                None,
+                false,
+                &owner,
+            ))
+        };
+        let owner_a = session.prepare_open().unwrap();
+        let first = {
+            let (session, store) = (session.clone(), store.clone());
+            std::thread::spawn(move || open(session, store, owner_a, a_path))
+        };
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap();
+        let owner_b = session.prepare_open().unwrap();
+        assert!(open(
+            session.clone(),
+            store.clone(),
+            owner_b,
+            directory.path().join("missing.kdbx")
+        )
+        .is_err());
+        release_tx.send(()).unwrap();
+        assert!(first.join().unwrap().is_err());
+        let saved: Settings = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
+        assert_eq!(saved.vault_path.as_deref(), Some("pre-existing.kdbx"));
     }
 }

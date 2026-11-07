@@ -19,7 +19,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::{error::CommandError, session::Session};
+use crate::{
+    error::CommandError,
+    session::{Held, Session},
+};
 
 pub const TITLE: &str = "AKM";
 
@@ -65,7 +68,7 @@ pub struct ReminderStatus {
 pub trait Notifier: Send + Sync {
     fn permission(&self) -> Permission;
     /// The error text is not shown or stored.
-    fn show(&self, title: &str, body: &str) -> Result<(), String>;
+    fn show(&self, held: &Held<'_>, title: &str, body: &str) -> Result<(), String>;
 }
 
 pub struct NativeNotifier<R: Runtime>(pub AppHandle<R>);
@@ -83,7 +86,7 @@ impl<R: Runtime> Notifier for NativeNotifier<R> {
         }
     }
 
-    fn show(&self, title: &str, body: &str) -> Result<(), String> {
+    fn show(&self, _held: &Held<'_>, title: &str, body: &str) -> Result<(), String> {
         self.0
             .notification()
             .builder()
@@ -207,33 +210,46 @@ impl Reminders {
         Ok(self.status_of(&gate))
     }
 
-    /// Shows at most one notification for `count` keys. Nothing is shown when the session is
-    /// locked, when the setting is off, when `count` is zero, or after a block. A refused
-    /// permission or a failed notification blocks further tries for this run: no retry loop.
-    pub fn notify(&self, session: &Session, count: u32) -> Result<ReminderStatus, CommandError> {
+    /// Shows at most one notification for `count` keys, counted in the session `session_id`.
+    /// Nothing is shown when that session is not the current one, when the setting is off,
+    /// when `count` is zero, or after a block. A refused permission or a failed notification
+    /// blocks further tries for this run: no retry loop.
+    ///
+    /// The notifier is called while the session gate is held: lock and a newer opening wait
+    /// for the call, so neither can land between the check and the hand-over. A toast that
+    /// the notifier already passed to Windows cannot be withdrawn.
+    pub fn notify(
+        &self,
+        session: &Session,
+        session_id: &str,
+        count: u32,
+    ) -> Result<ReminderStatus, CommandError> {
         if count == 0 {
             return Err(CommandError::new(
                 "invalid",
                 "There is nothing to report: no key needs attention.",
             ));
         }
-        session.snapshot()?;
         let mut gate = self.gate()?;
+        session.while_session(session_id, |held| self.attempt(held, &mut gate, count))?;
+        Ok(self.status_of(&gate))
+    }
+
+    fn attempt(&self, held: &Held<'_>, gate: &mut Gate, count: u32) {
         if !self.store.enabled() || gate.blocked {
-            return Ok(self.status_of(&gate));
+            return;
         }
         if self.notifier.permission() != Permission::Granted {
             gate.blocked = true;
-            return Ok(self.status_of(&gate));
+            return;
         }
-        match self.notifier.show(TITLE, &notification_body(count)) {
+        match self.notifier.show(held, TITLE, &notification_body(count)) {
             Ok(()) => gate.delivery = Delivery::Sent,
             Err(_) => {
                 gate.delivery = Delivery::Failed;
                 gate.blocked = true;
             }
         }
-        Ok(self.status_of(&gate))
     }
 }
 
@@ -251,6 +267,8 @@ mod tests {
         shown: Mutex<Vec<(String, String)>>,
         permission: Mutex<Option<Permission>>,
         refuse: Mutex<bool>,
+        /// The first `show` reports it entered, then waits to be released.
+        hold: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     }
 
     impl FakeNotifier {
@@ -272,7 +290,14 @@ mod tests {
                 .unwrap()
                 .unwrap_or(Permission::Granted)
         }
-        fn show(&self, title: &str, body: &str) -> Result<(), String> {
+        fn show(&self, _held: &Held<'_>, title: &str, body: &str) -> Result<(), String> {
+            let held = self.hold.lock().unwrap().take();
+            if let Some((entered, release)) = held {
+                entered.send(()).unwrap();
+                release
+                    .recv_timeout(std::time::Duration::from_secs(30))
+                    .unwrap();
+            }
             if *self.refuse.lock().unwrap() {
                 return Err("fake refusal".into());
             }
@@ -293,26 +318,41 @@ mod tests {
         }
     }
 
-    fn unlocked() -> (Session, tempfile::TempDir) {
+    fn unlocked() -> (Arc<Session>, tempfile::TempDir) {
         let directory = tempfile::tempdir().unwrap();
-        let session = Session::new(
+        let session = Arc::new(Session::new(
             Arc::new(MonotonicClock::default()),
             Box::new(FakeClipboard(Arc::new(Mutex::new(FakeData::default())))),
             Arc::new(|_| {}),
-        );
+        ));
         session.observe(Signal::Available);
+        open_vault(&session, directory.path());
+        (session, directory)
+    }
+
+    fn open_vault(session: &Session, directory: &Path) {
+        let path = directory.join("vault.kdbx");
         let ticket = session.begin_open().unwrap();
         session
             .open(ticket, || {
-                akm_core::Vault::create(
-                    directory.path().join("vault.kdbx"),
-                    "fake-test-password-123!",
-                    None,
-                )
+                if path.exists() {
+                    akm_core::Vault::open(&path, "fake-test-password-123!")
+                } else {
+                    akm_core::Vault::create(&path, "fake-test-password-123!", None)
+                }
                 .map_err(Into::into)
             })
             .unwrap();
-        (session, directory)
+    }
+
+    fn owner(session: &Session) -> String {
+        session
+            .active_owner(session.snapshot().unwrap().ticket)
+            .unwrap()
+    }
+
+    fn owner_of_nothing() -> String {
+        uuid::Uuid::new_v4().to_string()
     }
 
     fn setup(enabled: bool) -> (Reminders, Arc<FakeNotifier>) {
@@ -337,7 +377,7 @@ mod tests {
         let status = reminders.status().unwrap();
         assert!(!status.enabled);
         assert_eq!(status.delivery, Delivery::None);
-        let status = reminders.notify(&session, 3).unwrap();
+        let status = reminders.notify(&session, &owner(&session), 3).unwrap();
         assert!(!status.enabled);
         assert!(notifier.shown().is_empty());
         let store = FileReminders::new(Some(tempfile::tempdir().unwrap().path().join("none.json")));
@@ -348,7 +388,7 @@ mod tests {
     fn an_enabled_unlocked_session_shows_one_count_only_notification() {
         let (session, _directory) = unlocked();
         let (reminders, notifier) = setup(true);
-        let status = reminders.notify(&session, 2).unwrap();
+        let status = reminders.notify(&session, &owner(&session), 2).unwrap();
         assert_eq!(
             notifier.shown(),
             vec![("AKM".to_string(), "2 API keys need attention".to_string())]
@@ -361,8 +401,9 @@ mod tests {
     fn a_locked_session_shows_nothing() {
         let (session, _directory) = unlocked();
         let (reminders, notifier) = setup(true);
+        let id = owner(&session);
         session.lock().unwrap();
-        let error = reminders.notify(&session, 2).unwrap_err();
+        let error = reminders.notify(&session, &id, 2).unwrap_err();
         assert_eq!(error.kind, "locked");
         assert!(notifier.shown().is_empty());
         let never_opened = Session::new(
@@ -371,17 +412,99 @@ mod tests {
             Arc::new(|_| {}),
         );
         assert_eq!(
-            reminders.notify(&never_opened, 2).unwrap_err().kind,
+            reminders
+                .notify(&never_opened, &owner_of_nothing(), 2)
+                .unwrap_err()
+                .kind,
             "locked"
         );
         assert!(notifier.shown().is_empty());
     }
 
     #[test]
+    fn review1_7_a_request_made_for_an_older_session_shows_nothing() {
+        let (session, directory) = unlocked();
+        let (reminders, notifier) = setup(true);
+        let old = owner(&session);
+        session.lock().unwrap();
+        open_vault(&session, directory.path());
+        let current = owner(&session);
+        assert_ne!(old, current);
+        assert_eq!(
+            reminders.notify(&session, &old, 2).unwrap_err().kind,
+            "locked"
+        );
+        assert_eq!(
+            reminders
+                .notify(&session, "not-a-session", 2)
+                .unwrap_err()
+                .kind,
+            "locked"
+        );
+        assert!(notifier.shown().is_empty());
+        reminders.notify(&session, &current, 2).unwrap();
+        assert_eq!(notifier.shown().len(), 1);
+    }
+
+    #[test]
+    fn review1_7_lock_and_a_new_opening_wait_for_a_notification_that_passed_validation() {
+        use std::sync::mpsc;
+        for newer in ["lock", "open"] {
+            let (session, _directory) = unlocked();
+            let (reminders, notifier) = setup(true);
+            let reminders = Arc::new(reminders);
+            let (entered_tx, entered_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            *notifier.hold.lock().unwrap() = Some((entered_tx, release_rx));
+            let id = owner(&session);
+            let sender = {
+                let (session, reminders, id) = (session.clone(), reminders.clone(), id.clone());
+                std::thread::spawn(move || reminders.notify(&session, &id, 2))
+            };
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap();
+            let (done_tx, done_rx) = mpsc::channel();
+            let retire = {
+                let session = session.clone();
+                std::thread::spawn(move || {
+                    match newer {
+                        "lock" => session.lock().unwrap(),
+                        _ => drop(session.prepare_open().unwrap()),
+                    }
+                    done_tx.send(()).unwrap();
+                })
+            };
+            assert!(
+                done_rx
+                    .recv_timeout(std::time::Duration::from_millis(300))
+                    .is_err(),
+                "{newer}: the session was retired while the notifier was being called"
+            );
+            release_tx.send(()).unwrap();
+            sender.join().unwrap().unwrap();
+            retire.join().unwrap();
+            assert_eq!(notifier.shown().len(), 1, "{newer}");
+            assert_eq!(
+                reminders.notify(&session, &id, 3).unwrap_err().kind,
+                "locked",
+                "{newer}: a request after the retirement shows nothing"
+            );
+            assert_eq!(notifier.shown().len(), 1, "{newer}");
+        }
+    }
+
+    #[test]
     fn a_count_of_zero_shows_nothing() {
         let (session, _directory) = unlocked();
         let (reminders, notifier) = setup(true);
-        assert_eq!(reminders.notify(&session, 0).unwrap_err().kind, "invalid");
+        assert_eq!(
+            reminders
+                .notify(&session, &owner(&session), 0)
+                .unwrap_err()
+                .kind,
+            "invalid"
+        );
         assert!(notifier.shown().is_empty());
     }
 
@@ -390,23 +513,26 @@ mod tests {
         let (session, _directory) = unlocked();
         let (reminders, notifier) = setup(true);
         notifier.set_permission(Permission::Denied);
-        let first = reminders.notify(&session, 2).unwrap();
+        let first = reminders.notify(&session, &owner(&session), 2).unwrap();
         assert_eq!(first.permission, Permission::Denied);
         assert!(first.blocked);
         assert_eq!(first.delivery, Delivery::None);
         for _ in 0..5 {
-            reminders.notify(&session, 3).unwrap();
+            reminders.notify(&session, &owner(&session), 3).unwrap();
         }
         assert!(notifier.shown().is_empty());
         notifier.set_permission(Permission::Granted);
         assert!(
-            reminders.notify(&session, 2).unwrap().blocked,
+            reminders
+                .notify(&session, &owner(&session), 2)
+                .unwrap()
+                .blocked,
             "a block holds until the setting is turned off and on"
         );
         assert!(notifier.shown().is_empty());
         reminders.set_enabled(false).unwrap();
         reminders.set_enabled(true).unwrap();
-        reminders.notify(&session, 2).unwrap();
+        reminders.notify(&session, &owner(&session), 2).unwrap();
         assert_eq!(notifier.shown().len(), 1);
     }
 
@@ -415,13 +541,16 @@ mod tests {
         let (session, _directory) = unlocked();
         let (reminders, notifier) = setup(true);
         notifier.refuse(true);
-        let failed = reminders.notify(&session, 2).unwrap();
+        let failed = reminders.notify(&session, &owner(&session), 2).unwrap();
         assert_eq!(failed.delivery, Delivery::Failed);
         assert!(failed.blocked);
         notifier.refuse(false);
         for _ in 0..3 {
             assert_eq!(
-                reminders.notify(&session, 2).unwrap().delivery,
+                reminders
+                    .notify(&session, &owner(&session), 2)
+                    .unwrap()
+                    .delivery,
                 Delivery::Failed
             );
         }
@@ -430,7 +559,7 @@ mod tests {
         let again = reminders.set_enabled(true).unwrap();
         assert_eq!(again.delivery, Delivery::None);
         assert!(!again.blocked);
-        reminders.notify(&session, 2).unwrap();
+        reminders.notify(&session, &owner(&session), 2).unwrap();
         assert_eq!(notifier.shown().len(), 1);
     }
 

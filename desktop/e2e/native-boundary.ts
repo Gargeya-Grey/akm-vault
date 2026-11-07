@@ -90,6 +90,7 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
               return bridge ? bridge(command, args?.ids ?? []) : { application: [], operations: [] };
             }
             case "vault_activity": return;
+            case "view_discard": return;
             case "vault_lock": {
               if (args.sessionId !== owner) throw { kind: "locked", message: "A different test native session is current" };
               emitLock();
