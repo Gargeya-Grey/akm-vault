@@ -156,6 +156,7 @@ pub struct AuditView {
     pub key_title: Option<String>,
     pub project: Option<String>,
     pub environment: Option<String>,
+    pub key_id: Option<String>,
     pub detail: Option<String>,
 }
 
@@ -167,6 +168,9 @@ pub struct AuditReport {
     #[serde(serialize_with = "serialize_optional_sequence")]
     pub broken_at: Option<u64>,
     pub state: akm_core::audit::AuditState,
+    pub damage: Option<akm_core::audit::Damage>,
+    pub identity: akm_core::journal::Identity,
+    pub notices: Vec<akm_core::journal::Notice>,
     pub problem_line: Option<usize>,
     pub total_entries: usize,
 }
@@ -201,10 +205,14 @@ mod audit_precision_tests {
                     key_title: None,
                     project: None,
                     environment: None,
+                    key_id: None,
                     detail: None,
                 }],
                 broken_at: Some(seq),
                 state: akm_core::audit::AuditState::Corrupt,
+                damage: Some(akm_core::audit::Damage::BrokenLink),
+                identity: akm_core::journal::Identity::Confirmed,
+                notices: vec![],
                 problem_line: Some(3),
                 total_entries: 0,
             };
@@ -220,6 +228,9 @@ mod audit_precision_tests {
             entries: vec![],
             broken_at: None,
             state: akm_core::audit::AuditState::Corrupt,
+            damage: None,
+            identity: akm_core::journal::Identity::Confirmed,
+            notices: vec![],
             problem_line: Some(1),
             total_entries: 0,
         };

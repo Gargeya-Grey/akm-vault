@@ -26,6 +26,9 @@ pub enum Error {
     #[error("{0:?} matches {1} entries; be more specific")]
     Ambiguous(String, usize),
 
+    #[error("activity journal unavailable: {0}")]
+    Journal(String),
+
     #[error("invalid input: {0}")]
     Invalid(String),
 

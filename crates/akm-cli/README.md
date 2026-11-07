@@ -43,7 +43,16 @@ The default `get` view shows `Secret:      ********` for every secret. It shows 
 character and no length of the secret.
 
 Audit warnings after a committed vault mutation are printed without turning the
-successful mutation into an error.
+successful mutation into an error. The warning says that the change is saved and that
+you must not repeat it.
+
+The journal is a private per-device folder, `%LOCALAPPDATA%\akm\journal\`. It is never
+beside the vault. `AKM_JOURNAL_ROOT` replaces the folder with an absolute path. Only tests
+and proof scripts set it. A value that is not absolute makes the journal unavailable. The
+journal does not fall back to the default folder or to the old sidecar. `akm audit` and
+`akm audit --verify` run without a password, create nothing, and show key ids only. An old
+`<vault>.audit.jsonl` is reported and never read, moved or deleted. A damaged journal is
+reported by kind and keeps its bytes.
 
 ## Export files
 

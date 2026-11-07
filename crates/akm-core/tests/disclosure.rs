@@ -55,18 +55,18 @@ fn json_of_keys_and_inputs_holds_no_secret_bytes() {
     }
 }
 
-fn block_journal(vault_path: &std::path::Path) {
-    let journal = akm_core::audit::AuditLog::for_vault(vault_path);
-    let _ = std::fs::remove_file(journal.path());
-    std::fs::create_dir(journal.path()).unwrap();
+fn block_journal(vault: &akm_core::Vault) {
+    let journal = vault.audit_log().create_journal_path().unwrap();
+    let _ = std::fs::remove_file(&journal);
+    std::fs::create_dir(&journal).unwrap();
 }
 
 #[test]
 fn a_failed_journal_record_leaves_no_proof_for_a_key_or_a_scope() {
-    let (_directory, path, mut vault) = fake_vault();
+    let (_directory, _path, mut vault) = fake_vault();
     let key = vault.add(input()).unwrap();
     let plan = vault.plan_env(Some("demo"), Some("dev"), false).unwrap();
-    block_journal(&path);
+    block_journal(&vault);
     for kind in [KeyDisclosure::Reveal, KeyDisclosure::Copy] {
         assert!(vault.disclose_key(kind, &key, None).is_err(), "{kind:?}");
     }

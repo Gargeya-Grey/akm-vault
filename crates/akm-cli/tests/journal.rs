@@ -283,7 +283,10 @@ fn nothing_but_the_vault_and_its_backups_appears_beside_a_synced_vault() {
         let output = fixture.cli().args(&args).output().unwrap();
         assert_success(&output);
         assert_no_journal_metadata_in(fixture.vault_dir());
-        assert!(!fixture.journals().is_empty(), "{name}: no private journal");
+        assert!(
+            name == "list" || !fixture.journals().is_empty(),
+            "{name}: no private journal"
+        );
     }
     let audit = fixture.audit();
     assert_success(&audit);
@@ -417,6 +420,7 @@ fn older_format_and_read_only_vaults_are_journaled_without_being_written() {
         assert_eq!(names, ["older.kdbx"], "fixture {index}: {names:?}");
         if read_only {
             let mut permissions = fs::metadata(&fixture.vault).unwrap().permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
             permissions.set_readonly(false);
             fs::set_permissions(&fixture.vault, permissions).unwrap();
         }

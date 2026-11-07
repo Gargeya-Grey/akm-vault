@@ -464,8 +464,9 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             let vault = Vault::open(&path, &password)?;
             drop(password);
             let plan = planned_envs(&vault, &selection)?;
-            // Pairs the two records; the destination stays out of the plaintext journal.
+            // Pairs the two records; the destination stays out of the journal.
             let operation = uuid::Uuid::new_v4();
+            let journal = vault.audit_log();
             let envs = disclosed_envs(
                 &vault,
                 EnvDisclosure::Export,
@@ -481,12 +482,9 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                 Some(path) => io.files.write_new(&path, &envs)?,
                 None => write_stdout_export(&mut io.out, &envs)?,
             }
-            if let Some(warning) = record_export_completed(
-                io.complete,
-                &AuditLog::for_vault(&path),
-                &operation,
-                envs.len(),
-            ) {
+            if let Some(warning) =
+                record_export_completed(io.complete, &journal, &operation, envs.len())
+            {
                 warning!(io, "{warning}");
             }
         }
@@ -523,19 +521,19 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
         }
 
         Commands::Audit { limit, verify } => {
-            let log = AuditLog::for_vault(&path);
-            let snapshot = log.snapshot(limit)?;
+            let snapshot = AuditLog::for_vault(&path).snapshot(limit)?;
             use akm_core::audit::AuditState;
             let out = &mut *io.out;
             match snapshot.state {
                 AuditState::Absent => writeln!(
                     out,
-                    "Journal unavailable: no journal file at {}",
-                    log.path().display()
+                    "Journal unavailable: no journal exists for this vault on this device yet."
                 )?,
-                AuditState::Empty => {
-                    writeln!(out, "No records available at {}", log.path().display())?
-                }
+                AuditState::Empty => writeln!(
+                    out,
+                    "No records available in {}",
+                    snapshot.location.display()
+                )?,
                 AuditState::Consistent => {
                     writeln!(out, "Recorded chain is consistent, not authenticated.")?
                 }
@@ -544,8 +542,15 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                         .broken_at
                         .map(|seq| format!(", declared sequence {seq} (not verified)"))
                         .unwrap_or_default();
-                    writeln!(out, "Journal data is damaged at physical line {}{sequence}. Original bytes were preserved.", snapshot.problem_line.unwrap_or(0))?;
+                    let what = snapshot
+                        .damage
+                        .map(|damage| format!(": {}", damage.describe()))
+                        .unwrap_or_default();
+                    writeln!(out, "Journal data is damaged at physical line {}{what}{sequence}. Original bytes were preserved.", snapshot.problem_line.unwrap_or(0))?;
                 }
+            }
+            for notice in &snapshot.notices {
+                writeln!(out, "Notice: {}", notice.message)?;
             }
             writeln!(out, "Completeness unknown. Missing records, truncation and rewritten history cannot be ruled out. Requested events do not prove completion; legacy action outcomes are unknown.")?;
             let bad_status = snapshot.state == AuditState::Corrupt
@@ -565,7 +570,10 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                     entry.seq,
                     entry.ts.format("%Y-%m-%d %H:%M:%S"),
                     entry.action,
-                    entry.key_title.unwrap_or_else(|| "-".to_string()),
+                    entry
+                        .key_id
+                        .map(|id| format!("key {}", id.chars().take(8).collect::<String>()))
+                        .unwrap_or_else(|| "-".to_string()),
                     entry
                         .detail
                         .map(|detail| format!("  ({detail})"))
@@ -887,7 +895,7 @@ fn print_field(out: &mut dyn Write, key: &KeyMetadata, field: &str) -> Result<()
 
 /// The real `Io::complete`: writes the export-completion record and confirms it.
 fn append_completion(log: &AuditLog, detail: &str) -> Result<()> {
-    log.append("export-completed", None, None, None, None, Some(detail))
+    log.append("export-completed", None, Some(detail))
 }
 
 /// A disclosure write can deliver bytes before a later write or flush fails.
@@ -973,7 +981,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let blocker = directory.path().join("not-a-directory");
         std::fs::write(&blocker, b"fake").unwrap();
-        let log = AuditLog::for_vault(&blocker.join("vault.kdbx"));
+        let log = AuditLog::new(
+            akm_core::journal::JournalRoot::at(blocker.join("journal")),
+            akm_core::journal::VaultEvidence::from_file(&blocker.join("vault.kdbx")),
+        );
         let operation = uuid::Uuid::new_v4();
         let warning = record_export_completed(append_completion, &log, &operation, 2).unwrap();
         assert!(warning.contains("could not be confirmed"), "{warning}");

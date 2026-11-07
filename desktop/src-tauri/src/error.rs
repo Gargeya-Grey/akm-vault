@@ -47,6 +47,7 @@ impl From<Error> for CommandError {
             Error::EntryNotFound(_) => Self::new("notFound", error.to_string()),
             Error::Ambiguous(_, _) => Self::new("ambiguous", error.to_string()),
             Error::Invalid(_) => Self::new("invalid", error.to_string()),
+            Error::Journal(_) => Self::new("journal", error.to_string()),
             Error::Io(_) | Error::Json(_) => Self::new("io", error.to_string()),
         }
     }

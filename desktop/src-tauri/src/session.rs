@@ -1631,7 +1631,10 @@ mod tests {
     fn warning_from_a_committed_change_is_owned_after_another_vault_opens() {
         let f = fixture();
         let origin = f.session.snapshot().unwrap().ticket;
-        std::fs::create_dir(f._directory.path().join("vault.kdbx.audit.jsonl")).unwrap();
+        std::fs::create_dir(
+            crate::test_support::journal_of(&f._directory.path().join("vault.kdbx")).path(),
+        )
+        .unwrap();
         f.session
             .access(Access::Write, None, |vault| {
                 vault.add(akm_core::ApiKeyInput::new(
@@ -1672,7 +1675,10 @@ mod tests {
     fn warning_from_a_lock_overtaken_commit_keeps_a_secret_free_origin_notice() {
         let f = fixture();
         let origin = f.session.snapshot().unwrap().ticket;
-        std::fs::create_dir(f._directory.path().join("vault.kdbx.audit.jsonl")).unwrap();
+        std::fs::create_dir(
+            crate::test_support::journal_of(&f._directory.path().join("vault.kdbx")).path(),
+        )
+        .unwrap();
         let (committed_tx, committed_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         let session = f.session.clone();
@@ -2266,7 +2272,7 @@ mod tests {
                     }
                 }
                 let journal =
-                    akm_core::audit::AuditLog::for_vault(&f._directory.path().join("vault.kdbx"));
+                    crate::test_support::journal_of(&f._directory.path().join("vault.kdbx"));
                 if journal_fails {
                     std::fs::create_dir(journal.path()).unwrap();
                 }

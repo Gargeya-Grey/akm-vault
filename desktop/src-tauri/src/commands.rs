@@ -1,10 +1,11 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use akm_core::{audit::AuditLog, dotenv, EnvDisclosure, KeyDisclosure, Vault};
+use akm_core::{audit::AuditLog, dotenv, ApiKey, EnvDisclosure, KeyDisclosure, Vault};
 use chrono::{DateTime, Utc};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -410,26 +411,39 @@ pub async fn audit_read(
     let session = state.0.clone();
     let expected = session.snapshot()?;
     run_session(session, expected, Access::Read, move |vault| {
-        let log = AuditLog::for_vault(vault.path());
-        let snapshot = log.snapshot(limit.unwrap_or(500))?;
+        let snapshot = vault.audit_log().snapshot(limit.unwrap_or(500))?;
+        // The journal holds key IDs only. Titles, projects and environments are read from
+        // the unlocked vault now, so a renamed key shows its current name (unit 1b, D3).
+        let keys: HashMap<String, ApiKey> = vault
+            .list()
+            .into_iter()
+            .map(|key| (key.id.clone(), key))
+            .collect();
         let entries = snapshot
             .entries
             .into_iter()
-            .map(|entry| AuditView {
-                seq: entry.seq,
-                ts: entry.ts,
-                action: entry.action,
-                key_title: entry.key_title,
-                project: entry.project,
-                environment: entry.environment,
-                detail: entry.detail,
+            .map(|entry| {
+                let key = entry.key_id.as_ref().and_then(|id| keys.get(id));
+                AuditView {
+                    seq: entry.seq,
+                    ts: entry.ts,
+                    action: entry.action,
+                    key_title: key.map(|key| key.title.clone()),
+                    project: key.and_then(|key| key.project.clone()),
+                    environment: key.and_then(|key| key.environment.clone()),
+                    key_id: entry.key_id,
+                    detail: entry.detail,
+                }
             })
             .collect();
         Ok(AuditReport {
-            path: log.path().display().to_string(),
+            path: snapshot.location.display().to_string(),
             entries,
             broken_at: snapshot.broken_at,
             state: snapshot.state,
+            damage: snapshot.damage,
+            identity: snapshot.identity,
+            notices: snapshot.notices,
             problem_line: snapshot.problem_line,
             total_entries: snapshot.total_entries,
         })
@@ -600,8 +614,8 @@ pub async fn env_save<R: tauri::Runtime>(
             body,
             count,
             vault_path,
+            journal,
         } = requested_file_export_at(&session, expected, &scope)?;
-        let journal = AuditLog::for_vault(&vault_path);
         let settings = settings_file(&app)?;
         let config_dir = app
             .path()
@@ -618,14 +632,11 @@ pub async fn env_save<R: tauri::Runtime>(
                 )
             },
             |prepared| {
-                publish_and_record(&session, expected, prepared, |saved| {
+                publish_and_record(&session, expected, prepared, |_| {
                     journal.append(
                         "export-completed",
                         None,
-                        None,
-                        None,
-                        None,
-                        Some(&format!("{count} keys to {}", saved.display())),
+                        Some(&format!("file export completed; {count} keys")),
                     )
                 })
             },
@@ -640,6 +651,7 @@ struct FileExport {
     body: Zeroizing<String>,
     count: usize,
     vault_path: PathBuf,
+    journal: AuditLog,
 }
 
 fn requested_file_export_at(
@@ -660,6 +672,7 @@ fn requested_file_export_at(
                 body,
                 count,
                 vault_path: vault.path().to_path_buf(),
+                journal: vault.audit_log(),
             })
         })
         .map(|exported| exported.value)
@@ -927,7 +940,7 @@ mod tests {
         let requested = requested_key(&session, &key.id, KeyDisclosure::Reveal).unwrap();
         session.lock().unwrap();
         assert_eq!(session.reveal(requested).unwrap_err().kind, "locked");
-        let log = AuditLog::for_vault(&directory.path().join("vault.kdbx"));
+        let log = crate::test_support::journal_of(&directory.path().join("vault.kdbx"));
         assert_eq!(log.read(1).unwrap()[0].action, "reveal-requested");
 
         let ticket = session.begin_open().unwrap();
@@ -1005,7 +1018,7 @@ mod tests {
                 .kind,
             "clipboard"
         );
-        let log = AuditLog::for_vault(&path);
+        let log = crate::test_support::journal_of(&path);
         assert_eq!(log.read(1).unwrap()[0].action, "copy-requested");
         std::fs::remove_file(log.path()).unwrap();
         std::fs::create_dir(log.path()).unwrap();
@@ -1024,7 +1037,7 @@ mod tests {
             })
             .unwrap()
             .value;
-        let log = AuditLog::for_vault(&directory.path().join("vault.kdbx"));
+        let log = crate::test_support::journal_of(&directory.path().join("vault.kdbx"));
         let mut no_newline = std::fs::read(log.path()).unwrap();
         assert_eq!(no_newline.pop(), Some(b'\n'));
         for bytes in [
@@ -1073,7 +1086,7 @@ mod tests {
                 .unwrap();
             let expected = session.snapshot().unwrap();
             session.expire_presentation().unwrap();
-            let journal = AuditLog::for_vault(&directory.path().join("vault.kdbx"));
+            let journal = crate::test_support::journal_of(&directory.path().join("vault.kdbx"));
             match change {
                 "lock" => session.lock().unwrap(),
                 "revision" => {
@@ -1130,15 +1143,16 @@ mod tests {
             let exported = extract_export(&session, &scope, "file export").unwrap();
             let expected = exported.snapshot;
             let path = directory.path().join("vault.kdbx");
-            let log = AuditLog::for_vault(&path);
+            let log = crate::test_support::journal_of(&path);
             let before = fs::read(log.path()).unwrap();
             // Make valid completion bytes with the real encoder, then inject failure immediately
             // after writing those bytes to the actual test journal, before syncing that handle.
-            let oracle = AuditLog::for_vault(&directory.path().join("encoder-only.kdbx"));
+            let oracle = akm_core::audit::ChainFile::at(
+                directory.path().join("encoder-only.jsonl"),
+                &log.id(),
+            );
             fs::write(oracle.path(), &before).unwrap();
-            oracle
-                .append("export-completed", None, None, None, None, None)
-                .unwrap();
+            oracle.append("export-completed", None, None).unwrap();
             let completion = fs::read(oracle.path()).unwrap()[before.len()..].to_vec();
             let target = directory.path().join("fake-export.env");
             let worker_target = target.clone();
@@ -1158,7 +1172,7 @@ mod tests {
                     },
                     |prepared| {
                         publish_and_record(&worker_session, expected, prepared, |_| {
-                            let log = AuditLog::for_vault(&path);
+                            let log = crate::test_support::journal_of(&path);
                             let mut file = fs::OpenOptions::new()
                                 .append(true)
                                 .open(log.path())
@@ -1576,7 +1590,7 @@ mod tests {
             .truncate(false)
             .read(true)
             .write(true)
-            .open(directory.path().join("vault.kdbx.audit.jsonl.lock"))
+            .open(crate::test_support::journal_of(&path).lock_path())
             .unwrap();
         journal.lock().unwrap();
         let worker = session.clone();

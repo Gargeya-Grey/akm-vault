@@ -18,6 +18,7 @@ use zeroize::Zeroizing;
 use crate::audit::AuditLog;
 use crate::disclosure::{Disclosure, EnvDisclosure, EnvPlan, KeyDisclosure};
 use crate::error::{Error, Result};
+use crate::journal::{JournalRoot, VaultEvidence};
 use crate::model::*;
 
 /// Entries live under this top-level group so a vault can also hold unrelated
@@ -46,6 +47,7 @@ pub struct Vault {
     /// overwriting a vault that a cloud client replaced underneath us.
     fingerprint: Option<String>,
     warnings: Vec<VaultWarning>,
+    journal: JournalRoot,
 }
 
 struct ImportPlan {
@@ -56,6 +58,16 @@ struct ImportPlan {
 
 impl Vault {
     pub fn create(path: impl AsRef<Path>, password: &str, name: Option<&str>) -> Result<Self> {
+        Self::create_in(path, password, name, JournalRoot::from_environment())
+    }
+
+    /// Like [`Vault::create`], with an explicit journal folder.
+    pub fn create_in(
+        path: impl AsRef<Path>,
+        password: &str,
+        name: Option<&str>,
+        journal: JournalRoot,
+    ) -> Result<Self> {
         if password.chars().count() < 12 {
             return Err(Error::Invalid(
                 "master password must contain at least 12 characters".into(),
@@ -85,12 +97,18 @@ impl Vault {
             key,
             fingerprint: None,
             warnings: Vec::new(),
+            journal,
         };
         vault.save()?;
         Ok(vault)
     }
 
     pub fn open(path: impl AsRef<Path>, password: &str) -> Result<Self> {
+        Self::open_in(path, password, JournalRoot::from_environment())
+    }
+
+    /// Like [`Vault::open`], with an explicit journal folder.
+    pub fn open_in(path: impl AsRef<Path>, password: &str, journal: JournalRoot) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         if !path.exists() {
             return Err(Error::VaultNotFound(path.display().to_string()));
@@ -107,6 +125,7 @@ impl Vault {
             key,
             fingerprint,
             warnings: Vec::new(),
+            journal,
         })
     }
 
@@ -556,19 +575,22 @@ impl Vault {
         keys
     }
 
+    /// The journal of this vault. The evidence is what this `Vault` last read or wrote and
+    /// its vault ID, so the journal can be confirmed without writing anything to the vault.
     pub fn audit_log(&self) -> AuditLog {
-        AuditLog::for_vault(&self.path)
+        AuditLog::new(
+            self.journal.clone(),
+            VaultEvidence::unlocked(
+                &self.path,
+                self.fingerprint.clone(),
+                self.db.root().id().uuid().simple().to_string(),
+            ),
+        )
     }
 
     pub fn log(&self, action: &str, key: Option<&ApiKey>, detail: Option<&str>) -> Result<()> {
-        self.audit_log().append(
-            action,
-            key.map(|k| k.id.as_str()),
-            key.map(|k| k.title.as_str()),
-            key.and_then(|k| k.project.as_deref()),
-            key.and_then(|k| k.environment.as_deref()),
-            detail,
-        )
+        self.audit_log()
+            .append(action, key.map(|k| k.id.as_str()), detail)
     }
 
     pub fn save(&mut self) -> Result<()> {

@@ -126,7 +126,7 @@ fn audit_log_is_a_valid_hash_chain() {
     let log = vault.audit_log();
     assert_eq!(log.verify().unwrap(), None);
     assert_eq!(log.read(10).unwrap().len(), 2);
-    assert!(log.path().exists());
+    assert!(log.journal_path().unwrap().unwrap().exists());
 }
 
 #[test]
@@ -552,7 +552,11 @@ fn damaged_audit_log_does_not_turn_a_committed_mutation_into_a_retryable_error()
     let path = dir.path().join("vault.kdbx");
     write_database(&path, &fast_database(), PASSWORD);
     let mut vault = Vault::open(&path, PASSWORD).unwrap();
-    std::fs::write(vault.audit_log().path(), b"damaged audit JSON\n").unwrap();
+    std::fs::write(
+        vault.audit_log().create_journal_path().unwrap(),
+        b"damaged audit JSON\n",
+    )
+    .unwrap();
     let created = vault.add(sample()).unwrap();
     assert_eq!(Vault::open(&path, PASSWORD).unwrap().list().len(), 1);
     assert_eq!(vault.list(), vec![created.clone()]);
@@ -929,7 +933,11 @@ fn failed_upgrade_is_transactional_and_a_postcommit_audit_error_is_a_warning() {
             .to_string_lossy()
             .contains(".tmp")));
         drop(holder);
-        std::fs::write(vault.audit_log().path(), b"damaged log\n").unwrap();
+        std::fs::write(
+            vault.audit_log().create_journal_path().unwrap(),
+            b"damaged log\n",
+        )
+        .unwrap();
         vault.upgrade().unwrap();
         assert!(!vault.needs_upgrade());
         assert_eq!(vault.take_warnings().len(), 1);
