@@ -5,7 +5,8 @@ review scored the implementation 40.5/100, rounded to 41. See the
 [baseline review](docs/reviews/2026-10-30-baseline.md). Fixing the reported bugs
 does not itself establish a new score or certify security. The release gate is an
 independent re-review above 90, followed by real-use testing before wider
-distribution. Current status: [docs/STATE.md](docs/STATE.md).
+distribution. Current status: [docs/STATE.md](docs/STATE.md). The owner's own use
+before that gate follows [docs/FIRST_USE.md](docs/FIRST_USE.md).
 
 AKM is for a Windows developer who wants a local, account-free KeePass file plus
 API-key fields and process-environment injection. KeePassXC, 1Password CLI and
