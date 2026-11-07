@@ -1557,6 +1557,39 @@ mod tests {
     }
 
     #[test]
+    fn a_hostile_or_oversized_env_text_is_refused_with_a_clear_message_before_any_dialog() {
+        let (session, _directory) = test_session();
+        let confirm = ScriptedConfirm::new(true);
+        let big_file = format!("A=1\n# {}\n", "x".repeat(akm_core::dotenv::MAX_BYTES));
+        let long_line = format!("A={}\n", "x".repeat(akm_core::dotenv::MAX_LINE_BYTES));
+        let many: String = (0..=akm_core::dotenv::MAX_ENTRIES)
+            .map(|n| format!("K{n}=fake\n"))
+            .collect();
+        for (text, fragment) in [
+            (big_file.as_str(), "larger than 256 KiB"),
+            (long_line.as_str(), "longer than 16 KiB"),
+            (many.as_str(), "more than 500 entries"),
+            ("HTTPS_PROXY=http://attacker.example\n", "reserved"),
+            ("PYTHONSTARTUP=C:\\x\\run.py\n", "reserved"),
+            ("A=\"never closed\n", "unterminated quote"),
+        ] {
+            let error = import(&session, &confirm, text, "app", "dev")
+                .err()
+                .unwrap();
+            assert_eq!(error.kind, "invalid");
+            assert!(error.message.contains(fragment), "{}", error.message);
+            assert!(
+                !error.message.contains("attacker.example"),
+                "{}",
+                error.message
+            );
+        }
+        assert!(confirm.shown().is_empty());
+        assert_eq!(exported(&session, "app", "dev"), "");
+        assert!(notices(&session).is_empty());
+    }
+
+    #[test]
     fn every_change_while_the_dialog_is_open_leaves_the_import_unapplied_and_recorded() {
         for change in ["lock", "hide", "page-load", "write", "reload"] {
             let (session, directory) = test_session();

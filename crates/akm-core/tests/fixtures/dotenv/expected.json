@@ -1,0 +1,1092 @@
+{
+  "reader": {
+    "name": "python-dotenv",
+    "version": "1.2.2",
+    "call": "dotenv.parser.parse_stream(open(path, encoding='utf-8')); no interpolation"
+  },
+  "cases": [
+    {
+      "file": "plain.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "two words"
+          ],
+          [
+            "C",
+            "x/y:z@w+v.u-t_s"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "two words"
+          ],
+          [
+            "C",
+            "x/y:z@w+v.u-t_s"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "comments.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "TOKEN",
+            "abc"
+          ],
+          [
+            "HASH",
+            "abc#nocomment"
+          ],
+          [
+            "QUOTED",
+            "a # b"
+          ],
+          [
+            "SQUOTED",
+            "a # b"
+          ],
+          [
+            "TAB",
+            "abc"
+          ],
+          [
+            "HASHFIRST",
+            "#value"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "TOKEN",
+            "abc"
+          ],
+          [
+            "HASH",
+            "abc#nocomment"
+          ],
+          [
+            "QUOTED",
+            "a # b"
+          ],
+          [
+            "SQUOTED",
+            "a # b"
+          ],
+          [
+            "TAB",
+            "abc"
+          ],
+          [
+            "HASHFIRST",
+            "#value"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "comment_only_value.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "EMPTYC",
+            ""
+          ],
+          [
+            "NEXT",
+            "1"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "EMPTYC",
+            "# only a comment"
+          ],
+          [
+            "NEXT",
+            "1"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": "A # that follows the equals sign and spaces starts a comment, as in a shell. python-dotenv keeps the comment text as the value."
+    },
+    {
+      "file": "quotes.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "NONE",
+            "plain value"
+          ],
+          [
+            "SINGLE",
+            "single value"
+          ],
+          [
+            "DOUBLE",
+            "double value"
+          ],
+          [
+            "EMPTY_S",
+            ""
+          ],
+          [
+            "EMPTY_D",
+            ""
+          ],
+          [
+            "DQ_WITH_SQ",
+            "it's"
+          ],
+          [
+            "SQ_WITH_DQ",
+            "say \"hi\""
+          ],
+          [
+            "MID",
+            "ab\"cd"
+          ],
+          [
+            "APOS",
+            "it's"
+          ],
+          [
+            "PADDED",
+            "  padded  "
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "NONE",
+            "plain value"
+          ],
+          [
+            "SINGLE",
+            "single value"
+          ],
+          [
+            "DOUBLE",
+            "double value"
+          ],
+          [
+            "EMPTY_S",
+            ""
+          ],
+          [
+            "EMPTY_D",
+            ""
+          ],
+          [
+            "DQ_WITH_SQ",
+            "it's"
+          ],
+          [
+            "SQ_WITH_DQ",
+            "say \"hi\""
+          ],
+          [
+            "MID",
+            "ab\"cd"
+          ],
+          [
+            "APOS",
+            "it's"
+          ],
+          [
+            "PADDED",
+            "  padded  "
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "escapes_double.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "a\nb\tc\rd\"e\\f"
+          ],
+          [
+            "B",
+            "\\$HOME and \\x41 and \\u00e9 and \\q"
+          ],
+          [
+            "C",
+            "C:\\tmp\\new"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "a\nb\tc\rd\"e\\f"
+          ],
+          [
+            "B",
+            "\\$HOME and \\x41 and \\u00e9 and \\q"
+          ],
+          [
+            "C",
+            "C:\\tmp\\new"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "escapes_extra.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "bell\\a back\\b form\\f vert\\v apos\\'"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "bell\u0007 back\b form\f vert\u000b apos'"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": "AKM decodes only \\n, \\r, \\t, \\\" and \\\\ in double quotes. python-dotenv also decodes \\a, \\b, \\f, \\v and \\'. A secret that holds a backslash and one of those letters would change silently."
+    },
+    {
+      "file": "single_quote_literal.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "a\\nb"
+          ],
+          [
+            "B",
+            "C:\\tmp"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "a\\nb"
+          ],
+          [
+            "B",
+            "C:\\tmp"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "single_quote_double_backslash.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "back\\\\slash"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "back\\slash"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": "A single-quoted value is literal, as in a shell and in the Node dotenv package, so two backslashes stay two. python-dotenv turns them into one."
+    },
+    {
+      "file": "single_quote_backslash_quote.dotenv",
+      "akm": {
+        "error": "line 1"
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "a'b"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": "A single quote ends a single-quoted value; there is no \\' escape. The text after the closing quote is then an error in AKM. python-dotenv reads \\' as an escaped quote."
+    },
+    {
+      "file": "export.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "2"
+          ],
+          [
+            "C",
+            "3"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "2"
+          ],
+          [
+            "C",
+            "3"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "export_without_value.dotenv",
+      "akm": {
+        "error": "line 1"
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            null
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": "A name with no equals sign is an error in AKM. python-dotenv gives it the value None."
+    },
+    {
+      "file": "spacing.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "2"
+          ],
+          [
+            "C",
+            "3"
+          ],
+          [
+            "D",
+            "4"
+          ],
+          [
+            "E",
+            "5"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "2"
+          ],
+          [
+            "C",
+            "3"
+          ],
+          [
+            "D",
+            "4"
+          ],
+          [
+            "E",
+            "5"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "trailing_space.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "abc"
+          ],
+          [
+            "B",
+            "abc "
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "abc"
+          ],
+          [
+            "B",
+            "abc "
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "equals_in_value.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "b=c=d"
+          ],
+          [
+            "URL",
+            "https://x.example/p?a=1&b=2"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "b=c=d"
+          ],
+          [
+            "URL",
+            "https://x.example/p?a=1&b=2"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "empty.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            ""
+          ],
+          [
+            "B",
+            ""
+          ],
+          [
+            "C",
+            ""
+          ],
+          [
+            "D",
+            ""
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            ""
+          ],
+          [
+            "B",
+            ""
+          ],
+          [
+            "C",
+            ""
+          ],
+          [
+            "D",
+            ""
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "unicode.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "héllo wörld"
+          ],
+          [
+            "B",
+            "日本語"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "héllo wörld"
+          ],
+          [
+            "B",
+            "日本語"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "no_final_newline.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "2"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "2"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "crlf.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "2"
+          ],
+          [
+            "C",
+            "x\r\ny"
+          ],
+          [
+            "D",
+            "last"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "2"
+          ],
+          [
+            "C",
+            "x\ny"
+          ],
+          [
+            "D",
+            "last"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": "A CRLF inside a quoted value stays as written. python-dotenv reads the file in text mode and turns it into a line feed."
+    },
+    {
+      "file": "bom.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "2"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "﻿A",
+            "1"
+          ],
+          [
+            "B",
+            "2"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": "AKM drops one leading byte order mark. python-dotenv, opened as plain UTF-8, keeps it in the first name."
+    },
+    {
+      "file": "multiline_double.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "PEM",
+            "-----BEGIN FAKE KEY-----\nline-one\nline-two\n-----END FAKE KEY-----"
+          ],
+          [
+            "AFTER",
+            "1"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "PEM",
+            "-----BEGIN FAKE KEY-----\nline-one\nline-two\n-----END FAKE KEY-----"
+          ],
+          [
+            "AFTER",
+            "1"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "multiline_single.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "m1\nm2"
+          ],
+          [
+            "B",
+            "2"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "m1\nm2"
+          ],
+          [
+            "B",
+            "2"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "multiline_comment_marks_kept.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "x\n# not a comment\ny"
+          ],
+          [
+            "B",
+            "2"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "x\n# not a comment\ny"
+          ],
+          [
+            "B",
+            "2"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "interpolation_is_literal.dotenv",
+      "akm": {
+        "entries": [
+          [
+            "A",
+            "${HOME}/x"
+          ],
+          [
+            "B",
+            "$A"
+          ],
+          [
+            "C",
+            "${A}"
+          ],
+          [
+            "D",
+            "$(echo hi)"
+          ],
+          [
+            "E",
+            "`echo hi`"
+          ],
+          [
+            "F",
+            "%USERPROFILE%"
+          ]
+        ]
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "${HOME}/x"
+          ],
+          [
+            "B",
+            "$A"
+          ],
+          [
+            "C",
+            "${A}"
+          ],
+          [
+            "D",
+            "$(echo hi)"
+          ],
+          [
+            "E",
+            "`echo hi`"
+          ],
+          [
+            "F",
+            "%USERPROFILE%"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": null
+    },
+    {
+      "file": "duplicates.dotenv",
+      "akm": {
+        "error": "more than once"
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "A",
+            "2"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": "A repeated name is an error in AKM. python-dotenv keeps the last value."
+    },
+    {
+      "file": "lowercase_name.dotenv",
+      "akm": {
+        "error": "line 1"
+      },
+      "reader": {
+        "entries": [
+          [
+            "lower",
+            "1"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": "Names are A-Z, 0-9 and _ only, and may not start with a digit. python-dotenv accepts any name."
+    },
+    {
+      "file": "digit_first_name.dotenv",
+      "akm": {
+        "error": "line 1"
+      },
+      "reader": {
+        "entries": [
+          [
+            "1A",
+            "1"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": "Same rule as lowercase_name."
+    },
+    {
+      "file": "hyphen_name.dotenv",
+      "akm": {
+        "error": "line 1"
+      },
+      "reader": {
+        "entries": [
+          [
+            "A-B",
+            "1"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": "Same rule as lowercase_name."
+    },
+    {
+      "file": "malformed_no_equals.dotenv",
+      "akm": {
+        "error": "line 2"
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "2"
+          ]
+        ],
+        "skipped": 1
+      },
+      "note": "A line that is not NAME=value is an error in AKM. python-dotenv skips it."
+    },
+    {
+      "file": "malformed_unterminated_double.dotenv",
+      "akm": {
+        "error": "line 2"
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "C",
+            "3"
+          ]
+        ],
+        "skipped": 1
+      },
+      "note": "AKM refuses an unterminated quote. python-dotenv skips a malformed line and goes on."
+    },
+    {
+      "file": "malformed_unterminated_single.dotenv",
+      "akm": {
+        "error": "line 1"
+      },
+      "reader": {
+        "entries": [
+          [
+            "B",
+            "2"
+          ]
+        ],
+        "skipped": 1
+      },
+      "note": "Same rule as malformed_unterminated_double."
+    },
+    {
+      "file": "malformed_after_closing_quote.dotenv",
+      "akm": {
+        "error": "line 1"
+      },
+      "reader": {
+        "entries": [
+          [
+            "B",
+            "2"
+          ]
+        ],
+        "skipped": 1
+      },
+      "note": "Text after a closing quote that is not a comment is an error in AKM. python-dotenv skips the line."
+    },
+    {
+      "file": "malformed_single_after_closing_quote.dotenv",
+      "akm": {
+        "error": "line 1"
+      },
+      "reader": {
+        "entries": [
+          [
+            "B",
+            "2"
+          ]
+        ],
+        "skipped": 1
+      },
+      "note": "Same rule as malformed_after_closing_quote."
+    },
+    {
+      "file": "malformed_nul.dotenv",
+      "akm": {
+        "error": "line 1"
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "a\u0000b"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": "A NUL character is an error in AKM."
+    },
+    {
+      "file": "malformed_lone_cr.dotenv",
+      "akm": {
+        "error": "line 1"
+      },
+      "reader": {
+        "entries": [
+          [
+            "A",
+            "1"
+          ],
+          [
+            "B",
+            "2"
+          ]
+        ],
+        "skipped": 0
+      },
+      "note": "AKM ends a line only at a line feed or a CR LF pair. A lone CR is an error. python-dotenv reads a lone CR as a line end."
+    }
+  ],
+  "writer": [
+    {
+      "value": "abc-123",
+      "line": "A=abc-123"
+    },
+    {
+      "value": "",
+      "line": "A=''"
+    },
+    {
+      "value": "two words",
+      "line": "A='two words'"
+    },
+    {
+      "value": "a # b",
+      "line": "A='a # b'"
+    },
+    {
+      "value": "#start",
+      "line": "A='#start'"
+    },
+    {
+      "value": "${HOME}/x",
+      "line": "A='${HOME}/x'"
+    },
+    {
+      "value": "it's",
+      "line": "A=\"it's\""
+    },
+    {
+      "value": "say \"hi\"",
+      "line": "A=\"say \\\"hi\\\"\""
+    },
+    {
+      "value": "back\\slash",
+      "line": "A=\"back\\\\slash\""
+    },
+    {
+      "value": "two\nlines",
+      "line": "A=\"two\\nlines\""
+    },
+    {
+      "value": "cr\r\nlf",
+      "line": "A=\"cr\\r\\nlf\""
+    },
+    {
+      "value": "tab\there",
+      "line": "A='tab\there'"
+    },
+    {
+      "value": "  padded  ",
+      "line": "A='  padded  '"
+    },
+    {
+      "value": "héllo 日本",
+      "line": "A='héllo 日本'"
+    }
+  ]
+}

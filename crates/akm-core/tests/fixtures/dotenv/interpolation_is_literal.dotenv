@@ -1,0 +1,6 @@
+A=${HOME}/x
+B="$A"
+C='${A}'
+D=$(echo hi)
+E=`echo hi`
+F=%USERPROFILE%
