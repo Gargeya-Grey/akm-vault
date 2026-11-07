@@ -6,14 +6,14 @@ Updated 2026-11-07. Replace this file's sections when they change. History lives
 
 - **Phase two is built, and its two reviews are done.** Units 1c, 1h, 1b, 2, 3 and 4, security proposals A1 to A3, and the tools are on branch `phase2/units-1c-to-4`, in [PR #7](https://github.com/Gargeya-Grey/akm-vault/pull/7). The owner authorized all of them on 2026-11-07 and let the implementer decide the design questions; each decision is under "Decisions for the owner's veto" in `docs/design/unit*.md`.
 - **Reviews: two at most for phase two** (owner, 2026-11-07), by Codex GPT-6.1 Terra at max effort. Both failed. [Review 1](reviews/2026-11-07-phase2-review1.md): 8 P2 and 1 P3, fixed by fault class (P2R1 rows). [Review 2](reviews/2026-11-07-phase2-review2.md): 4 P2 and 1 P3 (P2R2 rows). Units 1c, 1b and the tools failed twice, so patching stopped and the owner chose one redesign per finding, with no third review: the fetch tool never deletes; the native dialog is the review; every vault command names its session; a seen fingerprint wins. Each redesign has tests that failed first and caught mutants. No reviewer has read the redesigns, so every phase two fix stays "fixed, not accepted".
-- **GitHub Actions is on** (owner, 2026-11-07). The first two CI runs failed tests that compared raw temp paths on the runner's `RUNNER~1` path (P2R2-06): `d628130` fixed the CLI test and its message, and CI now uses a temp path without short names.
+- **GitHub Actions is on** (owner, 2026-11-07). **CI is green on `4f88b3a`** ([run 42402999565](https://github.com/Gargeya-Grey/akm-vault/actions/runs/42402999565), all 27 steps). The four earlier runs failed for four separate reasons, each fixed: tests that compared raw temp paths on the runner's `RUNNER~1` path (P2R2-06; `d628130`, and CI now uses a temp path without short names); the fetch tool missed the root of the current folder's drive (`7ec9166`); and a lint that only a newer Clippy has (`4f88b3a` pins CI to Rust 1.90.0, the local toolchain).
 - **The owner will use AKM for their own keys before the release gate.** [FIRST_USE.md](FIRST_USE.md) gives the precautions and the six tests that need the owner present.
 - **Unit 1a: source accepted; work unit complete: NO.** R4-04 (open P1) is still deferred.
 - **No new score exists.** The only measured score is 40.5/100 ([baseline review](reviews/2026-10-30-baseline.md)). The full rescore of unit 5 needs several reviewers and waits for the owner.
 
 ## Last full check run
 
-On `3d663e0`, the head after the review 2 redesigns (2026-11-07, fake data only, Rust builds outside the repository). Later commits change docs only.
+On `3d663e0`, the head after the review 2 redesigns (2026-11-07, fake data only, Rust builds outside the repository). Later commits change docs, the fetch tool and its test (`7ec9166`), the CI workflow, and the test-only fake clipboard (`4f88b3a`); CI ran the full suite on `4f88b3a` and passed.
 
 - Rust: `cargo fmt --check` and Clippy (`-D warnings`) clean. `cargo test --workspace --offline --locked --no-fail-fast` 475 passed, 0 failed, 2 ignored (the opt-in real-clipboard test and one gated test).
 - Frontend: `npm ci`, `npm test` (353 passed in 28 files), the production build, and `npm run test:ui` (51 passed, mocked native boundary).
