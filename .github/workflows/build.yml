@@ -13,6 +13,13 @@ jobs:
   verify:
     runs-on: windows-latest
     steps:
+      # The default temp path holds the short name RUNNER~1, and four desktop tests compare
+      # raw temp paths with canonical ones (FINDINGS.md P2R2-06). RUNNER_TEMP has no short names.
+      - name: Use a temp folder without short names
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=$env:RUNNER_TEMP" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # tools/test_check_docs.py reads two past commits
