@@ -13,7 +13,10 @@ cargo test --workspace --offline --locked
 cargo clippy --workspace --all-targets --offline --locked -- -D warnings
 cargo fmt --all -- --check
 cargo build --release -p akm-cli --offline --locked
+python tools/check_docs.py
 ```
+
+`check_docs.py` fails when a tracked Markdown file names a test that is not a `fn` in the Rust sources, or holds a control character. A history line that must keep a removed name carries `<!-- check-docs: historical: <reason> -->`. Test the check with `python tools/test_check_docs.py`.
 
 Run these in `desktop`:
 
@@ -44,6 +47,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_dependencies.ps1
 
 ## Real-surface tests
 
+For a manual proof of one feature, use the verification skill in [.agents/skills/verify-akm/](../.agents/skills/verify-akm/SKILL.md). It runs a doctor check first, uses a temporary fake vault and journal, and writes a transcript to `W:\AKM-archive\proofs\`.
+
 **KeePassXC interchange.** This test uses temporary vaults and fake keys only:
 
 ```powershell
@@ -52,7 +57,7 @@ python tools/verify_keepassxc.py --akm target/release/akm.exe --keepassxc "C:/pa
 
 Since unit 2 it also covers rotation, native history, the Recycle Bin, restore, purge and stale-copy merges. KeePassXC 2.8.0 `merge` applies no `DeletedObjects` record, so the merge check compares an AKM purge with a KeePassXC permanent delete (finding 2-W-01).
 
-Use the portable KeePassXC 2.8.0. `tools/fetch_keepassxc.ps1` downloads the official x64 zip from the KeePassXC GitHub release, checks its SHA-256 against the `.DIGEST` file of that release, and extracts it outside the repository (default `W:\AKM-archive\tools\keepassxc-2.8.0\`). It stops on a digest mismatch:
+Use the portable KeePassXC 2.8.0. `tools/fetch_keepassxc.ps1` downloads the official x64 zip from the KeePassXC GitHub release, checks its SHA-256 against the `.DIGEST` file of that release, and extracts it outside the repository (default `W:\AKM-archive\tools\keepassxc-2.8.0\`). It changes the destination only after the digest check, and only when the folder is missing, empty or marked with its own `.akm-fetch-keepassxc` file; it refuses any other content, a drive root and a junction, also with `-Force`. Test it with `powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_fetch_keepassxc.ps1` (no network):
 
 ```powershell
 ./tools/fetch_keepassxc.ps1
@@ -99,7 +104,7 @@ Remove the variable afterwards.
 - **IPC shapes shared by Rust and TypeScript:** the TypeScript checks and the real frontend-native boundary.
 - **Frontend:** the affected lifecycle and interaction tests, a rebuilt GUI, and the affected native flow.
 - **Parser:** a written external dialect, and fixtures from another reader. Round trips through AKM alone are not enough.
-- **Documentation only:** check that the links resolve and the documents agree. No build is needed.
+- **Documentation only:** `python tools/check_docs.py`, and check that the links resolve and the documents agree. No build is needed.
 
 ## Not tested yet
 
