@@ -352,6 +352,7 @@ fn a_legacy_key_without_a_time_shows_unknown_and_never_an_invented_date() {
         entry.set_unprotected("AKM_ROTATION_DAYS", "30");
         entry.times.creation = Some(naive("2020-01-01T00:00:00Z"));
         entry.times.last_modification = Some(naive("2020-01-02T00:00:00Z"));
+        entry.times.location_changed = Some(naive("2020-01-01T00:00:00Z"));
         entry.id().to_string()
     };
     write_database(&path, &db);
@@ -879,4 +880,262 @@ fn foreign_parts(db: &Database) -> String {
         }
     }
     out
+}
+
+// ------------------------------------------- review 1, finding 6: foreign history sets the floor
+
+const FOREIGN_SECRET: &str = "foreign-older-secret";
+
+impl Fixture {
+    /// A foreign editor leaves a history version with a last-modification time `modified`
+    /// and its own secret, then the vault is opened again with the same controlled clock.
+    fn with_foreign_history(&mut self, id: &str, modified: &str) {
+        self.with_foreign_history_at(id, naive(modified));
+    }
+
+    fn with_foreign_history_at(&mut self, id: &str, modified: NaiveDateTime) {
+        let mut db = self.raw();
+        let entry_id = keepass::db::EntryId::from_uuid(id.parse().unwrap());
+        {
+            let mut entry = db.entry_mut(entry_id).unwrap();
+            let mut older = (*entry).clone();
+            older.history = None;
+            older.set_protected(fields::PASSWORD, FOREIGN_SECRET);
+            older.times.last_modification = Some(modified);
+            entry
+                .history
+                .get_or_insert_with(Default::default)
+                .add_entry(older);
+        }
+        write_database(&self.path, &db);
+        self.vault = Vault::open(&self.path, PASSWORD)
+            .unwrap()
+            .with_clock(Arc::new(self.clock.clone()));
+    }
+
+    fn foreign_history_is_intact(&self, id: &str, count: usize) {
+        let stored = self.raw();
+        let entry_id = keepass::db::EntryId::from_uuid(id.parse().unwrap());
+        let entry = stored.entry(entry_id).unwrap();
+        let versions = entry.history.as_ref().unwrap().get_entries().len();
+        assert_eq!(versions, count);
+        let foreign = (0..versions)
+            .map(|index| entry.historical(index).unwrap())
+            .find(|version| version.get(fields::PASSWORD) == Some(FOREIGN_SECRET))
+            .expect("the foreign version stays in the history");
+        assert_eq!(
+            foreign.times.last_modification,
+            Some(naive("2030-01-01T00:00:00Z"))
+        );
+    }
+
+    fn assert_known_after_future_history(&self, id: &str, changed: &str) {
+        let key = self.vault.get_by_id(id).unwrap();
+        assert_eq!(key.secret_change, SecretChange::Known);
+        assert_eq!(key.secret_changed_at, Some(utc(changed)));
+        assert_eq!(key.updated_at, Some(utc(changed)));
+        assert_eq!(
+            key.rotation_due_at(),
+            Some(utc(changed) + Duration::days(30)),
+            "the rotation due instant counts from the new secret-change time"
+        );
+        let versions = self.vault.history(id).unwrap();
+        for version in &versions {
+            assert!(
+                version.modified_at.unwrap() < utc(changed),
+                "every history version is older than the new time: {version:?}"
+            );
+        }
+        let stored = self.raw();
+        let entry_id = keepass::db::EntryId::from_uuid(id.parse().unwrap());
+        let entry = stored.entry(entry_id).unwrap();
+        assert_eq!(entry.get(META_SECRET_CHANGED), Some(changed));
+    }
+}
+
+#[test]
+fn rotate_after_a_foreign_future_history_version_is_known_and_ordered() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_history(&key.id, "2030-01-01T00:00:00Z");
+    assert_eq!(
+        f.vault.get_by_id(&key.id).unwrap().secret_change,
+        SecretChange::ChangedOutside,
+        "the foreign change is real before AKM rotates"
+    );
+    f.clock.set("2026-02-01T00:00:00Z");
+    let rotated = f.vault.rotate(&key.id, Secret::new("secret-two")).unwrap();
+    assert_eq!(rotated.changed_at, utc("2030-01-01T00:00:01Z"));
+    assert_eq!(rotated.previous_changed_at, None);
+    f.assert_known_after_future_history(&key.id, "2030-01-01T00:00:01Z");
+    f.foreign_history_is_intact(&key.id, 2);
+    assert_eq!(f.secret(&key.id), "secret-two");
+}
+
+#[test]
+fn update_with_a_new_secret_after_a_foreign_future_history_version_is_known_and_ordered() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_history(&key.id, "2030-01-01T00:00:00Z");
+    f.clock.set("2026-02-01T00:00:00Z");
+    f.vault
+        .update(&key.id, input("Alpha", "secret-two"))
+        .unwrap();
+    f.assert_known_after_future_history(&key.id, "2030-01-01T00:00:01Z");
+    f.foreign_history_is_intact(&key.id, 2);
+}
+
+#[test]
+fn import_of_a_new_secret_after_a_foreign_future_history_version_is_known_and_ordered() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_history(&key.id, "2030-01-01T00:00:00Z");
+    f.clock.set("2026-02-01T00:00:00Z");
+    let counts = f
+        .vault
+        .import_env(
+            &[("DEMO_KEY".to_string(), "secret-two".to_string())],
+            Some("demo"),
+            Some("dev"),
+        )
+        .unwrap();
+    assert_eq!(counts, (0, 1));
+    f.assert_known_after_future_history(&key.id, "2030-01-01T00:00:01Z");
+    f.foreign_history_is_intact(&key.id, 2);
+}
+
+#[test]
+fn a_notes_edit_after_a_foreign_future_history_version_orders_the_time_and_keeps_the_foreign_change_visible(
+) {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_history(&key.id, "2030-01-01T00:00:00Z");
+    f.clock.set("2026-02-01T00:00:00Z");
+    let edited = f
+        .vault
+        .update(
+            &key.id,
+            with_notes(input("Alpha", "secret-one"), "a later note"),
+        )
+        .unwrap();
+    assert_eq!(edited.updated_at, Some(utc("2030-01-01T00:00:01Z")));
+    assert_eq!(
+        edited.secret_change,
+        SecretChange::ChangedOutside,
+        "AKM did not change the secret, so the foreign change stays visible"
+    );
+    assert_eq!(edited.secret_changed_at, None);
+    f.foreign_history_is_intact(&key.id, 2);
+}
+
+#[test]
+fn a_foreign_history_version_in_the_same_second_as_the_clock_still_orders_the_time() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_history(&key.id, "2030-01-01T00:00:00Z");
+    f.clock.set("2030-01-01T00:00:00Z");
+    let rotated = f.vault.rotate(&key.id, Secret::new("secret-two")).unwrap();
+    assert_eq!(rotated.changed_at, utc("2030-01-01T00:00:01Z"));
+    f.assert_known_after_future_history(&key.id, "2030-01-01T00:00:01Z");
+}
+
+#[test]
+fn two_rotations_after_a_foreign_future_history_version_stay_ordered_and_known() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_history(&key.id, "2030-01-01T00:00:00Z");
+    f.clock.set("2026-02-01T00:00:00Z");
+    f.vault.rotate(&key.id, Secret::new("secret-two")).unwrap();
+    let second = f
+        .vault
+        .rotate(&key.id, Secret::new("secret-three"))
+        .unwrap();
+    assert_eq!(second.changed_at, utc("2030-01-01T00:00:02Z"));
+    assert_eq!(
+        second.previous_changed_at,
+        Some(utc("2030-01-01T00:00:01Z"))
+    );
+    f.assert_known_after_future_history(&key.id, "2030-01-01T00:00:02Z");
+    f.foreign_history_is_intact(&key.id, 3);
+}
+
+#[test]
+fn remove_and_restore_stamp_after_a_foreign_future_history_version() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_history(&key.id, "2030-01-01T00:00:00Z");
+    f.clock.set("2026-02-01T00:00:00Z");
+    f.vault.remove(&key.id).unwrap();
+    assert_eq!(
+        f.vault.recycled()[0].deleted_at,
+        Some(utc("2030-01-01T00:00:01Z"))
+    );
+    f.vault.restore(&key.id).unwrap();
+    let stored = f.raw();
+    let entry_id = keepass::db::EntryId::from_uuid(key.id.parse().unwrap());
+    assert_eq!(
+        stored.entry(entry_id).unwrap().times.location_changed,
+        Some(naive("2030-01-01T00:00:02Z"))
+    );
+}
+
+#[test]
+fn a_foreign_history_version_in_year_9999_gives_a_time_that_reads_back_as_known() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_history(&key.id, "9999-12-31T23:59:59Z");
+    f.clock.set("2026-02-01T00:00:00Z");
+    let rotation = f.vault.rotate(&key.id, Secret::new("secret-two")).unwrap();
+    assert_eq!(
+        rotation.changed_at.to_rfc3339(),
+        "+10000-01-01T00:00:00+00:00"
+    );
+    let after = f.vault.get_by_id(&key.id).unwrap();
+    assert_eq!(after.secret_change, SecretChange::Known);
+    assert_eq!(after.secret_changed_at, Some(rotation.changed_at));
+}
+
+#[test]
+fn a_foreign_history_version_at_the_last_representable_second_refuses_without_a_panic() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    let last = chrono::NaiveDate::from_ymd_opt(262_142, 12, 31)
+        .unwrap()
+        .and_hms_opt(23, 59, 59)
+        .unwrap();
+    f.with_foreign_history_at(&key.id, last);
+    f.clock.set("2026-02-01T00:00:00Z");
+    let bytes = fs::read(&f.path).unwrap();
+    let error = f
+        .vault
+        .rotate(&key.id, Secret::new("secret-two"))
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("too far in the future"),
+        "{error}"
+    );
+    assert_eq!(fs::read(&f.path).unwrap(), bytes, "nothing was saved");
+    assert_eq!(f.secret(&key.id), "secret-one");
+}
+
+#[test]
+fn a_foreign_future_location_time_orders_a_rotation_and_a_removal_after_it() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    let mut db = f.raw();
+    let entry_id = keepass::db::EntryId::from_uuid(key.id.parse().unwrap());
+    db.entry_mut(entry_id).unwrap().times.location_changed = Some(naive("2030-01-01T00:00:00Z"));
+    write_database(&f.path, &db);
+    f.vault = Vault::open(&f.path, PASSWORD)
+        .unwrap()
+        .with_clock(Arc::new(f.clock.clone()));
+    f.clock.set("2026-02-01T00:00:00Z");
+
+    let rotated = f.vault.rotate(&key.id, Secret::new("secret-two")).unwrap();
+    assert_eq!(rotated.changed_at, utc("2030-01-01T00:00:01Z"));
+    f.vault.remove(&key.id).unwrap();
+    assert_eq!(
+        f.vault.recycled()[0].deleted_at,
+        Some(utc("2030-01-01T00:00:02Z"))
+    );
 }

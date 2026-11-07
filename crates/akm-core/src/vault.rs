@@ -315,13 +315,7 @@ impl Vault {
         }
 
         let secret_changed = before.get(fields::PASSWORD) != Some(input.secret.as_str());
-        let stamp = next_stamp(
-            now,
-            &[
-                before.times.last_modification,
-                recorded_secret_change(&before),
-            ],
-        );
+        let stamp = next_stamp(now, &before)?;
         let mut candidate = self.db.clone();
         let key = {
             let mut entry = candidate
@@ -363,13 +357,7 @@ impl Vault {
             ));
         }
         let previous_changed_at = read_entry(&before).secret_changed_at;
-        let stamp = next_stamp(
-            self.clock.now(),
-            &[
-                before.times.last_modification,
-                recorded_secret_change(&before),
-            ],
-        );
+        let stamp = next_stamp(self.clock.now(), &before)?;
         let mut candidate = self.db.clone();
         let key = {
             let mut entry = candidate
@@ -405,11 +393,7 @@ impl Vault {
                     .into(),
             ));
         }
-        let located = self
-            .db
-            .entry(entry_id)
-            .and_then(|entry| entry.times.location_changed);
-        let stamp = next_stamp(self.clock.now(), &[located]);
+        let stamp = self.stamp_for(entry_id)?;
 
         let mut candidate = self.db.clone();
         let bin = ensure_recycle_bin(&mut candidate, stamp);
@@ -500,11 +484,7 @@ impl Vault {
                  Delete or rename that key first."
             )));
         }
-        let located = self
-            .db
-            .entry(entry_id)
-            .and_then(|entry| entry.times.location_changed);
-        let stamp = next_stamp(self.clock.now(), &[located]);
+        let stamp = self.stamp_for(entry_id)?;
 
         let mut candidate = self.db.clone();
         let previous = candidate
@@ -569,19 +549,7 @@ impl Vault {
                 .entry(*id)
                 .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
             let key = read_entry(&entry);
-            let mut recorded = vec![
-                entry.times.last_modification,
-                entry.times.location_changed,
-                recorded_secret_change(&entry),
-            ];
-            recorded.extend(
-                entry
-                    .history
-                    .iter()
-                    .flat_map(|history| history.get_entries())
-                    .map(|version| version.times.last_modification),
-            );
-            let stamp = next_stamp(self.clock.now(), &recorded);
+            let stamp = next_stamp(self.clock.now(), &entry)?;
             candidate
                 .entry_mut(*id)
                 .ok_or_else(|| Error::EntryNotFound(id.to_string()))?
@@ -727,13 +695,7 @@ impl Vault {
                 .entry_mut(id)
                 .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
             let before: Entry = (*entry).clone();
-            let stamp = next_stamp(
-                now,
-                &[
-                    before.times.last_modification,
-                    recorded_secret_change(&before),
-                ],
-            );
+            let stamp = next_stamp(now, &before)?;
             keep_version(&mut entry, before);
             entry.set_protected(fields::PASSWORD, secret);
             entry.set_unprotected(META_SECRET_CHANGED, format_secret_change(stamp));
@@ -1112,6 +1074,14 @@ impl Vault {
         Ok(())
     }
 
+    fn stamp_for(&self, id: EntryId) -> Result<NaiveDateTime> {
+        let entry = self
+            .db
+            .entry(id)
+            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+        next_stamp(self.clock.now(), &entry)
+    }
+
     fn find_entry_id(&self, id: &str) -> Option<EntryId> {
         let id = EntryId::from_uuid(Uuid::parse_str(id).ok()?);
         let root = self.db.root();
@@ -1150,14 +1120,45 @@ fn whole_second(time: DateTime<Utc>) -> NaiveDateTime {
         .expect("zero nanoseconds are valid")
 }
 
-/// The time of a change: now, but later than every time already recorded for the entry.
-/// Time can then never run backwards for one key, also when the clock moves back or two
-/// changes land in one second (design D4).
-fn next_stamp(now: DateTime<Utc>, recorded: &[Option<NaiveDateTime>]) -> NaiveDateTime {
+/// Every time already recorded for one key: its own times and secret-change record, and the
+/// same for every version in its history, whoever wrote them (design D5).
+fn recorded_times(entry: &Entry) -> impl Iterator<Item = NaiveDateTime> + '_ {
+    let own = |entry: &Entry| {
+        [
+            entry.times.creation,
+            entry.times.last_modification,
+            entry.times.location_changed,
+            recorded_secret_change(entry),
+        ]
+    };
+    own(entry)
+        .into_iter()
+        .chain(
+            entry
+                .history
+                .iter()
+                .flat_map(|history| history.get_entries())
+                .flat_map(own),
+        )
+        .flatten()
+}
+
+/// The time of a change: now, but later than every time already recorded for the entry
+/// (`recorded_times`). Time can then never run backwards for one key, also when the clock
+/// moves back, when a foreign editor left a newer history version, or when two changes land
+/// in one second. This is the only way AKM picks a time for a change to an existing key.
+fn next_stamp(now: DateTime<Utc>, entry: &Entry) -> Result<NaiveDateTime> {
     let now = whole_second(now);
-    match recorded.iter().flatten().max() {
-        Some(latest) if now <= *latest => *latest + Duration::seconds(1),
-        _ => now,
+    match recorded_times(entry).max() {
+        Some(latest) if now <= latest => latest
+            .checked_add_signed(Duration::seconds(1))
+            .ok_or_else(|| {
+                Error::Invalid(
+                    "a time recorded for this key is too far in the future to order a change after it"
+                        .into(),
+                )
+            }),
+        _ => Ok(now),
     }
 }
 
