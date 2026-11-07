@@ -9,6 +9,7 @@ import type {
   KeyDraft,
   KeyView,
   RecycledKey,
+  ReminderStatus,
   RotationReceipt,
   Status,
   WarningReport,
@@ -152,6 +153,11 @@ export const api = {
     return invoke<ImportReport | null>("env_import", { sessionId, operationId, text, project, environment }, undefined, operationId);
   },
   backup: () => invoke<BackupInfo>("backup_info"),
+
+  // The notification text is built natively from this count. The page cannot send any other text.
+  remindersStatus: () => invoke<ReminderStatus>("reminders_status"),
+  remindersSet: (enabled: boolean) => invoke<ReminderStatus>("reminders_set", { enabled }),
+  remindersNotify: (count: number) => invoke<ReminderStatus>("reminders_notify", { count }),
 };
 
 export function errorText(error: unknown): string {

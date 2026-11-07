@@ -3,7 +3,8 @@ import { api, errorText } from "../api";
 import { CLIPBOARD_LOCK_TEXT, clipboardCopyText } from "../clipboardText";
 import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
 import { formatBytes, formatDateTime, plural } from "../format";
-import type { BackupInfo, KeyView, Status } from "../types";
+import { REMINDER_NOTE, reminderText } from "../reminders";
+import type { BackupInfo, KeyView, ReminderStatus, Status } from "../types";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
@@ -36,6 +37,11 @@ export function Settings({ status, onLocked }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<Message | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [reminder, setReminder] = useState<ReminderStatus | null>(null);
+  const [reminderLoad, setReminderLoad] = useState<"loading" | "ready" | "failed">("loading");
+  const [reminderSaving, setReminderSaving] = useState(false);
+  const [reminderError, setReminderError] = useState<string | null>(null);
 
   const [importing, setImporting] = useState(false);
   const importDialogRef = useDialogFocus<HTMLDivElement>(importing);
@@ -117,6 +123,33 @@ export function Settings({ status, onLocked }: Props) {
     void loadBackup();
     void refreshKeys();
   }, [loadBackup, refreshKeys]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const next = await api.remindersStatus();
+        if (!mounted.current) return;
+        setReminder(next);
+        setReminderLoad("ready");
+      } catch {
+        if (mounted.current) setReminderLoad("failed");
+      }
+    })();
+  }, []);
+
+  async function changeReminder(enabled: boolean) {
+    if (reminderSaving) return;
+    setReminderSaving(true);
+    setReminderError(null);
+    try {
+      const next = await api.remindersSet(enabled);
+      if (mounted.current) setReminder(next);
+    } catch (cause) {
+      if (mounted.current) setReminderError(errorText(cause));
+    } finally {
+      if (mounted.current) setReminderSaving(false);
+    }
+  }
 
   useEffect(() => {
     if (preview === null) return;
@@ -343,6 +376,25 @@ export function Settings({ status, onLocked }: Props) {
           lock, and on suspend. {CLIPBOARD_LOCK_TEXT} You will need the master
           password again.
         </p>
+      </section>
+
+      <section className="settings-section" aria-labelledby="reminders-title">
+        <h2 id="reminders-title">Reminders</h2>
+        <div className="reminder-toggle">
+          <input
+            id="reminders-toggle"
+            type="checkbox"
+            checked={reminder?.enabled ?? false}
+            disabled={reminderLoad !== "ready" || reminderSaving}
+            aria-describedby="reminders-note"
+            onChange={(event) => void changeReminder(event.target.checked)}
+          />
+          <label htmlFor="reminders-toggle">Show a Windows notification when keys need attention</label>
+        </div>
+        <p className="field-note" id="reminders-note">{REMINDER_NOTE}</p>
+        {reminderLoad === "failed" && <Notice tone="error">AKM could not read the reminder setting.</Notice>}
+        {reminder && <p className="reminder-state prose" role="status">{reminderText(reminder)}</p>}
+        {reminderError && <Notice tone="error">{reminderError}</Notice>}
       </section>
 
       <section className="settings-section">

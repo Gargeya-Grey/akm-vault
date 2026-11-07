@@ -1,7 +1,13 @@
 import type { Page } from "@playwright/test";
-import type { ApplicationNotice, OperationNotice } from "../src/types";
+import type { ApplicationNotice, KeyView, OperationNotice, ReminderStatus } from "../src/types";
 
-export async function installNativeBoundaryMock(page: Page, theme = "light", retainedNotices?: OperationNotice[], retainedWarnings?: ApplicationNotice[]) {
+export interface BoundaryOptions {
+  /** Replaces the single default key. */
+  keys?: Partial<KeyView>[];
+  reminders?: ReminderStatus;
+}
+
+export async function installNativeBoundaryMock(page: Page, theme = "light", retainedNotices?: OperationNotice[], retainedWarnings?: ApplicationNotice[], options: BoundaryOptions = {}) {
   if (retainedNotices || retainedWarnings) {
     let operations = retainedNotices ?? [];
     let application = retainedWarnings ?? [];
@@ -15,7 +21,7 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
       return { application, operations };
     });
   }
-  await page.addInitScript(({ theme }) => {
+  await page.addInitScript(({ theme, options }) => {
     localStorage.setItem("akm-theme", theme);
     const callbacks = new Map<number, (event: unknown) => void>();
     const listeners = new Map<string, number>();
@@ -33,6 +39,8 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
       notes: null, expiresAt: null, rotationDays: null, createdAt: null,
       updatedAt: null, rotationDueAt: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0,
     };
+    const keys = (options.keys ?? [{}]).map((overrides, index) => ({ ...key, id: `${key.id}-${index}`, ...overrides }));
+    let reminders = options.reminders ?? { enabled: false, permission: "granted", delivery: "none", blocked: false };
     const emitNotice = (sessionId: string) => {
       const listener = listeners.get("vault-locked");
       if (listener !== undefined) callbacks.get(listener)?.({ event: "vault-locked", id: listener, payload: { sessionId } });
@@ -87,7 +95,10 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
               emitLock();
               return;
             }
-            case "keys_list": return [key];
+            case "keys_list": return keys;
+            case "reminders_status": return reminders;
+            case "reminders_set": reminders = { ...reminders, enabled: args.enabled as boolean, delivery: "none", blocked: false }; return reminders;
+            case "reminders_notify": reminders = { ...reminders, delivery: "sent" }; return reminders;
             case "audit_read": return { path: "C:/fake-test/journal/j-00000000000000000000000000000000.jsonl", state: "consistent", damage: null, identity: "confirmed", notices: [], brokenAt: null, problemLine: null, totalEntries: 3, entries: [
               { seq: "1", ts: "2026-10-31T00:00:00Z", action: "copy", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: null },
               { seq: "2", ts: "2026-10-31T00:00:00Z", action: "copy-requested", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: null },
@@ -101,5 +112,5 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
         },
       },
     });
-  }, { theme });
+  }, { theme, options });
 }

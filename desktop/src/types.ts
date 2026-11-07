@@ -125,5 +125,16 @@ export interface CommandError {
   message: string;
 }
 
+/**
+ * The opt-in notification, as the native layer reports it. `blocked` means that AKM stopped
+ * trying for this run, after a refused permission or a failed notification.
+ */
+export interface ReminderStatus {
+  enabled: boolean;
+  permission: "granted" | "denied" | "prompt";
+  delivery: "none" | "sent" | "failed";
+  blocked: boolean;
+}
+
 export type View = "keys" | "bin" | "activity" | "settings";
 export type Theme = "light" | "dark";
