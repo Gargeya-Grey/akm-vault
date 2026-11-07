@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { App } from "./App";
-import { acceptNativeStatus, nativeOwner } from "./nativeSession";
+import { acceptNativeStatus, nativeOwner, releaseNativeOwner } from "./nativeSession";
 import { acknowledgeCompletions, retainedCompletions, settleOutcome } from "./sessionBoundary";
 import type { Status } from "./types";
 
@@ -194,6 +194,18 @@ test("a hidden document after the vault was locked sends nothing", async () => {
   hide();
   await flush();
   expect(calls("view_discard")).toHaveLength(0);
+});
+
+test("a hide while the page has no native session sends nothing, not an empty or a guessed one", async () => {
+  const f = fixture();
+  render(<App />);
+  await screen.findByText("Current unlocked keys");
+  releaseNativeOwner(f.owner); // The page lost its session before React showed it: status still says unlocked.
+  expect(nativeOwner()).toBeNull();
+  hide();
+  await flush();
+  expect(calls("view_discard")).toHaveLength(0);
+  expect(calls("vault_lock")).toHaveLength(0);
 });
 
 test("a discard that native cannot take fails closed and locks that session", async () => {

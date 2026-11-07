@@ -1033,7 +1033,17 @@ mod tests {
         "reminders_notify",
     ];
 
-    fn command_headers() -> Vec<(String, String)> {
+    /// How many times the identifier `session_id` appears in the text, as a whole word.
+    fn session_id_words(text: &str) -> usize {
+        text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|word| *word == "session_id")
+            .count()
+    }
+
+    /// Each command: its name, the number of times `session_id` appears in its header, and the
+    /// number of times it appears in its body. A command that takes the id and never uses it
+    /// has a body count of zero.
+    fn command_headers() -> Vec<(String, usize, usize)> {
         let source = include_str!("commands.rs");
         let code = &source[..source.find("\nmod tests {").unwrap()];
         let mut found = Vec::new();
@@ -1043,8 +1053,12 @@ mod tests {
                 .find(|c: char| !(c.is_alphanumeric() || c == '_'))
                 .unwrap();
             let name = part[start..start + name_end].to_string();
-            let header = part[start..part.find('{').unwrap()].to_string();
-            found.push((name, header));
+            let body_start = part.find('{').unwrap();
+            found.push((
+                name,
+                session_id_words(&part[start..body_start]),
+                session_id_words(&part[body_start..]),
+            ));
         }
         found
     }
@@ -1053,17 +1067,21 @@ mod tests {
     fn p2r2_03_every_command_that_acts_on_the_vault_names_its_session() {
         let headers = command_headers();
         assert!(headers.len() >= 30, "the scan finds the commands");
-        for (name, header) in &headers {
+        for (name, in_header, in_body) in &headers {
             let exempt = NO_SESSION.iter().any(|(exempt, _)| exempt == name);
             assert_eq!(
-                header.contains("session_id"),
+                *in_header > 0,
                 !exempt,
                 "{name}: takes session_id unless it is on NO_SESSION"
+            );
+            assert!(
+                exempt || *in_body > 0,
+                "{name}: takes session_id and uses it"
             );
         }
         for (exempt, _) in NO_SESSION {
             assert!(
-                headers.iter().any(|(name, _)| name == exempt),
+                headers.iter().any(|(name, _, _)| name == exempt),
                 "{exempt} is a command"
             );
         }
@@ -1077,10 +1095,10 @@ mod tests {
         scoped.sort_unstable();
         let mut expected: Vec<&str> = headers
             .iter()
-            .filter(|(name, header)| {
-                header.contains("session_id") && !SESSION_SET_BY_HAND.contains(&name.as_str())
+            .filter(|(name, in_header, _)| {
+                *in_header > 0 && !SESSION_SET_BY_HAND.contains(&name.as_str())
             })
-            .map(|(name, _)| name.as_str())
+            .map(|(name, _, _)| name.as_str())
             .collect();
         expected.sort_unstable();
         assert_eq!(
