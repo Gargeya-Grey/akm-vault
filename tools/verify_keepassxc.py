@@ -30,6 +30,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="akm-interop-", dir=temp_root) as raw:
         work = Path(raw)
         vault = work / "vault.kdbx"
+        env["AKM_JOURNAL_ROOT"] = str(work / "akm-journal")
 
         def akm(*words, success=True):
             result = subprocess.run(

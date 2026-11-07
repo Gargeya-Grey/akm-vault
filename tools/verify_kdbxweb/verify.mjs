@@ -91,6 +91,7 @@ function createRunner(akmExe, vault) {
     if (!name.toUpperCase().startsWith('AKM_')) env[name] = value;
   }
   env.AKM_PASSWORD = PASSWORD;
+  env.AKM_JOURNAL_ROOT = path.join(path.dirname(path.resolve(vault)), 'akm-journal');
   return (args, input) => {
     const result = spawnSync(akmExe, ['--vault', vault, ...args], {
       env,

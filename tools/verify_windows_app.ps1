@@ -96,6 +96,9 @@ $cli = (Resolve-Path -LiteralPath $CliExe).Path
 $work = Join-Path $env:TEMP ('opencode\akm-app-proof-' + [Guid]::NewGuid())
 New-Item -ItemType Directory -Path $work | Out-Null
 $vault = Join-Path $work 'vault.kdbx'
+$journalRoot = Join-Path $work 'journal'
+$journalRootBefore = [Environment]::GetEnvironmentVariable('AKM_JOURNAL_ROOT', 'Process')
+[Environment]::SetEnvironmentVariable('AKM_JOURNAL_ROOT', $journalRoot, 'Process')
 $mainVault = $vault
 $cloneVault = Join-Path $work 'clones.kdbx'
 $legacyVault = Join-Path $work 'older.kdbx'
@@ -111,6 +114,7 @@ $recovery = [ordered]@{
   settingsPath = $settingsPath
   hadSettings = ($null -ne $settingsBefore)
   ownedVaults = $ownedVaults
+  journalRoot = $journalRoot
   processId = $null
   processStartUtc = $null
   remainingOnly = [bool]$RemainingOnly
@@ -477,9 +481,19 @@ function Set-NativeDialogValue($control, [string]$value) {
   }
 }
 
+function Get-TestJournal {
+  # The private journal folder is the test-owned AKM_JOURNAL_ROOT. The mapping names the journal of the current fake vault.
+  $mapping = [IO.File]::ReadAllText((Join-Path $journalRoot 'mapping.json')) | ConvertFrom-Json
+  $tail = ('\' + (Split-Path -Leaf $work) + '\' + (Split-Path -Leaf $vault)).ToLowerInvariant()
+  $bound = @($mapping.journals | Where-Object { $_.state -eq 'active' -and $_.path.ToLowerInvariant().EndsWith($tail) })
+  if ($bound.Count -ne 1) { throw "Expected one active journal binding for $vault but found $($bound.Count)" }
+  return (Join-Path $journalRoot ('j-' + $bound[0].id + '.jsonl'))
+}
+
 function Hold-TestJournal {
-  # This sidecar belongs only to the temporary fake vault. Overlap fs2's byte-range lock.
-  $stream = [IO.File]::Open(($vault + '.audit.jsonl.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite)
+  # This journal belongs only to the temporary fake vault. Overlap fs2's byte-range lock. The lock file already exists,
+  # so it is opened and never created: a file made here would not carry the private permissions.
+  $stream = [IO.File]::Open(((Get-TestJournal) + '.lock'), [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite)
   try { $stream.Lock(0, [Int64]::MaxValue) }
   catch { $stream.Dispose(); throw }
   return $stream
@@ -543,7 +557,7 @@ function Assert-GoneAndStable([string]$sentinel, [scriptblock]$predicate, [strin
 }
 
 function Get-RevealCount {
-  @(Get-Content -LiteralPath ($vault + '.audit.jsonl') | Where-Object { $_ } | ForEach-Object { ($_ | ConvertFrom-Json).action } | Where-Object { $_ -eq 'reveal-requested' }).Count
+  @(Get-Content -LiteralPath (Get-TestJournal) | Where-Object { $_ } | ForEach-Object { ($_ | ConvertFrom-Json).action } | Where-Object { $_ -eq 'reveal-requested' }).Count
 }
 
 function Assert-OutcomeRegion([string]$pattern) {
@@ -696,7 +710,7 @@ function Test-OutcomeHandoff {
   Test-CancelledOutcome
 
   # Delay a real pre-disclosure error too; an error outcome must not claim nothing was saved.
-  $journal = $vault + '.audit.jsonl'
+  $journal = Get-TestJournal
   $journalBefore = [IO.File]::ReadAllBytes($journal)
   $hold = Hold-TestJournal
   try {
@@ -806,7 +820,7 @@ try {
         $script:root = $mainRoot
         Assert-Proof (Wait-Text ('Saved plaintext secrets to ' + [regex]::Escape($exportPath))) 'the rebuilt export published to the exact approved native destination'
         Assert-Proof ([IO.File]::ReadAllText($exportPath) -eq "OPENAI_API_KEY=fake-prod-must-stay`n") 'the journal export contains only its selected fake prod secret'
-        $journal = $vault + '.audit.jsonl'
+        $journal = Get-TestJournal
         $journalBefore = [IO.File]::ReadAllBytes($journal)
         $actions = @(Get-Content -LiteralPath $journal | ForEach-Object { ($_ | ConvertFrom-Json).action })
         Assert-Proof ($actions[-2] -eq 'export-requested' -and $actions[-1] -eq 'export-completed') 'native export records a request before its known publication completion'
@@ -819,7 +833,7 @@ try {
         Set-NativeDialogValue (Native-FilenameControl) $refusedPath
         Click-NativeDialog '1' 'Save'
         $script:root = $mainRoot
-        Assert-Proof (Wait-Text 'Access is denied|permission denied|I/O error') 'failed pre-disclosure journaling is visibly refused'
+        Assert-Proof (Wait-Text 'Access is denied|permission denied|I/O error|was denied|activity journal unavailable') 'failed pre-disclosure journaling is visibly refused'
         Assert-Proof (!(Test-Path -LiteralPath $refusedPath)) 'a native export whose request cannot be recorded publishes no plaintext file'
         Remove-Item -LiteralPath $journal
         [IO.File]::WriteAllBytes($journal, $journalBefore)
@@ -833,7 +847,7 @@ try {
       Assert-Proof (Wait-Text 'Recorded chain is consistent') 'the real GUI reads a consistent journal snapshot'
       Assert-Proof (Wait-Text 'Completeness unknown') 'the real GUI does not claim a complete activity history'
       Assert-Proof (Wait-Text 'Added') 'the real GUI presents a known completed mutation'
-      $journal = $vault + '.audit.jsonl'
+      $journal = Get-TestJournal
       $legacyBackup = $vault + '.bak'
       Remove-Item -LiteralPath $legacyBackup
       New-Item -ItemType Directory -Path $legacyBackup | Out-Null
@@ -1093,6 +1107,7 @@ try {
   }
   throw
 } finally {
+  [Environment]::SetEnvironmentVariable('AKM_JOURNAL_ROOT', $journalRootBefore, 'Process')
   if ($process -and !$process.HasExited) {
     try { $process.CloseMainWindow() | Out-Null; if (!$process.WaitForExit(5000)) { $process.Kill() } } catch { $process.Kill() }
   }
