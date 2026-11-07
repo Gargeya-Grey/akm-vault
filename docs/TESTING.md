@@ -90,4 +90,4 @@ Remove the variable afterwards.
 
 ## Not tested yet
 
-Real OS lock and suspend delivery, a real 10-minute idle wait, install, upgrade and uninstall, a remote CI run, publisher signing, updater security, broad dotenv compatibility, a full rescore after phase one, and a professional audit.
+Real Windows toast delivery of the opt-in notification (unit 4: only a mocked native boundary and fake notifiers ran), real OS lock and suspend delivery, a real 10-minute idle wait, install, upgrade and uninstall, a remote CI run, publisher signing, updater security, broad dotenv compatibility, a full rescore after phase one, and a professional audit.

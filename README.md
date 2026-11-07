@@ -208,8 +208,12 @@ delivery is not verified yet.
   Closing a session is not a promise to erase every allocator or JavaScript copy.
 - Malware or a compromised Windows account is outside the protection offered by
   an unlocked password manager.
-- Rotation indicators and reminders are still development features. Metadata edits
-  currently affect the rotation clock, and reminders do not reach you outside AKM.
+- Reminders reach you inside AKM: a summary after unlock, and a status on every key
+  row. An optional Windows notification (Settings, off by default) says only how
+  many keys need attention. AKM runs nothing in the background, so it can show one
+  only while it is open and unlocked, and Windows decides whether to display it. A
+  key with a rotation interval and no known secret-change time shows "Rotation
+  unknown". Native notification delivery is not tested yet.
 - No updater, publisher signing or external professional security audit exists yet.
 - This source tree's `.gitignore` is not protection for secrets exported into a
   different repository.
