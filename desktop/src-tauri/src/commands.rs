@@ -1386,22 +1386,71 @@ mod tests {
 
     #[test]
     fn export_uses_core_validation_not_only_native_or_frontend_scope_checks() {
-        let (session, _directory) = test_session();
+        use akm_core::model::{META_ENVIRONMENT, META_ENV_VAR, META_PROJECT};
+        use keepass::db::fields;
+        use std::sync::Mutex;
+        // 3-SA-01: `add` now refuses PATH, so the key is an older entry written to the file.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vault.kdbx");
+        let mut db = keepass::Database::new();
+        db.config.kdf_config = keepass::config::KdfConfig::Aes { rounds: 10 };
+        {
+            let mut root = db.root_mut();
+            let mut group = root.add_group();
+            group.name = "API Keys".into();
+            let mut entry = group.add_entry();
+            entry.set_unprotected(fields::TITLE, "Process control");
+            entry.set_protected(fields::PASSWORD, "fake");
+            entry.set_unprotected(META_ENV_VAR, "PATH");
+            entry.set_unprotected(META_PROJECT, "app");
+            entry.set_unprotected(META_ENVIRONMENT, "dev");
+        }
+        db.save(
+            &mut std::fs::File::create(&path).unwrap(),
+            keepass::DatabaseKey::new().with_password("fake-test-password-123!"),
+        )
+        .unwrap();
+        let session = Session::new(
+            Arc::new(crate::session::MonotonicClock::default()),
+            Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
+                Mutex::new(crate::clipboard::tests::FakeData::default()),
+            ))),
+            Arc::new(|_| {}),
+        );
+        session.observe(crate::policy::Signal::Available);
+        let ticket = session.begin_open().unwrap();
         session
+            .open(ticket, || {
+                Vault::open(&path, "fake-test-password-123!").map_err(Into::into)
+            })
+            .unwrap();
+        let scope = ExportScope::new(Some("app".into()), Some("dev".into()), false).unwrap();
+        let error = extract_export(&session, &scope, "test").err().unwrap();
+        assert!(
+            error.message.contains("Process control"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("reserved"), "{}", error.message);
+        assert!(!error.message.contains("fake"), "{}", error.message);
+    }
+
+    #[test]
+    fn add_refuses_a_reserved_variable_name_for_the_desktop_too() {
+        let (session, _directory) = test_session();
+        let error = session
             .access(Access::Write, None, |vault| {
                 vault.add(akm_core::ApiKeyInput {
                     title: "Process control".into(),
                     secret: "fake".into(),
                     env_var: Some("PATH".into()),
-                    project: Some("app".into()),
-                    environment: Some("dev".into()),
                     ..Default::default()
                 })?;
                 Ok(())
             })
+            .err()
             .unwrap();
-        let scope = ExportScope::new(Some("app".into()), Some("dev".into()), false).unwrap();
-        assert!(extract_export(&session, &scope, "test").is_err());
+        assert!(error.message.contains("reserved"), "{}", error.message);
     }
     struct ScriptedConfirm {
         answer: bool,
