@@ -6,6 +6,7 @@ pub mod journal;
 pub mod lifecycle;
 pub mod model;
 mod private_fs;
+pub mod schedule;
 pub mod vault;
 
 pub use disclosure::{Disclosure, EnvDisclosure, EnvPlan, KeyDisclosure};

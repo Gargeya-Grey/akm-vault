@@ -212,7 +212,7 @@ fn rotate_replaces_the_secret_and_prints_literal_times_but_never_a_secret() {
         "{shown}"
     );
     assert!(shown.contains("History: 1 earlier version"), "{shown}");
-    assert!(shown.contains("Rotation:    30 days (30d)"), "{shown}");
+    assert!(shown.contains("Rotation:    30 days (in 30d)"), "{shown}");
 
     let later = f.run_with_input(
         "2026-05-11T10:00:00Z",

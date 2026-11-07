@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::lifecycle::SecretChange;
+use crate::schedule::{rotation_due, Remaining};
 
 /// Custom field names written into the KDBX entry. KeePassXC preserves unknown
 /// fields, so the vault stays fully readable outside this app.
@@ -87,12 +88,19 @@ impl ApiKey {
         self.expires_at.is_some_and(|e| e <= now)
     }
 
-    /// Days until the rotation interval elapses, counted from the last secret change. It is
-    /// `None` when AKM knows no such time: an edit of notes or metadata never counts.
-    pub fn rotation_due_in(&self, now: DateTime<Utc>) -> Option<i64> {
-        let days = self.rotation_days? as i64;
-        let changed = self.secret_changed_at?;
-        Some((changed + chrono::Duration::days(days) - now).num_days())
+    /// When the rotation interval elapses, counted from the last secret change. It is `None`
+    /// when AKM knows no such time: an edit of notes or metadata never counts.
+    pub fn rotation_due_at(&self) -> Option<DateTime<Utc>> {
+        Some(rotation_due(self.secret_changed_at?, self.rotation_days?))
+    }
+
+    /// The distance to [`ApiKey::rotation_due_at`]: exact for scheduling, whole days for display.
+    pub fn rotation_remaining(&self, now: DateTime<Utc>) -> Option<Remaining> {
+        Some(Remaining::of(self.rotation_due_at()?, now))
+    }
+
+    pub fn expiry_remaining(&self, now: DateTime<Utc>) -> Option<Remaining> {
+        Some(Remaining::of(self.expires_at?, now))
     }
 
     /// The environment variable name used when injecting this key.

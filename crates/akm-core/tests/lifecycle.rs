@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use akm_core::model::META_SECRET_CHANGED;
+use akm_core::schedule::Remaining;
 use akm_core::{ApiKeyInput, Clock, Error, KeyDisclosure, Secret, SecretChange, Vault};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use keepass::db::{fields, Database};
@@ -135,8 +136,8 @@ fn a_new_key_records_its_creation_as_the_secret_change_time() {
     assert_eq!(key.secret_change, SecretChange::Known);
     assert_eq!(key.history_count, 0);
     assert_eq!(
-        key.rotation_due_in(utc("2026-01-11T00:00:00Z")),
-        Some(20),
+        key.rotation_remaining(utc("2026-01-11T00:00:00Z")),
+        Some(Remaining::In { days: 20 }),
         "30 days after the secret change, minus 10 days"
     );
     let stored = f.raw();
@@ -161,8 +162,8 @@ fn a_notes_only_edit_does_not_reset_the_secret_change_time() {
     assert_eq!(edited.secret_changed_at, Some(utc("2026-01-01T00:00:00Z")));
     assert_eq!(edited.history_count, 1);
     assert_eq!(
-        edited.rotation_due_in(utc("2026-01-11T00:00:00Z")),
-        Some(20),
+        edited.rotation_remaining(utc("2026-01-11T00:00:00Z")),
+        Some(Remaining::In { days: 20 }),
         "the rotation age still counts from the secret change, not from the notes edit"
     );
 }
@@ -362,7 +363,7 @@ fn a_legacy_key_without_a_time_shows_unknown_and_never_an_invented_date() {
     let legacy = vault.get_by_id(&id).unwrap();
     assert_eq!(legacy.secret_changed_at, None);
     assert_eq!(legacy.secret_change, SecretChange::Unknown);
-    assert_eq!(legacy.rotation_due_in(utc("2026-03-01T00:00:00Z")), None);
+    assert_eq!(legacy.rotation_remaining(utc("2026-03-01T00:00:00Z")), None);
 
     let mut edit = vault.edit_input(&id).unwrap();
     edit.notes = Some("only a note".into());
@@ -409,7 +410,7 @@ fn a_secret_changed_in_another_program_is_unknown_not_the_old_time() {
     let key = vault.get_by_id(&id).unwrap();
     assert_eq!(key.secret_change, SecretChange::ChangedOutside);
     assert_eq!(key.secret_changed_at, None);
-    assert_eq!(key.rotation_due_in(utc("2026-03-01T00:00:00Z")), None);
+    assert_eq!(key.rotation_remaining(utc("2026-03-01T00:00:00Z")), None);
 }
 
 // ---------------------------------------------------------------- rotate

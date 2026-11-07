@@ -2,8 +2,9 @@ use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 
 use akm_core::audit::AuditLog;
+use akm_core::schedule::{parse_expiry, Remaining};
 use akm_core::{ApiKey, ApiKeyInput, EnvDisclosure, EnvPlan, Error, KeyDisclosure, Result, Vault};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand};
 use zeroize::Zeroizing;
 
@@ -95,7 +96,7 @@ struct AddArgs {
     #[arg(long, value_delimiter = ',')]
     tags: Vec<String>,
 
-    /// Expiry date, YYYY-MM-DD
+    /// Expiry: a date YYYY-MM-DD (it ends at 23:59:59 UTC that day) or a full RFC 3339 time
     #[arg(long)]
     expires: Option<String>,
 
@@ -356,7 +357,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                 url,
                 notes,
                 tags,
-                expires_at: parse_expiry(expires.as_deref())?,
+                expires_at: expires.as_deref().map(parse_expiry).transpose()?,
                 rotation_days,
             };
 
@@ -974,25 +975,15 @@ fn secret_value(given: Option<String>, from_stdin: bool) -> Result<String> {
     Ok(secret)
 }
 
-fn parse_expiry(raw: Option<&str>) -> Result<Option<DateTime<Utc>>> {
-    let Some(raw) = raw else {
-        return Ok(None);
-    };
-
-    if let Ok(date) = NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
-        let midnight = date
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| Error::Invalid(format!("invalid date {raw:?}")))?;
-        return Ok(Some(midnight.and_utc()));
+/// Whole days round up while time is left, and count full days once it is late. A key that is
+/// late by less than a day reads "overdue", never "in 0d".
+fn remaining_text(remaining: Remaining) -> String {
+    match remaining {
+        Remaining::In { days } => format!("in {days}d"),
+        Remaining::Now => "due now".to_string(),
+        Remaining::Overdue { days: 0 } => "overdue".to_string(),
+        Remaining::Overdue { days } => format!("{days}d overdue"),
     }
-
-    if let Ok(datetime) = DateTime::parse_from_rfc3339(raw) {
-        return Ok(Some(datetime.with_timezone(&Utc)));
-    }
-
-    Err(Error::Invalid(format!(
-        "could not parse expiry {raw:?}; use YYYY-MM-DD"
-    )))
 }
 
 fn print_table(out: &mut impl Write, keys: &[ApiKey], now: DateTime<Utc>) -> std::io::Result<()> {
@@ -1025,9 +1016,8 @@ fn print_table(out: &mut impl Write, keys: &[ApiKey], now: DateTime<Utc>) -> std
             })
             .unwrap_or_else(|| "-".to_string());
 
-        let rotation = match (key.rotation_days, key.rotation_due_in(now)) {
-            (_, Some(days)) if days < 0 => format!("{}d overdue", -days),
-            (_, Some(days)) => format!("in {days}d"),
+        let rotation = match (key.rotation_days, key.rotation_remaining(now)) {
+            (_, Some(remaining)) => remaining_text(remaining),
             (Some(_), None) => "unknown".to_string(),
             (None, None) => "-".to_string(),
         };
@@ -1064,7 +1054,7 @@ struct KeyMetadata {
     notes: Option<String>,
     expires_at: Option<DateTime<Utc>>,
     rotation_days: Option<u32>,
-    rotation_due_in: Option<i64>,
+    rotation_remaining: Option<Remaining>,
     secret_changed_at: Option<DateTime<Utc>>,
     history_count: usize,
     now: DateTime<Utc>,
@@ -1084,7 +1074,7 @@ impl KeyMetadata {
             notes: key.notes.clone(),
             expires_at: key.expires_at,
             rotation_days: key.rotation_days,
-            rotation_due_in: key.rotation_due_in(now),
+            rotation_remaining: key.rotation_remaining(now),
             secret_changed_at: key.secret_changed_at,
             history_count: key.history_count,
             now,
@@ -1132,8 +1122,12 @@ fn print_key(
         None => writeln!(out, "Expires:     -")?,
     }
 
-    match (key.rotation_days, key.rotation_due_in) {
-        (Some(interval), Some(days)) => writeln!(out, "Rotation:    {interval} days ({days}d)")?,
+    match (key.rotation_days, key.rotation_remaining) {
+        (Some(interval), Some(remaining)) => writeln!(
+            out,
+            "Rotation:    {interval} days ({})",
+            remaining_text(remaining)
+        )?,
         (Some(interval), None) => writeln!(
             out,
             "Rotation:    {interval} days (due date unknown: no secret-change time is recorded)"
@@ -1645,10 +1639,8 @@ mod tests {
 
     #[test]
     fn parses_date_and_rfc3339() {
-        assert!(parse_expiry(Some("2027-01-31")).unwrap().is_some());
-        assert!(parse_expiry(Some("2027-01-31T10:00:00Z"))
-            .unwrap()
-            .is_some());
-        assert!(parse_expiry(Some("soon")).is_err());
+        assert!(parse_expiry("2027-01-31").is_ok());
+        assert!(parse_expiry("2027-01-31T10:00:00Z").is_ok());
+        assert!(parse_expiry("soon").is_err());
     }
 }
