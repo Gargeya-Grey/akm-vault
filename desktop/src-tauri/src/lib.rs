@@ -1,7 +1,7 @@
 mod clipboard;
 mod commands;
 mod error;
-mod pending;
+mod import_review;
 mod policy;
 mod private_export;
 mod session;
@@ -23,6 +23,12 @@ pub fn run() {
         .manage(visibility::WindowPresentation::default())
         .setup(|app| {
             let handle = app.handle().clone();
+            app.manage(settings::PreferenceState(Arc::new(
+                settings::FilePreferences::for_app(&handle),
+            )));
+            app.manage(import_review::ConfirmState(Arc::new(
+                import_review::NativeConfirm(handle.clone()),
+            )));
             let session = Arc::new(Session::new(
                 Arc::new(MonotonicClock::default()),
                 Box::new(clipboard::NativeClipboard),
@@ -41,6 +47,13 @@ pub fn run() {
             app.manage(VaultState(session));
             Ok(())
         })
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                if let Some(state) = webview.try_state::<VaultState>() {
+                    state.0.document_started();
+                }
+            }
+        })
         .on_window_event(|window, event| {
             visibility::on_window_event(window, event);
             if matches!(
@@ -52,31 +65,7 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![
-            vault_status,
-            vault_prepare_open,
-            vault_unlock,
-            vault_create,
-            vault_lock,
-            vault_activity,
-            vault_warnings,
-            vault_dismiss_warnings,
-            vault_upgrade,
-            vault_reload,
-            keys_list,
-            key_reveal,
-            key_copy,
-            key_add,
-            key_update,
-            key_remove,
-            audit_read,
-            env_export,
-            env_copy,
-            env_save,
-            env_import_preview,
-            env_import_confirm,
-            backup_info
-        ])
+        .invoke_handler(commands::production_handlers!())
         .build(tauri::generate_context!())
         .expect("error while building AKM");
     app.run(|app, event| {

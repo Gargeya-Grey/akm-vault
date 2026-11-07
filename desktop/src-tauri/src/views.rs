@@ -1,4 +1,4 @@
-use akm_core::{ApiKey, ApiKeyInput, ImportPreview, Vault};
+use akm_core::{ApiKey, ApiKeyInput, Vault};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -233,14 +233,6 @@ mod audit_precision_tests {
 pub struct ImportReport {
     pub added: usize,
     pub updated: usize,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PreviewReport {
-    #[serde(flatten)]
-    pub preview: ImportPreview,
-    pub token: String,
 }
 
 #[derive(Serialize)]

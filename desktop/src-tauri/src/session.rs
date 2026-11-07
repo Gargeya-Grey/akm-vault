@@ -14,7 +14,6 @@ use zeroize::Zeroizing;
 use crate::{
     clipboard::{CleanupFailure, ClipboardBackend, ClipboardLease},
     error::CommandError,
-    pending::{PendingImport, PendingImports},
     policy::{Policy, Signal, Ticket},
 };
 
@@ -77,6 +76,10 @@ pub enum OperationWarningKind {
     BackupRetention,
     ExportJournal,
     Preference,
+    ImportApplied,
+    ImportSessionEnded,
+    ImportFailed,
+    ImportDeclined,
 }
 
 #[derive(Clone, Serialize)]
@@ -123,7 +126,6 @@ struct Gate {
     owner: Option<NativeOwner>,
     revision: u64,
     presentation: u64,
-    pending: PendingImports,
     clipboard: ClipboardLease,
     cleanup_episode: Option<u64>,
     path: Option<PathBuf>,
@@ -160,7 +162,6 @@ impl Session {
                 owner: None,
                 revision: 0,
                 presentation: 0,
-                pending: PendingImports::default(),
                 clipboard: ClipboardLease::new(clipboard),
                 cleanup_episode: None,
                 path: None,
@@ -196,7 +197,6 @@ impl Session {
     }
 
     fn locked_gate(&self, gate: &mut Gate) {
-        gate.pending.clear();
         cleanup_clipboard(gate, None);
         self.retire_owner(gate);
     }
@@ -315,7 +315,6 @@ impl Session {
         let reservation = {
             let mut gate = self.gate()?;
             let ticket = gate.policy.begin_open(self.clock.now());
-            gate.pending.clear();
             cleanup_clipboard(&mut gate, None);
             self.retire_owner(&mut gate);
             let ticket = ticket.ok_or_else(|| {
@@ -378,7 +377,6 @@ impl Session {
             .map(|owner| owner.id.to_string())
             .ok_or_else(CommandError::locked)?;
         gate.presentation = gate.presentation.wrapping_add(1);
-        gate.pending.clear();
         Ok(Some(NativeViewNotice {
             session_id,
             hide_id: uuid::Uuid::new_v4().to_string(),
@@ -434,7 +432,6 @@ impl Session {
                 Err(error) => {
                     gate.policy.lock();
                     // Opening never installed protected state; its own event would hide the terminal error.
-                    gate.pending.clear();
                     gate.owner = None;
                     *stored = StoredVault::default();
                     return Err(error);
@@ -447,7 +444,6 @@ impl Session {
             gate.path = Some(vault.path().to_path_buf());
             gate.revision = 0;
             gate.presentation = 0;
-            gate.pending.clear();
             core_notices(&mut gate, ticket, vault.take_warning_records());
             *stored = StoredVault {
                 ticket: Some(ticket),
@@ -510,9 +506,6 @@ impl Session {
                             "The session or vault changed. Start this operation again.",
                         ));
                     }
-                    if matches!(access, Access::Reload | Access::Upgrade) {
-                        gate.pending.clear();
-                    }
                     current
                 }
                 _ => {
@@ -547,7 +540,6 @@ impl Session {
         }
         if result.is_ok() && !matches!(access, Access::Read) {
             gate.revision = gate.revision.wrapping_add(1);
-            gate.pending.clear();
         }
         Ok(Stamped {
             snapshot: Snapshot {
@@ -675,37 +667,36 @@ impl Session {
         Ok(())
     }
 
-    pub fn store_preview(
-        &self,
-        expected: Snapshot,
-        text: Zeroizing<String>,
-        project: Option<String>,
-        environment: Option<String>,
-    ) -> Result<String, CommandError> {
-        let mut gate = self.gate()?;
-        if self.current(&mut gate)? != expected {
-            return Err(CommandError::new(
-                "stalePreview",
-                "The vault changed. Preview again.",
-            ));
-        }
-        Ok(gate.pending.set(
-            expected.ticket,
-            expected.revision,
-            text,
-            project,
-            environment,
-        ))
-    }
-
-    pub fn take_preview(&self, token: &str) -> Result<Stamped<PendingImport>, CommandError> {
+    /// An import request names the session it was made for. The reply of an older
+    /// session, or a request that arrives after a newer opening, is refused here.
+    pub fn begin_import(&self, session_id: &str) -> Result<Snapshot, CommandError> {
+        let id = uuid::Uuid::parse_str(session_id).map_err(|_| CommandError::locked())?;
         let mut gate = self.gate()?;
         let current = self.current(&mut gate)?;
-        let pending = gate.pending.take(token, current.ticket, current.revision)?;
-        Ok(Stamped {
-            snapshot: current,
-            value: pending,
-        })
+        gate.owner
+            .as_ref()
+            .filter(|owner| owner.ticket == current.ticket && owner.id == id)
+            .ok_or_else(CommandError::locked)?;
+        Ok(current)
+    }
+
+    /// The record belongs to the application, not to a session: it must survive a
+    /// lock and a lost reply. It holds an opaque operation id and a fixed kind only.
+    pub fn record_import(&self, ticket: Ticket, operation_id: &str, kind: OperationWarningKind) {
+        if let Ok(mut gate) = self.gate() {
+            gate.notices.push(OperationNotice {
+                id: operation_id.to_string(),
+                origin_session: ticket.0.to_string(),
+                kind,
+            });
+        }
+    }
+
+    /// A page load means the document that held any on-screen result is gone.
+    pub fn document_started(&self) {
+        if let Ok(mut gate) = self.gate() {
+            gate.presentation = gate.presentation.wrapping_add(1);
+        }
     }
 
     pub fn warnings(&self) -> Result<WarningReport, CommandError> {
@@ -906,19 +897,10 @@ mod tests {
     }
 
     #[test]
-    fn native_presentation_expiry_keeps_the_owner_but_expires_old_reviews_and_read_results() {
+    fn native_presentation_expiry_keeps_the_owner_but_expires_old_read_results_and_bound_writes() {
         let f = fixture();
         let before = f.session.snapshot().unwrap();
         let owner = f.session.active_owner(before.ticket).unwrap();
-        let token = f
-            .session
-            .store_preview(
-                before,
-                Zeroizing::new("TOKEN=fake-review".into()),
-                Some("demo".into()),
-                Some("dev".into()),
-            )
-            .unwrap();
         let read = f
             .session
             .access(Access::Read, Some(before), |_| Ok("fake-old-read"))
@@ -942,16 +924,15 @@ mod tests {
             f.native_notices.lock().unwrap().is_empty(),
             "presentation expiry is not a native lock"
         );
-        assert!(f.session.take_preview(&token).is_err());
-        assert!(f
-            .session
-            .store_preview(
-                before,
-                Zeroizing::new("TOKEN=fake-late".into()),
-                Some("demo".into()),
-                Some("dev".into())
-            )
-            .is_err());
+        assert_eq!(
+            f.session
+                .access(Access::Write, Some(before), |_| Ok(()))
+                .err()
+                .unwrap()
+                .kind,
+            "stalePreview",
+            "an operation bound to the old presentation is refused"
+        );
         assert_eq!(
             f.session.finish(Access::Read, read).unwrap_err().kind,
             "viewChanged"
@@ -989,15 +970,14 @@ mod tests {
             read.snapshot.presentation,
             f.session.snapshot().unwrap().presentation
         );
-        assert!(f
-            .session
-            .store_preview(
-                read.snapshot,
-                Zeroizing::new("TOKEN=fake-late-review".into()),
-                Some("demo".into()),
-                Some("dev".into())
-            )
-            .is_err());
+        assert_eq!(
+            f.session
+                .access(Access::Write, Some(read.snapshot), |_| Ok(()))
+                .err()
+                .unwrap()
+                .kind,
+            "stalePreview"
+        );
     }
 
     #[test]
@@ -2522,24 +2502,14 @@ mod tests {
     }
 
     #[test]
-    fn locking_clears_only_the_sessions_clipboard_and_invalidates_imports() {
+    fn locking_clears_only_the_sessions_clipboard() {
         let f = fixture();
         let stamp = f.session.snapshot().unwrap();
         f.session
             .copy(stamp.ticket, Zeroizing::new("fake".into()))
             .unwrap();
-        let token = f
-            .session
-            .store_preview(
-                stamp,
-                Zeroizing::new("TOKEN=fake".into()),
-                Some("app".into()),
-                Some("dev".into()),
-            )
-            .unwrap();
         f.session.lock().unwrap();
         assert_eq!(f.clipboard.lock().unwrap().text, "");
-        assert!(f.session.take_preview(&token).is_err());
         assert!(f
             .session
             .copy(stamp.ticket, Zeroizing::new("late".into()))
@@ -2556,41 +2526,29 @@ mod tests {
     }
 
     #[test]
-    fn intervening_writes_and_reload_discard_previews() {
+    fn a_snapshot_from_before_an_intervening_write_or_reload_cannot_authorize_a_write() {
         let f = fixture();
         let stamp = f.session.snapshot().unwrap();
-        let token = f
-            .session
-            .store_preview(
-                stamp,
-                Zeroizing::new("TOKEN=fake".into()),
-                Some("app".into()),
-                Some("dev".into()),
-            )
-            .unwrap();
         f.session
             .access(Access::Write, None, |vault| {
                 vault.add(akm_core::ApiKeyInput::new("Other", "fake-other"))?;
                 Ok(())
             })
             .unwrap();
-        assert!(f.session.take_preview(&token).is_err());
+        let stale = |stamp| {
+            f.session
+                .access(Access::Write, Some(stamp), |_| Ok(()))
+                .err()
+                .map(|error| error.kind)
+        };
+        assert_eq!(stale(stamp).as_deref(), Some("stalePreview"));
         let stamp = f.session.snapshot().unwrap();
-        let token = f
-            .session
-            .store_preview(
-                stamp,
-                Zeroizing::new("TOKEN=fake".into()),
-                Some("app".into()),
-                Some("dev".into()),
-            )
-            .unwrap();
         f.session
             .access(Access::Reload, None, |vault| {
                 vault.reload().map_err(Into::into)
             })
             .unwrap();
-        assert!(f.session.take_preview(&token).is_err());
+        assert_eq!(stale(stamp).as_deref(), Some("stalePreview"));
     }
 
     #[test]

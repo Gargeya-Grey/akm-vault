@@ -4,12 +4,14 @@
 #[path = "../src/clipboard.rs"]
 mod clipboard;
 #[path = "../src/commands.rs"]
+#[allow(unused_imports)]
 mod commands;
 #[path = "../src/error.rs"]
 #[allow(unused_imports)]
 mod error;
-#[path = "../src/pending.rs"]
-mod pending;
+#[path = "../src/import_review.rs"]
+#[allow(unused_imports)]
+mod import_review;
 #[path = "../src/policy.rs"]
 mod policy;
 #[path = "../src/private_export.rs"]
@@ -29,11 +31,14 @@ mod visibility;
 use commands::*;
 use session::{Access, MonotonicClock, Session, VaultState};
 use std::{
-    sync::{mpsc, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
     time::Duration,
 };
 use tauri::{
-    ipc::{CallbackFn, InvokeBody, InvokeResponse},
+    ipc::{CallbackFn, InvokeBody, InvokeResponse, InvokeResponseBody},
     test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY},
     webview::InvokeRequest,
 };
@@ -48,6 +53,50 @@ impl clipboard::ClipboardBackend for FakeClipboard {
     }
 }
 
+struct Answer(Arc<AtomicBool>);
+impl import_review::ImportConfirm for Answer {
+    fn confirm(&self, _: &import_review::ImportReview) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+fn call(
+    webview: &tauri::Webview<MockRuntime>,
+    command: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, serde_json::Value> {
+    let (response_tx, response_rx) = mpsc::channel();
+    let target = webview.clone();
+    let command = command.to_string();
+    let dispatch = std::thread::spawn(move || {
+        target.on_message(
+            InvokeRequest {
+                cmd: command,
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: "http://tauri.localhost".parse().unwrap(),
+                body: InvokeBody::Json(args),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.into(),
+            },
+            Box::new(move |_, _, response, _, _| {
+                response_tx.send(response).unwrap();
+            }),
+        );
+    });
+    let response = response_rx
+        .recv_timeout(Duration::from_secs(60))
+        .expect("actual command response");
+    dispatch.join().unwrap();
+    match response {
+        InvokeResponse::Ok(InvokeResponseBody::Json(text)) => {
+            Ok(serde_json::from_str(&text).unwrap())
+        }
+        InvokeResponse::Ok(InvokeResponseBody::Raw(_)) => panic!("raw reply"),
+        InvokeResponse::Err(error) => Err(error.0),
+    }
+}
+
 fn main() {
     let directory = tempfile::tempdir().unwrap();
     let session = Arc::new(Session::new(
@@ -56,6 +105,7 @@ fn main() {
         Arc::new(|_| {}),
     ));
     session.observe(policy::Signal::Available);
+    let answer = Arc::new(AtomicBool::new(true));
     let owner = session.prepare_open().unwrap();
     let ticket = session.claim_open(&owner).unwrap();
     session
@@ -80,19 +130,21 @@ fn main() {
         .unwrap()
         .value;
     let id = key.id.clone();
+    let second_vault = directory.path().join("second.kdbx");
+    akm_core::Vault::create(&second_vault, "fake-dispatch-password-123!", None).unwrap();
+    let settings_file = directory.path().join("fake-settings").join("settings.json");
     let app = mock_builder()
         .manage(VaultState(session.clone()))
-        .invoke_handler(tauri::generate_handler![
-            vault_status,
-            keys_list,
-            key_reveal,
-            key_copy,
-            audit_read,
-            env_export,
-            env_copy,
-            env_import_preview,
-            backup_info
-        ])
+        .manage(settings::PreferenceState(Arc::new(
+            settings::FilePreferences::new(
+                Some(settings_file.clone()),
+                Some(directory.path().join("fake-default.kdbx")),
+            ),
+        )))
+        .manage(import_review::ConfirmState(Arc::new(Answer(
+            answer.clone(),
+        ))))
+        .invoke_handler(commands::production_handlers!())
         .build(mock_context(noop_assets()))
         .unwrap();
     let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
@@ -115,8 +167,8 @@ fn main() {
             serde_json::json!({"project":"demo", "environment":"dev", "all":false}),
         ),
         (
-            "env_import_preview",
-            serde_json::json!({"text":"TOKEN=fake-next-value", "project":"demo", "environment":"dev"}),
+            "env_import",
+            serde_json::json!({"sessionId": owner, "operationId": uuid::Uuid::new_v4().to_string(), "text":"TOKEN=fake-next-value", "project":"demo", "environment":"dev"}),
         ),
         ("backup_info", serde_json::json!({})),
     ] {
@@ -178,4 +230,105 @@ fn main() {
         "vault-backed commands blocked their Tauri invocation thread: {stalled:?}"
     );
     println!("PASS: nine actual generated IPC handlers release invocation dispatch while fake vault access stalls; no real window/clipboard/settings.");
+
+    // The wire shapes that desktop/src/api.ts sends, through the production handler list.
+    let import = |operation: &str, session_id: &str, text: &str| {
+        call(
+            webview,
+            "env_import",
+            serde_json::json!({"sessionId": session_id, "operationId": operation, "text": text, "project": "demo", "environment": "dev"}),
+        )
+    };
+    let (applied, declined, refused) = (
+        uuid::Uuid::new_v4().to_string(),
+        uuid::Uuid::new_v4().to_string(),
+        uuid::Uuid::new_v4().to_string(),
+    );
+    assert_eq!(
+        import(
+            &applied,
+            &owner,
+            "WIRE_ONE=fake-wire-one
+"
+        )
+        .unwrap(),
+        serde_json::json!({"added": 1, "updated": 0})
+    );
+    answer.store(false, Ordering::SeqCst);
+    assert_eq!(
+        import(
+            &declined,
+            &owner,
+            "WIRE_TWO=fake-wire-two
+"
+        )
+        .unwrap(),
+        serde_json::Value::Null
+    );
+    answer.store(true, Ordering::SeqCst);
+    let error = import(
+        &refused,
+        &uuid::Uuid::new_v4().to_string(),
+        "WIRE_THREE=fake
+",
+    )
+    .unwrap_err();
+    assert_eq!(error["kind"], "locked");
+    let report = call(webview, "vault_warnings", serde_json::json!({})).unwrap();
+    let kinds: Vec<(String, String)> = report["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| {
+            (
+                record["id"].as_str().unwrap().into(),
+                record["kind"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    assert!(
+        kinds.contains(&(applied.clone(), "importApplied".into())),
+        "{kinds:?}"
+    );
+    assert!(
+        kinds.contains(&(declined.clone(), "importDeclined".into())),
+        "{kinds:?}"
+    );
+    assert!(
+        kinds.iter().all(|(id, _)| id != &refused),
+        "a refused request leaves no record"
+    );
+    call(
+        webview,
+        "vault_dismiss_warnings",
+        serde_json::json!({"ids": [applied, declined]}),
+    )
+    .unwrap();
+    let report = call(webview, "vault_warnings", serde_json::json!({})).unwrap();
+    assert!(report["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|record| record["id"] != applied.as_str() && record["id"] != declined.as_str()));
+
+    call(
+        webview,
+        "vault_lock",
+        serde_json::json!({"sessionId": owner}),
+    )
+    .unwrap();
+    let reserved = call(webview, "vault_prepare_open", serde_json::json!({})).unwrap();
+    let reserved = reserved.as_str().unwrap().to_string();
+    let status = call(
+        webview,
+        "vault_unlock",
+        serde_json::json!({"path": second_vault.display().to_string(), "password": "fake-dispatch-password-123!", "sessionId": reserved}),
+    )
+    .unwrap();
+    assert_eq!(status["sessionId"], reserved.as_str());
+    assert_eq!(status["unlocked"], true);
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&settings_file).unwrap()).unwrap();
+    assert_eq!(saved["vaultPath"], second_vault.display().to_string());
+    println!("PASS: env_import, vault_warnings, vault_dismiss_warnings, vault_lock, vault_prepare_open and vault_unlock answer the frontend's argument and reply shapes through the production handler list; the saved path went to the fake settings file.");
 }
