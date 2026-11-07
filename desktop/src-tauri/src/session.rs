@@ -207,6 +207,29 @@ pub struct Session {
 #[derive(Clone)]
 pub struct VaultState(pub Arc<Session>);
 
+/// Proof that the session gate is held for a session that is still current. Only
+/// `Session::while_current` and `Session::while_session` make one, and it is neither `Clone`
+/// nor `Copy`, so it cannot outlive the call that made it. A function that acts for a session
+/// (the notifier, the saved-path write) takes `&Held`: a caller that checked the session
+/// earlier and acts later has nothing to pass.
+pub struct Held<'gate> {
+    gate: std::marker::PhantomData<&'gate ()>,
+}
+
+impl Held<'_> {
+    fn new() -> Self {
+        Self {
+            gate: std::marker::PhantomData,
+        }
+    }
+
+    /// For a unit test of a function that takes `&Held` and has no session to hold.
+    #[cfg(test)]
+    pub fn for_test() -> Self {
+        Self::new()
+    }
+}
+
 impl Session {
     pub fn new(
         clock: Arc<dyn Clock>,
@@ -476,27 +499,30 @@ impl Session {
         Ok(())
     }
 
-    /// Runs a session-scoped side effect (a settings write, a notification) while `ticket`
-    /// still owns the session. The effect runs under the gate that lock and `start_open`
-    /// take, so neither can retire the owner between the check and the effect. The effect
-    /// must be short and must not call back into the session: the gate is not reentrant.
+    /// The one way to perform a session-scoped side effect (a settings write, a
+    /// notification). The effect runs while `ticket` still owns the session and under the
+    /// gate that lock and `start_open` take, so neither can retire the owner between the
+    /// check and the effect. The effect gets a `Held` and every such side effect takes one
+    /// as an argument, so code that checks and then acts after the gate is released does not
+    /// compile. The effect must be short and must not call back into the session: the gate
+    /// is not reentrant.
     pub fn while_current<T>(
         &self,
         ticket: Ticket,
-        effect: impl FnOnce() -> T,
+        effect: impl FnOnce(&Held<'_>) -> T,
     ) -> Result<T, CommandError> {
         let mut gate = self.gate()?;
         if self.current(&mut gate)?.ticket != ticket {
             return Err(CommandError::locked());
         }
-        Ok(effect())
+        Ok(effect(&Held::new()))
     }
 
     /// As `while_current`, for a request that names the session it was made for.
     pub fn while_session<T>(
         &self,
         session_id: &str,
-        effect: impl FnOnce() -> T,
+        effect: impl FnOnce(&Held<'_>) -> T,
     ) -> Result<T, CommandError> {
         let id = uuid::Uuid::parse_str(session_id).map_err(|_| CommandError::locked())?;
         let mut gate = self.gate()?;
@@ -505,7 +531,7 @@ impl Session {
             .as_ref()
             .filter(|owner| owner.ticket == current.ticket && owner.id == id)
             .ok_or_else(CommandError::locked)?;
-        Ok(effect())
+        Ok(effect(&Held::new()))
     }
 
     pub fn path(&self) -> Result<Option<PathBuf>, CommandError> {
@@ -2462,7 +2488,7 @@ mod tests {
         let old_ticket = f.session.snapshot().unwrap().ticket;
         let old_owner = f.session.active_owner(old_ticket).unwrap();
         let ran = AtomicUsize::new(0);
-        let effect = || ran.fetch_add(1, Ordering::SeqCst);
+        let effect = |_: &Held<'_>| ran.fetch_add(1, Ordering::SeqCst);
         assert!(f.session.while_current(old_ticket, effect).is_ok());
         assert!(f.session.while_session(&old_owner, effect).is_ok());
         assert_eq!(ran.load(Ordering::SeqCst), 2);
@@ -2510,7 +2536,7 @@ mod tests {
             let effect_session = f.session.clone();
             let effect = std::thread::spawn(move || {
                 effect_session
-                    .while_session(&owner, || {
+                    .while_session(&owner, |_| {
                         inside_tx.send(()).unwrap();
                         release_rx.recv().unwrap();
                     })

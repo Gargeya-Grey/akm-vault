@@ -38,7 +38,7 @@ mod views;
 mod visibility;
 
 use commands::*;
-use session::{Access, MonotonicClock, Session, VaultState};
+use session::{Access, Held, MonotonicClock, Session, VaultState};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -64,7 +64,7 @@ impl reminders::Notifier for Toasts {
     fn permission(&self) -> reminders::Permission {
         reminders::Permission::Granted
     }
-    fn show(&self, title: &str, body: &str) -> Result<(), String> {
+    fn show(&self, _held: &Held<'_>, title: &str, body: &str) -> Result<(), String> {
         self.0.lock().unwrap().push((title.into(), body.into()));
         Ok(())
     }

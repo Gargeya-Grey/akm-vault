@@ -19,7 +19,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::{error::CommandError, session::Session};
+use crate::{
+    error::CommandError,
+    session::{Held, Session},
+};
 
 pub const TITLE: &str = "AKM";
 
@@ -65,7 +68,7 @@ pub struct ReminderStatus {
 pub trait Notifier: Send + Sync {
     fn permission(&self) -> Permission;
     /// The error text is not shown or stored.
-    fn show(&self, title: &str, body: &str) -> Result<(), String>;
+    fn show(&self, held: &Held<'_>, title: &str, body: &str) -> Result<(), String>;
 }
 
 pub struct NativeNotifier<R: Runtime>(pub AppHandle<R>);
@@ -83,7 +86,7 @@ impl<R: Runtime> Notifier for NativeNotifier<R> {
         }
     }
 
-    fn show(&self, title: &str, body: &str) -> Result<(), String> {
+    fn show(&self, _held: &Held<'_>, title: &str, body: &str) -> Result<(), String> {
         self.0
             .notification()
             .builder()
@@ -228,11 +231,11 @@ impl Reminders {
             ));
         }
         let mut gate = self.gate()?;
-        session.while_session(session_id, || self.attempt(&mut gate, count))?;
+        session.while_session(session_id, |held| self.attempt(held, &mut gate, count))?;
         Ok(self.status_of(&gate))
     }
 
-    fn attempt(&self, gate: &mut Gate, count: u32) {
+    fn attempt(&self, held: &Held<'_>, gate: &mut Gate, count: u32) {
         if !self.store.enabled() || gate.blocked {
             return;
         }
@@ -240,7 +243,7 @@ impl Reminders {
             gate.blocked = true;
             return;
         }
-        match self.notifier.show(TITLE, &notification_body(count)) {
+        match self.notifier.show(held, TITLE, &notification_body(count)) {
             Ok(()) => gate.delivery = Delivery::Sent,
             Err(_) => {
                 gate.delivery = Delivery::Failed;
@@ -287,7 +290,7 @@ mod tests {
                 .unwrap()
                 .unwrap_or(Permission::Granted)
         }
-        fn show(&self, title: &str, body: &str) -> Result<(), String> {
+        fn show(&self, _held: &Held<'_>, title: &str, body: &str) -> Result<(), String> {
             let held = self.hold.lock().unwrap().take();
             if let Some((entered, release)) = held {
                 entered.send(()).unwrap();

@@ -196,7 +196,7 @@ async fn open_vault(
         .save_vault_path(
             ticket,
             &|effect| {
-                let _ = session.while_current(ticket, effect);
+                let _ = session.while_current(ticket, |held| effect(held));
             },
             &opened.value.path,
         )
@@ -2284,14 +2284,14 @@ mod tests {
             let saved = self.inner.save_vault_path(
                 ticket,
                 &|effect| {
-                    owned(&mut || {
+                    owned(&mut |held| {
                         self.entered.send(()).unwrap();
                         self.release
                             .lock()
                             .unwrap()
                             .recv_timeout(std::time::Duration::from_secs(30))
                             .unwrap();
-                        effect();
+                        effect(held);
                     });
                 },
                 vault_path,

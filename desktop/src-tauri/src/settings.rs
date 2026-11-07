@@ -6,7 +6,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-use crate::{error::CommandError, policy::Ticket};
+use crate::{error::CommandError, policy::Ticket, session::Held};
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,7 +22,7 @@ pub enum PreferenceSave {
 
 /// Runs the effect only while the opening that asks still owns the session, and holds the
 /// session gate (the one that lock and a newer opening take) while it runs.
-pub type OwnerFence<'a> = &'a dyn Fn(&mut dyn FnMut());
+pub type OwnerFence<'a> = &'a dyn Fn(&mut dyn FnMut(&Held<'_>));
 
 /// Where the last opened vault path lives. A newer opening always wins over an older one.
 pub trait PreferenceStore: Send + Sync {
@@ -98,8 +98,9 @@ impl PreferenceStore for FilePreferences {
             return Ok(PreferenceSave::Superseded);
         }
         let mut written = None;
-        owned(&mut || {
+        owned(&mut |held| {
             written = Some(write_settings_file(
+                held,
                 file,
                 &Settings {
                     vault_path: Some(vault_path.to_string()),
@@ -125,7 +126,11 @@ pub fn settings_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, C
     Ok(dir.join("settings.json"))
 }
 
-fn write_settings_file(path: &Path, settings: &Settings) -> Result<(), CommandError> {
+fn write_settings_file(
+    _held: &Held<'_>,
+    path: &Path,
+    settings: &Settings,
+) -> Result<(), CommandError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| CommandError::new("io", error.to_string()))?;
     }
@@ -153,11 +158,11 @@ pub fn current_path(
 mod tests {
     use super::*;
 
-    fn owned(effect: &mut dyn FnMut()) {
-        effect();
+    fn owned(effect: &mut dyn FnMut(&Held<'_>)) {
+        effect(&Held::for_test());
     }
 
-    fn not_owned(_effect: &mut dyn FnMut()) {}
+    fn not_owned(_effect: &mut dyn FnMut(&Held<'_>)) {}
 
     fn saved(file: &Path) -> Option<String> {
         FilePreferences::new(Some(file.to_path_buf()), None).saved_vault_path()
