@@ -155,3 +155,229 @@ fn candidate_lists_and_the_recycle_bin_hold_no_secret_bytes() {
         assert!(!text.contains(SECRET), "{text}");
     }
 }
+
+// ----------------- review 1, finding 3: a proof belongs to the vault session that recorded it
+
+mod bound {
+    use super::*;
+    use akm_core::journal::JournalRoot;
+    use akm_core::{ApiKey, Error};
+
+    pub struct Pair {
+        pub _directory: tempfile::TempDir,
+        pub a: Vault,
+        pub b: Vault,
+        pub key: ApiKey,
+    }
+
+    /// Vault B is a byte copy of vault A, so both hold the same key IDs. Each has its own
+    /// journal folder.
+    pub fn clones() -> Pair {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("a.kdbx");
+        let mut a = Vault::create_in(
+            &first,
+            PASSWORD,
+            None,
+            JournalRoot::at(directory.path().join("journal-a")),
+        )
+        .unwrap();
+        let key = a.add(input()).unwrap();
+        let second = directory.path().join("b.kdbx");
+        std::fs::copy(&first, &second).unwrap();
+        let b = Vault::open_in(
+            &second,
+            PASSWORD,
+            JournalRoot::at(directory.path().join("journal-b")),
+        )
+        .unwrap();
+        Pair {
+            _directory: directory,
+            a,
+            b,
+            key,
+        }
+    }
+
+    pub fn message(error: Error) -> String {
+        error
+            .to_string()
+            .trim_start_matches("invalid input: ")
+            .to_string()
+    }
+}
+
+#[test]
+fn a_vault_records_no_disclosure_for_a_key_it_does_not_hold() {
+    let pair = bound::clones();
+    let stranger = tempfile::tempdir().unwrap();
+    let other = akm_core::journal::JournalRoot::at(stranger.path().join("journal"));
+    let mut elsewhere =
+        Vault::create_in(stranger.path().join("c.kdbx"), PASSWORD, None, other).unwrap();
+    let foreign = elsewhere.add(input()).unwrap();
+    assert_ne!(foreign.id, pair.key.id);
+
+    let before = pair.a.audit_log().read(100).unwrap().len();
+    let error = pair
+        .a
+        .disclose_key(KeyDisclosure::Reveal, &foreign, None)
+        .unwrap_err();
+    assert!(
+        matches!(error, akm_core::Error::EntryNotFound(_)),
+        "{error}"
+    );
+    let after = pair.a.audit_log().read(100).unwrap().len();
+    assert_eq!(
+        before, after,
+        "no request was recorded for a stranger's key"
+    );
+}
+
+#[test]
+fn a_proof_from_one_vault_never_discloses_from_another_vault_with_the_same_key_id() {
+    let pair = bound::clones();
+    block_journal(&pair.b);
+    let proof = pair
+        .a
+        .disclose_key(KeyDisclosure::Reveal, &pair.key, Some("test"))
+        .unwrap();
+    let error = pair.b.secret(&pair.key.id, &proof).unwrap_err();
+    assert_eq!(
+        bound::message(error),
+        "this disclosure record was issued for another vault session"
+    );
+    assert!(pair
+        .b
+        .disclose_key(KeyDisclosure::Reveal, &pair.key, None)
+        .is_err());
+}
+
+#[test]
+fn a_scope_proof_and_a_scope_plan_from_one_vault_never_work_on_another_vault() {
+    let pair = bound::clones();
+    block_journal(&pair.b);
+    let plan_a = pair.a.plan_env(Some("demo"), Some("dev"), false).unwrap();
+    let plan_b = pair.b.plan_env(Some("demo"), Some("dev"), false).unwrap();
+    let proof = pair
+        .a
+        .disclose_env(EnvDisclosure::Export, &plan_a, Some("test"))
+        .unwrap();
+    assert_eq!(
+        bound::message(pair.b.env_vars(&plan_b, &proof).unwrap_err()),
+        "this disclosure record was issued for another vault session"
+    );
+    assert_eq!(
+        bound::message(pair.b.env_vars(&plan_a, &proof).unwrap_err()),
+        "this selection was planned for another vault session or an earlier state of it"
+    );
+    assert_eq!(
+        bound::message(
+            pair.b
+                .disclose_env(EnvDisclosure::Run, &plan_a, None)
+                .unwrap_err()
+        ),
+        "this selection was planned for another vault session or an earlier state of it"
+    );
+    assert_eq!(
+        pair.a.env_vars(&plan_a, &proof).unwrap(),
+        vec![("DEMO_TOKEN".to_string(), SECRET.to_string())],
+        "the vault that recorded it still can"
+    );
+}
+
+#[test]
+fn a_proof_is_used_once_for_a_key_and_for_a_scope() {
+    let (_directory, _path, mut vault) = fake_vault();
+    let key = vault.add(input()).unwrap();
+    let proof = vault
+        .disclose_key(KeyDisclosure::Reveal, &key, None)
+        .unwrap();
+    assert_eq!(&*vault.secret(&key.id, &proof).unwrap(), SECRET);
+    assert_eq!(
+        bound::message(vault.secret(&key.id, &proof).unwrap_err()),
+        "this disclosure record was already used"
+    );
+    let again = vault.disclose_key(KeyDisclosure::Copy, &key, None).unwrap();
+    assert!(
+        vault.secret(&key.id, &proof).is_err(),
+        "a new request does not revive an old record"
+    );
+    assert_eq!(&*vault.secret(&key.id, &again).unwrap(), SECRET);
+
+    let plan = vault.plan_env(Some("demo"), Some("dev"), false).unwrap();
+    let scope = vault.disclose_env(EnvDisclosure::Run, &plan, None).unwrap();
+    assert_eq!(vault.env_vars(&plan, &scope).unwrap().len(), 1);
+    assert_eq!(
+        bound::message(vault.env_vars(&plan, &scope).unwrap_err()),
+        "this disclosure record was already used"
+    );
+}
+
+#[test]
+fn a_refused_presentation_does_not_use_up_the_proof() {
+    let (_directory, _path, mut vault) = fake_vault();
+    let key = vault.add(input()).unwrap();
+    let proof = vault
+        .disclose_key(KeyDisclosure::Reveal, &key, None)
+        .unwrap();
+    assert!(vault.secret("not-a-key-id", &proof).is_err());
+    assert_eq!(&*vault.secret(&key.id, &proof).unwrap(), SECRET);
+}
+
+#[test]
+fn a_proof_and_a_plan_do_not_survive_a_change_of_the_vault() {
+    let (_directory, path, mut vault) = fake_vault();
+    let key = vault.add(input()).unwrap();
+    let plan = vault.plan_env(Some("demo"), Some("dev"), false).unwrap();
+    let proof = vault
+        .disclose_key(KeyDisclosure::Reveal, &key, None)
+        .unwrap();
+    let scope = vault
+        .disclose_env(EnvDisclosure::Export, &plan, None)
+        .unwrap();
+    vault
+        .rotate(&key.id, akm_core::Secret::new("fake-rotated-secret"))
+        .unwrap();
+    assert_eq!(
+        bound::message(vault.secret(&key.id, &proof).unwrap_err()),
+        "this disclosure record was issued before the vault changed"
+    );
+    assert!(vault.env_vars(&plan, &scope).is_err());
+    assert_eq!(
+        bound::message(
+            vault
+                .disclose_env(EnvDisclosure::Export, &plan, None)
+                .unwrap_err()
+        ),
+        "this selection was planned for another vault session or an earlier state of it"
+    );
+
+    let fresh = vault
+        .disclose_key(KeyDisclosure::Reveal, &key, None)
+        .unwrap();
+    assert_eq!(
+        &*vault.secret(&key.id, &fresh).unwrap(),
+        "fake-rotated-secret"
+    );
+
+    let late = vault
+        .disclose_key(KeyDisclosure::Reveal, &key, None)
+        .unwrap();
+    vault.reload().unwrap();
+    assert!(vault.secret(&key.id, &late).is_err(), "reload is a change");
+    drop(path);
+}
+
+#[test]
+fn a_proof_from_an_earlier_session_of_the_same_file_is_refused() {
+    let (_directory, path, mut vault) = fake_vault();
+    let key = vault.add(input()).unwrap();
+    let proof = vault
+        .disclose_key(KeyDisclosure::Reveal, &key, None)
+        .unwrap();
+    let reopened = Vault::open(&path, PASSWORD).unwrap();
+    assert_eq!(
+        bound::message(reopened.secret(&key.id, &proof).unwrap_err()),
+        "this disclosure record was issued for another vault session"
+    );
+}

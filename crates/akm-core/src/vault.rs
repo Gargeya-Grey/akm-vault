@@ -19,7 +19,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::audit::AuditLog;
-use crate::disclosure::{Disclosure, EnvDisclosure, EnvPlan, KeyDisclosure};
+use crate::disclosure::{Disclosure, EnvDisclosure, EnvPlan, KeyDisclosure, Stamp};
 use crate::error::{Error, Result};
 use crate::journal::{JournalRoot, VaultEvidence};
 use crate::lifecycle::{Clock, HistoryVersion, RecycledKey, Rotation, SecretChange, SystemClock};
@@ -53,6 +53,10 @@ pub struct Vault {
     warnings: Vec<VaultWarning>,
     journal: JournalRoot,
     clock: Arc<dyn Clock>,
+    /// Names this `Vault` value in the proofs and plans that it makes (review 1, finding 3).
+    session: Uuid,
+    /// Counts the changes of `db`: every commit and every reload.
+    state: u64,
 }
 
 struct ImportPlan {
@@ -104,6 +108,8 @@ impl Vault {
             warnings: Vec::new(),
             journal,
             clock: Arc::new(SystemClock),
+            session: Uuid::new_v4(),
+            state: 0,
         };
         vault.save()?;
         Ok(vault)
@@ -133,6 +139,8 @@ impl Vault {
             warnings: Vec::new(),
             journal,
             clock: Arc::new(SystemClock),
+            session: Uuid::new_v4(),
+            state: 0,
         })
     }
 
@@ -169,6 +177,7 @@ impl Vault {
             .map_err(|error| Error::Open(error.to_string()))?;
         self.db = db;
         self.fingerprint = Some(fingerprint);
+        self.state += 1;
         Ok(())
     }
 
@@ -768,7 +777,7 @@ impl Vault {
         }
 
         out.sort_by(|a, b| a.1.cmp(&b.1));
-        Ok(EnvPlan::new(out))
+        Ok(EnvPlan::new(self.stamp(), out))
     }
 
     /// Journals a request to disclose one key's secret. The proof exists only when the
@@ -779,8 +788,10 @@ impl Vault {
         key: &ApiKey,
         detail: Option<&str>,
     ) -> Result<Disclosure> {
+        self.find_entry_id(&key.id)
+            .ok_or_else(|| Error::EntryNotFound(key.id.clone()))?;
         self.log(action.action(), Some(key), detail)?;
-        Ok(Disclosure::key(action, key.id.clone()))
+        Ok(Disclosure::key(self.stamp(), action, key.id.clone()))
     }
 
     /// Journals a request to disclose a planned scope, before any value is read.
@@ -790,17 +801,14 @@ impl Vault {
         plan: &EnvPlan,
         detail: Option<&str>,
     ) -> Result<Disclosure> {
+        plan.stamp().plan_is_current(self.stamp())?;
         self.log(action.action(), None, detail)?;
-        Ok(Disclosure::env(action, plan.key_ids()))
+        Ok(Disclosure::env(self.stamp(), action, plan.key_ids()))
     }
 
     /// One key's secret, for the key that `proof` names.
     pub fn secret(&self, id: &str, proof: &Disclosure) -> Result<Zeroizing<String>> {
-        if !proof.covers_key(id) {
-            return Err(Error::Invalid(
-                "this disclosure record does not cover that key".into(),
-            ));
-        }
+        proof.redeem_key(self.stamp(), id)?;
         let entry = self
             .find_entry_id(id)
             .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
@@ -809,11 +817,7 @@ impl Vault {
 
     /// The variables of a plan, with their values. `proof` must be the record of this plan.
     pub fn env_vars(&self, plan: &EnvPlan, proof: &Disclosure) -> Result<Vec<(String, String)>> {
-        if !proof.covers_env(plan) {
-            return Err(Error::Invalid(
-                "this disclosure record does not cover that selection".into(),
-            ));
-        }
+        proof.redeem_env(self.stamp(), plan)?;
         let mut out = Vec::with_capacity(plan.len());
         for (id, name) in plan.entries() {
             let entry = self
@@ -971,6 +975,7 @@ impl Vault {
         tests::run_save_hook(tests::SaveStage::Committed, &tmp.path, &self.path);
         self.fingerprint = Some(fingerprint);
         self.db = verified;
+        self.state += 1;
         if let Some(backup) = &mut backup {
             backup.keep();
         }
@@ -1072,6 +1077,10 @@ impl Vault {
             fs::remove_file(backup)?;
         }
         Ok(())
+    }
+
+    fn stamp(&self) -> Stamp {
+        Stamp::new(self.session, self.state)
     }
 
     fn stamp_for(&self, id: EntryId) -> Result<NaiveDateTime> {
