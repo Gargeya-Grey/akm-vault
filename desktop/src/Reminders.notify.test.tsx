@@ -2,7 +2,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
 import { AttentionNotifier } from "./components/AttentionNotifier";
-import { adoptReservation } from "./nativeSession";
+import { adoptReservation, releaseNativeOwner } from "./nativeSession";
 import { nextAnnouncement } from "./reminders";
 import { acknowledgeCompletions, retainedCompletions } from "./sessionBoundary";
 import type { KeyView, ReminderStatus } from "./types";
@@ -30,6 +30,7 @@ let status: ReminderStatus;
 let keys: KeyView[];
 let foreground = true;
 let owner = "";
+let reservation = "";
 
 function key(id: string, title: string, overrides: Partial<KeyView> = {}): KeyView {
   return {
@@ -51,7 +52,8 @@ function setForeground(value: boolean) {
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(new Date(NOW));
-  adoptReservation(crypto.randomUUID());
+  reservation = crypto.randomUUID();
+  adoptReservation(reservation);
   owner = crypto.randomUUID();
   status = { enabled: true, permission: "granted", delivery: "none", blocked: false };
   keys = [];
@@ -117,7 +119,7 @@ test("an unlock in the background sends one count-only notification", async () =
   keys = [expired("a"), expired("b"), fine("c")];
   setForeground(false);
   await mount();
-  expect(sent()).toEqual([["reminders_notify", { count: 2 }]]);
+  expect(sent()).toEqual([["reminders_notify", { sessionId: reservation, count: 2 }]]);
   await tick(120_000);
   expect(sent()).toHaveLength(1);
 });
@@ -132,14 +134,14 @@ test("in the foreground nothing is sent; once the window goes to the background 
   setForeground(false);
   keys = [expired("a"), expired("b"), expired("c")];
   await tick();
-  expect(sent()).toEqual([["reminders_notify", { count: 3 }]]);
+  expect(sent()).toEqual([["reminders_notify", { sessionId: reservation, count: 3 }]]);
   await tick();
   expect(sent()).toHaveLength(1);
   keys = [expired("a")];
   await tick();
   keys = [expired("a"), expired("b")];
   await tick();
-  expect(sent()).toEqual([["reminders_notify", { count: 3 }], ["reminders_notify", { count: 2 }]]);
+  expect(sent()).toEqual([["reminders_notify", { sessionId: reservation, count: 3 }], ["reminders_notify", { sessionId: reservation, count: 2 }]]);
 });
 
 test("a key that enters the due-soon window while the window is in the background is announced by the clock alone", async () => {
@@ -148,11 +150,11 @@ test("a key that enters the due-soon window while the window is in the backgroun
   keys = [early, late];
   setForeground(false);
   await mount();
-  expect(sent()).toEqual([["reminders_notify", { count: 1 }]]);
+  expect(sent()).toEqual([["reminders_notify", { sessionId: reservation, count: 1 }]]);
   await tick(30_000);
   expect(sent()).toHaveLength(1);
   await tick(30_000);
-  expect(sent()).toEqual([["reminders_notify", { count: 1 }], ["reminders_notify", { count: 2 }]]);
+  expect(sent()).toEqual([["reminders_notify", { sessionId: reservation, count: 1 }], ["reminders_notify", { sessionId: reservation, count: 2 }]]);
 });
 
 test("the notification carries no title, project, environment or value", async () => {
@@ -161,7 +163,17 @@ test("the notification carries no title, project, environment or value", async (
   await mount();
   const everything = JSON.stringify(native.invoke.mock.calls.filter(([command]) => command === "reminders_notify"));
   for (const private_ of ["Private title", "secret-project", "prod", "FAKE_KEY"]) expect(everything).not.toContain(private_);
-  expect(everything).toBe('[["reminders_notify",{"count":2}]]');
+  expect(everything).toBe(`[["reminders_notify",{"sessionId":"${reservation}","count":2}]]`);
+});
+
+test("a page that has no native session sends no notification and reads no key", async () => {
+  releaseNativeOwner(reservation);
+  keys = [expired("a")];
+  setForeground(false);
+  await mount();
+  await tick(60_000);
+  expect(native.invoke.mock.calls.some(([command]) => command === "keys_list")).toBe(false);
+  expect(sent()).toHaveLength(0);
 });
 
 test("a denied permission or a block sends nothing and reads no key", async () => {

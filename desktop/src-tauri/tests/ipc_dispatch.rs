@@ -423,7 +423,12 @@ fn main() {
         call(webview, "reminders_status", serde_json::json!({})).unwrap(),
         off
     );
-    let ignored = call(webview, "reminders_notify", serde_json::json!({"count": 3})).unwrap();
+    let ignored = call(
+        webview,
+        "reminders_notify",
+        serde_json::json!({"count": 3, "sessionId": owner}),
+    )
+    .unwrap();
     assert_eq!(ignored, off, "a disabled setting shows nothing");
     assert!(toasts.0.lock().unwrap().is_empty());
     let on = call(
@@ -433,7 +438,12 @@ fn main() {
     )
     .unwrap();
     assert_eq!(on["enabled"], true);
-    let sent = call(webview, "reminders_notify", serde_json::json!({"count": 2})).unwrap();
+    let sent = call(
+        webview,
+        "reminders_notify",
+        serde_json::json!({"count": 2, "sessionId": owner}),
+    )
+    .unwrap();
     assert_eq!(sent["delivery"], "sent");
     assert_eq!(
         *toasts.0.lock().unwrap(),
@@ -442,7 +452,7 @@ fn main() {
     let extra = call(
         webview,
         "reminders_notify",
-        serde_json::json!({"count": 2, "title": "Secret title", "body": "Project X"}),
+        serde_json::json!({"count": 2, "sessionId": owner, "title": "Secret title", "body": "Project X"}),
     )
     .unwrap();
     assert_eq!(extra["delivery"], "sent");
@@ -456,9 +466,31 @@ fn main() {
         "a page cannot pass text into the notification"
     );
     assert_eq!(
-        call(webview, "reminders_notify", serde_json::json!({"count": 0})).unwrap_err()["kind"],
+        call(
+            webview,
+            "reminders_notify",
+            serde_json::json!({"count": 0, "sessionId": owner})
+        )
+        .unwrap_err()["kind"],
         "invalid"
     );
+    let stranger = uuid::Uuid::new_v4().to_string();
+    let shown_so_far = toasts.0.lock().unwrap().len();
+    assert_eq!(
+        call(
+            webview,
+            "reminders_notify",
+            serde_json::json!({"count": 2, "sessionId": stranger})
+        )
+        .unwrap_err()["kind"],
+        "locked",
+        "a request made for another session shows nothing"
+    );
+    assert!(
+        call(webview, "reminders_notify", serde_json::json!({"count": 2})).is_err(),
+        "a request that names no session is refused"
+    );
+    assert_eq!(toasts.0.lock().unwrap().len(), shown_so_far);
 
     call(
         webview,
@@ -468,7 +500,12 @@ fn main() {
     .unwrap();
     let shown_before_lock = toasts.0.lock().unwrap().len();
     assert_eq!(
-        call(webview, "reminders_notify", serde_json::json!({"count": 2})).unwrap_err()["kind"],
+        call(
+            webview,
+            "reminders_notify",
+            serde_json::json!({"count": 2, "sessionId": owner})
+        )
+        .unwrap_err()["kind"],
         "locked"
     );
     assert_eq!(toasts.0.lock().unwrap().len(), shown_before_lock);

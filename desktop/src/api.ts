@@ -154,10 +154,10 @@ export const api = {
   },
   backup: () => invoke<BackupInfo>("backup_info"),
 
-  // The notification text is built natively from this count. The page cannot send any other text.
+  // The notification text is built natively from this count. The page cannot send any other text. The session names the vault the count was made in; native refuses it if that session is no longer the current one.
   remindersStatus: () => invoke<ReminderStatus>("reminders_status"),
   remindersSet: (enabled: boolean) => invoke<ReminderStatus>("reminders_set", { enabled }),
-  remindersNotify: (count: number) => invoke<ReminderStatus>("reminders_notify", { count }),
+  remindersNotify: (count: number, sessionId: string) => invoke<ReminderStatus>("reminders_notify", { sessionId, count }),
 };
 
 export function errorText(error: unknown): string {

@@ -5,7 +5,7 @@
 - Scope: M13 and M12 ([FINDINGS.md](../FINDINGS.md)), plus one defect found while running the page tests (4-W-01) and one stale manifest value (4-W-02).
 - Inputs kept: [unit 2](unit2.md) (the secret-change time is `known`, `unknown` or `changed_outside`; AKM never invents a date; a key with a rotation interval and no known time is "Rotation unknown") and [unit 3](unit3.md) (a date-only expiry is the last second of that date in UTC; the page computes the states from due instants and a clock that calls nothing native, so a refresh is not user activity).
 - Public API change: yes, inside the desktop app.
-  - `akm-desktop` IPC: new commands `reminders_status`, `reminders_set(enabled)` and `reminders_notify(count)`. New reply shape `ReminderStatus { enabled, permission, delivery, blocked }`.
+  - `akm-desktop` IPC: new commands `reminders_status`, `reminders_set(enabled)` and `reminders_notify(sessionId, count)`. New reply shape `ReminderStatus { enabled, permission, delivery, blocked }`.
   - New dependency: `tauri-plugin-notification` 2.8.0, called from Rust only. No capability entry (D4).
   - Frontend: `keyState` returns a `kind`; `KeysView` takes an optional `summary` control; new `reminders.ts`, `AttentionSummary`, `AttentionNotifier`.
   - Not changed: the vault, the KDBX format, the journal, the CLI, `settings.json`.
@@ -61,9 +61,9 @@ A key with a rotation interval and no known secret-change time counts, in the su
 | Rule | How it holds |
 |---|---|
 | Off by default | `reminders.json` (one flag) beside `settings.json`; missing or unreadable means off. `settings.json`, which holds the saved vault path, is not read or written by this feature. |
-| Text holds no secret and no sensitive metadata | `reminders_notify(count: u32)` is the only call. The native layer builds the text: title "AKM", body "N API keys need attention" ("1 API key needs attention"). The page cannot pass a title, a project, an environment or any text; a test sends extra fields and checks the toast is unchanged. |
+| Text holds no secret and no sensitive metadata | `reminders_notify(sessionId, count: u32)` is the only call. The native layer builds the text: title "AKM", body "N API keys need attention" ("1 API key needs attention"). The page cannot pass a title, a project, an environment or any text; a test sends extra fields and checks the toast is unchanged. |
 | Only while the app runs | No service, no scheduled task, no startup entry, no autostart plugin (a test reads `tauri.conf.json` and `Cargo.toml`). The notifier is a React component that exists only while the app runs and the vault is unlocked. |
-| Never while locked | The native command first asks the session for a current ticket (`snapshot()`, which is not user activity). A locked, expired or never-opened session answers `locked` and shows nothing. The page also unmounts the notifier on a lock. |
+| Never while locked | `reminders_notify(sessionId, count)` names the session that the page counted in. Native hands the text to the notifier only inside `Session::while_session`. That call holds the gate that lock and a newer opening take, after it checked that this session is still the current one (review 1, finding 7). A lock or a new opening that arrives while the call runs waits for it. One that arrived earlier makes the request answer `locked`, and nothing is shown. A count made in an older session never reaches the notifier. The page also unmounts the notifier on a lock. |
 | Denied or disabled permission is a state | `ReminderStatus.permission` is `granted`, `denied` or `prompt`. A permission other than `granted` blocks the run: no toast, no retry. A failed `show` does the same (`delivery: failed`). Turning the setting off and on clears the block. Settings shows each state in words (D5). |
 | No retry loop | `blocked` holds until the user turns the setting off and on. The page asks `reminders_status` before it reads any key, and stops there when the setting is off or blocked. |
 | Capability entry | None. The plugin is called from Rust only. `capabilities/default.json` still holds `core:default` and `dialog:default`, so the webview has no `notification:*` permission and cannot send a notification itself. A test reads the file. (The brief expected an entry. The permissions are not needed: a permission for the page to send arbitrary notification text is the thing to avoid.) |
@@ -80,7 +80,8 @@ When the page sends the count: the notifier looks at start, every 30 seconds, an
 
 Honest limits:
 - The window of use is short (section 1): the vault locks after 10 idle minutes. The notification helps while the window is behind other windows or minimized in that time. It is not a reminder for days when AKM is locked or closed, and it cannot be one without a copy of the dates outside the vault or a background program.
-- A lock that lands between the native session check and the call to Windows can still show one count-only toast. The text is the same count that was true a moment before.
+- No lock and no newer opening lands between the session check and the hand-over to the notifier (finding 7). The limit is what Windows does after the hand-over. `show()` returns when the payload is prepared and sends on a background task (crate source, `desktop.rs`). So a toast that the notifier already accepted can appear after a later lock, and AKM cannot withdraw it. The text is the same count that was true at the hand-over. A test cannot prove the Windows side. That needs the owner present.
+- The notifier runs under the session gate. On Windows, `show()` does not wait for the main thread (checked in the crate source), so the gate is held for a short time only. A notifier that blocked would block lock. The test `review1_7_lock_and_a_new_opening_wait_for_a_notification_that_passed_validation` shows that lock waits for the call.
 - `delivery: sent` means "handed to Windows". Focus assist and the per-app notification switch decide whether a toast shows, and AKM cannot read either. Settings says so.
 - On a lock screen Windows may show the toast depending on its own setting. The text is a count of API keys, no title.
 - In a development build Windows shows the PowerShell name and icon (crate note). Installed builds were not tested here.
@@ -160,7 +161,7 @@ These stay as kept debt. FINDINGS lists them under M12. A later visual unit owns
 | `Attention` | `reminders.ts` | `expired`, `overdue`, `dueSoon`, `unknown` (key lists) and `total` |
 | `ReminderStatus` | IPC | `enabled`; `permission`: `granted`, `denied`, `prompt`; `delivery`: `none`, `sent`, `failed`; `blocked` |
 | `reminders.json` | app config folder | `{"enabled": bool}` |
-| `reminders_notify` | IPC | argument `{count}` only; the reply is a `ReminderStatus` |
+| `reminders_notify` | IPC | arguments `{sessionId, count}` only; the reply is a `ReminderStatus` |
 
 ## 4. Failure cases
 

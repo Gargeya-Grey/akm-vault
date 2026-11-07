@@ -873,14 +873,16 @@ pub fn reminders_set(
     state.0.set_enabled(enabled)
 }
 
-/// The page sends a count and nothing else. The text of the notification is built natively.
+/// The page sends a count and the session it counted in, and nothing else. The text of the
+/// notification is built natively, and only while that session is still the current one.
 #[tauri::command]
 pub fn reminders_notify(
     vault: State<'_, VaultState>,
     state: State<'_, ReminderState>,
+    session_id: String,
     count: u32,
 ) -> Result<ReminderStatus, CommandError> {
-    state.0.notify(&vault.0, count)
+    state.0.notify(&vault.0, &session_id, count)
 }
 
 #[tauri::command]

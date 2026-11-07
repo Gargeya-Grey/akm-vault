@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { api } from "../api";
+import { nativeOwner } from "../nativeSession";
 import { attentionOf, canNotify, nextAnnouncement } from "../reminders";
 
 /** Time between two looks. A hidden page may run slower; a look is cheap and reads no secret. */
@@ -22,6 +23,8 @@ export function AttentionNotifier() {
       if (looking) return;
       looking = true;
       try {
+        const session = nativeOwner();
+        if (session === null) return;
         const status = await api.remindersStatus();
         if (disposed || !canNotify(status)) return;
         const keys = await api.keys();
@@ -29,7 +32,7 @@ export function AttentionNotifier() {
         const count = attentionOf(keys, Date.now()).total;
         const step = nextAnnouncement(announced, count, inFront());
         announced = step.announced;
-        if (step.notify) await api.remindersNotify(count);
+        if (step.notify) await api.remindersNotify(count, session);
       } catch {
         // A locked session, a missing native command or a refused notification: the native side keeps the state.
       } finally {
