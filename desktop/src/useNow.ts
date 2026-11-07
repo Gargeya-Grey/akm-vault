@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { nextChangeAt } from "./schedule";
 import type { KeyView } from "./types";
 
@@ -16,6 +16,10 @@ const MARGIN_MS = 20;
  */
 export function useNow(keys: readonly KeyView[]): number {
   const [now, setNow] = useState(() => Date.now());
+  const latest = useRef(keys);
+  latest.current = keys;
+  // The due times, not the array: a caller may pass a new array on every render.
+  const dueTimes = keys.map((key) => `${key.expiresAt}|${key.rotationDueAt}`).join(",");
 
   useEffect(() => {
     let timer: number | undefined;
@@ -23,7 +27,7 @@ export function useNow(keys: readonly KeyView[]): number {
       window.clearTimeout(timer);
       timer = undefined;
       const current = Date.now();
-      const next = nextChangeAt(keys, current);
+      const next = nextChangeAt(latest.current, current);
       if (next === null) return;
       const wait = Math.min(Math.max(next - current + MARGIN_MS, MIN_WAIT_MS), MAX_WAIT_MS);
       timer = window.setTimeout(refresh, wait);
@@ -43,7 +47,7 @@ export function useNow(keys: readonly KeyView[]): number {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("focus", refresh);
     };
-  }, [keys]);
+  }, [dueTimes]);
 
   return now;
 }
