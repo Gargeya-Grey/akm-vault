@@ -1,9 +1,13 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { api } from "./api";
+import { adoptReservation } from "./nativeSession";
+import { acknowledgeNotices, retainedOperationNotices } from "./operationNotices";
 import { acknowledgeCompletions, COMPLETION_EVENT, invalidateSession, retainedCompletions, SESSION_LOSS_EVENT } from "./sessionBoundary";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
+const IMPORT = ["TOKEN=fake-private-value", "private-scope", "private-env"] as const;
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
+beforeEach(() => { adoptReservation(crypto.randomUUID()); });
 afterEach(() => { vi.resetAllMocks(); acknowledgeCompletions(retainedCompletions().map(({ id }) => id)); });
 
 test("a mutation reply overtaken by lock emits a secret-free receipt, not a retryable failure", async () => {
@@ -14,14 +18,14 @@ test("a mutation reply overtaken by lock emits a secret-free receipt, not a retr
   window.addEventListener(COMPLETION_EVENT, notice);
   window.addEventListener(SESSION_LOSS_EVENT, lost);
   try {
-    const outcome = api.confirmImport("fake-single-use-token").catch((error: unknown) => error);
+    const outcome = api.importEnv(...IMPORT).catch((error: unknown) => error);
     invalidateSession();
     resolve({ added: 1, updated: 0 });
     expect(await outcome).toMatchObject({ kind: "completedWhileLocked", message: expect.stringContaining("Do not repeat") });
     expect(notice).toHaveBeenCalledTimes(2); // Pending and settlement update one retained record.
     expect(lost).toHaveBeenCalledTimes(1);
     expect(retainedCompletions()).toHaveLength(1);
-    expect(JSON.stringify(notice.mock.calls)).not.toContain("fake-single-use-token");
+    expect(JSON.stringify(notice.mock.calls)).not.toContain("fake-private-value");
   } finally { window.removeEventListener(COMPLETION_EVENT, notice); window.removeEventListener(SESSION_LOSS_EVENT, lost); }
 });
 
@@ -53,14 +57,69 @@ test("a cancelled save overtaken by a session change remains cancellation, not c
 
 test("native known-commit errors are normalized and retain only four fixed classification fields", async () => {
   native.invoke.mockRejectedValueOnce({ kind: "completedWhileLocked", message: "FAKE_PRIVATE_NATIVE_ERROR C:/private-a/export.env", value: "fake-secret" });
-  const error = await api.confirmImport("fake-private-token").catch((cause: unknown) => cause);
+  const error = await api.importEnv(...IMPORT).catch((cause: unknown) => cause);
   expect(error).toMatchObject({ kind: "completedWhileLocked", message: expect.stringContaining("Do not repeat") });
   const records = retainedCompletions();
   expect(records).toHaveLength(1);
   expect(Object.keys(records[0]).sort()).toEqual(["generation", "id", "operation", "outcome"]);
   expect(records[0]).toMatchObject({ operation: "import", outcome: "completedWhileLocked" });
-  for (const privateText of ["fake-private-token", "FAKE_PRIVATE_NATIVE_ERROR", "export.env", "fake-secret"]) {
+  for (const privateText of ["fake-private-value", "private-scope", "FAKE_PRIVATE_NATIVE_ERROR", "export.env", "fake-secret"]) {
     expect(JSON.stringify(error)).not.toContain(privateText);
     expect(JSON.stringify(records)).not.toContain(privateText);
   }
+});
+
+function dispatchedOperation(): string {
+  const call = native.invoke.mock.calls.find(([command]) => command === "env_import");
+  return (call?.[1] as { operationId: string }).operationId;
+}
+function recordFor(operation: string, kind: string) {
+  return { application: [], operations: [{ id: operation, originSession: crypto.randomUUID(), kind }] };
+}
+
+for (const [kind, outcome] of [["importApplied", "completed"], ["importSessionEnded", "completedWhileLocked"], ["importFailed", "reportedError"], ["importDeclined", "cancelled"]] as const) {
+  test(`a lost import reply is settled from the native ${kind} record and the record is acknowledged`, async () => {
+    native.invoke.mockReturnValueOnce(new Promise(() => {}));
+    void api.importEnv(...IMPORT).catch(() => {});
+    expect(retainedCompletions()).toMatchObject([{ operation: "import", outcome: "pending" }]);
+    const operation = dispatchedOperation();
+    native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, kind) : undefined);
+    await api.warnings();
+    expect(retainedCompletions()).toMatchObject([{ operation: "import", outcome }]);
+    expect(retainedOperationNotices()).toEqual([]);
+    expect(native.invoke).toHaveBeenCalledWith("vault_dismiss_warnings", { ids: [operation] });
+    await api.warnings();
+    expect(retainedCompletions()).toHaveLength(1);
+  });
+}
+
+test("a native import record for a request this page never made is shown as a notice, not folded", async () => {
+  native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(crypto.randomUUID(), "importApplied") : undefined);
+  await api.warnings();
+  expect(retainedCompletions()).toEqual([]);
+  expect(retainedOperationNotices()).toMatchObject([{ kind: "importApplied" }]);
+  acknowledgeNotices(retainedOperationNotices().map(({ id }) => id));
+});
+
+test("a native import record cannot overwrite an outcome the reply already settled", async () => {
+  native.invoke.mockResolvedValueOnce({ added: 1, updated: 0 });
+  await api.importEnv(...IMPORT);
+  const operation = dispatchedOperation();
+  expect(retainedCompletions()).toMatchObject([{ outcome: "completed" }]);
+  native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, "importFailed") : undefined);
+  await api.warnings();
+  expect(retainedCompletions()).toMatchObject([{ outcome: "completed" }]);
+  acknowledgeNotices(retainedOperationNotices().map(({ id }) => id));
+});
+
+test("a reply from the native command acknowledges its own native record", async () => {
+  native.invoke.mockResolvedValueOnce({ added: 1, updated: 0 });
+  await api.importEnv(...IMPORT);
+  expect(native.invoke).toHaveBeenCalledWith("vault_dismiss_warnings", { ids: [dispatchedOperation()] });
+});
+
+test("a transport failure keeps the native record because it may be the only truth", async () => {
+  native.invoke.mockRejectedValueOnce(new Error("channel closed"));
+  await api.importEnv(...IMPORT).catch(() => {});
+  expect(native.invoke).not.toHaveBeenCalledWith("vault_dismiss_warnings", expect.anything());
 });

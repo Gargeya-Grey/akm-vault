@@ -6,36 +6,40 @@ import type {
   AuditReport,
   BackupInfo,
   ImportReport,
-  ImportPreview,
   KeyDraft,
   KeyView,
   Status,
   WarningReport,
 } from "./types";
 
-const mutations = new Set(["vault_create", "vault_upgrade", "key_add", "key_update", "key_remove", "env_import_confirm", "env_save"]);
+const mutations = new Set(["vault_create", "vault_upgrade", "key_add", "key_update", "key_remove", "env_import", "env_save"]);
+// A request that the user can still decline in a native window answers null when they do.
+const declinable = new Set(["env_import", "env_save"]);
 const statusReplies = new Set(["vault_status", "vault_unlock", "vault_create", "vault_upgrade", "vault_reload"]);
 
-async function invoke<T>(command: string, args?: Record<string, unknown>, expectedOwner?: string): Promise<T> {
+async function invoke<T>(command: string, args?: Record<string, unknown>, expectedOwner?: string, operation?: string): Promise<T> {
   const generation = sessionGeneration();
   const bootstrap = command === "vault_status" && nativeOwner() === null;
   const notices = nativeNoticeStamp();
-  const outcome = command === "env_import_confirm" ? beginOutcome("import", generation)
+  const outcome = command === "env_import" ? beginOutcome("import", generation, operation)
     : command === "env_save" ? beginOutcome("export", generation) : undefined;
   const cancelled = () => ({ kind: "locked", message: "The session changed. Unlock the vault again." });
   let knownSuccess = false;
   try {
     const result = await nativeInvoke<T>(command, args);
-    knownSuccess = !(command === "env_save" && result === null);
-    if (command === "env_save" && result === null && outcome !== undefined) settleOutcome(outcome, "cancelled");
+    const declined = declinable.has(command) && result === null;
+    knownSuccess = !declined;
+    if (declined && outcome !== undefined) settleOutcome(outcome, "cancelled");
+    if (operation !== undefined) acknowledgeImportRecord(operation);
     if (generation !== sessionGeneration()) {
-      if (mutations.has(command) && !(command === "env_save" && result === null)) throw completedWhileLocked();
+      if (mutations.has(command) && !declined) throw completedWhileLocked();
       throw cancelled();
     }
     if (statusReplies.has(command)) acceptNativeStatus(result as Status, expectedOwner);
     if (outcome !== undefined) settleOutcome(outcome, "completed");
     return result;
   } catch (error) {
+    if (operation !== undefined && errorKind(error) !== "unknown") acknowledgeImportRecord(operation);
     if (errorKind(error) === "completedWhileLocked" || (knownSuccess && mutations.has(command))) {
       if (outcome !== undefined) settleOutcome(outcome, "completedWhileLocked");
       else reportCompletion(generation);
@@ -50,6 +54,17 @@ async function invoke<T>(command: string, args?: Record<string, unknown>, expect
     if (obsolete) throw cancelled();
     throw error;
   }
+}
+
+// A reply that came from the native command is the outcome, so its native record is redundant.
+// A transport failure leaves the record in place: it may be the only truth about the request.
+function acknowledgeImportRecord(operation: string) {
+  acknowledgeNotices([operation]);
+  void dismissNatively([operation]);
+}
+
+async function dismissNatively(ids: string[]) {
+  try { await nativeInvoke<void>("vault_dismiss_warnings", { ids }); } catch { /* the record stays and is offered again */ }
 }
 
 async function open(command: "vault_unlock" | "vault_create", args: Record<string, unknown>): Promise<Status> {
@@ -93,7 +108,8 @@ export const api = {
   warnings: async () => {
     const report = await nativeInvoke<WarningReport>("vault_warnings");
     // This channel contains app warnings and fixed, origin-owned receipts, never protected vault results.
-    receiveWarnings(report);
+    const folded = receiveWarnings(report);
+    if (folded.length > 0) void dismissNatively(folded);
   },
   dismissWarnings: async (ids: string[]) => {
     // ID-only acknowledgment is application-wide too; a newer vault must not suppress a completed dismissal.
@@ -118,12 +134,17 @@ export const api = {
     project: string | null,
     environment: string | null,
   ) => invoke<string | null>("env_save", { project, environment, all: false }),
-  previewImport: (
+  // One request. A native window lists the names and the scope; null means that the user declined there.
+  importEnv: (
     text: string,
-    project: string | null,
-    environment: string | null,
-  ) => invoke<ImportPreview>("env_import_preview", { text, project, environment }),
-  confirmImport: (token: string) => invoke<ImportReport>("env_import_confirm", { token }),
+    project: string,
+    environment: string,
+  ): Promise<ImportReport | null> => {
+    const sessionId = nativeOwner();
+    if (sessionId === null) return Promise.reject({ kind: "locked", message: "The session changed. Unlock the vault again." });
+    const operationId = crypto.randomUUID();
+    return invoke<ImportReport | null>("env_import", { sessionId, operationId, text, project, environment }, undefined, operationId);
+  },
   backup: () => invoke<BackupInfo>("backup_info"),
 };
 

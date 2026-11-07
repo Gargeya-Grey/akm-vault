@@ -3,7 +3,7 @@ import { api, errorText } from "../api";
 import { CLIPBOARD_LOCK_TEXT, clipboardCopyText } from "../clipboardText";
 import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
 import { formatBytes, formatDateTime, plural } from "../format";
-import type { BackupInfo, ImportPreview, KeyView, Status } from "../types";
+import type { BackupInfo, KeyView, Status } from "../types";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
@@ -21,7 +21,6 @@ interface Message {
 
 type Scope = { project: string; environment: string };
 type ExportPreview = Scope & { text: string };
-type ReviewedImport = Scope & ImportPreview;
 
 export function Settings({ status, onLocked }: Props) {
   const [backup, setBackup] = useState<BackupInfo | null>(null);
@@ -43,9 +42,9 @@ export function Settings({ status, onLocked }: Props) {
   const [importText, setImportText] = useState("");
   const [importProject, setImportProject] = useState("");
   const [importEnvironment, setImportEnvironment] = useState("");
-  const [importBusy, setImportBusy] = useState<"preview" | "confirm" | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
-  const [importPreview, setImportPreview] = useState<ReviewedImport | null>(null);
+  const [importNote, setImportNote] = useState<string | null>(null);
 
   const hidePreview = useCallback(() => {
     exportRequest.current += 1;
@@ -55,9 +54,9 @@ export function Settings({ status, onLocked }: Props) {
 
   const editImport = useCallback(() => {
     importRequest.current += 1;
-    setImportPreview(null);
     setImportError(null);
-    setImportBusy(null);
+    setImportNote(null);
+    setImportBusy(false);
   }, []);
 
   const closeImport = useCallback(() => {
@@ -128,11 +127,11 @@ export function Settings({ status, onLocked }: Props) {
   useEffect(() => {
     if (!importing) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && importBusy !== "confirm") closeImport();
+      if (event.key === "Escape" && !importBusy) closeImport();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [importing, importBusy, importPreview, closeImport]);
+  }, [importing, importBusy, closeImport]);
 
   const projects = useMemo(
     () => uniqueOptions(keys.map((key) => key.project)),
@@ -228,7 +227,6 @@ export function Settings({ status, onLocked }: Props) {
     setImporting(true);
     setImportError(null);
     setImportText("");
-    setImportPreview(null);
     setImportProject(project);
     setImportEnvironment(environment);
   }
@@ -237,31 +235,26 @@ export function Settings({ status, onLocked }: Props) {
     event.preventDefault();
     if (importBusy) return;
     setImportError(null);
+    setImportNote(null);
 
     if (!importProject.trim() || !importEnvironment.trim()) {
       setImportError("Choose the target project and environment. Imports never search other scopes.");
       return;
     }
-    if (!importText.trim() && !importPreview) {
+    if (!importText.trim()) {
       setImportError("Paste at least one NAME=value line.");
       return;
     }
 
     const currentRequest = ++importRequest.current;
-    const input = { text: importText, project: importProject.trim(), environment: importEnvironment.trim() };
-    const confirming = importPreview !== null;
-    setImportBusy(importPreview ? "confirm" : "preview");
+    setImportBusy(true);
     try {
-      if (!importPreview) {
-        const reviewed = await api.previewImport(input.text, input.project, input.environment);
-        if (currentRequest !== importRequest.current) return;
-        setImportPreview({ ...reviewed, project: input.project, environment: input.environment });
+      const report = await api.importEnv(importText, importProject.trim(), importEnvironment.trim());
+      if (currentRequest !== importRequest.current) return;
+      if (report === null) {
+        setImportNote("Nothing was imported. You declined it in the confirmation window.");
         return;
       }
-      const token = importPreview.token;
-      setImportPreview(null);
-      const report = await api.confirmImport(token);
-      if (currentRequest !== importRequest.current) return;
       setImporting(false);
       setImportText("");
       setMessage({
@@ -273,10 +266,10 @@ export function Settings({ status, onLocked }: Props) {
     } catch (cause) {
       if (currentRequest === importRequest.current) {
         setImportError(errorText(cause));
-        if (confirming) setMessage({ tone: "error", text: errorText(cause) });
+        setMessage({ tone: "error", text: errorText(cause) });
       }
     } finally {
-      if (currentRequest === importRequest.current) setImportBusy(null);
+      if (currentRequest === importRequest.current) setImportBusy(false);
     }
   }
 
@@ -414,7 +407,7 @@ export function Settings({ status, onLocked }: Props) {
             type="button"
             className="text-button"
             onClick={openImport}
-            disabled={status.needsUpgrade || importBusy === "confirm"}
+            disabled={status.needsUpgrade || importBusy}
           >
             <Icon name="upload" />
             Import .env…
@@ -476,7 +469,7 @@ export function Settings({ status, onLocked }: Props) {
           className="overlay"
           role="presentation"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget && importBusy !== "confirm") closeImport();
+            if (event.target === event.currentTarget && !importBusy) closeImport();
           }}
         >
           <div
@@ -497,14 +490,13 @@ export function Settings({ status, onLocked }: Props) {
                 className="icon-button"
                 aria-label="Close"
                 onClick={closeImport}
-                disabled={importBusy === "confirm"}
+                disabled={importBusy}
               >
                 <Icon name="close" size={20} />
               </button>
             </header>
 
             <form onSubmit={submitImport}>
-              {!importPreview && <>
               <div className="field">
                 <label htmlFor="import-text">Paste the .env contents</label>
                 <textarea
@@ -513,7 +505,7 @@ export function Settings({ status, onLocked }: Props) {
                   rows={9}
                   value={importText}
                   onChange={(event) => { editImport(); setImportText(event.target.value); }}
-                  disabled={importBusy !== null}
+                  disabled={importBusy}
                   placeholder={"OPENAI_API_KEY=sk-…\nGITHUB_TOKEN=ghp_…"}
                   spellCheck={false}
                   autoFocus
@@ -531,7 +523,7 @@ export function Settings({ status, onLocked }: Props) {
                     id="import-project"
                     value={importProject}
                     onChange={(event) => { editImport(); setImportProject(event.target.value); }}
-                    disabled={importBusy !== null}
+                    disabled={importBusy}
                     placeholder="my-app"
                     autoComplete="off"
                   />
@@ -544,7 +536,7 @@ export function Settings({ status, onLocked }: Props) {
                     id="import-environment"
                     value={importEnvironment}
                     onChange={(event) => { editImport(); setImportEnvironment(event.target.value); }}
-                    disabled={importBusy !== null}
+                    disabled={importBusy}
                     placeholder="dev"
                     autoComplete="off"
                   />
@@ -553,28 +545,12 @@ export function Settings({ status, onLocked }: Props) {
 
               <Notice tone="info">
                 Only keys in this exact project and environment can be updated.
-                Empty values are rejected. Review the entry names before anything is saved.
+                Empty values are rejected. AKM then opens a confirmation window
+                that lists the entry names. Nothing is saved until you confirm there.
               </Notice>
-              </>}
 
-              {importPreview && (
-                <section aria-label="Import review">
-                  <p>Target: <strong>{importPreview.project} / {importPreview.environment}</strong>.</p>
-                  <p>{importPreview.added} new, {importPreview.updated} replacements, {importPreview.unchanged} unchanged. Secret values are not shown.</p>
-                  <ul className="import-review">
-                    {importPreview.changes.map((change) => (
-                      <li key={change.name}>
-                        <span className="mono">{change.name}</span>
-                        <span>{change.title}</span>
-                        <span className={change.action === "update" ? "danger-text" : "label"}>
-                          {change.action === "update" ? "Replace secret" : change.action === "add" ? "Add key" : "Keep unchanged"}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                  <button type="button" className="text-button" disabled={importBusy !== null} onClick={editImport}>Edit input</button>
-                </section>
-              )}
+              {importBusy && <Notice tone="info">Waiting for your answer in the AKM confirmation window. Nothing is saved until you confirm there.</Notice>}
+              {importNote && <Notice tone="info">{importNote}</Notice>}
 
               {importError && <Notice tone="error">{importError}</Notice>}
 
@@ -583,12 +559,12 @@ export function Settings({ status, onLocked }: Props) {
                   type="button"
                   className="text-button"
                   onClick={closeImport}
-                  disabled={importBusy === "confirm"}
+                  disabled={importBusy}
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn" disabled={importBusy !== null} aria-busy={importBusy !== null || undefined}>
-                  {importBusy ? "Working…" : importPreview ? "Confirm import" : "Review import"}
+                <button type="submit" className="btn" disabled={importBusy} aria-busy={importBusy || undefined}>
+                  {importBusy ? "Waiting for confirmation…" : "Review import"}
                 </button>
               </div>
             </form>

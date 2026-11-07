@@ -67,7 +67,7 @@ export interface AuditReport {
 export interface OperationNotice {
   id: string;
   originSession: string;
-  kind: "journal" | "backupRefresh" | "backupPrune" | "backupRetention" | "exportJournal" | "preference";
+  kind: "journal" | "backupRefresh" | "backupPrune" | "backupRetention" | "exportJournal" | "preference" | "importApplied" | "importSessionEnded" | "importFailed" | "importDeclined";
 }
 
 export interface WarningReport {
@@ -83,12 +83,6 @@ export interface ApplicationNotice {
 export interface ImportReport {
   added: number;
   updated: number;
-}
-
-export interface ImportPreview extends ImportReport {
-  unchanged: number;
-  token: string;
-  changes: { name: string; title: string; action: "add" | "update" | "unchanged" }[];
 }
 
 export interface BackupInfo {

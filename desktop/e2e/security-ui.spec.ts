@@ -59,11 +59,10 @@ for (const width of [390, 1440]) {
       await page.getByRole("button", { name: "Import .env…" }).click();
       await page.getByLabel("Paste the .env contents").fill("OPENAI_API_KEY=fake-new-key");
       await page.getByRole("button", { name: "Review import" }).click();
-      await expect(page.getByRole("region", { name: "Import review" })).toContainText("demo / dev");
-      await expect(page.getByRole("region", { name: "Import review" })).toContainText("Replace secret");
-      expect(await page.evaluate(() => window.__akmTest.calls.filter((call) => call.command === "env_import_confirm").length)).toBe(0);
-      await page.getByRole("button", { name: "Confirm import" }).click();
       await expect(page.getByText("Imported: 0 added, 1 updated.")).toBeVisible();
+      const imports = await page.evaluate(() => window.__akmTest.calls.filter((call) => call.command === "env_import"));
+      expect(imports).toHaveLength(1);
+      expect(await page.evaluate(() => window.__akmTest.calls.some((call) => call.command === "env_import_preview" || call.command === "env_import_confirm"))).toBe(false);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
       await page.getByRole("button", { name: "Preview", exact: true }).click();
       await expect(page.getByText("OPENAI_API_KEY=fake-browser-test-value", { exact: true })).toBeVisible();

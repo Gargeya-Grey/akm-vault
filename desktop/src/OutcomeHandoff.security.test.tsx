@@ -32,8 +32,7 @@ async function dispatch(operation: Operation) {
     if (command === "vault_unlock") { native.active = true; return status(); }
     if (command === "keys_list") return [{ id: "fake-key", title: "Fixture key", project: "demo", environment: "dev" }];
     if (command === "backup_info") return { path: "C:/fake/current.bak", exists: false, bytes: 0, modified: null };
-    if (command === "env_import_preview") return { token: "fake-private-review-token", added: 1, updated: 0, unchanged: 0, changes: [] };
-    if (command === (operation === "import" ? "env_import_confirm" : "env_save")) {
+    if (command === (operation === "import" ? "env_import" : "env_save")) {
       return new Promise((resolve, reject) => {
         settle = (reply) => reply === "error"
           ? reject({ kind: "io", message: "Error for C:/fake/private-origin-a-export.env: FAKE_DETAIL_MARKER" })
@@ -51,8 +50,6 @@ async function dispatch(operation: Operation) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
     fireEvent.click(screen.getByRole("button", { name: "Review import" }));
-    await screen.findByRole("button", { name: "Confirm import" });
-    fireEvent.click(screen.getByRole("button", { name: "Confirm import" }));
   } else {
     await screen.findByRole("option", { name: "demo" });
     fireEvent.change(screen.getByLabelText("Project"), { target: { value: "demo" } });
@@ -108,7 +105,7 @@ for (const operation of ["import", "export"] as const) {
           else if (operation === "import") expect(screen.getByText("Imported: 1 added, 0 updated.")).toBeTruthy();
           else expect(screen.getByText(/Saved plaintext secrets to C:\/fake\/private-origin-a-export.env/)).toBeTruthy();
         }
-        expect(native.invoke.mock.calls.filter(([command]) => command === (operation === "import" ? "env_import_confirm" : "env_save"))).toHaveLength(1);
+        expect(native.invoke.mock.calls.filter(([command]) => command === (operation === "import" ? "env_import" : "env_save"))).toHaveLength(1);
         if (!["normal", "hide", "return"].includes(handoff)) expect(screen.getByText("Unlocked keys region")).toBeTruthy();
         fireEvent.click(screen.getByRole("button", { name: "Dismiss operation outcomes" }));
         expect(retainedCompletions()).toHaveLength(0);

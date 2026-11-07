@@ -26,6 +26,10 @@ const OPERATION_MESSAGES: Record<OperationNotice["kind"], string> = {
   backupRetention: "A vault change was saved, but retention of its pre-change encrypted backup could not be confirmed. Do not repeat the saved operation. Inspect its backups before relying on recovery.",
   backupPrune: "A vault change was saved, but old backups could not be pruned. Do not repeat the saved operation. Check its retained backups.",
   preference: "A vault was opened, but its path preference was not saved. Check the vault path the next time you open AKM.",
+  importApplied: "An import was applied to the vault, but this window did not receive its result. Do not repeat it. Check the keys in the relevant vault.",
+  importSessionEnded: "An import was saved, but its session ended before the result arrived. Do not repeat it. Open the vault and check the keys.",
+  importFailed: "An import reported an error. This does not confirm that nothing was saved. Check the vault before you try again.",
+  importDeclined: "An import was declined in the confirmation window. Nothing was saved.",
 };
 
 function outcomeMessage({ operation, outcome }: OperationOutcome) {
@@ -33,7 +37,7 @@ function outcomeMessage({ operation, outcome }: OperationOutcome) {
   switch (outcome) {
     case "pending": return `${name} is awaiting an outcome. Do not repeat it while it is pending.`;
     case "completed": return `${name} completed. Inspect the relevant vault or saved file before repeating it.`;
-    case "cancelled": return "File export was cancelled. No file was saved by this request.";
+    case "cancelled": return operation === "import" ? "Import was declined in the confirmation window. No keys were changed by this request." : "File export was cancelled. No file was saved by this request.";
     case "reportedError": return `${name} reported an error. This does not confirm that nothing was saved. Inspect the relevant vault or export before retrying.`;
     case "unconfirmed": return `${name} outcome could not be confirmed after the session changed. Inspect the relevant vault or export before retrying.`;
     case "completedWhileLocked": return COMPLETION_MESSAGE;

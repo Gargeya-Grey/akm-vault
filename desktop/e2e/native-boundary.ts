@@ -94,8 +94,7 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
               { seq: "3", ts: "2026-10-31T00:00:00Z", action: "add-completed", keyTitle: "OpenAI", project: "demo", environment: "dev", detail: null },
             ] };
             case "backup_info": return { path: "C:/fake-test/vault.kdbx.bak", exists: false, bytes: 0, modified: null };
-            case "env_import_preview": return { token: "preview-token", added: 0, updated: 1, unchanged: 0, changes: [{ name: "OPENAI_API_KEY", title: "OpenAI", action: "update" }] };
-            case "env_import_confirm": return { added: 0, updated: 1 };
+            case "env_import": return { added: 0, updated: 1 };
             case "env_export": return "OPENAI_API_KEY=fake-browser-test-value\n";
             default: throw new Error(`Unexpected test IPC: ${command}`);
           }
