@@ -84,9 +84,10 @@ akm purge --older-than-days 90 --yes   # the retention sweep, only when you run 
   `purge --live`.
 - `restore` refuses a key whose variable name a live key now uses in the same project and
   environment.
-- `purge` is the only way to delete for good, and it needs `--yes` without a terminal. It stores a
-  deletion record, so a KeePassXC merge with an older copy of the vault does not bring the key back.
-  Nothing purges by itself.
+- `purge` is the only way to delete for good, and it needs `--yes` without a terminal. It stores the
+  KDBX deletion record. Other readers apply it, but KeePassXC 2.8.0 `merge` does not: it brings a
+  deleted key back from an older copy, also when KeePassXC made the deletion. Older copies and
+  backups can still hold the key. Nothing purges by itself.
 - The journal records `rotate-completed`, `restore-completed`, `purge-completed` and
   `remove-completed` with the key id only.
 - A debug build of `akm` reads `AKM_TEST_CLOCK` (an RFC 3339 time) as its clock. Only tests set it.

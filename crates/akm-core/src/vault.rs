@@ -512,8 +512,9 @@ impl Vault {
         Ok(key)
     }
 
-    /// Deletes one key for good, live or recycled, and writes the deletion record that
-    /// stops a KeePassXC merge from bringing it back (design D7).
+    /// Deletes one key for good, live or recycled, and writes the KDBX deletion record.
+    /// Readers that apply the record keep the key deleted; KeePassXC 2.8.0 `merge` does
+    /// not (design D9).
     pub fn purge(&mut self, id: &str) -> Result<ApiKey> {
         self.ensure_writable()?;
         let entry_id = self

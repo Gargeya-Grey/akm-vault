@@ -619,7 +619,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                     print_warnings(io, &mut vault);
                     status!(
                         io,
-                        "Deleted {title:?} for good. A deletion record was stored, so merging an older copy of this vault does not bring it back."
+                        "Deleted {title:?} for good. A deletion record was stored. Older copies and backups of this vault can still hold the key, and a KeePassXC merge with an older copy can bring it back."
                     );
                 }
                 (None, Some(days)) => {
