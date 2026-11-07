@@ -183,6 +183,32 @@ function Find-Control([string]$name, $type = $null, [int]$milliseconds = 12000) 
   throw "Missing AKM control: $name"
 }
 
+function Confirm-NativeImport([string]$expect, [string]$button = 'Import', [int]$milliseconds = 15000) {
+  # Unit 1c: the import is reviewed and confirmed in a native dialog (class #32770) that the AKM process owns.
+  $isDialog = New-Object System.Windows.Automation.PropertyCondition($AE::ClassNameProperty, '#32770')
+  $byProcess = New-Object System.Windows.Automation.AndCondition(
+    (New-Object System.Windows.Automation.PropertyCondition($AE::ProcessIdProperty, $process.Id)), $isDialog)
+  $byName = New-Object System.Windows.Automation.AndCondition(
+    (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $button)),
+    (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))
+  $until = [DateTime]::UtcNow.AddMilliseconds($milliseconds)
+  do {
+    $dialogs = @($AE::RootElement.FindAll($TS::Children, $byProcess)) + @($script:root.FindAll($TS::Descendants, $isDialog))
+    foreach ($dialog in $dialogs) {
+      $texts = @($dialog.FindAll($TS::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }) -join "`n"
+      $target = @($dialog.FindAll($TS::Descendants, $byName))
+      if ($target.Count -gt 0) {
+        Assert-Proof ($texts -match $expect) "the native import dialog names the reviewed scope ($expect)"
+        $target[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        return
+      }
+    }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $until)
+  Save-ProofDiagnostics 'native-import-dialog'
+  throw "Missing native import dialog button: $button"
+}
+
 function Set-Field([string]$name, [string]$value) {
   $element = Find-Control $name ([System.Windows.Automation.ControlType]::Edit)
   $element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($value)
@@ -660,12 +686,11 @@ function Test-OutcomeHandoff {
   Set-Field 'Paste the .env contents' 'HANDOFF_TOKEN=fake-outcome-import-value'
   Set-Field 'Target project' 'outcome-import-project'
   Set-Field 'Target environment' 'outcome-import-env'
-  Click-Control 'Review import'
-  Find-Control 'Confirm import' ([System.Windows.Automation.ControlType]::Button) | Out-Null
   $before = (Get-FileHash -LiteralPath $vault -Algorithm SHA256).Hash
   $hold = Hold-TestJournal
   try {
-    Click-Control 'Confirm import'
+    Click-Control 'Review import'
+    Confirm-NativeImport 'project "outcome-import-project", environment "outcome-import-env"'
     Assert-Proof (Wait-Owned 'Keys' { param($s) @(Get-ProofRecords $s 'Import is awaiting an outcome').Count -eq 1 }) 'dispatched import creates a pending application-owned outcome'
     $until = [DateTime]::UtcNow.AddSeconds(20)
     do {
@@ -969,12 +994,10 @@ try {
   Set-Field 'Paste the .env contents' 'OPENAI_API_KEY=fake-dev-value'
   Set-Field 'Target project' 'demo'
   Set-Field 'Target environment' 'dev'
-  Click-Control 'Review import'
-  Find-Control 'Confirm import' ([System.Windows.Automation.ControlType]::Button) | Out-Null
-  Assert-Proof (Wait-Text '1\s*new,\s*0\s*replacements') 'dev import review does not target the prod key'
   $beforeConfirm = Invoke-TestCli @('list', '--json') | Out-String | ConvertFrom-Json
-  Assert-Proof ($beforeConfirm.Count -eq 1) 'preview did not write to disk'
-  Click-Control 'Confirm import'
+  Assert-Proof ($beforeConfirm.Count -eq 1) 'nothing was written before the native confirmation'
+  Click-Control 'Review import'
+  Confirm-NativeImport 'project "demo", environment "dev"'
   Assert-Proof (Wait-Text 'Imported: 1 added, 0 updated\.') 'confirmed scoped import saved'
   $keys = Invoke-TestCli @('list', '--json') | Out-String | ConvertFrom-Json
   $prod = $keys | Where-Object { $_.environment -eq 'prod' }

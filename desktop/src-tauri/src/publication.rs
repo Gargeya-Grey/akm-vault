@@ -132,6 +132,12 @@ impl Publication {
         }
     }
 
+    /// Platforms without the private clipboard: nothing was touched.
+    #[cfg(not(windows))]
+    pub(crate) fn unsupported(error: CommandError) -> Self {
+        Self::new(Outcome::Untouched(error))
+    }
+
     pub fn into_outcome(self) -> Outcome {
         self.outcome
     }

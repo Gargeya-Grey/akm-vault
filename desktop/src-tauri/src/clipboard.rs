@@ -1797,8 +1797,8 @@ pub(crate) mod windows {
 
 #[cfg(not(windows))]
 impl ClipboardBackend for NativeClipboard {
-    fn set_private(&mut self, _text: &str) -> Result<CopyAttempt, CommandError> {
-        Err(CommandError::new(
+    fn set_private(&mut self, _text: &str) -> Publication {
+        Publication::unsupported(CommandError::new(
             "clipboard",
             "Private clipboard is implemented for Windows only.",
         ))

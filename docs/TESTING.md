@@ -2,7 +2,7 @@
 
 ## Requirements
 
-Windows with Rust 1.89 or later, Node 22.12 or later, Visual Studio C++ Build Tools, the Windows SDK, WebView2 and Microsoft Edge (for the headless UI tests).
+Windows with Rust 1.90 or later, Node 22.12 or later, Visual Studio C++ Build Tools, the Windows SDK, WebView2 and Microsoft Edge (for the headless UI tests).
 
 ## Commands that define done
 

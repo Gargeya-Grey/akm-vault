@@ -184,7 +184,7 @@ never touch the real journal.
 
 ## Build and verify on Windows
 
-Requires Rust 1.89+, Node 22.12+, Visual Studio C++ Build Tools, the Windows SDK
+Requires Rust 1.90+, Node 22.12+, Visual Studio C++ Build Tools, the Windows SDK
 and WebView2.
 
 ```powershell
