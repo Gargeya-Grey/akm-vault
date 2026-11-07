@@ -49,7 +49,7 @@ From phase two review 1 ([FINDINGS.md](docs/FINDINGS.md), P2R1 rows) and the col
 
 | Class | Guard |
 |---|---|
-| A. A check, then an act after the gate is released | Hold the gate through the act, or check again inside the act. Test: a barrier between the check and the act. |
+| A. A check, then an act after the gate is released | Run a session-scoped effect through `Session::while_current` or `Session::while_session`; the effect takes the `Held` witness. Where the act cannot run under the gate (a modal dialog), check again after it. Test: a barrier between the check and the act. |
 | B. A capability or snapshot used outside its source | Bind it to its source (vault, journal, session, fingerprint) and check that binding where it is used. |
 | C. State advanced before its record is durable | Write the record first; advance the state only after the write succeeds. Test: fail the write, then retry. |
 | D. A doc that names a stale test or behaviour | `python tools/check_docs.py`. |
