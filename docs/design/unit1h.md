@@ -1,6 +1,6 @@
 # Unit 1h: clipboard and disclosure hardening
 
-- Status: implemented on branch `phase2/units-1c-to-4`. Not yet reviewed. The owner may veto any decision under "Decisions for the owner's veto".
+- Status: implemented on branch `phase2/units-1c-to-4`. Not yet reviewed (the independent review follows the whole chain). The owner may veto any decision under "Decisions for the owner's veto".
 - Tier: Tier 2, 8 units, risk: privacy, public API (crate APIs), hook-like window events. The sub-units: disclosure capability (core, CLI, desktop), publication typestate, clipboard release and cleanup, encoding seam and fake extraction, session lock order, generated-handler tests, copy table, CLI export observation.
 - Scope: 1H-01 to 1H-08, 1A-A2-02, 1A-A2-03, and L1 ([FINDINGS.md](../FINDINGS.md)). Inputs: [unit 1a repair design](unit1a-repair.md) (section 4), its two design reviews ([1](../reviews/2026-11-01-unit1a-repair-design-review1.md), [2](../reviews/2026-11-01-unit1a-repair-design-review2.md)), and [unit 1c](unit1c.md) (not undone).
 - Public API change: yes, inside the workspace crates.
@@ -36,6 +36,7 @@ A lock transition (`locked_gate`, expiry seen in any gate call, a poisoned gate,
 | otherwise | none |
 
 - The ticket rule is the fence against a stale settle: a late settle from session A cannot clean session B's new copy.
+- A tick keeps the rule that unit 1a accepted: while the session is not locked, a tick attempts only when the lease is due, even if the lease belongs to an older ticket (`cleanup_episode_a_successful_not_due_tick_is_not_recovery`). While the session is locked, a tick cleans up.
 - The flag is a boolean, so two transitions inside one call give one attempt. A call that sets the flag after its attempt would need a second unlock in the same call; `begin_open` is the only path from locked to unlocked, and `start_open` settles once at its end. Tests count attempts at every public entry.
 - `start_open` retires the old owner first, then settles.
 - A lock waits for the gate behind a copy in progress, and, after its notice, for the clipboard mutex behind a cleanup or copy in progress. Both are **recorded limits** (owner rule, 2026-11-01: waiting for a copy already in progress is allowed). The notice never waits for a cleanup.
@@ -117,7 +118,8 @@ Every row of the table reads the fake sequence and the exact application warning
 | Tick cleanup stalled in the backend, lock arrives | The notice is delivered. The lock call returns after the stalled cleanup ends. |
 | Tick cleanup stalled, a copy arrives, lock arrives | The copy waits for the clipboard mutex, holding no gate. The notice is delivered. |
 | Session A lock settles after session B copied | The ticket rule skips B's lease. |
-| Idle expiry seen by `copy_stamped` | No lease change by the copy. One attempt after the gate is released. |
+| Idle expiry seen by `copy_stamped` | The copy answers `locked`. One attempt, after the gate is released. |
+| A lock arrives while a copy runs | The lock sends its notice at once. The copy finishes, then answers `locked` (it checks the ticket again). The lock's attempt removes what the copy published. Before this unit the lock waited for the copy and the copy answered `Ok`; the test `closing_serializes_with_a_copy_in_progress_and_clears_it` now accepts both answers and still requires an empty clipboard. |
 | Window `CloseRequested`, `Destroyed`, `ExitRequested`, `Exit` | One attempt in all. |
 | Cleanup read triggers a delayed render | Nothing is emptied. The lease ends. |
 | `CloseClipboard` fails after a verified copy | Error, no lease, final warning. |
