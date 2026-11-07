@@ -52,7 +52,13 @@ export interface AuditEntry {
   keyTitle: string | null;
   project: string | null;
   environment: string | null;
+  keyId: string | null;
   detail: string | null;
+}
+
+export interface JournalNotice {
+  kind: "legacySidecar" | "identityUnconfirmed" | "earlierJournal" | "relatedJournal";
+  message: string;
 }
 
 export interface AuditReport {
@@ -60,6 +66,9 @@ export interface AuditReport {
   entries: AuditEntry[];
   brokenAt: string | null;
   state: "absent" | "empty" | "consistent" | "corrupt";
+  damage: "truncatedTail" | "malformedJson" | "brokenLink" | "hashMismatch" | null;
+  identity: "confirmed" | "unconfirmed";
+  notices: JournalNotice[];
   problemLine: number | null;
   totalEntries: number;
 }

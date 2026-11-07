@@ -24,6 +24,18 @@ const STATES: Record<AuditReport["state"], string> = {
   corrupt: "Journal data is damaged",
 };
 
+const DAMAGE: Record<NonNullable<AuditReport["damage"]>, string> = {
+  truncatedTail: "the last line has no line end",
+  malformedJson: "a line is not a valid record",
+  brokenLink: "a record does not follow the one before it",
+  hashMismatch: "a record does not match its hash",
+};
+
+function keyLabel(keyTitle: string | null, keyId: string | null): string {
+  if (keyTitle !== null) return keyTitle;
+  return keyId === null ? "Vault" : `Key ${keyId.slice(0, 8)}`;
+}
+
 export function Activity() {
   const [report, setReport] = useState<AuditReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -56,8 +68,9 @@ export function Activity() {
             Activity, <em>after the fact.</em>
           </h1>
           <p className="lead">
-            Available activity records live beside the vault and may expose metadata to sync providers.
-            Requests do not prove completion. Records are not authenticated and cannot prove a complete history.
+            Activity records are kept on this device, in a private folder that is not beside the vault.
+            They hold key ids and counts, not key names or values. Requests do not prove completion.
+            Records are not authenticated and cannot prove a complete history.
           </p>
         </div>
         <button
@@ -88,10 +101,16 @@ export function Activity() {
 
         {report && <div className="ledger-message"><p>Completeness unknown</p></div>}
 
+        {report?.notices.map((notice) => (
+          <div className="ledger-message" key={notice.kind}>
+            <Notice tone="info">{notice.message}</Notice>
+          </div>
+        ))}
+
         {report?.state === "corrupt" && (
           <div className="ledger-message">
             <Notice tone="error">
-              Damage was found at physical line <span className="mono">{report.problemLine}</span>{report.brokenAt === null ? "." : <>, declared sequence <span className="mono">{report.brokenAt}</span> (not verified).</>}
+              Damage was found{report.damage === null ? "" : ` (${DAMAGE[report.damage]})`} at physical line <span className="mono">{report.problemLine}</span>{report.brokenAt === null ? "." : <>, declared sequence <span className="mono">{report.brokenAt}</span> (not verified).</>}
               Original bytes were preserved. The displayed prefix is not authenticated; missing records and the cause of damage are unknown.
             </Notice>
           </div>
@@ -129,7 +148,7 @@ export function Activity() {
                   {Object.hasOwn(ACTIONS, entry.action) ? ACTIONS[entry.action] : `Legacy ${entry.action} (outcome unknown)`}
                 </span>
                 <span className="audit-key">
-                  <span>{entry.keyTitle ?? "Vault"}</span>
+                  <span>{keyLabel(entry.keyTitle, entry.keyId)}</span>
                   <span className="key-sub">
                     {[entry.project, entry.environment]
                       .filter(Boolean)
