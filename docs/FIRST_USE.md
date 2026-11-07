@@ -29,7 +29,7 @@ These were never run, because the agent rules allow them only with the owner pre
 | Full native GUI proof | Copy, clear and lock on the real window | `tools/verify_windows_app.ps1` without `-SkipClipboard` |
 | Import dialog | The native dialog lists names and scope, never values; Cancel writes nothing | Import a fake `.env` file in the desktop app; press Cancel once, Import once |
 | Windows notification | It shows only a count, and never after a lock | Turn on the notification in Settings with one overdue fake key; lock, then wait |
-| Window hide | Hiding the window during an import discards it (P2R1-01) | Start an import, minimize the window before you confirm |
+| Import and lock | The native dialog is the review (P2R2-02): an Import click in it applies the import; a lock before the click refuses it | Start an import; once press Import after you minimize and restore the window, once lock AKM (Win+L or the idle lock) before you press Import |
 | R4-04 | The outcome records survive a minimize (open P1) | Choose option A or B in [FINDINGS.md](FINDINGS.md) first |
 
 Report a failure as a new row in [FINDINGS.md](FINDINGS.md), with fake data only.
