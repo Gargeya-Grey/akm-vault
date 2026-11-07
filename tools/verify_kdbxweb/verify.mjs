@@ -444,7 +444,17 @@ async function partB(akmExe, work) {
     const db = await loadVault(vault);
     same(foreignSnapshot(db, state.foreignUuid), state.baseline, 'foreign data after AKM changes');
     equal(findEntry(db, 'Post interop key').fields.get('Password').getText(), 'fake-post-secret', 'new secret');
-    isTrue(!allEntries(db).some((entry) => fieldText(entry, 'Title') === 'Kdbxweb AKM key'), 'removed entry is still present');
+    // AKM moves a removed key to the Recycle Bin, which it creates when the vault has none.
+    const moved = findEntry(db, 'Kdbxweb AKM key');
+    equal(db.meta.recycleBinEnabled, true, 'Recycle Bin enabled');
+    equal(moved.parentGroup.uuid.id, db.meta.recycleBinUuid.id, 'removed entry sits in the Recycle Bin group');
+    equal(moved.parentGroup.name, 'Recycle Bin', 'Recycle Bin group name');
+    const purged = akm(['purge', state.akmEntryId, '--yes']);
+    equal(purged.code, 0, `akm purge exit code (${purged.err})`);
+    const after = await loadVault(vault);
+    same(foreignSnapshot(after, state.foreignUuid), state.baseline, 'foreign data after the purge');
+    isTrue(!allEntries(after).some((entry) => fieldText(entry, 'Title') === 'Kdbxweb AKM key'), 'purged entry is still present');
+    isTrue(after.deletedObjects.some((item) => item.uuid.id === moved.uuid.id), 'purge wrote no DeletedObjects record');
   });
 
   await check('B6 kdbxweb still reads the Argon2id 64 MiB / 3 / 4 KDF and AES-256 after AKM rewrites the vault', async () => {
@@ -454,12 +464,123 @@ async function partB(akmExe, work) {
   });
 }
 
+const SECRET_CHANGE_PATTERN = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/;
+
+function insideGroup(db, entryUuid) {
+  const entry = allEntries(db).find((item) => item.uuid.id === entryUuid);
+  return entry ? entry.parentGroup.name : null;
+}
+
+async function partC(akmExe, work) {
+  console.log('--- C: rotation, history, Recycle Bin, restore, purge and stale-copy merges (kdbxweb reads and merges) ---');
+  const vault = path.join(work, 'lifecycle.kdbx');
+  const akm = createRunner(akmExe, vault);
+  const state = {};
+  const run = (args, input) => {
+    const result = akm(args, input);
+    if (result.code !== 0) throw new Error(`akm ${args[0]} exited ${result.code}: ${result.err}`);
+    return result;
+  };
+
+  await check('C1 AKM adds a key; kdbxweb sees a secret-change time and no history', async () => {
+    run(['init', '--name', 'lifecycle']);
+    run(['add', 'Rotating key', '--project', 'demo', '--env', 'dev', '--rotation-days', '30', '--secret-stdin'], 'fake-v1\n');
+    run(['add', 'Companion key', '--secret-stdin'], 'fake-companion\n');
+    state.id = JSON.parse(run(['list', '--json']).out).find((key) => key.title === 'Rotating key').id;
+    const entry = findEntry(await loadVault(vault), 'Rotating key');
+    isTrue(SECRET_CHANGE_PATTERN.test(fieldText(entry, 'AKM_SECRET_CHANGED')), `AKM_SECRET_CHANGED is ${fieldText(entry, 'AKM_SECRET_CHANGED')}`);
+    equal(entry.history.length, 0, 'history length');
+    state.firstChange = fieldText(entry, 'AKM_SECRET_CHANGED');
+  });
+
+  await check('C2 rotate adds one native history version that holds the old secret', async () => {
+    run(['rotate', state.id, '--secret-stdin'], 'fake-v2\n');
+    const entry = findEntry(await loadVault(vault), 'Rotating key');
+    equal(fieldText(entry, 'Password'), 'fake-v2', 'new secret');
+    equal(entry.history.length, 1, 'history length');
+    equal(fieldText(entry.history[0], 'Password'), 'fake-v1', 'old secret in history');
+    equal(fieldText(entry.history[0], 'AKM_SECRET_CHANGED'), state.firstChange, 'history keeps the old change time');
+    const now = fieldText(entry, 'AKM_SECRET_CHANGED');
+    isTrue(SECRET_CHANGE_PATTERN.test(now) && now > state.firstChange, `change time ${now} is not later than ${state.firstChange}`);
+    // The same value again is refused and adds nothing.
+    const again = akm(['rotate', state.id, '--secret-stdin'], 'fake-v2\n');
+    isTrue(again.code !== 0, 'rotating to the current value succeeded');
+    equal(findEntry(await loadVault(vault), 'Rotating key').history.length, 1, 'history after the refused rotation');
+    isTrue(!akm(['history', state.id]).out.includes('fake-v1'), 'history output shows a secret');
+  });
+
+  await check('C3 rm moves the key to the Recycle Bin with the same UUID and its history', async () => {
+    run(['rm', state.id, '--yes']);
+    const db = await loadVault(vault);
+    const entry = findEntry(db, 'Rotating key');
+    equal(db.meta.recycleBinEnabled, true, 'Recycle Bin enabled');
+    equal(entry.parentGroup.uuid.id, db.meta.recycleBinUuid.id, 'entry sits in the Recycle Bin group');
+    equal(uuidText(entry.uuid), state.id, 'UUID');
+    equal(entry.history.length, 1, 'history length');
+    state.inBin = readFileSync(vault);
+  });
+
+  await check('C4 restore returns the key to its group with the same UUID, secret and history', async () => {
+    run(['restore', state.id]);
+    const db = await loadVault(vault);
+    const entry = findEntry(db, 'Rotating key');
+    equal(entry.parentGroup.name, 'API Keys', 'group');
+    equal(uuidText(entry.uuid), state.id, 'UUID');
+    equal(fieldText(entry, 'Password'), 'fake-v2', 'secret');
+    equal(entry.history.length, 1, 'history length');
+    state.live = readFileSync(vault);
+  });
+
+  await check('C5 purge deletes for good and writes a DeletedObjects record', async () => {
+    run(['rm', state.id, '--yes']);
+    state.inBin2 = readFileSync(vault);
+    run(['purge', state.id, '--yes']);
+    const db = await loadVault(vault);
+    isTrue(insideGroup(db, uuidFromText(state.id)) === null, 'purged entry is still present');
+    isTrue(db.deletedObjects.some((item) => item.uuid.id === uuidFromText(state.id)), 'no DeletedObjects record');
+    equal(fieldText(findEntry(db, 'Companion key'), 'Password'), 'fake-companion', 'companion key');
+    state.purged = readFileSync(vault);
+  });
+
+  // kdbxweb applies DeletedObjects when it merges, so it shows the record does its job.
+  for (const stale of ['live', 'inBin2']) {
+    const label = stale === 'live' ? 'live in its group' : 'in the Recycle Bin';
+    await check(`C6 merge in both directions with a stale copy (key ${label}) does not bring the purged key back`, async () => {
+      const id = uuidFromText(state.id);
+      const staleDb = await Kdbx.load(toArrayBuffer(state[stale]), credentials());
+      const purgedDb = await Kdbx.load(toArrayBuffer(state.purged), credentials());
+      staleDb.merge(purgedDb);
+      isTrue(insideGroup(staleDb, id) === null, 'merging the purged vault into the stale copy kept the key');
+
+      const staleAgain = await Kdbx.load(toArrayBuffer(state[stale]), credentials());
+      const purgedAgain = await Kdbx.load(toArrayBuffer(state.purged), credentials());
+      purgedAgain.merge(staleAgain);
+      isTrue(insideGroup(purgedAgain, id) === null, 'merging the stale copy into the purged vault brought the key back');
+      // Control: without the record the same merge does bring the key back, so the record is what stops it.
+      const noRecord = await Kdbx.load(toArrayBuffer(state.purged), credentials());
+      noRecord.deletedObjects = [];
+      noRecord.merge(await Kdbx.load(toArrayBuffer(state[stale]), credentials()));
+      isTrue(insideGroup(noRecord, id) !== null, 'control: the merge did not bring the key back without the record');
+      const merged = path.join(work, `merged-${stale}.kdbx`);
+      writeFileSync(merged, Buffer.from(await purgedAgain.save()));
+      const listed = createRunner(akmExe, merged)(['list', '--json']);
+      equal(listed.code, 0, `akm list exit code (${listed.err})`);
+      equal(JSON.parse(listed.out).map((key) => key.title), ['Companion key'], 'keys in the merged vault');
+    });
+  }
+}
+
+function uuidFromText(text) {
+  return Buffer.from(text.replaceAll('-', ''), 'hex').toString('base64');
+}
+
 async function main() {
   const { akm } = parseArgs(process.argv.slice(2));
   const work = mkdtempSync(path.join(tmpdir(), 'akm-kdbxweb-'));
   try {
     await partA(akm, work);
     await partB(akm, work);
+    await partC(akm, work);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
