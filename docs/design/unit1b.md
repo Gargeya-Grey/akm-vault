@@ -1,10 +1,10 @@
 # Unit 1b: private per-device journal
 
-- Status: implemented on branch `phase2/units-1c-to-4`. Not yet reviewed (the independent review follows the whole chain). The owner may veto any decision under "Decisions for the owner's veto".
+- Status: implemented on branch `phase2/units-1c-to-4`. Reviewed once (review 2 of phase two, finding P2R2-04). D12 answers that finding and refines R2, R5 and D10. The owner may veto any decision under "Decisions for the owner's veto".
 - Tier: Tier 2, 6 units, risk: privacy, schema (journal and mapping format), public API (crate APIs and the Activity IPC shape), delete (never done, see D6). The sub-units: location and permission layer, vault identity and mapping, record format and damage report, legacy sidecar notice, callers (CLI, desktop, proof tools), tests and test isolation.
 - Scope: M1, P2-JOURNAL-IDENTITY, P2-JOURNAL-OUTCOMES, and the malformed-tail part of M6 ([FINDINGS.md](../FINDINGS.md)). Inputs: [unit 1h](unit1h.md) (the journal binds every secret sink; this unit keeps that) and contract 12 ([PROJECT.md](../PROJECT.md)).
 - Public API change: yes, inside the workspace crates.
-  - `akm-core`: new `journal` module (`JournalRoot`, `VaultEvidence`). `AuditLog` is bound to a root and to evidence about one vault. `AuditLog::append` loses the title, project and environment arguments. `AuditEntry` loses those three fields. New `ChainFile` (the old file-level chain code). `AuditSnapshot` gains `damage`, `identity`, `notices` and `location`. New `Error::Journal`. `Vault::open_in` and `Vault::create_in` take a `JournalRoot`.
+  - `akm-core`: new `journal` module (`JournalRoot`, `VaultEvidence`; D12 adds `VaultEvidence::with_lineage`). `AuditLog` is bound to a root and to evidence about one vault. `AuditLog::append` loses the title, project and environment arguments. `AuditEntry` loses those three fields. New `ChainFile` (the old file-level chain code). `AuditSnapshot` gains `damage`, `identity`, `notices` and `location`. New `Error::Journal`. `Vault::open_in` and `Vault::create_in` take a `JournalRoot`.
   - `akm-desktop`: `AuditReport` gets `damage`, `identity` and `notices`. `AuditView` gets `keyId`. The error kind `journal` is new.
   - Not changed: KDBX format, the vault file (this unit never writes it), rotation and history fields, disclosure capability (unit 1h).
 
@@ -65,6 +65,8 @@ No single field decides. The rules, first match wins, over the active bindings. 
 | R4 | `P` exists, otherwise (no root: a locked read by `akm audit`, or the vault file is unreadable) | **Unconfirmed.** The journal of `P` is shown with a notice. The mapping is not changed. An append with this evidence is refused. |
 | R5 | no `P`; a binding `F` has the same `file_id`, and `sha` is in `F.seen` or the roots are equal | **Moved.** Rename or move on the same volume. `F.path` is updated. |
 | R6 | anything else | **New.** A new binding and journal. |
+
+**D12 refines R2 and R5.** R2 applies only to a version that no other binding recorded. R5 needs more than a file ID and an equal vault ID. The full table is in [D12](#d12-a-version-that-this-device-saw-belongs-to-the-journal-that-recorded-it-review-2-finding-4).
 
 How each requested case falls out:
 
@@ -175,6 +177,7 @@ Decision: `bind` and `locate` read the file at the path again, under the mapping
 | has another vault ID, has none, or there is no binding | **Superseded.** An append is refused (`the file at this vault's path is no longer the one this session opened`). A read shows no journal, `identity` unconfirmed and the standard notice. Nothing is created or changed. |
 
 - **What the records of A go to: a refusal, not A's own journal.** A's journal is bound to a vault that is no longer at the path. To write there, the mapping would need a "detached but still writable" state, and a way to create it for a reader that never recorded anything. A refusal is fail-closed (contract 12): the reader reopens the vault. A's earlier records stay in its detached journal. They are not merged, and B's reads list that journal in the `earlierJournal` notice.
+- **D12 refines this table.** Where another binding recorded the stale session's version, the record goes to that binding (Observed), and a tie is refused. The table above still holds for a version that nobody recorded.
 - Only evidence of an unlocked vault (with a vault ID) can be stale. Evidence without a vault ID (`akm audit`, `VaultEvidence::from_file`) is read-only by D2 and keeps R1 to R6, which show an unseen file as unconfirmed with the journal visible. Limit: a caller that appends with such evidence is not protected from the false rollback record described above. No production caller does.
 - The common case is unchanged: a sync client replaces the file with a newer version of the same vault. The roots are equal, so the reader keeps recording in its journal.
 - Veto effect: send Superseded to the detached binding with the same path and vault ID, and create a detached binding when there is none.
@@ -187,6 +190,60 @@ Decision: `bind` and `locate` read the file at the path again, under the mapping
 The rollback indication is the only record that the mapping owes: it moves the observed `sha` to the front of `seen`, and the next observation of that `sha` is then "not a rollback". `journal::record` is the only function that stores a mapping for a record. When a record is owed, it writes the records first and stores the mapping after they succeeded. If the append fails (damaged chain, journal cannot be opened, any I/O error), the mapping is as it was, and a retry writes the rollback record once, then the requested record. Every other change (a new binding, a move, a new `sha`, a replacement) is stored first: a binding without a journal file is harmless, a record without a binding is not. `journal::place`, which only creates a binding for tests, never consumes an owed record. The mapping lock is held across the append only when a record is owed.
 
 - Limit: if the append succeeds and storing the mapping fails, or the append fails at the final `sync` after its bytes were written, the retry writes the indication again. A second `vault-rolled-back` record is true (the vault was in that state at both attempts). A missing one is not.
+
+### D12. A version that this device saw belongs to the journal that recorded it (review 2, finding 4)
+
+The premise that failed: "the root group UUID names one vault". A clone copies that UUID. R2 and D10 used it to say "same vault, so the same journal", so a clone's version that replaced the original's file at the original's path was recorded in the original's journal. The clone's own history then split, and the original's journal showed records of another instance. This broke the promise in D2 that clone histories are never merged. The owner's decision (2026-11-07) is **"a seen fingerprint wins"**: the root UUID can rule an instance out. It never says which instance a file is.
+
+Data (both additive; the mapping stays version 1 and older readers ignore the new field):
+
+- A binding gets `elsewhere`: versions that were recorded for it while the file sat at another path (at most 32, newest first). They name the binding as the owner of the version. They are not part of the order of `seen`, so they never make or hide a rollback.
+- Evidence of an unlocked vault gets a `lineage`: the fingerprints that the session held before the current one, oldest first. These are the bytes it took from the disk, then each of its own saves. The first one is always kept, then the last 15. `Vault` keeps it. A reload from the disk clears it. A save changes the fingerprint, so without it the first record after a save would have no version to look up. `VaultEvidence::with_lineage` is the one new public function.
+
+Terms. `P` is the active binding at the observed path. A binding **knows** a version if it is in its `seen` or its `elsewhere`. The **owners** are the active bindings other than `P` that know the version and whose vault ID does not contradict the evidence (two known IDs that differ rule a binding out). If no binding knows the version itself, the owners are those that know a version of the lineage, but only if `P` knows none of the lineage. A direct match always beats a lineage match.
+
+State table, first match wins, fresh evidence at a path with a binding:
+
+| # | Case | Result |
+|---|---|---|
+| S1 | `P` has the version in `seen` | **Same** (R1). If it is not the newest, the file went back: the rollback record goes to `P`'s journal. The path decides, also when other bindings know the version too. |
+| S2 | `P` has the version in `elsewhere` | **Same**, no rollback. |
+| S3 | `P` does not know the version; exactly one owner `X` | **Claimed**. The record goes to `X`'s journal. The version is added to `X.elsewhere`. `P` is not changed and not detached. No rollback is asked of `X`: the file is not `X`'s own file, so an old version of `X` at this path is no step back of `X`. |
+| S4 | `P` does not know the version; two or more owners | **Ambiguous**. See below. |
+| S5 | nobody knows the version, and `P` knows a version of the lineage | not claimed. Row S7. |
+| S6 | nobody knows the version, `P` knows none of the lineage; one owner or more than one for the lineage | **Claimed** or **Ambiguous**, as S3 and S4. |
+| S7 | no owner | The root rules of D2: R2 (**Same**), R3 (**Replaced**), R4 (**Unconfirmed**). Only a version that no binding recorded reaches the root UUID. |
+
+At a path without an active binding: R5 moves a binding when the file ID matches one binding that knows the version, or when the file ID and the vault ID match exactly one binding and no other binding knows the version. More than one candidate, or none, is **New** (R6). This row is how D12 changes R5: before, a file ID and an equal vault ID were enough, so a clone's version that was written into the original's file and then renamed moved the original's binding.
+
+Stale evidence (D10 restated), a path with a binding is required: the binding that recorded the version, or a version of the lineage, vouches (**Observed**; the path's own binding first, then a single other owner, a tie is **Ambiguous**). If nobody recorded it, the path's binding vouches when both vault IDs are known and equal. Otherwise **Superseded**. A path without a binding gives stale evidence nothing to stand on: a copy cannot be told from a file that moved.
+
+Answers to the cases in the review:
+
+- **A path replaced by an already observed clone** (the reviewer's case): S3. The records go to the clone's journal, also the records of every later save made from that version, in this and in later processes (the lineage and `elsewhere` carry the claim). The original's binding and journal bytes are unchanged and stay discoverable: a read at that path shows the clone's journal and a notice (`earlierJournal`) that names the file of the other journal. Putting the original's bytes back returns to the original's journal (S1).
+- **A fresh copy at a new path, before any change** (its bytes equal a version that the original saw): **keeps the unit 1b behaviour: a new journal** (R6). The owner's rule is not forced here. The root UUID rule never decided this case. R6 decided it, and a path without a binding has no earlier history that the version could contradict. The copy and the original cannot be told apart by their bytes, so the copy starts its own journal and the histories are never merged. D12 applies where the root UUID used to decide, at a path that already has a binding. Limit: the same bytes written over a path that is bound to a third journal are claimed by the journal that recorded them.
+- **A version that two journals recorded** (S4): this happens after a copy, because a copy and its source then both know the version. **Fail closed for that one append.** The append, and with it a disclosure, is refused with `this vault version was recorded in more than one journal on this device (bound to <paths>) ...`. The mapping and the journals stay as they were. A read shows no journal, `identity` unconfirmed and a notice that names the candidates. The way out is to copy the vault to a new path, which starts a journal of its own. The path's own binding decides when it is one of the two (S1): putting a shared version back where it belongs is not ambiguous.
+- **D10 (stale readers).** Stale evidence still never changes the mapping. Where the stale session's version was recorded by another binding, its records go there (the reviewer's alternation). The rows of D10 for a binding with another vault ID, or with none, or for a path without a binding, are unchanged.
+- **D11 (rollback indication).** Only S1 asks for a rollback record, so `journal::record` stays the only place that stores a mapping after an owed record. A claim stores its `elsewhere` change before the record is written, like a new binding: a version note without a record is harmless, and a retry finds the version known and changes nothing. A clone that returns to one of its own earlier versions **at its own path** is a rollback in its own journal (S1). The same old version at another path is not (S3). Both are tested.
+
+Rejected:
+
+- **Fail closed on ambiguity of identity in general** (refuse whenever the vault ID matches a binding at another path). Every sync update of a vault would be refused once any clone exists, and the only way out is to move the file. It is used for the one real tie (S4).
+- **Document the clone replacement as a limit.** The result is a wrong record in a security journal, in the normal flow "copy a file over another and open it".
+- **Pick one owner of a tie** (the newest, the lowest ID). Any pick merges two histories or splits one without telling the user.
+- **Add the claimed version to `X.seen`.** The next observation of `X`'s own file would then look like a rollback.
+- **Write a note into the vault.** D2 forbids it.
+
+Limits:
+
+- `seen` and `elsewhere` keep 32 versions each. A version older than that is not known, and the root UUID decides.
+- A version that no binding recorded and that has no recorded lineage still falls to the root UUID. A clone's version that was never journaled, copied over the original's path, joins the original's journal. The review's case needed the clone's version to be recorded.
+- Evidence without a lineage (`akm audit`, a library caller that does not pass one) is claimed by its version only.
+- A claimed file that is then renamed is a new place and gets its own journal (R5, R6).
+- The path's own binding stays active while its file holds a claimed version. The notice says so. It is not detached, because the original's bytes may come back (S1).
+- The check is a point in time, as in D10.
+- Veto effect: remove rows S3 to S6 (an unrecorded or recorded version at a bound path then goes to the root rules), and the review's flow merges again.
+- Not changed, and noted: the vault write lock is named after the path as the caller spelled it. Two spellings of one file (a junction, a subst drive) get two lock files. That is path aliasing, not copying, and is not part of this decision.
 
 ## 3. Failure cases
 
@@ -202,6 +259,8 @@ The rollback indication is the only record that the mapping owes: it moves the o
 | Many appends and reads at once | one chain, sequence numbers `1..n`, reads always consistent |
 | Truncated tail, malformed line, broken link, altered early record | reported by kind; bytes unchanged; append refused |
 | KDBX 3.x, 4.0 and read-only vaults | journaled; vault bytes and read-only attribute unchanged |
+| A clone's recorded version replaces the original's file (D12 S3) | records go to the clone's journal, in this and in later processes; the original's journal bytes are unchanged; a read names both journals |
+| A version that two journals recorded, at a path bound to a third (D12 S4) | the append and the disclosure are refused; nothing is stored; a read shows no journal and names the candidates |
 | Journal fails before a disclosure | action refused |
 | Journal fails after a commit | warning, "Do not repeat" |
 
@@ -209,6 +268,7 @@ The rollback indication is the only record that the mapping owes: it moves the o
 
 - Completeness and authenticity of records are not proved (D7).
 - A rollback to a vault version that this device never saw is not detected (D2).
+- A clone's version that was never journaled, copied over another vault file of the same family, joins that file's journal. The limits of D12 list the others.
 - A move across volumes starts a new journal (D2). The old journal remains and is listed in a notice.
 - A sync client that watches `%LOCALAPPDATA%` is not detected (D4). Backup tools that run as SYSTEM can read the folder.
 - Moving the log does not remove copies of the old sidecar that already synced (D5).
