@@ -42,11 +42,11 @@ AKM dotenv profile v1. The reference reader is python-dotenv 1.2.2 (no interpola
 | Malformed line, unterminated quote | an error naming the line. Never a skip. |
 | Errors | name the line number. They never repeat file content. A name is repeated only when it is plain letters, digits and underscores, up to 64 characters. |
 
-Where AKM differs from python-dotenv 1.2.2 on purpose (each is a fixture with a note):
+Where AKM differs from python-dotenv 1.2.2 on purpose (each is a fixture with a note; the recorded reader output in `crates/akm-core/tests/fixtures/dotenv/expected.json` is the source of truth for this table):
 
 | Case | python-dotenv | AKM | Reason |
 |---|---|---|---|
-| `TOKEN=abc # note` | keeps `abc # note` | `abc` | a shell does this; the old behaviour stored the comment in the secret |
+| `EMPTYC= # only a comment` (a comment right after `=` and spaces) | keeps `# only a comment` | empty | a shell does this. Both readers give `abc` for `TOKEN=abc # note`. |
 | `\a \b \f \v \'` in double quotes | decoded | kept as written | a secret with a backslash and such a letter must not change |
 | `'a\\b'` | `a\b` | `a\\b` | single quotes are literal, as in a shell and in Node dotenv |
 | `'it\'s'` | reads `\'` as a quote | error | there is no escape in single quotes |

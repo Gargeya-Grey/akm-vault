@@ -1,55 +1,63 @@
 # Current state
 
-Updated 2026-11-02. Replace this file's sections when they change. History lives in Git.
+Updated 2026-11-07. Replace this file's sections when they change. History lives in Git.
 
 ## Status
 
-- **Phase one is complete.** Its review rounds accepted the fixes for the original critical and high findings. H9 (rotation) is still open, and H6 is partial: real Windows lock and suspend delivery is not tested.
-- **Unit 1a: source accepted; work unit complete: NO.** [Acceptance review 2](reviews/2026-11-02-unit1a-acceptance-review2.md) passed under the [pass rule](REVIEWING.md#pass-rule), after the owner's scope split of 2026-11-02 (option A): 1A-A2-01 moved to unit 1c, 1A-A2-02 and A2-03 to unit 1h, 1A-A2-04 to unit 1b, and A2-05 was fixed. The unit is complete only when R4-04 passes. The owner-present real clipboard test and the full native GUI copy proof have not run.
-- **Unit 1a is on `main`.** PRs #3, #4 and #5 landed together through one merge of #5 (`60a7347`). PRs #1 and #2 landed earlier (`d46bcce`, `4656b0c`). No pull request is open, and `main` is the only branch.
-- **The pass rule is in force** (owner decision, 2026-11-02). Every review from now on is judged by it.
-- **No new score exists.** The only measured score is 40.5/100 ([baseline review](reviews/2026-10-30-baseline.md)).
+- **Phase two is built and in review.** Units 1c, 1h, 1b, 2, 3 and 4, security proposals A1 to A3, and the tools are on branch `phase2/units-1c-to-4`, in [PR #7](https://github.com/Gargeya-Grey/akm-vault/pull/7). The owner authorized all of them on 2026-11-07 and let the implementer decide the design questions; each decision is under "Decisions for the owner's veto" in `docs/design/unit*.md`.
+- **Reviews: two at most for phase two** (owner, 2026-11-07), by Codex GPT-6.1 Terra at max effort. [Review 1](reviews/2026-11-07-phase2-review1.md) failed with 8 P2 and 1 P3 findings. All 9 are fixed by fault class (FINDINGS.md rows P2R1-01 to P2R1-10; the class table is in AGENTS.md); each fix has a test that failed first. Review 2, the last one, runs on `3391b94`. The first attempt was refused by the provider's safety filter before it produced a review; the second attempt is running.
+- **GitHub Actions is on** (owner, 2026-11-07). The first CI run failed one test that depended on the temp path (a short name such as `RUNNER~1`); `d628130` fixes the test and the product message.
+- **The owner will use AKM for their own keys before the release gate.** [FIRST_USE.md](FIRST_USE.md) gives the precautions and the six tests that need the owner present.
+- **Unit 1a: source accepted; work unit complete: NO.** R4-04 (open P1) is still deferred.
+- **No new score exists.** The only measured score is 40.5/100 ([baseline review](reviews/2026-10-30-baseline.md)). The full rescore of unit 5 needs several reviewers and waits for the owner.
 
 ## Last full check run
 
-This run checked branch `fix/unit1a-sound-findings` at `94d8008` (unit 1a, round A1 fix) on 2026-11-02, in a separate check session. All data was fake.
+On `8548191` (2026-11-07, fake data only, Rust builds outside the repository). The later commits change the CI workflow, docs, and one CLI export message with its test.
 
-- Rust: `cargo fmt --all -- --check` and Clippy (`-D warnings`) were clean. `cargo test --workspace --offline --locked` passed 230 tests, with 2 gated tests ignored. The release CLI was rebuilt with `--locked` after the GUI build.
-- Frontend: `npm ci` passed. `npm test` passed 192 cases in 16 files. The production build passed. `npm run test:ui` passed 32 mocked-native cases.
+- Rust: `cargo fmt --check` and Clippy (`-D warnings`) clean. `cargo test --workspace --offline --locked` 454 passed, 0 failed, 2 ignored (the opt-in real-clipboard test and one gated test).
+- Frontend: `npm ci`, `npm test` (305 passed in 28 files), the production build, and `npm run test:ui` (51 passed, mocked native boundary).
 - Build: `npm run tauri -- build -- --locked --offline` built the GUI and the unsigned MSI and NSIS installers. None is installed.
-- Final-build checks, between two hash runs that matched:
-  - Release CLI, fake vaults (`.scratch` scripts, not committed): the earlier script passed 39 of 39, and the unit 1a script passed 49 of 49.
-  - Native GUI proof `-JournalOnly` passed 27 checks.
-  - Native GUI proof `-JournalExportOnly` passed 9 checks on its fourth run. Runs 1 to 3 failed in the filter step of the proof script: twice `Missing select option in the test process: Environment / prod` (`tools/verify_windows_app.ps1:303`), once `Unsupported Pattern` at the Project filter's Expand call (line 270). The cause is timing in the proof script, not AKM: the same binary then passed; the frontend bundle is byte-identical to the one built from `2664e51`; and a build of `2664e51` passed the same proof in the same conditions. `Select-FilterOnce` calls Expand once, with no wait or retry when UI Automation does not yet expose the combo box pattern or its options. Making that step robust is open tool work (TESTING.md).
-  - Both proofs used fake vaults, did not touch the clipboard and did not minimize or hide the window. The settings file was byte-identical before and after (SHA-256 `dacba49a…9115`), and no `akm-desktop` process remained.
-- Round A1 tests (`836fc8c`): the four text tests and the copy table failed on the old production code and pass at `94d8008`. Mutants (`.scratch/mutants_a1.py`): 5 of 5 caught.
-- Not run: KeePassXC interchange (no KDBX format change; the portable KeePassXC path was not found), the full native GUI proof and the real clipboard test (they use the clipboard and need the owner present), `-OutcomeOnly` (owner gate), and R4-04 (deferred).
-- CI: GitHub Actions is off, so no CI ran (`CI RESULT: none`).
+- Security checks: `check_no_network.py` PASS and its test; `check_dependencies.ps1` PASS, with the two Linux-only `cargo audit` warnings of SEC-01.
+- Real readers: KeePassXC 2.8.0 interchange PASS (rotation, Recycle Bin, restore, purge, stale-copy merges); kdbxweb all checks PASS, 0 FAIL.
+- Tools: `check_docs.py` PASS and its test; `test_fetch_keepassxc.ps1` 8 of 8; `test_proof_snapshot.ps1` all cases.
+- Native GUI proofs on these builds: `-JournalOnly` and `-JournalExportOnly` passed to their last check (each script stops at its first failure). No clipboard access, no minimize. The settings file was byte-identical afterwards, and no `akm-desktop` process remained.
+- After `d628130`: `cargo test -p akm-cli --test security` 48 passed, 1 ignored; Clippy on `akm-cli` clean.
+- Not run: R4-04, the real clipboard test, the full native GUI proof, the native import dialog, the Windows toast and a real window hide. They need the owner present ([FIRST_USE.md](FIRST_USE.md)).
 
-## Unit 1a build under test
+## Builds under test
 
-- Source: `94d8008`, now in `main` through the merge `60a7347`. The branch is deleted. `main` also has the UI change of PR #2, so a build of `main` will not match these hashes: rebuild and run the checks again before a proof on `main`.
-- Builds in `target/release`, all unsigned and not installed, SHA-256:
-  - `akm-desktop.exe` `32f591a7d197ed93e7aba57d6c7a3ff8548ce44172a3b27f183222c0578c9104`
-  - `akm.exe` `ad2ec01b491de883493b12d0aad802084ad8831b45083083a8e77ef8c6ceafc1`
-  - `bundle/msi/AKM_0.1.0_x64_en-US.msi` `d7c457b92d98e730db56e211eee6ebf716aee157f95fc20514d13a26427c852c`
-  - `bundle/nsis/AKM_0.1.0_x64-setup.exe` `05f8124b441f96c2c086151961e9487fd40b48c946b25b3bee7d8f97085ea3cf`
-- The R4-04 pass conditions in FINDINGS.md still name `cfeb1b0`; update them to the accepted source before R4-04 runs.
-- Before you use a build for a proof, check its hash against this list. A different hash needs a rebuild and a new check run.
+Builds of `8548191` in the session build folder, all unsigned and not installed, SHA-256:
+
+- `akm-desktop.exe` `be200c0c7b9c124b74915fefc3566a537395753196cac3b908062b1f456421f4`
+- `akm.exe` `6fc47991109e603485034077051265e7299104d8d197bf679169f58211a8d21f` (before the `d628130` message fix)
+- `AKM_0.1.0_x64_en-US.msi` `ea5a5c7bcfbc0686dbd6ca3a248b435e832ffce960de0d7f6515cf66c0bb7a1d`
+- `AKM_0.1.0_x64-setup.exe` `bb2b8341660a753ab3a2618ea0f240fcf9a73faa964df8c712c46a5dd1edc0a0`
+
+The CI run of PR #7 uploads its own build with a `SHA256SUMS.txt`. Build from the merged `main` before you install, and compare the hashes with that run.
+
+## Stop rule: design questions for the owner
+
+[Review 2](reviews/2026-11-07-phase2-review2.md) failed with 4 P2 and 1 P3 (FINDINGS.md rows P2R2-01 to P2R2-05). Units 1c, 1b and the tools failed both phase two reviews, so patching stopped (AGENTS.md). In each class that came back, the earlier fix kept a premise that the review broke:
+
+| Finding | Premise that failed | Proposed redesign |
+|---|---|---|
+| P2R2-01 fetch tool deletes nested files (F) | The tool can tell its own files from others, so it may delete. | The tool never deletes. Each fetch goes to a new folder named by version and digest. |
+| P2R2-02 hidden import still commits (A) | A hide that the page sees must cancel an approval that native code gives. | The native dialog is the review: an approval in it stands, a lock still refuses it. Contract 7 changes its wording for the desktop import. |
+| P2R2-03 delayed discard reaches session B (B) | A discard without an identity reaches only the current session. | `view_discard` carries its session ID; a failed discard locks only that session. |
+| P2R2-04 clone replacement mixes journals (B) | The root UUID names one vault. | A fingerprint that this device has seen belongs to the journal that saw it; only an unseen one falls back to the root UUID. |
 
 ## Next action
 
-Nothing is in progress. Each item below waits for the owner. Each unit needs its own authorization ([ROADMAP.md](ROADMAP.md)).
-
-1. **R4-04 (open P1, deferred by the owner on 2026-11-01).** The proof script failed review twice (R4-04-SCRIPT in [FINDINGS.md](FINDINGS.md)). The owner chooses: **A**, a fake-data-only proof log in the app, which needs a rebuild and must stay off in release builds; or **B**, a stronger script that watches UI Automation events, with its two gaps as written limits. The run needs the owner present. Before it runs, update the R4-04 pass conditions from `cfeb1b0` to the build of `main`. R4-04 must pass before unit 1a is complete and before the release gate.
-2. **Units 1b, 1c and 1h** are not authorized. Their findings are in [FINDINGS.md](FINDINGS.md). Unit 1b now also owns the cause of the `-JournalExportOnly` proof-script failures (1A-A2-04).
-3. **Security proposals** (owner request, 2026-11-02) are in [ROADMAP.md](ROADMAP.md#security-proposals-not-authorized). None is authorized. The suggested first two, a threat model and a no-network check, add no product code. Group D adds agent-safety ideas from existing free tools (kdbx, kprun, fnox, secretspec, dotenvx).
-4. **Owner-present tests:** the real clipboard test and the full native GUI copy proof for unit 1a.
+1. The owner answers the design questions above.
+2. The owner merges PR #7 after CI is green (owner gate).
+3. The owner runs the six tests in [FIRST_USE.md](FIRST_USE.md), and chooses option A or B for R4-04.
+4. Release decisions for the owner: SEC-02 to SEC-05 and 2-W-01 in [FINDINGS.md](FINDINGS.md).
 
 ## Local state outside the repository
 
-- Git tag `archive/pre-cleanup-2026-11-01` keeps all the tracked evidence that the cleanup removed: phase-one records, the review rounds, probes and hash manifests.
-- Git tag `baseline/pre-unit-1a` is a commit with no parent. It holds the 139-file source snapshot from before unit 1a, rebuilt from `before.zip`, and each file matches the archived `before-sha256.json`.
-- `W:\AKM-archive\2026-11-01-local-evidence\` keeps the 265 ignored local files that the cleanup moved out: raw logs, screenshots and source archives.
-- The desktop app's settings select the fake vault `%TEMP%\opencode\akm-app-proof-07ee8d95-96d0-40df-bf1c-e24b33600ef2\vault.kdbx`. An earlier restart lost the owner's previous setting, so it is unknown. Keep that folder while the app selects it.
-- `%TEMP%\opencode\akm-app-proof-030c41dd-649e-44ae-8086-285677373566` holds the diagnostics of the failed R4-04 attempt.
+- Git tag `archive/pre-cleanup-2026-11-01` keeps the tracked evidence that the cleanup removed. Git tag `baseline/pre-unit-1a` holds the source snapshot from before unit 1a.
+- `W:\AKM-archive\2026-11-01-local-evidence\` keeps the ignored local files that the cleanup moved out. `W:\AKM-archive\2026-11-07-leaked-test-journal\` keeps the 1288 fake journals that tests wrote to the real journal folder before the guard (1B-C-01).
+- `W:\AKM-archive\proofs\` keeps the verification skill's transcripts.
+- The desktop app's settings select the fake vault `%TEMP%\opencode\akm-app-proof-07ee8d95-96d0-40df-bf1c-e24b33600ef2\vault.kdbx` (SHA-256 of the settings file `dacba49a…9115`). The owner's earlier setting is unknown. When the owner opens their own vault, the app replaces this setting.
+- The old builds in `target\debug` and `target\release` were deleted on 2026-11-07 to free disk space; the unit 1a hashes are in Git history.

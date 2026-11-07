@@ -57,7 +57,7 @@ python tools/verify_keepassxc.py --akm target/release/akm.exe --keepassxc "C:/pa
 
 Since unit 2 it also covers rotation, native history, the Recycle Bin, restore, purge and stale-copy merges. KeePassXC 2.8.0 `merge` applies no `DeletedObjects` record, so the merge check compares an AKM purge with a KeePassXC permanent delete (finding 2-W-01).
 
-Use the portable KeePassXC 2.8.0. `tools/fetch_keepassxc.ps1` downloads the official x64 zip from the KeePassXC GitHub release, checks its SHA-256 against the `.DIGEST` file of that release, and extracts it outside the repository (default `W:\AKM-archive\tools\keepassxc-2.8.0\`). It changes the destination only after the digest check, and only when the folder is missing, empty or marked with its own `.akm-fetch-keepassxc` file; it refuses any other content, a drive root and a junction, also with `-Force`. Test it with `powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_fetch_keepassxc.ps1` (no network):
+Use the portable KeePassXC 2.8.0. `tools/fetch_keepassxc.ps1` downloads the official x64 zip from the KeePassXC GitHub release, checks its SHA-256 against the `.DIGEST` file of that release, and, after that check, adds one new folder `KeePassXC-<version>-x64-<first 12 digest characters>` under the destination (default `W:\AKM-archive\tools\keepassxc\`). It never deletes or replaces anything: a second fetch of the same release changes nothing, and an unmarked folder of that name is refused. Remove old folders by hand. It refuses a drive root and a destination at or below a junction. Test it with `powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_fetch_keepassxc.ps1` (no network):
 
 ```powershell
 ./tools/fetch_keepassxc.ps1

@@ -4,24 +4,26 @@ Downloads portable KeePassXC (Windows x64 zip) for tools/verify_keepassxc.py and
 
 .DESCRIPTION
 Downloads the official zip and its .DIGEST file from the KeePassXC GitHub release, compares the
-SHA-256 of the zip with the digest, and extracts it in a staging folder. Only after that check
-does it touch the destination. The destination must be outside the repository, must not be a
-drive root or a reparse point, and must be missing, empty, or a folder that this tool created
-(it holds the marker file .akm-fetch-keepassxc and nothing but KeePassXC-*-x64 folders). With
--Force, it replaces only such a folder. Any other content is refused and left untouched.
+SHA-256 of the zip with the digest, and extracts it in a temporary folder. Only then does it add
+one new folder, KeePassXC-<version>-<first 12 digest characters>, under the destination.
+
+The tool never deletes or replaces anything outside its own temporary folder (owner decision,
+2026-11-07, review 2 finding P2R2-01). A second fetch of the same release finds its folder and
+changes nothing. An existing folder of that name that the tool did not mark is refused. Remove
+old folders by hand. The destination must be outside the repository, must not be a drive root,
+and neither it nor any folder above it may be a junction or a link.
+
 When the requested version has no x64 zip, it uses the newest published 2.7.x or 2.8.x release
 that has one, and says so. -LocalZip and -LocalDigest use local files instead of the download
 (tools/test_fetch_keepassxc.ps1 uses them).
 
 .EXAMPLE
 ./tools/fetch_keepassxc.ps1
-python tools/verify_keepassxc.py --akm target/release/akm.exe --keepassxc W:/AKM-archive/tools/keepassxc-2.8.0/<folder>/keepassxc-cli.exe
 #>
 [CmdletBinding()]
 param(
     [string]$Version = '2.8.0',
-    [string]$Destination = 'W:\AKM-archive\tools\keepassxc-2.8.0\',
-    [switch]$Force,
+    [string]$Destination = 'W:\AKM-archive\tools\keepassxc\',
     [string]$LocalZip,
     [string]$LocalDigest
 )
@@ -39,22 +41,21 @@ if ($null -eq [IO.Directory]::GetParent($destFull.TrimEnd('\'))) {
     throw "Destination $destFull is a drive root. Choose a folder of its own."
 }
 
-function Assert-Replaceable([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-    $item = Get-Item -LiteralPath $Path -Force
-    if (-not $item.PSIsContainer) { throw "Destination $Path is a file, not a folder. Nothing was changed." }
-    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Destination $Path is a reparse point (a junction or link). Nothing was changed." }
-    $children = @(Get-ChildItem -LiteralPath $Path -Force)
-    if ($children.Count -eq 0) { return }
-    $owned = $children | Where-Object { $_.Name -eq $Marker }
-    $foreign = @($children | Where-Object { $_.Name -ne $Marker -and -not ($_.PSIsContainer -and $_.Name -like 'KeePassXC-*-x64') })
-    if (-not $owned -or $foreign.Count) {
-        throw "Destination $Path holds content that this tool did not create ($(@($foreign.Name) -join ', ')). Nothing was changed. Choose an empty folder."
+# The destination and every existing folder above it: a junction or link there could send the
+# new folder somewhere else.
+function Assert-NoReparseAbove([string]$Path) {
+    $current = [IO.DirectoryInfo]::new($Path.TrimEnd('\'))
+    while ($null -ne $current) {
+        if ($current.Exists -and ($current.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "$($current.FullName) is a junction or link. Choose a destination without one. Nothing was changed."
+        }
+        $current = $current.Parent
     }
-    if (-not $Force) { throw "Destination $Path already holds a KeePassXC that this tool fetched. Use -Force to replace it." }
 }
-
-Assert-Replaceable $destFull
+Assert-NoReparseAbove $destFull
+if ((Test-Path -LiteralPath $destFull) -and -not (Get-Item -LiteralPath $destFull -Force).PSIsContainer) {
+    throw "Destination $destFull is a file, not a folder. Nothing was changed."
+}
 
 $base = 'https://github.com/keepassxreboot/keepassxc/releases/download'
 $headers = @{ 'User-Agent' = 'akm-fetch-keepassxc' }
@@ -98,29 +99,36 @@ try {
     $expected = $match.Groups[1].Value.ToLowerInvariant()
     $actual = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actual -ne $expected) {
-        throw "SHA-256 mismatch for $asset. Expected $expected from the DIGEST file, got $actual. The destination was not changed."
+        throw "SHA-256 mismatch for $asset. Expected $expected from the DIGEST file, got $actual. Nothing was changed."
     }
     Write-Host "SHA-256 OK: $actual"
 
-    $staged = Join-Path $work 'extract'
-    Expand-Archive -LiteralPath $zipPath -DestinationPath $staged
-    if (-not (Get-ChildItem -LiteralPath $staged -Recurse -Filter 'keepassxc-cli.exe' | Select-Object -First 1)) {
-        throw "keepassxc-cli.exe is not in $asset. The destination was not changed."
-    }
-
-    Assert-Replaceable $destFull
-    if (Test-Path -LiteralPath $destFull) {
-        Get-ChildItem -LiteralPath $destFull -Force | Where-Object { $_.Name -ne $Marker } | Remove-Item -Recurse -Force
+    $target = Join-Path $destFull ("KeePassXC-$Version-x64-" + $actual.Substring(0, 12))
+    $markerText = "Created by tools/fetch_keepassxc.ps1 for KeePassXC $Version ($actual)."
+    if (Test-Path -LiteralPath $target) {
+        $markerPath = Join-Path $target $Marker
+        $owned = (Test-Path -LiteralPath $markerPath) -and ((Get-Content -LiteralPath $markerPath -Raw).Trim() -eq $markerText)
+        if (-not $owned) { throw "$target exists and this tool did not create it. Nothing was changed." }
+        Write-Host "Already fetched; nothing was changed."
     } else {
-        New-Item -ItemType Directory -Path $destFull | Out-Null
+        $staged = Join-Path $work 'extract'
+        Expand-Archive -LiteralPath $zipPath -DestinationPath $staged
+        if (-not (Get-ChildItem -LiteralPath $staged -Recurse -Filter 'keepassxc-cli.exe' | Select-Object -First 1)) {
+            throw "keepassxc-cli.exe is not in $asset. Nothing was changed."
+        }
+        New-Item -ItemType Directory -Path $destFull -Force | Out-Null
+        Assert-NoReparseAbove $destFull
+        # A copy, because the temporary folder can be on another drive. The marker comes last, so
+        # a copy that stops halfway leaves an unmarked folder, which the next run refuses.
+        Copy-Item -LiteralPath $staged -Destination $target -Recurse
+        Set-Content -LiteralPath (Join-Path $target $Marker) -Value $markerText -Encoding UTF8
     }
-    Set-Content -LiteralPath (Join-Path $destFull $Marker) -Value "Created by tools/fetch_keepassxc.ps1 for KeePassXC $Version ($actual)." -Encoding UTF8
-    Get-ChildItem -LiteralPath $staged -Force | Move-Item -Destination $destFull
 } finally {
+    # The only removal in this tool: its own temporary folder, made above with a new GUID.
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-$cli = Get-ChildItem -LiteralPath $destFull -Recurse -Filter 'keepassxc-cli.exe' | Select-Object -First 1
+$cli = Get-ChildItem -LiteralPath $target -Recurse -Filter 'keepassxc-cli.exe' | Select-Object -First 1
 Write-Host "KeePassXC $Version"
 Write-Host "URL      $zipUrl"
 Write-Host "SHA256   $actual"

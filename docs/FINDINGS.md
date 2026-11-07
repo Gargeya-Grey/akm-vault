@@ -197,6 +197,18 @@ From [phase two review 1 of 2](reviews/2026-11-07-phase2-review1.md), on `e9e5fb
 | P2R1-09 | P3 | Fixed, not accepted (`e284bab`) | A1 | D: a doc that names stale things | `docs/THREAT_MODEL.md:105`. The threat model cited removed tests and described the old parser, the old blocklist and the old rollback limit. Check: `tools/check_docs.py` fails when a Markdown file names a test that is not a `fn`; `tools/test_check_docs.py` shows it fails at `e9e5fb9` and `cfce854`. Named later unit if review 2 finds more: 5. |
 | P2R1-10 | Gap | Open | 3, 5 | none | The review was incomplete: unit 3 had no P2 in the inspected code but its full scope was not verified, and unit 5 (the second-reader suite and the full rescore) was not reviewed. Review 2 covers unit 3. The full rescore needs several reviewers, so it waits for the owner. |
 
+## Phase two review 2 (2026-11-07)
+
+From [phase two review 2 of 2](reviews/2026-11-07-phase2-review2.md), on `3391b94`. Units 1c, 1b and the tools failed both reviews, so patching stopped (AGENTS.md) and the owner chose one redesign per finding on 2026-11-07, with no third review. Each redesign removes the premise that the earlier fix kept (STATE.md, "Stop rule").
+
+| ID | Severity | Status | Unit | Class | Problem |
+|---|---|---|---|---|---|
+| P2R2-01 | P2 | Fixed, not accepted (owner decision: the tool never deletes) | Tools | F | `tools/fetch_keepassxc.ps1:47`. A forced replacement deleted files that a person added inside a fetched `KeePassXC-*-x64` folder. Redesign: each fetch adds one new marked folder named by version and digest; nothing is deleted or replaced. Test: `tools/test_fetch_keepassxc.ps1` (9 cases, with nested sentinels at every depth, a junction above the destination, and a structural check that the only removal is the tool's own temporary folder). The old tool fails the structural check. |
+| P2R2-02 | P2 | Open (redesign in progress; owner decision: the native dialog is the review) | 1c | A | `desktop/src/App.tsx:231`, `desktop/src-tauri/src/commands.rs:843`. A delayed `view_discard` lets an approval in the native dialog commit after the page discarded its review on hide. |
+| P2R2-03 | P2 | Open (fix in progress) | 1c | B | `desktop/src-tauri/src/commands.rs:904`, `desktop/src/api.ts:112`. `view_discard` has no session identity: a delayed discard from session A expires session B's view, and its failure path locks B. |
+| P2R2-04 | P2 | Open (redesign in progress; owner decision: a seen fingerprint wins) | 1b | B | `crates/akm-core/src/journal.rs:363`. A clone that replaces its original at the same path shares the root UUID, so its records join the original's journal and its own history splits. |
+| P2R2-05 | P3 | Fixed, not accepted | 3 | D | `docs/design/unit3.md:49` said python-dotenv keeps `abc # note`; the recorded reader output gives `abc`. The row now names the real difference (a comment right after `=`), and the table names `expected.json` as its source of truth. |
+
 ## Security checks (2026-11-07)
 
 Found by `tools/check_dependencies.ps1`, `tools/check_no_network.py` and the threat-model read ([THREAT_MODEL.md](THREAT_MODEL.md)) on the security branch, before unit 4. The collect run repeats the checks on the final tree.
