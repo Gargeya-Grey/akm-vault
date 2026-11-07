@@ -374,9 +374,10 @@ fn a_legacy_key_without_a_time_shows_unknown_and_never_an_invented_date() {
     );
     assert_eq!(noted.secret_changed_at, None);
 
+    clock.set("2026-03-02T00:00:00Z");
     let rotated = vault.rotate(&id, Secret::new("fresh-secret")).unwrap();
     assert_eq!(rotated.previous_changed_at, None);
-    assert_eq!(rotated.changed_at, utc("2026-03-01T00:00:00Z"));
+    assert_eq!(rotated.changed_at, utc("2026-03-02T00:00:00Z"));
     assert_eq!(
         vault.get_by_id(&id).unwrap().secret_change,
         SecretChange::Known
@@ -672,16 +673,12 @@ fn restore_returns_the_same_key_to_its_group_with_its_history() {
         entry.times.location_changed,
         Some(naive("2026-01-04T00:00:00Z"))
     );
-    assert_eq!(
-        f.vault
-            .audit_log()
-            .read(100)
-            .unwrap()
-            .last()
-            .unwrap()
-            .action,
-        "restore-completed"
-    );
+    let records = f.vault.audit_log().read(100).unwrap();
+    let restored_record = records
+        .iter()
+        .find(|record| record.action == "restore-completed")
+        .unwrap();
+    assert_eq!(restored_record.key_id.as_deref(), Some(key.id.as_str()));
 }
 
 #[test]

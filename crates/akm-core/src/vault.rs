@@ -4,13 +4,15 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chrono::{DateTime, Duration, Timelike, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, Timelike, Utc};
 use fs2::FileExt;
 use keepass::config::{
     CompressionConfig, DatabaseConfig, DatabaseVersion, InnerCipherConfig, KdfConfig,
     OuterCipherConfig,
 };
-use keepass::db::{fields, Database, Entry, EntryId, EntryRef, GroupId, Value};
+#[cfg(test)]
+use keepass::db::Times;
+use keepass::db::{fields, Database, Entry, EntryId, EntryMut, EntryRef, GroupId, Value};
 use keepass::DatabaseKey;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -262,7 +264,7 @@ impl Vault {
                 .ok_or_else(|| Error::Invalid("API Keys group disappeared".into()))?;
             let mut entry = group.add_entry();
             let id = entry.id().to_string();
-            write_entry(&mut entry, &input, &id, now, now);
+            finish_new_entry(&mut entry, &input, &id, whole_second(now));
             read_entry(&entry)
         };
 
@@ -275,18 +277,49 @@ impl Vault {
         self.ensure_writable()?;
         input.validate()?;
         let now = self.clock.now();
+        let entry_id = self
+            .find_entry_id(id)
+            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+        let before: Entry = (*self
+            .db
+            .entry(entry_id)
+            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?)
+        .clone();
+
+        // A tracked edit of the `keepass` crate adds history even when nothing changed.
+        // Apply the input to a copy first: if the copy equals the entry, there is nothing
+        // to save, to record or to stamp (design D4).
+        let created = before.times.creation.unwrap_or_else(|| whole_second(now));
+        let mut probe = before.clone();
+        write_entry(
+            &mut probe,
+            &input,
+            id,
+            created,
+            before.times.last_modification.unwrap_or(created),
+        );
+        if probe == before {
+            return Ok(read_entry(&before));
+        }
+
+        let secret_changed = before.get(fields::PASSWORD) != Some(input.secret.as_str());
+        let stamp = next_stamp(
+            now,
+            &[
+                before.times.last_modification,
+                recorded_secret_change(&before),
+            ],
+        );
         let mut candidate = self.db.clone();
-
         let key = {
-            let entry_id = self
-                .find_entry_id(id)
-                .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
-            let created = self.get_by_id(id)?.created_at.unwrap_or(now);
-
             let mut entry = candidate
                 .entry_mut(entry_id)
                 .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
-            write_entry(&mut entry, &input, id, created, now);
+            keep_version(&mut entry, before);
+            write_entry(&mut entry, &input, id, created, stamp);
+            if secret_changed {
+                entry.set_unprotected(META_SECRET_CHANGED, format_secret_change(stamp));
+            }
             read_entry(&entry)
         };
 
@@ -295,54 +328,282 @@ impl Vault {
         Ok(key)
     }
 
+    /// Replaces the secret of one live key and records the time (design D3). The old
+    /// secret stays in the native history. The same value is refused: it is no rotation.
+    pub fn rotate(&mut self, id: &str, secret: Secret) -> Result<Rotation> {
+        self.ensure_writable()?;
+        if secret.is_empty() {
+            return Err(Error::Invalid("secret must not be empty".into()));
+        }
+        let entry_id = self
+            .find_entry_id(id)
+            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+        let before: Entry = (*self
+            .db
+            .entry(entry_id)
+            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?)
+        .clone();
+        if before.get(fields::PASSWORD) == Some(secret.as_str()) {
+            return Err(Error::Invalid(
+                "the new secret is the same as the current secret, so nothing was changed. \
+                 If an earlier attempt was saved, the key is already rotated; check its secret-change time."
+                    .into(),
+            ));
+        }
+        let previous_changed_at = read_entry(&before).secret_changed_at;
+        let stamp = next_stamp(
+            self.clock.now(),
+            &[
+                before.times.last_modification,
+                recorded_secret_change(&before),
+            ],
+        );
+        let mut candidate = self.db.clone();
+        let key = {
+            let mut entry = candidate
+                .entry_mut(entry_id)
+                .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+            keep_version(&mut entry, before);
+            entry.set_protected(fields::PASSWORD, secret.as_str());
+            entry.set_unprotected(META_SECRET_CHANGED, format_secret_change(stamp));
+            entry.times.last_modification = Some(stamp);
+            read_entry(&entry)
+        };
+        self.commit(candidate)?;
+        self.log_committed("rotate", Some(&key), None);
+        Ok(Rotation {
+            key,
+            changed_at: stamp.and_utc(),
+            previous_changed_at,
+        })
+    }
+
+    /// Moves a live key to the Recycle Bin, which it creates when the vault has none
+    /// (design D6). Nothing is deleted for good.
     pub fn remove(&mut self, id: &str) -> Result<ApiKey> {
         self.ensure_writable()?;
         let key = self.get_by_id(id)?;
         let entry_id = self
             .find_entry_id(id)
             .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+        if self.db.meta.recyclebin_enabled == Some(false) {
+            return Err(Error::Invalid(
+                "this vault's Recycle Bin is turned off, so AKM will not move the key there. \
+                 Turn the Recycle Bin on in KeePassXC, or delete the key for good with purge."
+                    .into(),
+            ));
+        }
+        let located = self
+            .db
+            .entry(entry_id)
+            .and_then(|entry| entry.times.location_changed);
+        let stamp = next_stamp(self.clock.now(), &[located]);
 
         let mut candidate = self.db.clone();
-        rebuild_attachment_references(&mut candidate);
-        candidate
+        let bin = ensure_recycle_bin(&mut candidate, stamp);
+        let mut entry = candidate
             .entry_mut(entry_id)
-            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?
-            .remove();
+            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+        entry
+            .move_to(bin)
+            .map_err(|error| Error::Invalid(error.to_string()))?;
+        entry.times.location_changed = Some(stamp);
 
         self.commit(candidate)?;
-        self.log_committed("remove", Some(&key), None);
+        self.log_committed("remove", Some(&key), Some("moved to the Recycle Bin"));
         Ok(key)
     }
 
-    /// Replaces the secret of one key and records the time (design D3). Not built yet.
-    pub fn rotate(&mut self, _id: &str, _secret: Secret) -> Result<Rotation> {
-        Err(Error::Invalid("not implemented".into()))
-    }
-
-    /// The earlier versions of one key, newest first. Not built yet.
-    pub fn history(&self, _id: &str) -> Result<Vec<HistoryVersion>> {
-        Err(Error::Invalid("not implemented".into()))
-    }
-
-    /// The keys in the Recycle Bin. Not built yet.
+    /// The keys in the Recycle Bin, newest deletion first.
     pub fn recycled(&self) -> Vec<RecycledKey> {
-        Vec::new()
+        let Some(bin) = self.db.recycle_bin() else {
+            return Vec::new();
+        };
+        let mut keys: Vec<RecycledKey> = bin
+            .entries()
+            .filter(|entry| is_api_key(entry))
+            .map(|entry| RecycledKey {
+                key: read_entry(&entry),
+                deleted_at: entry.times.location_changed.map(|time| time.and_utc()),
+            })
+            .collect();
+        keys.sort_by(|a, b| {
+            b.deleted_at
+                .cmp(&a.deleted_at)
+                .then(a.key.title.cmp(&b.key.title))
+        });
+        keys
     }
 
-    pub fn find_recycled(&self, _query: &str) -> Result<RecycledKey> {
-        Err(Error::Invalid("not implemented".into()))
+    /// A recycled key by native UUID, then by exact case-insensitive title.
+    pub fn find_recycled(&self, query: &str) -> Result<RecycledKey> {
+        let all = self.recycled();
+        if let Some(found) = all.iter().find(|item| item.key.id == query) {
+            return Ok(found.clone());
+        }
+        let exact: Vec<_> = all
+            .into_iter()
+            .filter(|item| item.key.title.eq_ignore_ascii_case(query))
+            .collect();
+        match exact.len() {
+            0 => Err(Error::EntryNotFound(query.to_string())),
+            1 => Ok(exact.into_iter().next().expect("checked len == 1")),
+            n => Err(Error::Ambiguous(query.to_string(), n)),
+        }
     }
 
-    pub fn restore(&mut self, _id: &str) -> Result<ApiKey> {
-        Err(Error::Invalid("not implemented".into()))
+    /// Moves a recycled key back to its group, with its UUID, secret, history and times
+    /// (design D8). It is refused while a live key uses the same variable in the same scope.
+    pub fn restore(&mut self, id: &str) -> Result<ApiKey> {
+        self.ensure_writable()?;
+        let entry_id = self
+            .find_recycled_entry_id(id)
+            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+        let key = {
+            let entry = self
+                .db
+                .entry(entry_id)
+                .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+            read_entry(&entry)
+        };
+        let variable = key.resolved_env_var();
+        if self.list().iter().any(|live| {
+            live.project == key.project
+                && live.environment == key.environment
+                && live.resolved_env_var() == variable
+        }) {
+            return Err(Error::Invalid(format!(
+                "cannot restore: a live key already uses the variable {variable} in the same project and environment. \
+                 Delete or rename that key first."
+            )));
+        }
+        let located = self
+            .db
+            .entry(entry_id)
+            .and_then(|entry| entry.times.location_changed);
+        let stamp = next_stamp(self.clock.now(), &[located]);
+
+        let mut candidate = self.db.clone();
+        let previous = candidate
+            .entry(entry_id)
+            .and_then(|entry| entry.previous_parent().map(|group| group.id()));
+        let target = previous
+            .filter(|group| {
+                candidate
+                    .group(*group)
+                    .is_some_and(|group| group.name.eq_ignore_ascii_case(GROUP_NAME))
+            })
+            .unwrap_or_else(|| ensure_group(&mut candidate));
+        let mut entry = candidate
+            .entry_mut(entry_id)
+            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+        entry
+            .move_to(target)
+            .map_err(|error| Error::Invalid(error.to_string()))?;
+        entry.times.location_changed = Some(stamp);
+
+        self.commit(candidate)?;
+        self.log_committed("restore", Some(&key), None);
+        Ok(key)
     }
 
-    pub fn purge(&mut self, _id: &str) -> Result<ApiKey> {
-        Err(Error::Invalid("not implemented".into()))
+    /// Deletes one key for good, live or recycled, and writes the deletion record that
+    /// stops a KeePassXC merge from bringing it back (design D7).
+    pub fn purge(&mut self, id: &str) -> Result<ApiKey> {
+        self.ensure_writable()?;
+        let entry_id = self
+            .find_entry_id(id)
+            .or_else(|| self.find_recycled_entry_id(id))
+            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+        let mut purged = self.purge_entries(&[entry_id], None)?;
+        Ok(purged.remove(0))
     }
 
-    pub fn purge_recycled_older_than(&mut self, _days: u32) -> Result<Vec<ApiKey>> {
-        Err(Error::Invalid("not implemented".into()))
+    /// The retention action: deletes for good every recycled key that moved to the
+    /// Recycle Bin more than `days` days ago. It runs only when called.
+    pub fn purge_recycled_older_than(&mut self, days: u32) -> Result<Vec<ApiKey>> {
+        self.ensure_writable()?;
+        let cutoff = self.clock.now() - Duration::days(i64::from(days));
+        let ids: Vec<EntryId> = self
+            .recycled()
+            .iter()
+            .filter(|item| item.deleted_at.is_some_and(|deleted| deleted < cutoff))
+            .filter_map(|item| self.find_recycled_entry_id(&item.key.id))
+            .collect();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.purge_entries(&ids, Some("retention"))
+    }
+
+    fn purge_entries(&mut self, ids: &[EntryId], detail: Option<&str>) -> Result<Vec<ApiKey>> {
+        let mut candidate = self.db.clone();
+        rebuild_attachment_references(&mut candidate);
+        let mut keys = Vec::new();
+        for id in ids {
+            let entry = candidate
+                .entry(*id)
+                .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+            let key = read_entry(&entry);
+            let mut recorded = vec![
+                entry.times.last_modification,
+                entry.times.location_changed,
+                recorded_secret_change(&entry),
+            ];
+            recorded.extend(
+                entry
+                    .history
+                    .iter()
+                    .flat_map(|history| history.get_entries())
+                    .map(|version| version.times.last_modification),
+            );
+            let stamp = next_stamp(self.clock.now(), &recorded);
+            candidate
+                .entry_mut(*id)
+                .ok_or_else(|| Error::EntryNotFound(id.to_string()))?
+                .remove();
+            candidate.deleted_objects.insert(id.uuid(), Some(stamp));
+            keys.push(key);
+        }
+        self.commit(candidate)?;
+        for key in &keys {
+            self.log_committed("purge", Some(key), detail.or(Some("deleted for good")));
+        }
+        Ok(keys)
+    }
+
+    /// The earlier versions of one key, live or recycled, newest first. It names fields
+    /// and never returns a value.
+    pub fn history(&self, id: &str) -> Result<Vec<HistoryVersion>> {
+        let entry_id = self
+            .find_entry_id(id)
+            .or_else(|| self.find_recycled_entry_id(id))
+            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+        let entry = self
+            .db
+            .entry(entry_id)
+            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+        let versions: &[Entry] = entry
+            .history
+            .as_ref()
+            .map_or(&[], |history| history.get_entries().as_slice());
+        Ok(versions
+            .iter()
+            .enumerate()
+            .map(|(index, version)| {
+                let newer: &Entry = if index == 0 {
+                    &entry
+                } else {
+                    &versions[index - 1]
+                };
+                HistoryVersion {
+                    index,
+                    modified_at: version.times.last_modification.map(|time| time.and_utc()),
+                    changed: changed_fields(version, newer),
+                    secret_changed: version.get(fields::PASSWORD) != newer.get(fields::PASSWORD),
+                }
+            })
+            .collect())
     }
 
     pub fn preview_import_env(
@@ -441,8 +702,18 @@ impl Vault {
             let mut entry = candidate
                 .entry_mut(id)
                 .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+            let before: Entry = (*entry).clone();
+            let stamp = next_stamp(
+                now,
+                &[
+                    before.times.last_modification,
+                    recorded_secret_change(&before),
+                ],
+            );
+            keep_version(&mut entry, before);
             entry.set_protected(fields::PASSWORD, secret);
-            entry.times.last_modification = now.naive_utc().with_nanosecond(0);
+            entry.set_unprotected(META_SECRET_CHANGED, format_secret_change(stamp));
+            entry.times.last_modification = Some(stamp);
         }
         for input in plan.additions {
             let group_id = ensure_group(&mut candidate);
@@ -451,7 +722,7 @@ impl Vault {
                 .ok_or_else(|| Error::Invalid("API Keys group disappeared".into()))?;
             let mut entry = group.add_entry();
             let id = entry.id().to_string();
-            write_entry(&mut entry, &input, &id, now, now);
+            finish_new_entry(&mut entry, &input, &id, whole_second(now));
         }
         self.commit(candidate)?;
         self.log_committed(
@@ -830,11 +1101,147 @@ impl Vault {
         entry_id
     }
 
+    fn find_recycled_entry_id(&self, id: &str) -> Option<EntryId> {
+        let id = EntryId::from_uuid(Uuid::parse_str(id).ok()?);
+        self.db
+            .recycle_bin()?
+            .entries()
+            .find(|entry| entry.id() == id && is_api_key(entry))
+            .map(|entry| entry.id())
+    }
+
     fn sibling(&self, suffix: &str) -> PathBuf {
         let mut os = self.path.as_os_str().to_os_string();
         os.push(suffix);
         PathBuf::from(os)
     }
+}
+
+/// A time with whole seconds, the precision of KDBX.
+fn whole_second(time: DateTime<Utc>) -> NaiveDateTime {
+    time.naive_utc()
+        .with_nanosecond(0)
+        .expect("zero nanoseconds are valid")
+}
+
+/// The time of a change: now, but later than every time already recorded for the entry.
+/// Time can then never run backwards for one key, also when the clock moves back or two
+/// changes land in one second (design D4).
+fn next_stamp(now: DateTime<Utc>, recorded: &[Option<NaiveDateTime>]) -> NaiveDateTime {
+    let now = whole_second(now);
+    match recorded.iter().flatten().max() {
+        Some(latest) if now <= *latest => *latest + Duration::seconds(1),
+        _ => now,
+    }
+}
+
+const SECRET_CHANGE_FORMAT: &str = "%Y-%m-%dT%H:%M:%SZ";
+
+fn format_secret_change(time: NaiveDateTime) -> String {
+    time.format(SECRET_CHANGE_FORMAT).to_string()
+}
+
+/// The time in `AKM_SECRET_CHANGED`, if the field holds one.
+fn recorded_secret_change(entry: &Entry) -> Option<NaiveDateTime> {
+    NaiveDateTime::parse_from_str(entry.get(META_SECRET_CHANGED)?, SECRET_CHANGE_FORMAT).ok()
+}
+
+/// What AKM knows about the last secret change. A history version that is not older than
+/// the record and holds another secret shows that a program other than AKM changed the
+/// secret afterwards (AKM sets the record in the same save as the change). The record is
+/// then no longer true, and no date is shown.
+fn secret_change_of(entry: &Entry) -> (Option<DateTime<Utc>>, SecretChange) {
+    let Some(recorded) = recorded_secret_change(entry) else {
+        return (None, SecretChange::Unknown);
+    };
+    let current = entry.get(fields::PASSWORD);
+    let changed_outside = entry
+        .history
+        .iter()
+        .flat_map(|history| history.get_entries())
+        .any(|version| {
+            version
+                .times
+                .last_modification
+                .is_some_and(|modified| modified >= recorded)
+                && version.get(fields::PASSWORD) != current
+        });
+    if changed_outside {
+        (None, SecretChange::ChangedOutside)
+    } else {
+        (Some(recorded.and_utc()), SecretChange::Known)
+    }
+}
+
+/// Pushes the entry as it was onto its native history before a real change.
+fn keep_version(entry: &mut EntryMut<'_>, before: Entry) {
+    entry
+        .history
+        .get_or_insert_with(Default::default)
+        .add_entry(before);
+}
+
+fn finish_new_entry(entry: &mut EntryMut<'_>, input: &ApiKeyInput, id: &str, stamp: NaiveDateTime) {
+    write_entry(entry, input, id, stamp, stamp);
+    entry.times.location_changed = Some(stamp);
+    entry.times.last_access = Some(stamp);
+    entry.set_unprotected(META_SECRET_CHANGED, format_secret_change(stamp));
+}
+
+/// The Recycle Bin group of the vault. A missing group, or a `RecycleBinUUID` that names
+/// no group, gets a new "Recycle Bin" group in the way KeePassXC makes it.
+fn ensure_recycle_bin(db: &mut Database, stamp: NaiveDateTime) -> GroupId {
+    if let Some(bin) = db.recycle_bin() {
+        return bin.id();
+    }
+    let id = {
+        let mut root = db.root_mut();
+        let mut group = root.add_group();
+        group.name = "Recycle Bin".to_string();
+        group.set_icon_builtin(43);
+        group.enable_autotype = Some(false);
+        group.enable_searching = Some(false);
+        group.times.creation = Some(stamp);
+        group.times.last_modification = Some(stamp);
+        group.times.last_access = Some(stamp);
+        group.times.location_changed = Some(stamp);
+        group.id()
+    };
+    db.meta.recyclebin_uuid = Some(id.uuid());
+    db.meta.recyclebin_enabled = Some(true);
+    db.meta.recyclebin_changed = Some(stamp);
+    id
+}
+
+/// Entries that AKM lists in the Recycle Bin: those with an AKM ID or whose previous
+/// group was the AKM group. Other entries in the bin belong to other programs.
+fn is_api_key(entry: &EntryRef<'_>) -> bool {
+    entry.get(META_ID).is_some()
+        || entry
+            .previous_parent()
+            .is_some_and(|group| group.name.eq_ignore_ascii_case(GROUP_NAME))
+}
+
+/// The names of the fields that differ between two versions of an entry. No values.
+fn changed_fields(older: &Entry, newer: &Entry) -> Vec<String> {
+    let mut names: Vec<String> = older
+        .fields
+        .keys()
+        .chain(newer.fields.keys())
+        .filter(|name| older.fields.get(*name) != newer.fields.get(*name))
+        .cloned()
+        .collect();
+    if older.tags != newer.tags {
+        names.push("Tags".to_string());
+    }
+    if older.times.expires != newer.times.expires
+        || (older.times.expires == Some(true) && older.times.expiry != newer.times.expiry)
+    {
+        names.push("Expiry".to_string());
+    }
+    names.sort();
+    names.dedup();
+    names
 }
 
 fn ensure_group(db: &mut Database) -> GroupId {
@@ -974,13 +1381,69 @@ fn same_database_content(intended: &Database, verified: &Database) -> bool {
         (Some(expected), Some(actual)) if expected == actual => {}
         _ => return false,
     }
+    // The library keeps the group that an entry had in each old history version when the
+    // entry moves, and the parser gives every version the current group. KDBX does not
+    // store that group for a version, so compare the versions field by field without it,
+    // then compare everything else with the histories removed (design D6).
+    if !same_histories(intended, verified) {
+        return false;
+    }
     let mut intended = intended.clone();
     let mut verified = verified.clone();
+    intended.foreach_entry_mut(|mut entry| entry.history = None);
+    verified.foreach_entry_mut(|mut entry| entry.history = None);
     intended.remove_unused_attachments();
     verified.remove_unused_attachments();
     intended.foreach_attachment_mut(|attachment| attachment.remove());
     verified.foreach_attachment_mut(|attachment| attachment.remove());
     intended == verified
+}
+
+fn same_histories(intended: &Database, verified: &Database) -> bool {
+    intended.iter_all_entries().all(|entry| {
+        let Some(other) = verified.entry(entry.id()) else {
+            return false;
+        };
+        let count = |entry: &EntryRef<'_>| {
+            entry
+                .history
+                .as_ref()
+                .map_or(0, |history| history.get_entries().len())
+        };
+        count(&entry) == count(&other)
+            && (0..count(&entry)).all(|index| {
+                match (entry.historical(index), other.historical(index)) {
+                    (Some(a), Some(b)) => same_version(&a, &b),
+                    _ => false,
+                }
+            })
+    })
+}
+
+/// Every stored property of one history version, except the group it was in.
+fn same_version(a: &EntryRef<'_>, b: &EntryRef<'_>) -> bool {
+    let attachments = |entry: &EntryRef<'_>| {
+        let mut named: Vec<_> = entry
+            .attachments_named()
+            .map(|(name, attachment)| (name.to_string(), attachment.data.clone()))
+            .collect();
+        named.sort_by(|x, y| x.0.cmp(&y.0));
+        named
+    };
+    a.id() == b.id()
+        && a.fields == b.fields
+        && a.autotype == b.autotype
+        && a.tags == b.tags
+        && a.times == b.times
+        && a.custom_data == b.custom_data
+        && a.foreground_color == b.foreground_color
+        && a.background_color == b.background_color
+        && a.override_url == b.override_url
+        && a.quality_check == b.quality_check
+        && a.icon() == b.icon()
+        && a.previous_parent().map(|group| group.id())
+            == b.previous_parent().map(|group| group.id())
+        && attachments(a) == attachments(b)
 }
 
 fn rebuild_attachment_references(db: &mut Database) {
@@ -1049,8 +1512,8 @@ fn write_entry(
     entry: &mut Entry,
     input: &ApiKeyInput,
     id: &str,
-    created: DateTime<Utc>,
-    updated: DateTime<Utc>,
+    created: NaiveDateTime,
+    updated: NaiveDateTime,
 ) {
     entry.set_unprotected(fields::TITLE, input.title.trim());
     entry.set_unprotected(
@@ -1063,8 +1526,8 @@ fn write_entry(
     set_or_remove(entry, fields::NOTES, input.notes.as_deref());
 
     entry.tags = input.tags.clone();
-    entry.times.creation = created.naive_utc().with_nanosecond(0);
-    entry.times.last_modification = updated.naive_utc().with_nanosecond(0);
+    entry.times.creation = Some(created);
+    entry.times.last_modification = Some(updated);
 
     match input.expires_at {
         Some(expires) => {
@@ -1103,6 +1566,7 @@ fn set_or_remove(entry: &mut Entry, key: &str, value: Option<&str>) {
 }
 
 fn read_entry(entry: &Entry) -> ApiKey {
+    let (secret_changed_at, secret_change) = secret_change_of(entry);
     ApiKey {
         id: entry.id().to_string(),
         title: entry.get(fields::TITLE).unwrap_or_default().to_string(),
@@ -1124,8 +1588,8 @@ fn read_entry(entry: &Entry) -> ApiKey {
             .and_then(|raw| raw.parse().ok()),
         created_at: entry.times.creation.map(|ts| ts.and_utc()),
         updated_at: entry.times.last_modification.map(|ts| ts.and_utc()),
-        secret_changed_at: None,
-        secret_change: SecretChange::Unknown,
+        secret_changed_at,
+        secret_change,
         history_count: entry.history.as_ref().map_or(0, |h| h.get_entries().len()),
     }
 }
@@ -1241,6 +1705,80 @@ mod tests {
                 .file_name()
                 .to_string_lossy()
                 .contains(".tmp")));
+        }
+    }
+
+    fn round_trip(db: &Database) -> Database {
+        let key = DatabaseKey::new().with_password(PASSWORD);
+        let mut bytes = Vec::new();
+        db.save(&mut bytes, key.clone()).unwrap();
+        Database::parse(&bytes, key).unwrap()
+    }
+
+    /// A database with one entry that has two history versions and an attachment in the
+    /// oldest one, plus a second group.
+    fn database_with_history() -> (Database, EntryId, GroupId) {
+        let mut db = Database::with_config(hardened_config());
+        db.config.kdf_config = KdfConfig::Aes { rounds: 10 };
+        let target = db.root_mut().add_group().id();
+        let mut root = db.root_mut();
+        let mut entry = root.add_entry();
+        entry.set_unprotected(fields::TITLE, "Moves");
+        entry.set_protected(fields::PASSWORD, "version-0");
+        entry.add_attachment("old.txt", Value::protected(b"old bytes".to_vec()));
+        let id = entry.id();
+        for version in 1..=2 {
+            let before: Entry = (*entry).clone();
+            entry.history.get_or_insert_default().add_entry(before);
+            entry.set_protected(fields::PASSWORD, format!("version-{version}"));
+        }
+        (db, id, target)
+    }
+
+    #[test]
+    fn a_moved_entry_with_history_passes_the_content_comparison() {
+        let (mut db, id, target) = database_with_history();
+        db.entry_mut(id).unwrap().move_to(target).unwrap();
+        let parsed = round_trip(&db);
+        assert!(
+            db != parsed,
+            "the library keeps the old group in the versions, so strict equality fails"
+        );
+        assert!(same_database_content(&db, &parsed));
+    }
+
+    #[test]
+    fn the_content_comparison_still_rejects_a_changed_history_version() {
+        for change in ["secret", "time", "field", "dropped", "attachment"] {
+            let (mut db, id, target) = database_with_history();
+            db.entry_mut(id).unwrap().move_to(target).unwrap();
+            let parsed = round_trip(&db);
+            let mut altered = db.clone();
+            let mut entry = altered.entry_mut(id).unwrap();
+            let versions: Vec<Entry> = entry.history.as_ref().unwrap().get_entries().clone();
+            let mut history = keepass::db::History::default();
+            let count = versions.len();
+            for (index, version) in versions.into_iter().enumerate().rev() {
+                let mut version = version;
+                match change {
+                    "secret" if index == 0 => version.set_protected(fields::PASSWORD, "forged"),
+                    "time" if index == 1 => version.times.last_modification = Some(Times::epoch()),
+                    "field" if index == 0 => version.set_unprotected("Extra", "1"),
+                    "dropped" if index == count - 1 => continue,
+                    _ => {}
+                }
+                history.add_entry(version);
+            }
+            entry.history = Some(history);
+            if change == "attachment" {
+                altered.foreach_attachment_mut(|mut attachment| {
+                    attachment.data = Value::protected(b"forged bytes".to_vec())
+                });
+            }
+            assert!(
+                !same_database_content(&altered, &parsed),
+                "accepted a changed history: {change}"
+            );
         }
     }
 

@@ -404,7 +404,9 @@ fn native_uuid_targets_clones_and_foreign_entries_in_case_insensitive_groups() {
         keepass::DatabaseKey::new().with_password(PASSWORD),
     )
     .unwrap();
-    assert_eq!(db.root().groups().count(), 1);
+    // The removed clone sits in the Recycle Bin next to the original group.
+    assert_eq!(db.root().groups().count(), 2);
+    assert_eq!(db.recycle_bin().unwrap().entries().count(), 1);
 }
 
 #[test]
@@ -564,7 +566,9 @@ fn damaged_audit_log_does_not_turn_a_committed_mutation_into_a_retryable_error()
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("audit"));
     assert!(vault.take_warnings().is_empty());
-    vault.update(&created.id, sample()).unwrap();
+    let mut changed = sample();
+    changed.notes = Some("a real change; an identical update saves nothing".into());
+    vault.update(&created.id, changed).unwrap();
     assert_eq!(vault.take_warnings().len(), 1);
     vault
         .import_env(

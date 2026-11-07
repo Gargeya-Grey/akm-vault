@@ -87,11 +87,12 @@ impl ApiKey {
         self.expires_at.is_some_and(|e| e <= now)
     }
 
-    /// Days until the rotation interval elapses, based on last modification.
+    /// Days until the rotation interval elapses, counted from the last secret change. It is
+    /// `None` when AKM knows no such time: an edit of notes or metadata never counts.
     pub fn rotation_due_in(&self, now: DateTime<Utc>) -> Option<i64> {
         let days = self.rotation_days? as i64;
-        let updated = self.updated_at.or(self.created_at)?;
-        Some((updated + chrono::Duration::days(days) - now).num_days())
+        let changed = self.secret_changed_at?;
+        Some((changed + chrono::Duration::days(days) - now).num_days())
     }
 
     /// The environment variable name used when injecting this key.
