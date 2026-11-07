@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use akm_core::{audit::AuditLog, dotenv, ApiKey, EnvDisclosure, KeyDisclosure, Vault};
+use akm_core::{audit::AuditLog, dotenv, ApiKey, EnvDisclosure, KeyDisclosure, Secret, Vault};
 use chrono::{DateTime, Utc};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -44,6 +44,10 @@ macro_rules! production_handlers {
             key_add,
             key_update,
             key_remove,
+            key_rotate,
+            recycled_list,
+            key_restore,
+            key_purge,
             audit_read,
             env_export,
             env_copy,
@@ -401,6 +405,71 @@ pub async fn key_remove(state: State<'_, VaultState>, id: String) -> Result<(), 
         Ok(())
     })
     .await
+}
+
+/// Replaces the secret of a key. The reply carries times and the key's metadata, never a secret.
+/// A repeat with the value already stored is refused by the core, so a lost reply cannot rotate twice.
+#[tauri::command]
+pub async fn key_rotate(
+    state: State<'_, VaultState>,
+    id: String,
+    secret: String,
+) -> Result<RotationView, CommandError> {
+    let session = state.0.clone();
+    let expected = session.snapshot()?;
+    run_session(session, expected, Access::Write, move |vault| {
+        rotate_key(vault, &id, secret)
+    })
+    .await
+}
+
+fn rotate_key(vault: &mut Vault, id: &str, secret: String) -> Result<RotationView, CommandError> {
+    let rotation = vault.rotate(id, Secret::from(secret))?;
+    Ok(RotationView::from(&rotation))
+}
+
+#[tauri::command]
+pub async fn recycled_list(
+    state: State<'_, VaultState>,
+) -> Result<Vec<RecycledView>, CommandError> {
+    let session = state.0.clone();
+    let expected = session.snapshot()?;
+    run_session(session, expected, Access::Read, |vault| {
+        Ok(vault.recycled().iter().map(RecycledView::from).collect())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn key_restore(
+    state: State<'_, VaultState>,
+    id: String,
+) -> Result<KeyView, CommandError> {
+    let session = state.0.clone();
+    let expected = session.snapshot()?;
+    run_session(session, expected, Access::Write, move |vault| {
+        let key = vault.restore(&id)?;
+        Ok(KeyView::from(&key))
+    })
+    .await
+}
+
+/// Deletes a key for good. It accepts only a key that is in the Recycle Bin, so a live key
+/// can never be purged from here.
+#[tauri::command]
+pub async fn key_purge(state: State<'_, VaultState>, id: String) -> Result<(), CommandError> {
+    let session = state.0.clone();
+    let expected = session.snapshot()?;
+    run_session(session, expected, Access::Write, move |vault| {
+        purge_recycled(vault, &id)
+    })
+    .await
+}
+
+fn purge_recycled(vault: &mut Vault, id: &str) -> Result<(), CommandError> {
+    let recycled = vault.find_recycled(id)?;
+    vault.purge(&recycled.key.id)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -838,6 +907,94 @@ mod tests {
             })
             .unwrap();
         (session, directory)
+    }
+
+    #[test]
+    fn a_rotation_committed_while_the_session_locks_reports_completion_and_no_secret() {
+        let (session, directory) = test_session();
+        let key = session
+            .access(Access::Write, None, |vault| {
+                Ok(vault.add(akm_core::ApiKeyInput::new("Rotated", "fake-old-secret"))?)
+            })
+            .unwrap()
+            .value;
+        let snapshot = session.snapshot().unwrap();
+        let completed = session
+            .access(Access::Write, Some(snapshot), |vault| {
+                rotate_key(vault, &key.id, "fake-new-secret".into())
+            })
+            .unwrap();
+        let receipt = serde_json::to_string(&completed.value).unwrap();
+        assert!(!receipt.contains("fake-old-secret") && !receipt.contains("fake-new-secret"));
+        assert!(receipt.contains("\"changedAt\"") && receipt.contains("\"historyCount\":1"));
+        session.lock().unwrap();
+        let error = session.finish(Access::Write, completed).err().unwrap();
+        assert_eq!(error.kind, "completedWhileLocked");
+        let shown = serde_json::to_string(&error).unwrap();
+        assert!(!shown.contains("fake-old-secret") && !shown.contains("fake-new-secret"));
+        // The rotation is saved once: a second open shows the new secret and one history version.
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        assert_eq!(
+            crate::test_support::secret_of(&reopened, &key.id),
+            "fake-new-secret"
+        );
+        assert_eq!(reopened.get_by_id(&key.id).unwrap().history_count, 1);
+    }
+
+    #[test]
+    fn repeating_a_rotation_with_the_stored_value_is_refused_and_adds_no_history() {
+        let (session, _directory) = test_session();
+        let key = session
+            .access(Access::Write, None, |vault| {
+                Ok(vault.add(akm_core::ApiKeyInput::new("Rotated", "fake-old-secret"))?)
+            })
+            .unwrap()
+            .value;
+        let rotate = |secret: &str| {
+            session.access(Access::Write, None, |vault| {
+                rotate_key(vault, &key.id, secret.into())
+            })
+        };
+        rotate("fake-new-secret").unwrap();
+        let error = rotate("fake-new-secret").err().unwrap();
+        assert_eq!(error.kind, "invalid");
+        assert!(!error.message.contains("fake-new-secret"));
+        let history = session
+            .access(Access::Read, None, |vault| {
+                Ok(vault.get_by_id(&key.id)?.history_count)
+            })
+            .unwrap()
+            .value;
+        assert_eq!(history, 1);
+    }
+
+    #[test]
+    fn the_purge_command_deletes_only_a_key_that_is_in_the_recycle_bin() {
+        let (session, _directory) = test_session();
+        let key = session
+            .access(Access::Write, None, |vault| {
+                Ok(vault.add(akm_core::ApiKeyInput::new("Kept", "fake-kept-secret"))?)
+            })
+            .unwrap()
+            .value;
+        let purge =
+            |id: &str| session.access(Access::Write, None, |vault| purge_recycled(vault, id));
+        assert_eq!(purge(&key.id).err().unwrap().kind, "notFound");
+        session
+            .access(Access::Write, None, |vault| Ok(vault.remove(&key.id)?))
+            .unwrap();
+        purge(&key.id).unwrap();
+        let (live, recycled) = session
+            .access(Access::Read, None, |vault| {
+                Ok((vault.list().len(), vault.recycled().len()))
+            })
+            .unwrap()
+            .value;
+        assert_eq!((live, recycled), (0, 0));
     }
 
     #[test]

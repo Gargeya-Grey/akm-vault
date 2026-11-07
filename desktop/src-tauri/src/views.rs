@@ -1,4 +1,4 @@
-use akm_core::{ApiKey, ApiKeyInput, Secret, Vault};
+use akm_core::{ApiKey, ApiKeyInput, RecycledKey, Rotation, Secret, SecretChange, Vault};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +50,10 @@ pub struct KeyView {
     updated_at: Option<DateTime<Utc>>,
     expired: bool,
     rotation_due_in: Option<i64>,
+    /// When the secret last changed. `None` when AKM knows no such time.
+    secret_changed_at: Option<DateTime<Utc>>,
+    secret_change: SecretChange,
+    history_count: usize,
 }
 
 impl From<&ApiKey> for KeyView {
@@ -74,6 +78,44 @@ impl From<&ApiKey> for KeyView {
             updated_at: key.updated_at,
             expired: key.is_expired(now),
             rotation_due_in: key.rotation_due_in(now),
+            secret_changed_at: key.secret_changed_at,
+            secret_change: key.secret_change,
+            history_count: key.history_count,
+        }
+    }
+}
+
+/// The receipt of a rotation. It carries no secret.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotationView {
+    key: KeyView,
+    changed_at: DateTime<Utc>,
+    previous_changed_at: Option<DateTime<Utc>>,
+}
+
+impl From<&Rotation> for RotationView {
+    fn from(rotation: &Rotation) -> Self {
+        Self {
+            key: KeyView::from(&rotation.key),
+            changed_at: rotation.changed_at,
+            previous_changed_at: rotation.previous_changed_at,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecycledView {
+    key: KeyView,
+    deleted_at: Option<DateTime<Utc>>,
+}
+
+impl From<&RecycledKey> for RecycledView {
+    fn from(item: &RecycledKey) -> Self {
+        Self {
+            key: KeyView::from(&item.key),
+            deleted_at: item.deleted_at,
         }
     }
 }

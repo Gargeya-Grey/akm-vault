@@ -161,6 +161,7 @@ fn main() {
     for (command, args) in [
         ("vault_status", serde_json::json!({})),
         ("keys_list", serde_json::json!({})),
+        ("recycled_list", serde_json::json!({})),
         ("key_reveal", serde_json::json!({"id": id})),
         ("key_copy", serde_json::json!({"id": id})),
         ("audit_read", serde_json::json!({"limit": 10})),
@@ -250,7 +251,7 @@ fn main() {
         stalled.is_empty(),
         "vault-backed commands blocked their Tauri invocation thread: {stalled:?}"
     );
-    println!("PASS: nine actual generated IPC handlers release invocation dispatch while fake vault access stalls; no real window/clipboard/settings.");
+    println!("PASS: ten actual generated IPC handlers release invocation dispatch while fake vault access stalls; no real window/clipboard/settings.");
 
     // The wire shapes that desktop/src/api.ts sends, through the production handler list.
     let import = |operation: &str, session_id: &str, text: &str| {
@@ -331,6 +332,61 @@ fn main() {
         .unwrap()
         .iter()
         .all(|record| record["id"] != applied.as_str() && record["id"] != declined.as_str()));
+
+    // Rotation, the Recycle Bin, restore and purge with the shapes that api.ts sends.
+    let listed = call(webview, "keys_list", serde_json::json!({})).unwrap();
+    let history_before = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|key| key["id"] == id.as_str())
+        .unwrap()["historyCount"]
+        .as_u64()
+        .unwrap();
+    let rotated = call(
+        webview,
+        "key_rotate",
+        serde_json::json!({"id": id, "secret": "fake-rotated-wire-value"}),
+    )
+    .unwrap();
+    assert_eq!(rotated["key"]["id"], id.as_str());
+    assert_eq!(rotated["key"]["historyCount"], history_before + 1);
+    assert_eq!(rotated["key"]["secretChange"], "known");
+    assert!(rotated["changedAt"].is_string());
+    assert!(!rotated.to_string().contains("fake-rotated-wire-value"));
+    assert!(!rotated.to_string().contains("fake-dispatch-value"));
+    let repeated = call(
+        webview,
+        "key_rotate",
+        serde_json::json!({"id": id, "secret": "fake-rotated-wire-value"}),
+    )
+    .unwrap_err();
+    assert_eq!(repeated["kind"], "invalid");
+    call(webview, "key_remove", serde_json::json!({"id": id})).unwrap();
+    let listed = call(webview, "keys_list", serde_json::json!({})).unwrap();
+    assert!(listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|key| key["id"] != id.as_str()));
+    let recycled = call(webview, "recycled_list", serde_json::json!({})).unwrap();
+    assert_eq!(recycled.as_array().unwrap().len(), 1);
+    assert_eq!(recycled[0]["key"]["id"], id.as_str());
+    assert!(recycled[0]["deletedAt"].is_string());
+    assert!(!recycled.to_string().contains("fake-rotated-wire-value"));
+    let restored = call(webview, "key_restore", serde_json::json!({"id": id})).unwrap();
+    assert_eq!(restored["id"], id.as_str());
+    assert_eq!(restored["historyCount"], history_before + 1);
+    let live_purge = call(webview, "key_purge", serde_json::json!({"id": id})).unwrap_err();
+    assert_eq!(
+        live_purge["kind"], "notFound",
+        "a live key is never purged from here"
+    );
+    call(webview, "key_remove", serde_json::json!({"id": id})).unwrap();
+    call(webview, "key_purge", serde_json::json!({"id": id})).unwrap();
+    let recycled = call(webview, "recycled_list", serde_json::json!({})).unwrap();
+    assert!(recycled.as_array().unwrap().is_empty());
+    println!("PASS: key_rotate, recycled_list, key_restore and key_purge answer the frontend's argument and reply shapes; no reply carries a secret.");
 
     call(
         webview,
