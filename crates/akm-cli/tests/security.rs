@@ -1110,7 +1110,7 @@ fn check_protected_original_in_actual_cli(relative: bool) {
     };
     let output = command.args(["rm", "Demo", "--yes"]).output().unwrap();
     assert_success(&output);
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Deleted"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Moved"));
     assert!(stderr(&output).contains(".bak could not be refreshed"));
     assert!(Vault::open(&fixture.vault, PASSWORD)
         .unwrap()

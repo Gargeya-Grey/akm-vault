@@ -157,10 +157,55 @@ enum Commands {
         reveal: bool,
     },
 
-    /// Delete a key
+    /// Replace the secret of a key and record the time (the new secret comes from the
+    /// prompt or from stdin, never from an argument)
+    Rotate {
+        /// Case-insensitive substring of title, project, tag, issuer or URL
+        query: String,
+
+        /// Read the new secret from stdin (single line, trailing newline stripped)
+        #[arg(long)]
+        secret_stdin: bool,
+    },
+
+    /// List the earlier versions of a key: times and field names, never values
+    History {
+        /// Id or title of a key, live or in the Recycle Bin
+        query: String,
+    },
+
+    /// Move a key to the Recycle Bin. Restore it with `restore`; delete it for good with `purge`
     Rm {
         query: String,
 
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// List the keys in the Recycle Bin
+    Bin,
+
+    /// Move a key from the Recycle Bin back to the key list
+    Restore {
+        /// Id or exact title of a key in the Recycle Bin
+        query: String,
+    },
+
+    /// Delete for good: one key from the Recycle Bin, or every recycled key older than N days
+    Purge {
+        /// Id or exact title of a key in the Recycle Bin
+        #[arg(required_unless_present = "older_than_days")]
+        query: Option<String>,
+
+        /// Delete every recycled key that has been in the Recycle Bin for more than N days
+        #[arg(long, conflicts_with = "query")]
+        older_than_days: Option<u32>,
+
+        /// Delete a live key for good instead of moving it to the Recycle Bin
+        #[arg(long, requires = "query")]
+        live: bool,
+
+        /// Confirm without an interactive prompt
         #[arg(long)]
         yes: bool,
     },
@@ -295,7 +340,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                 secret,
             } = *args;
             let password = master_password(false)?;
-            let mut vault = Vault::open(&path, &password)?;
+            let mut vault = open_vault(&path, &password)?;
             drop(password);
             let secret = secret_value(secret, secret_stdin)?;
 
@@ -333,7 +378,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             expiring,
         } => {
             let password = master_password(false)?;
-            let vault = Vault::open(&path, &password)?;
+            let vault = open_vault(&path, &password)?;
             drop(password);
 
             let mut keys = match expiring {
@@ -355,7 +400,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                 return Ok(0);
             }
 
-            print_table(&mut io.out, &keys)?;
+            print_table(&mut io.out, &keys, vault.now())?;
         }
 
         Commands::Get {
@@ -364,7 +409,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             reveal,
         } => {
             let password = master_password(false)?;
-            let vault = Vault::open(&path, &password)?;
+            let vault = open_vault(&path, &password)?;
             drop(password);
             let key = vault.find(&query)?;
 
@@ -387,7 +432,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             };
 
             // 1A-R8-01: the default view and every other field receive `KeyMetadata`.
-            let metadata = KeyMetadata::from(&key);
+            let metadata = KeyMetadata::new(&key, vault.now());
             let out = &mut *io.out;
             let shown = match (
                 field.as_deref(),
@@ -409,7 +454,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
 
         Commands::Rm { query, yes } => {
             let password = master_password(false)?;
-            let mut vault = Vault::open(&path, &password)?;
+            let mut vault = open_vault(&path, &password)?;
             drop(password);
             let key = vault.find(&query)?;
 
@@ -431,7 +476,189 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
 
             vault.remove(&key.id)?;
             print_warnings(io, &mut vault);
-            status!(io, "Deleted {:?}", key.title);
+            status!(
+                io,
+                "Moved {:?} to the Recycle Bin.\nRestore it with `akm restore {id}`. Delete it for good with `akm purge {id}`.",
+                key.title,
+                id = key.id
+            );
+        }
+
+        Commands::Rotate {
+            query,
+            secret_stdin,
+        } => {
+            let password = master_password(false)?;
+            let mut vault = open_vault(&path, &password)?;
+            drop(password);
+            let key = vault.find(&query)?;
+            let secret = secret_value(None, secret_stdin)?;
+            let rotation = vault.rotate(&key.id, secret.into())?;
+            print_warnings(io, &mut vault);
+            status!(
+                io,
+                "Rotated {:?} ({})\n  Secret changed:          {}\n  Previous secret change:  {}\nThe old secret stays in the vault history. Rotating here does not change the secret at the provider.",
+                rotation.key.title,
+                rotation.key.id,
+                show_time(rotation.changed_at),
+                rotation
+                    .previous_changed_at
+                    .map_or_else(|| "unknown".to_string(), show_time)
+            );
+        }
+
+        Commands::History { query } => {
+            let password = master_password(false)?;
+            let vault = open_vault(&path, &password)?;
+            drop(password);
+            let (id, title) = match vault.find(&query) {
+                Ok(key) => (key.id, key.title),
+                Err(Error::EntryNotFound(_)) => {
+                    let recycled = vault.find_recycled(&query)?;
+                    (recycled.key.id, recycled.key.title)
+                }
+                Err(error) => return Err(error),
+            };
+            let versions = vault.history(&id)?;
+            if versions.is_empty() {
+                writeln!(io.out, "no earlier versions of {title:?} ({id})")?;
+                return Ok(0);
+            }
+            writeln!(
+                io.out,
+                "{} earlier version(s) of {title:?} ({id}), newest first. Values are never shown.",
+                versions.len()
+            )?;
+            for version in versions {
+                writeln!(
+                    io.out,
+                    "#{:<3} {}  {}  {}",
+                    version.index,
+                    version
+                        .modified_at
+                        .map_or_else(|| "unknown time".to_string(), show_time),
+                    if version.secret_changed {
+                        "secret changed"
+                    } else {
+                        "secret kept   "
+                    },
+                    version.changed.join(", ")
+                )?;
+            }
+        }
+
+        Commands::Bin => {
+            let password = master_password(false)?;
+            let vault = open_vault(&path, &password)?;
+            drop(password);
+            let recycled = vault.recycled();
+            if recycled.is_empty() {
+                writeln!(io.out, "The Recycle Bin is empty.")?;
+                return Ok(0);
+            }
+            for item in &recycled {
+                writeln!(
+                    io.out,
+                    "{}  {}  {}",
+                    item.key.id,
+                    item.deleted_at
+                        .map_or_else(|| "unknown time".to_string(), show_time),
+                    item.key.title
+                )?;
+            }
+            writeln!(
+                io.out,
+                "\n{} recycled key(s). Nothing is deleted for good until you run `akm purge`.",
+                recycled.len()
+            )?;
+        }
+
+        Commands::Restore { query } => {
+            let password = master_password(false)?;
+            let mut vault = open_vault(&path, &password)?;
+            drop(password);
+            let recycled = vault.find_recycled(&query)?;
+            let key = vault.restore(&recycled.key.id)?;
+            print_warnings(io, &mut vault);
+            status!(io, "Restored {:?} ({})", key.title, key.id);
+        }
+
+        Commands::Purge {
+            query,
+            older_than_days,
+            live,
+            yes,
+        } => {
+            let password = master_password(false)?;
+            let mut vault = open_vault(&path, &password)?;
+            drop(password);
+            match (query, older_than_days) {
+                (Some(query), None) => {
+                    let (id, title) = if live {
+                        let key = vault.find(&query)?;
+                        (key.id, key.title)
+                    } else {
+                        let recycled = vault.find_recycled(&query).map_err(|error| match error {
+                            Error::EntryNotFound(_) => Error::EntryNotFound(format!(
+                                "{query} in the Recycle Bin (to delete a live key for good, pass --live)"
+                            )),
+                            other => other,
+                        })?;
+                        (recycled.key.id, recycled.key.title)
+                    };
+                    if !confirmed(
+                        io,
+                        yes,
+                        "delete for good",
+                        &format!("Delete {title:?} ({id}) for good? This cannot be undone."),
+                    )? {
+                        status!(io, "Cancelled.");
+                        return Ok(0);
+                    }
+                    vault.purge(&id)?;
+                    print_warnings(io, &mut vault);
+                    status!(
+                        io,
+                        "Deleted {title:?} for good. A deletion record was stored, so merging an older copy of this vault does not bring it back."
+                    );
+                }
+                (None, Some(days)) => {
+                    let due = vault
+                        .recycled()
+                        .iter()
+                        .filter(|item| {
+                            item.deleted_at.is_some_and(|at| {
+                                at < vault.now() - chrono::Duration::days(i64::from(days))
+                            })
+                        })
+                        .count();
+                    if due == 0 {
+                        status!(
+                            io,
+                            "Nothing to purge: no recycled key is older than {days} days."
+                        );
+                        return Ok(0);
+                    }
+                    if !confirmed(
+                        io,
+                        yes,
+                        "delete for good",
+                        &format!("Delete {due} recycled key(s) older than {days} days for good? This cannot be undone."),
+                    )? {
+                        status!(io, "Cancelled.");
+                        return Ok(0);
+                    }
+                    let purged = vault.purge_recycled_older_than(days)?;
+                    print_warnings(io, &mut vault);
+                    status!(
+                        io,
+                        "Deleted {} key{} for good.",
+                        purged.len(),
+                        if purged.len() == 1 { "" } else { "s" }
+                    );
+                }
+                _ => unreachable!("clap requires exactly one of a key or --older-than-days"),
+            }
         }
 
         Commands::Run { selection, command } => {
@@ -441,7 +668,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             let mut command = child::prepare(program, &command[1..])?;
             {
                 let password = master_password(false)?;
-                let vault = Vault::open(&path, &password)?;
+                let vault = open_vault(&path, &password)?;
                 drop(password);
                 let plan = planned_envs(&vault, &selection)?;
                 let envs = disclosed_envs(
@@ -461,7 +688,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
         Commands::Export { selection, output } => {
             let output = output.as_deref().map(export::destination).transpose()?;
             let password = master_password(false)?;
-            let vault = Vault::open(&path, &password)?;
+            let vault = open_vault(&path, &password)?;
             drop(password);
             let plan = planned_envs(&vault, &selection)?;
             // Pairs the two records; the destination stays out of the journal.
@@ -496,7 +723,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                 ));
             }
             let password = master_password(false)?;
-            let mut vault = Vault::open(&path, &password)?;
+            let mut vault = open_vault(&path, &password)?;
             drop(password);
             if !vault.needs_upgrade() {
                 status!(io, "Vault is already KDBX 4.1; no upgrade needed.");
@@ -585,6 +812,61 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
     }
 
     Ok(0)
+}
+
+/// Opens the vault. A debug build reads `AKM_TEST_CLOCK` (an RFC 3339 time) so that a test
+/// can fix every time that the vault writes. A release build never reads it.
+fn open_vault(path: &Path, password: &str) -> Result<Vault> {
+    let vault = Vault::open(path, password)?;
+    with_test_clock(vault)
+}
+
+#[cfg(debug_assertions)]
+fn with_test_clock(vault: Vault) -> Result<Vault> {
+    struct Fixed(DateTime<Utc>);
+    impl akm_core::Clock for Fixed {
+        fn now(&self) -> DateTime<Utc> {
+            self.0
+        }
+    }
+    match std::env::var("AKM_TEST_CLOCK") {
+        Ok(text) => {
+            let time = DateTime::parse_from_rfc3339(&text)
+                .map_err(|_| Error::Invalid("AKM_TEST_CLOCK must be an RFC 3339 time".into()))?;
+            Ok(vault.with_clock(std::sync::Arc::new(Fixed(time.with_timezone(&Utc)))))
+        }
+        Err(_) => Ok(vault),
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn with_test_clock(vault: Vault) -> Result<Vault> {
+    Ok(vault)
+}
+
+/// A time as the CLI prints it.
+fn show_time(time: DateTime<Utc>) -> String {
+    time.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+}
+
+/// A line-based yes/no on the terminal, or a refusal when there is none and `--yes` is absent.
+fn confirmed(io: &mut Io, yes: bool, what: &str, question: &str) -> Result<bool> {
+    if yes {
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(Error::Invalid(format!(
+            "refusing to {what} without confirmation; pass --yes"
+        )));
+    }
+    write!(io.out, "{question} [y/N] ")?;
+    io.out.flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 /// The selection's names, checked before anything is journaled or read.
@@ -713,7 +995,7 @@ fn parse_expiry(raw: Option<&str>) -> Result<Option<DateTime<Utc>>> {
     )))
 }
 
-fn print_table(out: &mut impl Write, keys: &[ApiKey]) -> std::io::Result<()> {
+fn print_table(out: &mut impl Write, keys: &[ApiKey], now: DateTime<Utc>) -> std::io::Result<()> {
     if keys.is_empty() {
         return writeln!(out, "no keys");
     }
@@ -731,7 +1013,6 @@ fn print_table(out: &mut impl Write, keys: &[ApiKey]) -> std::io::Result<()> {
         "TITLE", "PROJECT", "ENV", "ENV VAR", "EXPIRES"
     )?;
 
-    let now = Utc::now();
     for key in keys {
         let expires = key
             .expires_at
@@ -744,16 +1025,12 @@ fn print_table(out: &mut impl Write, keys: &[ApiKey]) -> std::io::Result<()> {
             })
             .unwrap_or_else(|| "-".to_string());
 
-        let rotation = key
-            .rotation_due_in(now)
-            .map(|days| {
-                if days < 0 {
-                    format!("{}d overdue", -days)
-                } else {
-                    format!("in {days}d")
-                }
-            })
-            .unwrap_or_else(|| "-".to_string());
+        let rotation = match (key.rotation_days, key.rotation_due_in(now)) {
+            (_, Some(days)) if days < 0 => format!("{}d overdue", -days),
+            (_, Some(days)) => format!("in {days}d"),
+            (Some(_), None) => "unknown".to_string(),
+            (None, None) => "-".to_string(),
+        };
 
         writeln!(
             out,
@@ -788,10 +1065,13 @@ struct KeyMetadata {
     expires_at: Option<DateTime<Utc>>,
     rotation_days: Option<u32>,
     rotation_due_in: Option<i64>,
+    secret_changed_at: Option<DateTime<Utc>>,
+    history_count: usize,
+    now: DateTime<Utc>,
 }
 
-impl From<&ApiKey> for KeyMetadata {
-    fn from(key: &ApiKey) -> Self {
+impl KeyMetadata {
+    fn new(key: &ApiKey, now: DateTime<Utc>) -> Self {
         Self {
             id: key.id.clone(),
             title: key.title.clone(),
@@ -804,7 +1084,10 @@ impl From<&ApiKey> for KeyMetadata {
             notes: key.notes.clone(),
             expires_at: key.expires_at,
             rotation_days: key.rotation_days,
-            rotation_due_in: key.rotation_due_in(Utc::now()),
+            rotation_due_in: key.rotation_due_in(now),
+            secret_changed_at: key.secret_changed_at,
+            history_count: key.history_count,
+            now,
         }
     }
 }
@@ -840,7 +1123,7 @@ fn print_key(
     )?;
     writeln!(out, "URL:         {}", key.url.as_deref().unwrap_or("-"))?;
 
-    let now = Utc::now();
+    let now = key.now;
     match key.expires_at {
         Some(date) if date <= now => {
             writeln!(out, "Expires:     {} (EXPIRED)", date.format("%Y-%m-%d"))?
@@ -849,15 +1132,29 @@ fn print_key(
         None => writeln!(out, "Expires:     -")?,
     }
 
-    if let Some(days) = key.rotation_due_in {
-        writeln!(
+    match (key.rotation_days, key.rotation_due_in) {
+        (Some(interval), Some(days)) => writeln!(out, "Rotation:    {interval} days ({days}d)")?,
+        (Some(interval), None) => writeln!(
             out,
-            "Rotation:    {} days ({days}d)",
-            key.rotation_days.unwrap_or(0)
-        )?;
-    } else {
-        writeln!(out, "Rotation:    -")?;
+            "Rotation:    {interval} days (due date unknown: no secret-change time is recorded)"
+        )?,
+        (None, _) => writeln!(out, "Rotation:    -")?,
     }
+    writeln!(
+        out,
+        "Secret changed: {}",
+        key.secret_changed_at
+            .map_or_else(|| "unknown".to_string(), show_time)
+    )?;
+    writeln!(
+        out,
+        "History: {}",
+        match key.history_count {
+            0 => "none".to_string(),
+            1 => "1 earlier version".to_string(),
+            n => format!("{n} earlier versions"),
+        }
+    )?;
 
     if let Some(notes) = &key.notes {
         writeln!(out, "Notes:       {notes}")?;

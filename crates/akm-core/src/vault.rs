@@ -136,6 +136,11 @@ impl Vault {
         })
     }
 
+    /// The time by this vault's clock. Callers use it for "now" so one clock decides.
+    pub fn now(&self) -> DateTime<Utc> {
+        self.clock.now()
+    }
+
     /// Replaces the clock that stamps every time this vault writes (design D9).
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
