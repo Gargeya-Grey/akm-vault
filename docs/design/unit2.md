@@ -58,7 +58,7 @@ Rejected: the library's tracked edit (history on a no-op, wall-clock seconds). R
 
 ### D5. Same-second edits and clock rollback
 
-Every time that AKM writes for one key comes from `next_stamp(now, recorded)`: the clock time cut to the second, or one second after the newest time already recorded for that key (last modification, location change, secret-change field, every history version), whichever is later. So:
+Every time that AKM writes for one key comes from `next_stamp(now, entry)`: the clock time cut to the second, or one second after the newest time already recorded for that key, whichever is later. "Recorded" is `recorded_times(entry)`: creation, last modification, location change and the secret-change field of the entry, and the same four of every history version, whoever wrote them. `update`, `rotate`, `import`, `remove`, `restore` and `purge` all use it (review 1, finding 6: before, rotate, update and import ignored history and location, so a history version that a foreign editor dated in the future made AKM's own rotation read back as "changed outside"). A floor that has no later second to use (the last second the date type holds) refuses the change with an error and saves nothing. So:
 
 - two edits in one second get two different times and two history versions, in order;
 - a clock that goes back never moves a time back, and never makes the history order wrong;
