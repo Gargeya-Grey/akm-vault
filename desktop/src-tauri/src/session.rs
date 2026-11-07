@@ -476,6 +476,38 @@ impl Session {
         Ok(())
     }
 
+    /// Runs a session-scoped side effect (a settings write, a notification) while `ticket`
+    /// still owns the session. The effect runs under the gate that lock and `start_open`
+    /// take, so neither can retire the owner between the check and the effect. The effect
+    /// must be short and must not call back into the session: the gate is not reentrant.
+    pub fn while_current<T>(
+        &self,
+        ticket: Ticket,
+        effect: impl FnOnce() -> T,
+    ) -> Result<T, CommandError> {
+        let mut gate = self.gate()?;
+        if self.current(&mut gate)?.ticket != ticket {
+            return Err(CommandError::locked());
+        }
+        Ok(effect())
+    }
+
+    /// As `while_current`, for a request that names the session it was made for.
+    pub fn while_session<T>(
+        &self,
+        session_id: &str,
+        effect: impl FnOnce() -> T,
+    ) -> Result<T, CommandError> {
+        let id = uuid::Uuid::parse_str(session_id).map_err(|_| CommandError::locked())?;
+        let mut gate = self.gate()?;
+        let current = self.current(&mut gate)?;
+        gate.owner
+            .as_ref()
+            .filter(|owner| owner.ticket == current.ticket && owner.id == id)
+            .ok_or_else(CommandError::locked)?;
+        Ok(effect())
+    }
+
     pub fn path(&self) -> Result<Option<PathBuf>, CommandError> {
         Ok(self.gate()?.path.clone())
     }
@@ -2422,6 +2454,87 @@ mod tests {
         release_tx.send(()).unwrap();
         assert_eq!(worker.join().unwrap().unwrap_err().kind, "locked");
         assert!(f.session.snapshot().is_err());
+    }
+
+    #[test]
+    fn review1_a_session_effect_runs_only_for_the_current_owner() {
+        let f = fixture();
+        let old_ticket = f.session.snapshot().unwrap().ticket;
+        let old_owner = f.session.active_owner(old_ticket).unwrap();
+        let ran = AtomicUsize::new(0);
+        let effect = || ran.fetch_add(1, Ordering::SeqCst);
+        assert!(f.session.while_current(old_ticket, effect).is_ok());
+        assert!(f.session.while_session(&old_owner, effect).is_ok());
+        assert_eq!(ran.load(Ordering::SeqCst), 2);
+        let new_owner = f.session.prepare_open().unwrap();
+        for (name, result) in [
+            (
+                "old ticket",
+                f.session.while_current(old_ticket, effect).err(),
+            ),
+            (
+                "old owner",
+                f.session.while_session(&old_owner, effect).err(),
+            ),
+            (
+                "new owner, not opened",
+                f.session.while_session(&new_owner, effect).err(),
+            ),
+            (
+                "malformed",
+                f.session.while_session("not-a-uuid", effect).err(),
+            ),
+        ] {
+            assert_eq!(
+                result.unwrap_or_else(|| panic!("{name} ran")).kind,
+                "locked"
+            );
+        }
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            2,
+            "a retired owner runs no effect"
+        );
+    }
+
+    #[test]
+    fn review1_a_session_effect_holds_the_gate_so_lock_and_a_new_opening_wait_for_it() {
+        for newer in ["lock", "open"] {
+            let f = fixture();
+            let owner = f
+                .session
+                .active_owner(f.session.snapshot().unwrap().ticket)
+                .unwrap();
+            let (inside_tx, inside_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let effect_session = f.session.clone();
+            let effect = std::thread::spawn(move || {
+                effect_session
+                    .while_session(&owner, || {
+                        inside_tx.send(()).unwrap();
+                        release_rx.recv().unwrap();
+                    })
+                    .unwrap();
+            });
+            inside_rx.recv().unwrap();
+            let (done_tx, done_rx) = mpsc::channel();
+            let retiring = f.session.clone();
+            let retire = std::thread::spawn(move || {
+                match newer {
+                    "lock" => retiring.lock().unwrap(),
+                    _ => drop(retiring.prepare_open().unwrap()),
+                }
+                done_tx.send(()).unwrap();
+            });
+            assert!(
+                done_rx.recv_timeout(Duration::from_millis(300)).is_err(),
+                "{newer}: the owner was retired while its effect was running"
+            );
+            release_tx.send(()).unwrap();
+            effect.join().unwrap();
+            done_rx.recv().unwrap();
+            retire.join().unwrap();
+        }
     }
 
     #[test]

@@ -194,7 +194,9 @@ async fn open_vault(
     if preferences
         .save_vault_path(
             ticket,
-            &|| session.ensure(ticket).is_ok(),
+            &|effect| {
+                let _ = session.while_current(ticket, effect);
+            },
             &opened.value.path,
         )
         .is_err()
@@ -1916,7 +1918,7 @@ mod tests {
         fn save_vault_path(
             &self,
             ticket: crate::policy::Ticket,
-            owns: &dyn Fn() -> bool,
+            owned: crate::settings::OwnerFence<'_>,
             vault_path: &str,
         ) -> Result<crate::settings::PreferenceSave, CommandError> {
             if self
@@ -1930,7 +1932,7 @@ mod tests {
                     .recv_timeout(std::time::Duration::from_secs(30))
                     .unwrap();
             }
-            self.inner.save_vault_path(ticket, owns, vault_path)
+            self.inner.save_vault_path(ticket, owned, vault_path)
         }
     }
 
@@ -2003,5 +2005,187 @@ mod tests {
         assert_eq!(session.active_owner(current.ticket).unwrap(), owner_b);
         let report = serde_json::to_value(session.warnings().unwrap()).unwrap();
         assert_eq!(report["operations"].as_array().unwrap().len(), 0);
+    }
+
+    struct BarrierAfterCheck {
+        inner: crate::settings::FilePreferences,
+        armed: std::sync::atomic::AtomicBool,
+        entered: std::sync::mpsc::Sender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+        log: Arc<Mutex<Vec<&'static str>>>,
+    }
+    impl PreferenceStore for BarrierAfterCheck {
+        fn saved_vault_path(&self) -> Option<String> {
+            self.inner.saved_vault_path()
+        }
+        fn default_vault_path(&self) -> Result<PathBuf, CommandError> {
+            self.inner.default_vault_path()
+        }
+        fn save_vault_path(
+            &self,
+            ticket: crate::policy::Ticket,
+            owned: crate::settings::OwnerFence<'_>,
+            vault_path: &str,
+        ) -> Result<crate::settings::PreferenceSave, CommandError> {
+            if !self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return self.inner.save_vault_path(ticket, owned, vault_path);
+            }
+            let saved = self.inner.save_vault_path(
+                ticket,
+                &|effect| {
+                    owned(&mut || {
+                        self.entered.send(()).unwrap();
+                        self.release
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(std::time::Duration::from_secs(30))
+                            .unwrap();
+                        effect();
+                    });
+                },
+                vault_path,
+            );
+            self.log.lock().unwrap().push("A-saved");
+            saved
+        }
+    }
+
+    #[test]
+    fn review1_2_a_retiring_opening_cannot_interleave_between_the_ownership_check_and_the_settings_write(
+    ) {
+        use crate::{clipboard::tests::FakeData, policy::Signal, session::MonotonicClock};
+        use std::sync::mpsc;
+        let directory = tempfile::tempdir().unwrap();
+        let a_path = directory.path().join("a.kdbx");
+        Vault::create(&a_path, "fake-test-password-123!", None).unwrap();
+        let missing = directory.path().join("missing.kdbx");
+        let settings = directory.path().join("fake-settings").join("settings.json");
+        fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        fs::write(&settings, r#"{"vaultPath":"pre-existing.kdbx"}"#).unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let store = Arc::new(BarrierAfterCheck {
+            inner: crate::settings::FilePreferences::new(Some(settings.clone()), None),
+            armed: std::sync::atomic::AtomicBool::new(true),
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+            log: log.clone(),
+        });
+        let session = Arc::new(Session::new(
+            Arc::new(MonotonicClock::default()),
+            Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
+                Mutex::new(FakeData::default()),
+            ))),
+            Arc::new(|_| {}),
+        ));
+        session.observe(Signal::Available);
+        let open = |session: Arc<Session>, store: Arc<BarrierAfterCheck>, owner: String, path| {
+            tauri::async_runtime::block_on(open_vault(
+                session,
+                store,
+                path,
+                Zeroizing::new("fake-test-password-123!".into()),
+                None,
+                false,
+                &owner,
+            ))
+        };
+        let owner_a = session.prepare_open().unwrap();
+        let first = {
+            let (session, store) = (session.clone(), store.clone());
+            std::thread::spawn(move || open(session, store, owner_a, a_path))
+        };
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap();
+        let (retired_tx, retired_rx) = mpsc::channel();
+        let second = {
+            let (session, store, log) = (session.clone(), store.clone(), log.clone());
+            std::thread::spawn(move || {
+                let owner_b = session.prepare_open().unwrap();
+                log.lock().unwrap().push("B-retired-A");
+                retired_tx.send(()).unwrap();
+                open(session, store, owner_b, missing)
+            })
+        };
+        let _ = retired_rx.recv_timeout(std::time::Duration::from_millis(500));
+        release_tx.send(()).unwrap();
+        let _ = first.join().unwrap();
+        assert!(second.join().unwrap().is_err(), "B must fail to open");
+        let saved: Settings = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
+        let events = log.lock().unwrap().clone();
+        let a_wrote = saved
+            .vault_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with("a.kdbx"));
+        if a_wrote {
+            assert_eq!(
+                events,
+                ["A-saved", "B-retired-A"],
+                "A may write only while it still owns the session, never after B retired it"
+            );
+        } else {
+            assert_eq!(saved.vault_path.as_deref(), Some("pre-existing.kdbx"));
+        }
+    }
+
+    #[test]
+    fn review1_2_an_opening_retired_by_a_failed_newer_opening_leaves_the_earlier_preference() {
+        use crate::{clipboard::tests::FakeData, policy::Signal, session::MonotonicClock};
+        use std::sync::mpsc;
+        let directory = tempfile::tempdir().unwrap();
+        let a_path = directory.path().join("a.kdbx");
+        Vault::create(&a_path, "fake-test-password-123!", None).unwrap();
+        let settings = directory.path().join("fake-settings").join("settings.json");
+        fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        fs::write(&settings, r#"{"vaultPath":"pre-existing.kdbx"}"#).unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let store = Arc::new(PausingPreferences {
+            inner: crate::settings::FilePreferences::new(Some(settings.clone()), None),
+            pause_first: std::sync::atomic::AtomicBool::new(true),
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        });
+        let session = Arc::new(Session::new(
+            Arc::new(MonotonicClock::default()),
+            Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
+                Mutex::new(FakeData::default()),
+            ))),
+            Arc::new(|_| {}),
+        ));
+        session.observe(Signal::Available);
+        let open = |session: Arc<Session>, store: Arc<PausingPreferences>, owner: String, path| {
+            tauri::async_runtime::block_on(open_vault(
+                session,
+                store,
+                path,
+                Zeroizing::new("fake-test-password-123!".into()),
+                None,
+                false,
+                &owner,
+            ))
+        };
+        let owner_a = session.prepare_open().unwrap();
+        let first = {
+            let (session, store) = (session.clone(), store.clone());
+            std::thread::spawn(move || open(session, store, owner_a, a_path))
+        };
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap();
+        let owner_b = session.prepare_open().unwrap();
+        assert!(open(
+            session.clone(),
+            store.clone(),
+            owner_b,
+            directory.path().join("missing.kdbx")
+        )
+        .is_err());
+        release_tx.send(()).unwrap();
+        assert!(first.join().unwrap().is_err());
+        let saved: Settings = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
+        assert_eq!(saved.vault_path.as_deref(), Some("pre-existing.kdbx"));
     }
 }
