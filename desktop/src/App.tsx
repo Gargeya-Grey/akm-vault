@@ -4,6 +4,7 @@ import { api, errorText } from "./api";
 import { Activity } from "./components/Activity";
 import { KeysView } from "./components/KeysView";
 import { NavBar } from "./components/NavBar";
+import { RecycleBin } from "./components/RecycleBin";
 import { ConfirmDialog, Notice } from "./components/Notice";
 import { Settings } from "./components/Settings";
 import { Unlock } from "./components/Unlock";
@@ -369,6 +370,8 @@ export function App() {
         />
       ) : view === "keys" ? (
         <KeysView key={revision} readOnly={status.needsUpgrade} />
+      ) : view === "bin" ? (
+        <RecycleBin key={revision} readOnly={status.needsUpgrade} />
       ) : view === "activity" ? (
         <Activity />
       ) : (

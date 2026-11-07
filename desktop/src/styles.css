@@ -1673,3 +1673,25 @@ textarea:disabled {
     animation: none !important;
   }
 }
+
+/* Recycle Bin rows */
+.bin-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1.2fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.key-rows li.bin-row:last-child {
+  border-bottom: 0;
+}
+
+@media (max-width: 760px) {
+  .bin-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding-block: 14px;
+  }
+}

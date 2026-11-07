@@ -8,11 +8,13 @@ import type {
   ImportReport,
   KeyDraft,
   KeyView,
+  RecycledKey,
+  RotationReceipt,
   Status,
   WarningReport,
 } from "./types";
 
-const mutations = new Set(["vault_create", "vault_upgrade", "key_add", "key_update", "key_remove", "env_import", "env_save"]);
+const mutations = new Set(["vault_create", "vault_upgrade", "key_add", "key_update", "key_remove", "key_rotate", "key_restore", "key_purge", "env_import", "env_save"]);
 // A request that the user can still decline in a native window answers null when they do.
 const declinable = new Set(["env_import", "env_save"]);
 const statusReplies = new Set(["vault_status", "vault_unlock", "vault_create", "vault_upgrade", "vault_reload"]);
@@ -124,6 +126,10 @@ export const api = {
   update: (id: string, draft: KeyDraft) =>
     invoke<KeyView>("key_update", { id, draft }),
   remove: (id: string) => invoke<void>("key_remove", { id }),
+  rotate: (id: string, secret: string) => invoke<RotationReceipt>("key_rotate", { id, secret }),
+  recycled: () => invoke<RecycledKey[]>("recycled_list"),
+  restore: (id: string) => invoke<KeyView>("key_restore", { id }),
+  purge: (id: string) => invoke<void>("key_purge", { id }),
 
   audit: (limit = 300) => invoke<AuditReport>("audit_read", { limit }),
   exportEnv: (project: string | null, environment: string | null) =>

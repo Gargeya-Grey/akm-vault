@@ -55,6 +55,10 @@ export function keyState(key: KeyView): { label: string; tone: KeyTone } {
   if (key.rotationDueIn !== null && key.rotationDueIn <= 14) {
     return { label: "Rotate soon", tone: "warn" };
   }
+  if (key.rotationDays !== null && key.rotationDueIn === null) {
+    // AKM has no secret-change time, so it cannot say that the key is on schedule.
+    return { label: "Rotation unknown", tone: "warn" };
+  }
   return { label: "OK", tone: "ok" };
 }
 
@@ -67,8 +71,14 @@ export function expiryLabel(key: KeyView): string {
   return formatDate(key.expiresAt);
 }
 
+/** The time of the last secret change, or "unknown". AKM never invents a date. */
+export function secretChangeLabel(key: KeyView): string {
+  if (key.secretChange === "known" && key.secretChangedAt) return formatDateTime(key.secretChangedAt);
+  return "unknown";
+}
+
 export function rotationLabel(key: KeyView): string {
-  if (key.rotationDueIn === null) return "—";
+  if (key.rotationDueIn === null) return key.rotationDays === null ? "—" : "unknown";
   if (key.rotationDueIn < 0) return "overdue";
   if (key.rotationDueIn === 0) return "due today";
   return `in ${key.rotationDueIn} days`;

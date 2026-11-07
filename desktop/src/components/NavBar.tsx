@@ -3,6 +3,7 @@ import { Icon } from "./Icon";
 
 const sections: { id: View; label: string }[] = [
   { id: "keys", label: "Keys" },
+  { id: "bin", label: "Recycle Bin" },
   { id: "activity", label: "Activity" },
   { id: "settings", label: "Settings" },
 ];

@@ -205,8 +205,8 @@ test("an unknown-owner hide is coalesced across bootstrap adoption, not replayed
 for (const phase of ["pending", "displayed", "error"] as const) {
   test(`the native expiry's direct disclosure consumer fences a ${phase} reveal result`, async () => {
     const f = fixture(); f.hold("key_reveal");
-    const item: KeyView = { id: "fake-key", title: "Fake reveal fixture", username: null, issuer: null, project: "demo", environment: "dev", scopes: [], envVar: "TOKEN", resolvedEnvVar: "TOKEN", url: null, notes: null, tags: [], expiresAt: null, rotationDays: null, createdAt: null, updatedAt: null, expired: false, rotationDueIn: null };
-    render(<><App /><KeyDetail item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} /></>);
+    const item: KeyView = { id: "fake-key", title: "Fake reveal fixture", username: null, issuer: null, project: "demo", environment: "dev", scopes: [], envVar: "TOKEN", resolvedEnvVar: "TOKEN", url: null, notes: null, tags: [], expiresAt: null, rotationDays: null, createdAt: null, updatedAt: null, expired: false, rotationDueIn: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0 };
+    render(<><App /><KeyDetail item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} /></>);
     await screen.findByText("Current unlocked keys");
     fireEvent.click(screen.getByRole("button", { name: "Reveal" }));
     if (phase === "displayed") { await act(async () => f.pending.resolve("fake-reveal-value")); expect(screen.getByText("fake-reveal-value")).toBeTruthy(); }

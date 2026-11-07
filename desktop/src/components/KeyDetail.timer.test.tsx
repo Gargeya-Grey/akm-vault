@@ -11,6 +11,9 @@ const item: KeyView = {
   environment: "dev", scopes: [], envVar: "TOKEN", resolvedEnvVar: "TOKEN", url: null, notes: null,
   tags: [], expiresAt: null, rotationDays: null, createdAt: null, updatedAt: null, expired: false,
   rotationDueIn: null,
+  secretChangedAt: null,
+  secretChange: "unknown",
+  historyCount: 0,
 };
 
 beforeEach(() => {
@@ -34,7 +37,7 @@ async function reveal() {
 
 // Owner decision, 1 Nov 2026: the "Hides in N seconds" text is the only timer. There is no bar.
 test("the countdown text is the only timer, and it resets on each reveal", async () => {
-  render(<KeyDetail item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} />);
+  render(<KeyDetail item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
   await reveal();
   expect(screen.getByText("fake-timer-value")).toBeTruthy();
   expect(document.body.textContent).toContain("Hides in 30 seconds");

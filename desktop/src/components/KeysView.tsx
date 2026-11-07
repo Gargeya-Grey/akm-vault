@@ -7,11 +7,12 @@ import {
   plural,
   rotationLabel,
 } from "../format";
-import type { KeyView } from "../types";
+import type { KeyView, RotationReceipt } from "../types";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
 import { KeyDetail } from "./KeyDetail";
 import { Icon } from "./Icon";
 import { KeyForm } from "./KeyForm";
+import { RotateDialog } from "./RotateDialog";
 import { ConfirmDialog, Notice } from "./Notice";
 
 export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
@@ -29,6 +30,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
   const [deleting, setDeleting] = useState<KeyView | null>(null);
   const [deletingBusy, setDeletingBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [rotating, setRotating] = useState<KeyView | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -106,6 +108,17 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
     setFlash(`Saved “${item.title}”. The vault file has been rewritten.`);
   }
 
+  function rotated(receipt: RotationReceipt) {
+    setKeys((current) =>
+      current.map((key) => (key.id === receipt.key.id ? receipt.key : key)),
+    );
+    setSelectedId(receipt.key.id);
+    setRotating(null);
+    setFlash(
+      `Rotated “${receipt.key.title}”. The old secret stays in the vault history. Rotating here does not change the secret at the provider.`,
+    );
+  }
+
   async function remove() {
     if (!deleting) return;
     setDeletingBusy(true);
@@ -114,7 +127,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
       await api.remove(deleting.id);
       setKeys((current) => current.filter((key) => key.id !== deleting.id));
       if (selectedId === deleting.id) setSelectedId(null);
-      setFlash(`Deleted “${deleting.title}”. Check backup notices and your encrypted backups before relying on recovery.`);
+      setFlash(`Moved “${deleting.title}” to the Recycle Bin. Restore it there, or delete it for good. Check backup notices before you rely on encrypted backups.`);
       setDeleting(null);
     } catch (cause) {
       setDeleteError(errorText(cause));
@@ -314,6 +327,10 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
             setSelectedId(null);
             setFormItem(selected);
           }}
+          onRotate={() => {
+            setSelectedId(null);
+            setRotating(selected);
+          }}
           onDelete={() => {
             setDeleteError(null);
             setSelectedId(null);
@@ -330,19 +347,27 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
         />
       )}
 
+      {rotating && (
+        <RotateDialog
+          item={rotating}
+          onRotated={rotated}
+          onClose={() => { setSelectedId(rotating.id); setRotating(null); }}
+        />
+      )}
+
       {deleting && (
         <ConfirmDialog
-          title="Delete this key?"
-          confirmLabel="Delete key"
+          title="Move this key to the Recycle Bin?"
+          confirmLabel="Move to Recycle Bin"
           busy={deletingBusy}
+          destructive={false}
           onConfirm={remove}
           onCancel={() => { setSelectedId(deleting.id); setDeleting(null); }}
         >
           <p>
-            <strong>{deleting.title}</strong> will be removed from the vault.
-            This cannot be undone from inside the app. Encrypted backups may contain
-            previous data, but recovery depends on their contents and retention.
-            Check backup notices after deletion and keep an independent backup.
+            <strong>{deleting.title}</strong> leaves the key list and moves to the Recycle Bin
+            inside the vault. Its secret, history and group are kept. Open the Recycle Bin to
+            restore it, or to delete it for good. Nothing is deleted for good until you ask.
           </p>
           {deleteError && <Notice tone="error">{deleteError}</Notice>}
         </ConfirmDialog>

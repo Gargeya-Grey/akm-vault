@@ -7,7 +7,10 @@ import { Notice } from "./Notice";
 const ACTIONS: Record<string, string> = {
   "add-completed": "Added",
   "update-completed": "Updated",
-  "remove-completed": "Removed",
+  "remove-completed": "Moved to Recycle Bin",
+  "rotate-completed": "Rotated",
+  "restore-completed": "Restored",
+  "purge-completed": "Deleted for good",
   "export-completed": "Exported",
   "import-completed": "Imported",
   "upgrade-completed": "Format upgraded",

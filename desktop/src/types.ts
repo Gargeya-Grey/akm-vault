@@ -27,6 +27,25 @@ export interface KeyView {
   updatedAt: string | null;
   expired: boolean;
   rotationDueIn: number | null;
+  /** When the secret last changed. Null when AKM has no such time. */
+  secretChangedAt: string | null;
+  secretChange: SecretChange;
+  /** The number of earlier versions in the vault's native history. */
+  historyCount: number;
+}
+
+export type SecretChange = "known" | "unknown" | "changed_outside";
+
+/** The receipt of a rotation. It holds times and metadata, never a secret. */
+export interface RotationReceipt {
+  key: KeyView;
+  changedAt: string;
+  previousChangedAt: string | null;
+}
+
+export interface RecycledKey {
+  key: KeyView;
+  deletedAt: string | null;
 }
 
 export interface KeyDraft {
@@ -106,5 +125,5 @@ export interface CommandError {
   message: string;
 }
 
-export type View = "keys" | "activity" | "settings";
+export type View = "keys" | "bin" | "activity" | "settings";
 export type Theme = "light" | "dark";

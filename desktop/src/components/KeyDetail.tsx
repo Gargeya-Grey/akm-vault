@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, errorText } from "../api";
 import { clipboardCopyText } from "../clipboardText";
-import { formatDate, formatDateTime, keyState, rotationLabel } from "../format";
+import { formatDate, formatDateTime, keyState, plural, rotationLabel, secretChangeLabel } from "../format";
 import type { KeyView } from "../types";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
@@ -13,12 +13,13 @@ interface Props {
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onRotate: () => void;
   readOnly?: boolean;
 }
 
 const HIDE_SECONDS = 30;
 
-export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }: Props) {
+export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly = false }: Props) {
   const dialogRef = useDialogFocus<HTMLDivElement>();
   const [secret, setSecret] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(HIDE_SECONDS);
@@ -170,6 +171,24 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
         ? "Not set"
         : `every ${item.rotationDays} days · ${rotationLabel(item)}`,
   });
+  facts.push({
+    key: "Secret changed",
+    value:
+      item.secretChange === "known" ? (
+        <span className="mono">{secretChangeLabel(item)}</span>
+      ) : item.secretChange === "changed_outside" ? (
+        <span>unknown · changed outside AKM</span>
+      ) : (
+        <span>unknown</span>
+      ),
+  });
+  facts.push({
+    key: "History",
+    value:
+      item.historyCount === 0
+        ? "No earlier versions"
+        : `${plural(item.historyCount, "earlier version")} in the vault history`,
+  });
   if (item.createdAt)
     facts.push({
       key: "Added",
@@ -275,9 +294,13 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
         <div className="dialog-actions spread">
           <button type="button" className="text-button danger-text" onClick={onDelete} disabled={readOnly}>
             <Icon name="trash" />
-            Delete key
+            Move to Recycle Bin
           </button>
           <div className="action-cluster">
+            <button type="button" className="text-button" onClick={onRotate} disabled={readOnly}>
+              <Icon name="refresh" />
+              Rotate secret
+            </button>
             <button type="button" className="text-button" onClick={onClose}>
               Close
             </button>

@@ -34,6 +34,9 @@ const key: KeyView = {
   updatedAt: null,
   expired: false,
   rotationDueIn: null,
+  secretChangedAt: null,
+  secretChange: "unknown",
+  historyCount: 0,
 };
 const status: Status = { sessionId: "fake-session", path: "C:/fake/a.kdbx", exists: true, unlocked: true, keyCount: 1, vaultName: "Fake", needsUpgrade: false };
 
@@ -59,7 +62,7 @@ function promisesNothing(text: string) {
 
 test("the key copy text says that cleanup is an attempt and that the copy may remain", async () => {
   respond();
-  render(<KeyDetail item={key} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} />);
+  render(<KeyDetail item={key} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Copy" }));
   expect(await screen.findByText(COPY_TEXT)).toBeTruthy();
   promisesNothing(document.body.textContent ?? "");
