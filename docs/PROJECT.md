@@ -64,7 +64,7 @@ These contracts do not claim that every nearby seam is complete. Open defects ar
 
 - `crates/akm-core/src/vault.rs` owns transactions, KDBX identity and persistence.
 - `crates/akm-core/src/model.rs` owns API-key fields and rotation calculations.
-- `crates/akm-core/src/audit.rs` and `dotenv.rs` own the current journal and dotenv dialect.
+- `crates/akm-core/src/audit.rs`, `journal.rs` and `private_fs.rs` own the private per-device journal: the hash chain and its damage report, the vault-to-journal mapping, and the permission checks. `dotenv.rs` owns the dotenv dialect. [Unit 1b design](design/unit1b.md).
 - `crates/akm-cli/src/` owns child isolation, CLI workflows and protected exports.
 - `desktop/src-tauri/src/` owns session policy, commands, clipboard and native exports.
 - `desktop/src/` owns frontend lifecycle, forms and reviewed workflow presentation.

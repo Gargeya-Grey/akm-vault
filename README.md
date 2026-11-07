@@ -146,16 +146,35 @@ an already-authorized OS operation may finish and must report its completed outc
 
 ## Activity journal and privacy
 
-The current journal is plaintext `<vault>.audit.jsonl`, beside the encrypted vault.
-It contains entry titles, projects, environments, timing and action metadata.
-**It syncs if that folder syncs, and exposes that metadata to the provider.** It
-does not intentionally contain secret values.
+The journal lives on this device, in a private folder (`%LOCALAPPDATA%\akm\journal\`).
+Nothing is written beside the vault, so a sync provider sees no journal. Only your
+Windows account can open the folder. AKM checks that on every use and refuses to use a
+folder that other accounts, links or non-local disks could reach. It does not repair
+the folder and it does not fall back to another place.
+
+A record holds the time, the action, the key id and a count or an operation id. It holds
+no key name, project, environment, path or secret value. The Activity view looks up key
+names from the unlocked vault. `akm audit` runs without the password and shows ids only.
+
+The journal belongs to the device, not to the vault. AKM links a vault to its journal
+with a device-local mapping. It never writes to the vault for that. A renamed vault
+keeps its journal. A copy, a different vault at the same path, and a second vault start
+their own journals, and AKM never merges them. When AKM cannot tell which vault it has
+(for example, a locked file it has not seen before), it shows the journal read-only and
+says so. An older `<vault>.audit.jsonl` file is reported and left untouched. AKM does
+not read, move, delete or import it.
 
 The hash chain detects some edits but cannot prove completeness. Truncating the
 end, deleting the log or rewriting the whole chain is not authenticated. Treat it
-as a convenience journal, not security evidence. A private, per-device journal is
-[planned](docs/ROADMAP.md). A journal failure after a successful vault commit must
-produce a warning, not an error that encourages retrying an already-saved change.
+as a convenience journal, not security evidence. A damaged journal is kept as it is,
+reported by kind (`truncatedTail`, `malformedJson`, `brokenLink`, `hashMismatch`) with
+no claim about the cause, and gets no new records. If a record cannot be saved
+before a disclosure, an export or a launch, the action does not happen. If it cannot
+be saved after a committed change, AKM prints a warning that says the change is saved
+and that you must not repeat it.
+
+Tests and proof scripts set `AKM_JOURNAL_ROOT` to a temporary absolute folder, so they
+never touch the real journal.
 
 ## Build and verify on Windows
 

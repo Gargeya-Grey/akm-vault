@@ -79,7 +79,7 @@ Remove the variable afterwards.
 ## Which checks a change needs
 
 - **Core data or persistence:** core regressions, the CLI security tests, the KeePassXC test, and the GUI flows that use the change. Keep the KDF, cipher, history and attachment checks.
-- **Journal:** append, read and failure tests across sessions, plus the CLI and Activity callers. A journal warning after a commit must never look like an unsaved change.
+- **Journal:** append, read and failure tests across sessions, plus the CLI and Activity callers. A journal warning after a commit must never look like an unsaved change. Every process that a test or a proof script starts gets its own `AKM_JOURNAL_ROOT` (an absolute temporary folder), so no test touches `%LOCALAPPDATA%\akm`. `.cargo/config.toml` sets a default for processes that Cargo starts. The tests that use `icacls` and `mklink /J` change only folders that they create. `tools/verify_windows_app.ps1`, `tools/verify_keepassxc.py`, `tools/prepare_gui_fixture.py` and `tools/verify_kdbxweb/verify.mjs` set the variable too; the first one reads the journal through `mapping.json` and `j-<id>.jsonl`.
 - **Session, clipboard or export:** deterministic interleaving tests, plus real Windows evidence. Mocked browser tests do not prove native clipboard or OS behaviour.
 - **IPC shapes shared by Rust and TypeScript:** the TypeScript checks and the real frontend-native boundary.
 - **Frontend:** the affected lifecycle and interaction tests, a rebuilt GUI, and the affected native flow.
