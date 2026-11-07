@@ -1,13 +1,14 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { App } from "./App";
+import { acceptNativeStatus, nativeOwner } from "./nativeSession";
 import { acknowledgeCompletions, retainedCompletions, settleOutcome } from "./sessionBoundary";
 import type { Status } from "./types";
 
-// Review 1, finding 1. A hidden document discards the page's review. Native must hear about it
-// without waiting for a window event, or an open import dialog stays live for an approval of a
-// form that the page already threw away. The native side is a mock here: these tests prove what
-// the page sends, and the Rust tests prove what native does with it.
+// The native dialog is the review (P2R2-02). A hidden document discards the page's form and tells
+// native which session it was in (P2R2-03), but the user's click in the native dialog stands. The
+// page must still hear the truth of a request whose form it threw away. The native side is a mock
+// here: these tests prove what the page sends and shows, and the Rust tests prove what native does.
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
@@ -29,24 +30,30 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function fixture(options: { unlocked?: boolean; discard?: () => unknown } = {}) {
+type Args = { sessionId?: string | null } | undefined;
+
+function fixture(options: { unlocked?: boolean; discard?: (args: Args) => unknown } = {}) {
   vi.spyOn(document, "hidden", "get").mockReturnValue(false);
   const owner = crypto.randomUUID();
-  let active = options.unlocked ?? true;
+  let current: string | null = options.unlocked === false ? null : owner;
   const pending = deferred<unknown>();
-  native.invoke.mockReset().mockImplementation(async (command: string, args?: { sessionId?: string | null }) => {
+  native.invoke.mockReset().mockImplementation(async (command: string, args?: Args) => {
     if (command === "env_import") return pending.promise;
-    if (command === "view_discard") return options.discard?.();
-    if (command === "vault_status") return { sessionId: active ? owner : null, path: "C:/fake/current.kdbx", exists: true, unlocked: active, keyCount: 1, vaultName: active ? "Fake" : null, needsUpgrade: false } satisfies Status;
+    if (command === "view_discard") return options.discard?.(args);
+    if (command === "vault_status") return { sessionId: current, path: "C:/fake/current.kdbx", exists: true, unlocked: current !== null, keyCount: 1, vaultName: current ? "Fake" : null, needsUpgrade: false } satisfies Status;
     if (command === "vault_warnings") return { application: [], operations: [] };
     if (command === "vault_activity") return;
-    if (command === "vault_lock") { expect(args?.sessionId).toBe(owner); active = false; return; }
+    if (command === "vault_lock") {
+      if (args?.sessionId !== current) throw { kind: "locked", message: "The vault is locked." };
+      current = null;
+      return;
+    }
     if (command === "keys_list") return [{ project: "demo", environment: "dev" }];
     if (command === "backup_info") return { path: "C:/fake/current.bak", exists: false, bytes: 0, modified: null };
     if (command === "reminders_status") return { enabled: false, permission: "granted", delivery: "none", blocked: false };
     throw new Error(command);
   });
-  return { pending, active: () => active };
+  return { owner, pending, active: () => current !== null };
 }
 
 const calls = (command: string) => native.invoke.mock.calls.filter(([name]) => name === command);
@@ -75,26 +82,86 @@ async function settingsWithPendingImport() {
   expect(calls("env_import")).toHaveLength(1);
 }
 
-test("hiding the document with an import confirmation pending tells native, and a late approval gets a truthful error", async () => {
+const outcomes = () => screen.getByRole("region", { name: "Operation outcomes" });
+
+test("hiding the document sends the session that the page read, and nothing else", async () => {
   const f = fixture();
   await settingsWithPendingImport();
   expect(calls("view_discard")).toHaveLength(0);
   hide();
   await flush();
-  expect(calls("view_discard")).toHaveLength(1);
+  expect(calls("view_discard")).toEqual([["view_discard", { sessionId: f.owner }]]);
+  expect(calls("vault_lock")).toHaveLength(0);
+});
+
+test("an approval after a hide is reported as a completed import, never as not done", async () => {
+  const f = fixture();
+  await settingsWithPendingImport();
+  hide();
+  await flush();
   expect(screen.queryByRole("dialog")).toBeNull();
   show();
-  await act(async () => f.pending.reject({ kind: "stalePreview", message: "The vault changed while the import waited for confirmation. Start it again." }));
-  const outcomes = screen.getByRole("region", { name: "Operation outcomes" });
-  expect(outcomes.textContent).not.toContain("Imported");
+  await act(async () => f.pending.resolve({ added: 1, updated: 0 }));
+  expect(outcomes().textContent).toContain("Import completed");
+  expect(outcomes().textContent).not.toContain("declined");
   expect(document.body.textContent).not.toContain("fake-private-input");
+  expect(retainedCompletions()).toMatchObject([{ operation: "import", outcome: "completed" }]);
+  expect(f.active()).toBe(true);
+  expect(calls("vault_lock")).toHaveLength(0);
+});
+
+test("a decline after a hide is reported as a decline", async () => {
+  const f = fixture();
+  await settingsWithPendingImport();
+  hide();
+  await flush();
+  show();
+  await act(async () => f.pending.resolve(null));
+  expect(outcomes().textContent).toContain("declined in the confirmation window");
+  expect(retainedCompletions()).toMatchObject([{ operation: "import", outcome: "cancelled" }]);
+});
+
+test("a refusal after a hide stays an error that does not claim nothing was saved", async () => {
+  const f = fixture();
+  await settingsWithPendingImport();
+  hide();
+  await flush();
+  show();
+  await act(async () => f.pending.reject({ kind: "stalePreview", message: "The session or vault changed. Start this operation again." }));
+  expect(outcomes().textContent).not.toContain("Imported");
+  expect(outcomes().textContent).toContain("does not confirm that nothing was saved");
   expect(retainedCompletions()).toMatchObject([{ operation: "import", outcome: "reportedError" }]);
   expect(f.active()).toBe(true);
   expect(calls("vault_lock")).toHaveLength(0);
 });
 
+test("a discard that is delivered after the approval changes neither the import nor the lock state", async () => {
+  const late = deferred<unknown>();
+  const f = fixture({ discard: () => late.promise });
+  await settingsWithPendingImport();
+  hide();
+  await flush();
+  show();
+  await act(async () => f.pending.resolve({ added: 1, updated: 0 }));
+  await act(async () => late.resolve(undefined));
+  expect(retainedCompletions()).toMatchObject([{ operation: "import", outcome: "completed" }]);
+  expect(f.active()).toBe(true);
+  expect(calls("vault_lock")).toHaveLength(0);
+});
+
+test("a discard that never returns does not hide the outcome of the import", async () => {
+  const f = fixture({ discard: () => new Promise(() => {}) });
+  await settingsWithPendingImport();
+  hide();
+  await flush();
+  show();
+  await act(async () => f.pending.resolve({ added: 1, updated: 0 }));
+  expect(outcomes().textContent).toContain("Import completed");
+  expect(f.active()).toBe(true);
+});
+
 test("hiding the document reaches native from every view, not only from Settings", async () => {
-  fixture();
+  const f = fixture();
   render(<App />);
   await screen.findByText("Current unlocked keys");
   hide();
@@ -105,7 +172,7 @@ test("hiding the document reaches native from every view, not only from Settings
   expect(calls("view_discard")).toHaveLength(1);
   hide();
   await flush();
-  expect(calls("view_discard")).toHaveLength(2);
+  expect(calls("view_discard")).toEqual([["view_discard", { sessionId: f.owner }], ["view_discard", { sessionId: f.owner }]]);
 });
 
 test("a hidden document with no unlocked vault sends nothing", async () => {
@@ -117,15 +184,45 @@ test("a hidden document with no unlocked vault sends nothing", async () => {
   expect(calls("view_discard")).toHaveLength(0);
 });
 
-test("a discard that native cannot take fails closed and locks the vault", async () => {
+test("a hidden document after the vault was locked sends nothing", async () => {
+  const f = fixture();
+  render(<App />);
+  await screen.findByText("Current unlocked keys");
+  fireEvent.click(screen.getByRole("button", { name: "Lock now" }));
+  await flush();
+  expect(f.active()).toBe(false);
+  hide();
+  await flush();
+  expect(calls("view_discard")).toHaveLength(0);
+});
+
+test("a discard that native cannot take fails closed and locks that session", async () => {
   const f = fixture({ discard: () => { throw { kind: "internal", message: "Could not deliver native presentation expiry." }; } });
   render(<App />);
   await screen.findByText("Current unlocked keys");
   hide();
   await flush();
   expect(calls("view_discard")).toHaveLength(1);
-  expect(calls("vault_lock")).toHaveLength(1);
+  expect(calls("vault_lock")).toEqual([["vault_lock", { sessionId: f.owner }]]);
   expect(f.active()).toBe(false);
+});
+
+test("a discard that fails after another vault was opened locks the old session and not the new one", async () => {
+  const late = deferred<unknown>();
+  const f = fixture({ discard: () => late.promise });
+  render(<App />);
+  await screen.findByText("Current unlocked keys");
+  hide();
+  await flush();
+  expect(calls("view_discard")).toEqual([["view_discard", { sessionId: f.owner }]]);
+  const replacement = crypto.randomUUID();
+  act(() => acceptNativeStatus({ sessionId: replacement, path: "C:/fake/other.kdbx", exists: true, unlocked: true, keyCount: 0, vaultName: "Other", needsUpgrade: false }));
+  expect(nativeOwner()).toBe(replacement);
+  await act(async () => late.reject({ kind: "internal", message: "Could not deliver native presentation expiry." }));
+  expect(calls("vault_lock").every(([, args]) => (args as Args)?.sessionId === f.owner)).toBe(true);
+  expect(calls("vault_lock").some(([, args]) => (args as Args)?.sessionId === replacement)).toBe(false);
+  expect(calls("vault_status")).toHaveLength(1);
+  expect(nativeOwner()).toBe(replacement);
 });
 
 test("a discard that finds the vault already locked does not lock anything again", async () => {

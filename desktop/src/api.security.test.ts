@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { api } from "./api";
-import { adoptReservation } from "./nativeSession";
+import { adoptReservation, nativeOwner } from "./nativeSession";
 import { acknowledgeNotices, retainedOperationNotices } from "./operationNotices";
 import { acknowledgeCompletions, COMPLETION_EVENT, invalidateSession, retainedCompletions, SESSION_LOSS_EVENT } from "./sessionBoundary";
 
@@ -122,4 +122,48 @@ test("a transport failure keeps the native record because it may be the only tru
   native.invoke.mockRejectedValueOnce(new Error("channel closed"));
   await api.importEnv(...IMPORT).catch(() => {});
   expect(native.invoke).not.toHaveBeenCalledWith("vault_dismiss_warnings", expect.anything());
+});
+
+// P2R2-03. A discard names the session that the page read when it handled the hide. A discard
+// that fails locks that session and no other.
+const lockCalls = () => native.invoke.mock.calls.filter(([command]) => command === "vault_lock");
+
+test("a discard carries the session that was named, not the one that is current when it is sent", async () => {
+  const named = crypto.randomUUID();
+  native.invoke.mockResolvedValue(undefined);
+  await api.discardView(named);
+  expect(native.invoke).toHaveBeenCalledTimes(1);
+  expect(native.invoke).toHaveBeenCalledWith("view_discard", { sessionId: named });
+});
+
+test("a failed discard locks the session it named and never asks which session is current", async () => {
+  const named = crypto.randomUUID();
+  native.invoke.mockImplementation(async (command: string) => {
+    if (command === "view_discard") throw { kind: "internal", message: "Could not deliver native presentation expiry." };
+    if (command === "vault_lock") return;
+    throw new Error(command);
+  });
+  await api.discardView(named);
+  expect(native.invoke.mock.calls.map(([command]) => command)).toEqual(["view_discard", "vault_lock"]);
+  expect(lockCalls()).toEqual([["vault_lock", { sessionId: named }]]);
+});
+
+test("a failed discard from a retired session leaves the session that replaced it unlocked", async () => {
+  const retired = crypto.randomUUID();
+  const replacement = nativeOwner();
+  expect(replacement).not.toBeNull();
+  native.invoke.mockImplementation(async (command: string, args?: { sessionId?: string }) => {
+    if (command === "view_discard") throw { kind: "internal", message: "Could not deliver native presentation expiry." };
+    if (command === "vault_lock" && args?.sessionId !== replacement) throw { kind: "locked", message: "The vault is locked." };
+    throw new Error(command);
+  });
+  await api.discardView(retired);
+  expect(lockCalls()).toEqual([["vault_lock", { sessionId: retired }]]);
+  expect(nativeOwner()).toBe(replacement);
+});
+
+test("a discard that finds its session locked does nothing more", async () => {
+  native.invoke.mockRejectedValue({ kind: "locked", message: "The vault is locked." });
+  await api.discardView(crypto.randomUUID());
+  expect(lockCalls()).toEqual([]);
 });

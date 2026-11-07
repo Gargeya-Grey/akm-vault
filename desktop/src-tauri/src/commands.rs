@@ -1746,17 +1746,24 @@ mod tests {
 
     #[test]
     fn every_change_while_the_dialog_is_open_leaves_the_import_unapplied_and_recorded() {
-        for change in ["lock", "hide", "page-load", "write", "reload"] {
+        for change in ["lock", "session", "write", "reload"] {
             let (session, directory) = test_session();
             let session = Arc::new(session);
             let confirm = {
                 let session = session.clone();
+                let other = directory.path().join("other.kdbx");
                 ScriptedConfirm::during(true, move || match change {
                     "lock" => session.lock().unwrap(),
-                    "hide" => {
-                        session.expire_presentation().unwrap();
+                    "session" => {
+                        session.lock().unwrap();
+                        let ticket = session.begin_open().unwrap();
+                        session
+                            .open(ticket, || {
+                                Vault::create(&other, "fake-test-password-123!", None)
+                                    .map_err(Into::into)
+                            })
+                            .unwrap();
                     }
-                    "page-load" => session.document_started(),
                     "write" => {
                         session
                             .access(Access::Write, None, |vault| {
@@ -1801,51 +1808,97 @@ mod tests {
             assert_eq!(record.len(), 1, "{change}");
             assert_eq!(record[0]["id"], operation.as_str());
             assert_eq!(record[0]["kind"], "importFailed", "{change}");
+            for name in ["vault.kdbx", "other.kdbx"] {
+                let path = directory.path().join(name);
+                if path.exists() {
+                    let reopened = Vault::open(path, "fake-test-password-123!").unwrap();
+                    assert!(
+                        crate::test_support::env_of(&reopened, "app", "dev").is_empty(),
+                        "{change}: nothing was imported into {name}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn p2r2_02_the_click_in_the_dialog_stands_after_a_hide_a_page_load_a_discard_or_a_hidden_window(
+    ) {
+        for change in ["hide", "page-load", "discard", "window"] {
+            let (session, directory) = test_session();
+            let session = Arc::new(session);
+            let window = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let confirm = {
+                let (session, hidden) = (session.clone(), window.clone());
+                ScriptedConfirm::during(true, move || match change {
+                    "hide" => {
+                        session.expire_presentation().unwrap();
+                    }
+                    "page-load" => session.document_started(),
+                    "discard" => discard_view(&session, |_| Ok(())).unwrap(),
+                    "window" => hidden.store(false, std::sync::atomic::Ordering::SeqCst),
+                    _ => unreachable!(),
+                })
+                .on_window(window)
+            };
+            let operation = new_operation();
+            let report = run_import(
+                &session,
+                &confirm,
+                &owner(&session),
+                &operation,
+                Zeroizing::new("TOKEN=fake-approved\n".into()),
+                Some("app".into()),
+                Some("dev".into()),
+            )
+            .unwrap_or_else(|error| panic!("{change}: the approval was refused: {error:?}"))
+            .unwrap();
+            assert_eq!((report.added, report.updated), (1, 0), "{change}");
+            assert_eq!(confirm.shown().len(), 1, "{change}");
+            let record = notices(&session);
+            assert_eq!(record.len(), 1, "{change}");
+            assert_eq!(record[0]["id"], operation.as_str());
+            assert_eq!(record[0]["kind"], "importApplied", "{change}");
+            assert!(session.snapshot().is_ok(), "{change}: still unlocked");
             let reopened = Vault::open(
                 directory.path().join("vault.kdbx"),
                 "fake-test-password-123!",
             )
             .unwrap();
-            assert!(
-                crate::test_support::env_of(&reopened, "app", "dev").is_empty(),
-                "{change}: nothing was imported"
+            assert_eq!(
+                crate::test_support::env_of(&reopened, "app", "dev"),
+                [("TOKEN".into(), "fake-approved".into())],
+                "{change}"
             );
         }
     }
 
     #[test]
-    fn review1_1_a_hidden_document_discards_the_native_view_even_without_a_minimize() {
+    fn p2r2_02_a_discard_that_native_cannot_take_locks_the_session_and_the_lock_refuses_the_approval(
+    ) {
         let (session, directory) = test_session();
         let session = Arc::new(session);
-        let emitted = Arc::new(Mutex::new(Vec::new()));
         let confirm = {
-            let (session, emitted) = (session.clone(), emitted.clone());
+            let session = session.clone();
             ScriptedConfirm::during(true, move || {
-                discard_view(&session, |notice| {
-                    emitted.lock().unwrap().push(notice.session_id.clone());
-                    Ok(())
-                })
-                .unwrap();
+                assert!(discard_view(&session, |_| Err(())).is_err());
             })
         };
-        let id = owner(&session);
         let operation = new_operation();
         let error = run_import(
             &session,
             &confirm,
-            &id,
+            &owner(&session),
             &operation,
             Zeroizing::new("TOKEN=fake-late\n".into()),
             Some("app".into()),
             Some("dev".into()),
         )
         .err()
-        .expect("the import ran after the document was hidden");
-        assert_eq!(error.kind, "stalePreview");
-        assert_eq!(*emitted.lock().unwrap(), [id]);
+        .expect("the import ran after the session was locked");
+        assert_eq!(error.kind, "locked");
         let record = notices(&session);
         assert_eq!(record.len(), 1);
-        assert_eq!(record[0]["id"], operation.as_str());
         assert_eq!(record[0]["kind"], "importFailed");
         let reopened = Vault::open(
             directory.path().join("vault.kdbx"),
@@ -1853,10 +1906,6 @@ mod tests {
         )
         .unwrap();
         assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
-        assert!(
-            session.snapshot().is_ok(),
-            "discarding a view does not lock the session"
-        );
     }
 
     #[test]
@@ -1871,46 +1920,6 @@ mod tests {
         })
         .unwrap();
         assert!(!emitted, "a locked session has no view to discard");
-    }
-
-    #[test]
-    fn review1_1_an_approval_from_a_window_that_is_hidden_when_the_dialog_returns_is_refused() {
-        let (session, directory) = test_session();
-        let window = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let hide = window.clone();
-        let confirm = ScriptedConfirm::during(true, move || {
-            hide.store(false, std::sync::atomic::Ordering::SeqCst)
-        })
-        .on_window(window);
-        let operation = new_operation();
-        let error = run_import(
-            &session,
-            &confirm,
-            &owner(&session),
-            &operation,
-            Zeroizing::new("TOKEN=fake-late\n".into()),
-            Some("app".into()),
-            Some("dev".into()),
-        )
-        .err()
-        .expect("the import ran from a hidden window");
-        assert_eq!(error.kind, "viewChanged");
-        assert!(
-            error.message.contains("Nothing was imported"),
-            "{}",
-            error.message
-        );
-        assert_eq!(confirm.shown().len(), 1);
-        let record = notices(&session);
-        assert_eq!(record.len(), 1);
-        assert_eq!(record[0]["id"], operation.as_str());
-        assert_eq!(record[0]["kind"], "importFailed");
-        let reopened = Vault::open(
-            directory.path().join("vault.kdbx"),
-            "fake-test-password-123!",
-        )
-        .unwrap();
-        assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
     }
 
     #[test]
@@ -1937,16 +1946,13 @@ mod tests {
 
     #[test]
     fn review1_1_a_change_after_the_review_was_read_and_before_the_dialog_shows_no_dialog() {
-        for change in ["lock", "hide", "write"] {
+        for change in ["lock", "write"] {
             let (session, directory) = test_session();
             let session = Arc::new(session);
             let confirm = {
                 let session = session.clone();
                 ScriptedConfirm::new(true).on_probe(move || match change {
                     "lock" => session.lock().unwrap(),
-                    "hide" => {
-                        session.expire_presentation().unwrap();
-                    }
                     _ => {
                         session
                             .access(Access::Write, None, |vault| {
@@ -1985,6 +1991,31 @@ mod tests {
             .unwrap();
             assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
         }
+    }
+
+    #[test]
+    fn p2r2_02_a_hide_before_the_dialog_opens_does_not_withhold_the_dialog() {
+        let (session, _directory) = test_session();
+        let session = Arc::new(session);
+        let confirm = {
+            let session = session.clone();
+            ScriptedConfirm::new(true).on_probe(move || {
+                session.expire_presentation().unwrap();
+            })
+        };
+        let report = run_import(
+            &session,
+            &confirm,
+            &owner(&session),
+            &new_operation(),
+            Zeroizing::new("TOKEN=fake-approved\n".into()),
+            Some("app".into()),
+            Some("dev".into()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!((report.added, report.updated), (1, 0));
+        assert_eq!(confirm.shown().len(), 1);
     }
 
     #[test]
