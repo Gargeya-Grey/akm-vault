@@ -1255,6 +1255,40 @@ textarea:disabled {
   overflow-wrap: anywhere;
 }
 
+/* Unlock summary (unit 4) */
+.attention-summary {
+  margin: 0 0 24px;
+  padding: 14px 18px;
+}
+
+.attention-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.attention-summary h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  letter-spacing: -0.02em;
+}
+
+.attention-summary ul {
+  margin: 8px 0 0;
+  padding-left: 1.2em;
+  overflow-wrap: anywhere;
+}
+
+.attention-summary li + li {
+  margin-top: 4px;
+}
+
+.reminder-state {
+  margin-top: 12px;
+}
+
 /* Settings */
 .settings-section {
   padding: 26px 0;

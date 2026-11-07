@@ -1,22 +1,34 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { api, errorText } from "../api";
 import {
   expiryLabel,
   keyState,
-  needsAttention,
   plural,
   rotationLabel,
+  statusDescription,
 } from "../format";
+import { attentionOf } from "../reminders";
 import type { KeyView, RotationReceipt } from "../types";
 import { useNow } from "../useNow";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
+import { AttentionSummary } from "./AttentionSummary";
 import { KeyDetail } from "./KeyDetail";
 import { Icon } from "./Icon";
 import { KeyForm } from "./KeyForm";
 import { RotateDialog } from "./RotateDialog";
 import { ConfirmDialog, Notice } from "./Notice";
 
-export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
+interface SummaryControl {
+  dismissed: boolean;
+  onDismiss: () => void;
+}
+
+/**
+ * `summary` is owned by the app, so that a dismissal outlives this view until the next unlock.
+ * Without it the view keeps its own flag.
+ */
+export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; summary?: SummaryControl }) {
+  const [summaryDismissed, setSummaryDismissed] = useState(false);
   const [keys, setKeys] = useState<KeyView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +45,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [rotating, setRotating] = useState<KeyView | null>(null);
   const now = useNow(keys);
+  const statusId = useId();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -92,7 +105,8 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
   }, [keys, query, project, environment]);
 
   const selected = keys.find((key) => key.id === selectedId) ?? null;
-  const attention = keys.filter((key) => needsAttention(key, now)).length;
+  const attention = attentionOf(keys, now);
+  const showSummary = !loading && attention.total > 0 && !(summary?.dismissed ?? summaryDismissed);
 
   function clearFilters() {
     setQuery("");
@@ -161,6 +175,13 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
         </button>
       </header>
 
+      {showSummary && (
+        <AttentionSummary
+          attention={attention}
+          onDismiss={summary?.onDismiss ?? (() => setSummaryDismissed(true))}
+        />
+      )}
+
       <div className="stat-row" aria-label="Vault summary">
         <div className="stat">
           <span className="stat-num mono">{keys.length}</span>
@@ -175,8 +196,8 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
           </span>
         </div>
         <div className="stat">
-          <span className={`stat-num mono${attention > 0 ? " danger-text" : ""}`}>
-            {attention}
+          <span className={`stat-num mono${attention.total > 0 ? " danger-text" : ""}`}>
+            {attention.total}
           </span>
           <span className="stat-label">need attention</span>
         </div>
@@ -200,6 +221,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search title, project, env var…"
               autoComplete="off"
+              data-focus-fallback=""
             />
           </div>
           <FilterSelect
@@ -281,6 +303,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
                     className="key-row"
                     onClick={() => setSelectedId(item.id)}
                     aria-label={`Open ${item.title}`}
+                    aria-describedby={`${statusId}-${item.id}`}
                   >
                     <span className="key-ident">
                       <span className="key-title">{item.title}</span>
@@ -313,6 +336,9 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
                       <Icon name="arrowRight" />
                     </span>
                   </button>
+                  <span className="sr-only" id={`${statusId}-${item.id}`}>
+                    {statusDescription(item, now)}
+                  </span>
                 </li>
               );
             })}

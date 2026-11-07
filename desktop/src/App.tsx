@@ -64,6 +64,7 @@ export function App() {
   const [sessionEpoch, setSessionEpoch] = useState(0);
   const [watch, setWatch] = useState<"registering" | "ready" | "failed">("registering");
   const [lockUnconfirmed, setLockUnconfirmed] = useState(false);
+  const [summaryDismissedFor, setSummaryDismissedFor] = useState<string | null>(null);
   const watchReady = useRef(false);
   const lastAccepted = useRef(0);
   const epoch = useRef(0);
@@ -369,7 +370,14 @@ export function App() {
           }}
         />
       ) : view === "keys" ? (
-        <KeysView key={revision} readOnly={status.needsUpgrade} />
+        <KeysView
+          key={revision}
+          readOnly={status.needsUpgrade}
+          summary={{
+            dismissed: status.sessionId !== null && summaryDismissedFor === status.sessionId,
+            onDismiss: () => setSummaryDismissedFor(status.sessionId),
+          }}
+        />
       ) : view === "bin" ? (
         <RecycleBin key={revision} readOnly={status.needsUpgrade} />
       ) : view === "activity" ? (

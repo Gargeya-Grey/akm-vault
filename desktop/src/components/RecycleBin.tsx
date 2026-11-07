@@ -70,7 +70,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
     <main className="wrap view">
       <header className="view-head">
         <div>
-          <h1>
+          <h1 tabIndex={-1} data-focus-fallback="">
             Recycle Bin, <em>nothing lost yet.</em>
           </h1>
           <p className="lead">
