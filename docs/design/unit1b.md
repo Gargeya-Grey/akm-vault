@@ -163,6 +163,31 @@ New causes: a refused folder, a damaged mapping, `Unconfirmed` evidence. They us
 
 `JournalRoot::at(path)` and `AKM_JOURNAL_ROOT` are the only ways to move the root. Windows-only ACL calls are covered by real folders in temporary directories with `icacls` and `mklink /J`. The storage check is a pure function with literal drive types and flags, because a test cannot make a network drive.
 
+### D10. Stale readers (review 1, finding 4)
+
+An open `Vault` holds a snapshot: the bytes it last read or wrote (`sha`) and its vault ID. The file at the path can change after that (a sync client, a restore, another program). Evidence from a snapshot whose `sha` is not the file's `sha` now is **stale**. Before this decision, stale evidence ran through R1 to R6 like fresh evidence. Reader A, open on a vault that vault B replaced, detached B's active binding by R3, and B's next record detached A's new binding in turn. A stale reader of the same vault moved an old `sha` to the front of `seen`, so the next current writer looked like a rollback.
+
+Decision: `bind` and `locate` read the file at the path again, under the mapping lock, and compare its SHA-256 with the evidence. A different value, or a file that cannot be read, makes the evidence stale. **Stale evidence never changes the mapping.** Only the active binding at the path whose vault ID equals the evidence's vault ID can vouch for it:
+
+| Stale evidence, and the active binding at its path | Result |
+|---|---|
+| has the same known vault ID | **Observed.** The record goes to that binding's journal. `seen` and the binding are not changed and no rollback is checked. A read shows the journal as confirmed. |
+| has another vault ID, has none, or there is no binding | **Superseded.** An append is refused (`the file at this vault's path is no longer the one this session opened`). A read shows no journal, `identity` unconfirmed and the standard notice. Nothing is created or changed. |
+
+- **What the records of A go to: a refusal, not A's own journal.** A's journal is bound to a vault that is no longer at the path. To write there, the mapping would need a "detached but still writable" state, and a way to create it for a reader that never recorded anything. A refusal is fail-closed (contract 12): the reader reopens the vault. A's earlier records stay in its detached journal. They are not merged, and B's reads list that journal in the `earlierJournal` notice.
+- Only evidence of an unlocked vault (with a vault ID) can be stale. Evidence without a vault ID (`akm audit`, `VaultEvidence::from_file`) is read-only by D2 and keeps R1 to R6, which show an unseen file as unconfirmed with the journal visible. Limit: a caller that appends with such evidence is not protected from the false rollback record described above. No production caller does.
+- The common case is unchanged: a sync client replaces the file with a newer version of the same vault. The roots are equal, so the reader keeps recording in its journal.
+- Veto effect: send Superseded to the detached binding with the same path and vault ID, and create a detached binding when there is none.
+- Rejected: leaving stale evidence in R1 to R6 (the ping-pong above). Rejected: deciding by file ID (the path's file ID belongs to the file now, not to the snapshot).
+- Limit: the check is a point in time. A file that changes between the check and the append is not seen. The record then goes to the journal that the check chose, which is the journal of the evidence's own vault.
+- Cost: one more read and hash of the vault file per journal operation.
+
+### D11. An owed record is written before the mapping advances (review 1, finding 5)
+
+The rollback indication is the only record that the mapping owes: it moves the observed `sha` to the front of `seen`, and the next observation of that `sha` is then "not a rollback". `journal::record` is the only function that stores a mapping for a record. When a record is owed, it writes the records first and stores the mapping after they succeeded. If the append fails (damaged chain, journal cannot be opened, any I/O error), the mapping is as it was, and a retry writes the rollback record once, then the requested record. Every other change (a new binding, a move, a new `sha`, a replacement) is stored first: a binding without a journal file is harmless, a record without a binding is not. `journal::place`, which only creates a binding for tests, never consumes an owed record. The mapping lock is held across the append only when a record is owed.
+
+- Limit: if the append succeeds and storing the mapping fails, or the append fails at the final `sync` after its bytes were written, the retry writes the indication again. A second `vault-rolled-back` record is true (the vault was in that state at both attempts). A missing one is not.
+
 ## 3. Failure cases
 
 | Case | Result |

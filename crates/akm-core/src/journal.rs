@@ -203,12 +203,28 @@ impl VaultEvidence {
 
     fn observe(&self) -> Observation {
         let canonical = canonical(&self.path);
+        let stale = self.is_stale(&canonical);
         Observation {
             key: path_key(&canonical),
             file_id: private_fs::file_id(&canonical),
             path: canonical.display().to_string(),
             sha: self.sha.clone(),
             root: self.root.clone(),
+            stale,
+        }
+    }
+
+    /// The bytes this evidence describes are not the bytes at the path now. A file that
+    /// cannot be read counts as different: the evidence cannot be shown to be current.
+    /// Only evidence of an unlocked vault can be stale. Evidence without a vault ID is
+    /// read-only (D2) and keeps the rules R1 to R6, which show an unseen file as unconfirmed.
+    fn is_stale(&self, canonical: &Path) -> bool {
+        let (Some(sha), Some(_)) = (&self.sha, &self.root) else {
+            return false;
+        };
+        match fs::read(canonical) {
+            Ok(bytes) => hex::encode(Sha256::digest(bytes)) != *sha,
+            Err(_) => true,
         }
     }
 }
@@ -294,6 +310,8 @@ pub(crate) struct Observation {
     pub file_id: Option<String>,
     pub sha: Option<String>,
     pub root: Option<String>,
+    /// The evidence is a snapshot that no longer matches the file at the path (unit 1b, D10).
+    pub stale: bool,
 }
 
 /// The identity rules R1 to R6 of the design, as data.
@@ -314,9 +332,28 @@ pub(crate) enum Resolution {
         index: usize,
     },
     New,
+    /// Stale evidence of the vault that owns the active binding at this path. The journal
+    /// is that binding's. Nothing about the binding is learned from it.
+    Observed {
+        index: usize,
+    },
+    /// Stale evidence that no active binding at this path vouches for.
+    Superseded,
 }
 
 pub(crate) fn resolve(bindings: &[Binding], observation: &Observation) -> Resolution {
+    if observation.stale {
+        return bindings
+            .iter()
+            .position(|binding| {
+                binding.state == BindingState::Active
+                    && path_key_of(binding) == observation.key
+                    && matches!((&binding.root, &observation.root), (Some(a), Some(b)) if a == b)
+            })
+            .map_or(Resolution::Superseded, |index| Resolution::Observed {
+                index,
+            });
+    }
     let seen_at = |binding: &Binding| {
         observation
             .sha
@@ -558,30 +595,47 @@ fn note(binding: &mut Binding, observation: &Observation, adopt_root: bool) -> b
 /// The journal that a record about this vault goes to.
 pub(crate) struct Placement {
     pub id: String,
-    pub rolled_back: bool,
+    /// The vault went back to a version that this device saw. The record of that is owed
+    /// before the requested record.
+    pub owes_rollback: bool,
 }
 
-/// Finds, or creates, the binding for a vault. Takes the mapping lock for the change only.
-pub(crate) fn bind(folder: &Folder, evidence: &VaultEvidence) -> Result<Placement> {
-    let _lock = lock_mapping(folder, true)?;
-    let mut mapping = load(folder)?;
-    let observation = evidence.observe();
+fn superseded() -> Error {
+    journal_error(
+        "the file at this vault's path is no longer the one this session opened, so its journal cannot be confirmed from here. Reopen the vault",
+    )
+}
+
+/// What one observation changes in the mapping, and where its record goes.
+struct Decision {
+    mapping: Mapping,
+    changed: bool,
+    placement: Placement,
+}
+
+/// The identity rules applied to the mapping. Pure: nothing is written.
+fn decide(mut mapping: Mapping, observation: &Observation) -> Result<Decision> {
     let mut changed = true;
-    let mut rolled_back = false;
-    let id = match resolve(&mapping.journals, &observation) {
+    let mut owes_rollback = false;
+    let id = match resolve(&mapping.journals, observation) {
         Resolution::Same {
             index,
-            rolled_back: back,
+            rolled_back,
             adopt_root,
         } => {
-            rolled_back = back;
-            changed = note(&mut mapping.journals[index], &observation, adopt_root);
+            owes_rollback = rolled_back;
+            changed = note(&mut mapping.journals[index], observation, adopt_root);
             mapping.journals[index].id.clone()
         }
+        Resolution::Observed { index } => {
+            changed = false;
+            mapping.journals[index].id.clone()
+        }
+        Resolution::Superseded => return Err(superseded()),
         Resolution::Moved { index } => {
             let binding = &mut mapping.journals[index];
             binding.path.clone_from(&observation.path);
-            note(binding, &observation, false);
+            note(binding, observation, false);
             binding.id.clone()
         }
         Resolution::Replaced { index } => {
@@ -591,7 +645,7 @@ pub(crate) fn bind(folder: &Folder, evidence: &VaultEvidence) -> Result<Placemen
                 reason: "replaced".into(),
                 at: Utc::now(),
             });
-            let binding = new_binding(&observation);
+            let binding = new_binding(observation);
             let id = binding.id.clone();
             mapping.journals.push(binding);
             id
@@ -602,16 +656,57 @@ pub(crate) fn bind(folder: &Folder, evidence: &VaultEvidence) -> Result<Placemen
             ));
         }
         Resolution::New => {
-            let binding = new_binding(&observation);
+            let binding = new_binding(observation);
             let id = binding.id.clone();
             mapping.journals.push(binding);
             id
         }
     };
-    if changed {
-        store(folder, &mapping)?;
+    Ok(Decision {
+        mapping,
+        changed,
+        placement: Placement { id, owes_rollback },
+    })
+}
+
+/// Runs `write` for the journal that a record about this vault goes to, with the mapping
+/// locked. The only place that stores a mapping for a record.
+///
+/// A mapping change that consumes an owed record (the rollback indication moves the
+/// observed version to the front of `seen`) is stored only after `write` succeeded. If
+/// `write` fails, the mapping is as it was and a retry owes the record again. Every other
+/// change is stored first: a binding without a journal file yet is harmless, a record
+/// without a binding is not.
+pub(crate) fn record<T>(
+    folder: &Folder,
+    evidence: &VaultEvidence,
+    write: impl FnOnce(&Placement) -> Result<T>,
+) -> Result<T> {
+    let lock = lock_mapping(folder, true)?;
+    let decision = decide(load(folder)?, &evidence.observe())?;
+    if decision.placement.owes_rollback {
+        let written = write(&decision.placement)?;
+        if decision.changed {
+            store(folder, &decision.mapping)?;
+        }
+        return Ok(written);
     }
-    Ok(Placement { id, rolled_back })
+    if decision.changed {
+        store(folder, &decision.mapping)?;
+    }
+    drop(lock);
+    write(&decision.placement)
+}
+
+/// The journal ID for a vault, creating the binding if there is none. It consumes no owed
+/// record: when one is owed, the mapping is left as it is.
+pub(crate) fn place(folder: &Folder, evidence: &VaultEvidence) -> Result<String> {
+    let _lock = lock_mapping(folder, true)?;
+    let decision = decide(load(folder)?, &evidence.observe())?;
+    if decision.changed && !decision.placement.owes_rollback {
+        store(folder, &decision.mapping)?;
+    }
+    Ok(decision.placement.id)
 }
 
 /// The result of a read-only lookup.
@@ -648,6 +743,11 @@ pub(crate) fn locate(root: &JournalRoot, evidence: &VaultEvidence) -> Result<Loc
         Resolution::Unconfirmed { index } => {
             notices.push(unconfirmed_notice());
             (Some(index), Identity::Unconfirmed)
+        }
+        Resolution::Observed { index } => (Some(index), Identity::Confirmed),
+        Resolution::Superseded => {
+            notices.push(unconfirmed_notice());
+            (None, Identity::Unconfirmed)
         }
         Resolution::Replaced { .. } | Resolution::New => (None, Identity::Confirmed),
     };
@@ -713,6 +813,7 @@ mod tests {
             file_id: file_id.map(str::to_string),
             sha: sha.map(str::to_string),
             root: root.map(str::to_string),
+            stale: false,
         }
     }
 
@@ -820,6 +921,65 @@ mod tests {
         for (name, observation, expected) in cases {
             assert_eq!(resolve(&bound, &observation), expected, "{name}");
         }
+    }
+
+    #[test]
+    fn stale_evidence_resolves_only_through_the_active_binding_with_its_vault_id() {
+        let mut bound = [binding(
+            r"C:\V\a.kdbx",
+            Some("f1"),
+            Some("r1"),
+            &["new", "old"],
+        )];
+        let stale = |path: &str, sha: &str, root: Option<&str>| Observation {
+            stale: true,
+            ..seen(path, Some("f1"), Some(sha), root)
+        };
+        let cases: [(&str, Observation, Resolution); 6] = [
+            (
+                "same vault, a version the mapping knows (no rollback)",
+                stale(r"c:\v\A.KDBX", "old", Some("r1")),
+                Resolution::Observed { index: 0 },
+            ),
+            (
+                "same vault, a version the mapping never saw",
+                stale(r"C:\V\a.kdbx", "x", Some("r1")),
+                Resolution::Observed { index: 0 },
+            ),
+            (
+                "another vault, the replaced one",
+                stale(r"C:\V\a.kdbx", "x", Some("r2")),
+                Resolution::Superseded,
+            ),
+            (
+                "the bytes are known but the vault ID is not",
+                stale(r"C:\V\a.kdbx", "old", None),
+                Resolution::Superseded,
+            ),
+            (
+                "no binding at this path",
+                stale(r"C:\V.kdbx", "old", Some("r1")),
+                Resolution::Superseded,
+            ),
+            (
+                "fresh evidence of the same bytes still sees the rollback",
+                seen(r"C:\V\a.kdbx", Some("f1"), Some("old"), Some("r1")),
+                Resolution::Same {
+                    index: 0,
+                    rolled_back: true,
+                    adopt_root: false,
+                },
+            ),
+        ];
+        for (name, observation, expected) in cases {
+            assert_eq!(resolve(&bound, &observation), expected, "{name}");
+        }
+        bound[0].state = BindingState::Detached;
+        assert_eq!(
+            resolve(&bound, &stale(r"C:\V\a.kdbx", "old", Some("r1"))),
+            Resolution::Superseded,
+            "a detached binding never vouches"
+        );
     }
 
     #[test]

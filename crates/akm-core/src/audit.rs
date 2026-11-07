@@ -429,22 +429,23 @@ impl AuditLog {
     /// they do not exist. Refuses when the identity of the vault cannot be confirmed.
     pub fn append(&self, action: &str, key_id: Option<&str>, detail: Option<&str>) -> Result<()> {
         let folder = self.root.open_or_create()?;
-        let placement = journal::bind(&folder, &self.evidence)?;
-        let chain = ChainFile::private(folder.journal_file(&placement.id), &placement.id);
-        let mut records = Vec::new();
-        if placement.rolled_back {
+        journal::record(&folder, &self.evidence, |placement| {
+            let chain = ChainFile::private(folder.journal_file(&placement.id), &placement.id);
+            let mut records = Vec::new();
+            if placement.owes_rollback {
+                records.push(NewRecord {
+                    action: "vault-rolled-back",
+                    key_id: None,
+                    detail: Some("vault content matches an earlier version that this device saw"),
+                });
+            }
             records.push(NewRecord {
-                action: "vault-rolled-back",
-                key_id: None,
-                detail: Some("vault content matches an earlier version that this device saw"),
+                action,
+                key_id,
+                detail,
             });
-        }
-        records.push(NewRecord {
-            action,
-            key_id,
-            detail,
-        });
-        chain.append_all(&records)
+            chain.append_all(&records)
+        })
     }
 
     pub fn read(&self, limit: usize) -> Result<Vec<AuditEntry>> {
@@ -490,8 +491,8 @@ impl AuditLog {
     #[doc(hidden)]
     pub fn create_journal_path(&self) -> Result<PathBuf> {
         let folder = self.root.open_or_create()?;
-        let placement = journal::bind(&folder, &self.evidence)?;
-        Ok(folder.journal_file(&placement.id))
+        let id = journal::place(&folder, &self.evidence)?;
+        Ok(folder.journal_file(&id))
     }
 }
 

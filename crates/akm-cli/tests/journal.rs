@@ -831,3 +831,173 @@ fn a_damaged_mapping_is_kept_and_fails_closed() {
     assert!(stderr(&reveal).contains("mapping"), "{}", stderr(&reveal));
     assert_eq!(fs::read(&mapping).unwrap(), bytes);
 }
+
+// Review 1, finding 4: a reader that stays open across a same-path replacement must not
+// detach or rebind the journal of the vault that is there now, also across processes.
+
+fn active_ids(mapping: &Value) -> Vec<String> {
+    mapping["journals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|journal| journal["state"] == "active")
+        .map(|journal| journal["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn stale_disclosure(vault: &akm_core::Vault) -> akm_core::Result<()> {
+    let key = vault.list().remove(0);
+    vault
+        .disclose_key(akm_core::KeyDisclosure::Reveal, &key, None)
+        .map(|_| ())
+}
+
+#[test]
+fn a_stale_reader_cannot_detach_the_journal_that_the_cli_keeps_for_the_current_vault() {
+    let fixture = Fixture::new();
+    let stale = akm_core::Vault::open_in(
+        &fixture.vault,
+        PASSWORD,
+        akm_core::journal::JournalRoot::at(&fixture.root),
+    )
+    .unwrap();
+    stale_disclosure(&stale).unwrap();
+
+    write_database(&fixture.vault, PASSWORD);
+    assert_success(&fixture.reveal());
+    let current = active_ids(&fixture.mapping());
+    assert_eq!(current.len(), 1);
+
+    for round in 0..3 {
+        let error = stale_disclosure(&stale).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no longer the one this session opened"),
+            "round {round}: {error}"
+        );
+        assert_success(&fixture.reveal());
+    }
+
+    let mapping = fixture.mapping();
+    assert_eq!(
+        mapping["journals"].as_array().unwrap().len(),
+        2,
+        "{mapping}"
+    );
+    assert_eq!(
+        active_ids(&mapping),
+        current,
+        "the current binding is the same"
+    );
+    assert_eq!(fixture.journals().len(), 2);
+
+    let audit = fixture.audit();
+    assert_success(&audit);
+    let text = stdout(&audit);
+    assert!(text.contains("#4") && !text.contains("#5"), "{text}");
+    assert!(text.contains("earlier journal"), "{text}");
+    assert!(!text.contains("cannot be confirmed"), "{text}");
+}
+
+#[test]
+fn a_stale_reader_that_the_cli_replaced_twice_never_merges_the_histories() {
+    let fixture = Fixture::new();
+    assert_success(&fixture.reveal());
+    let first = akm_core::Vault::open_in(
+        &fixture.vault,
+        PASSWORD,
+        akm_core::journal::JournalRoot::at(&fixture.root),
+    )
+    .unwrap();
+    write_database(&fixture.vault, PASSWORD);
+    assert_success(&fixture.reveal());
+    let second = akm_core::Vault::open_in(
+        &fixture.vault,
+        PASSWORD,
+        akm_core::journal::JournalRoot::at(&fixture.root),
+    )
+    .unwrap();
+    write_database(&fixture.vault, PASSWORD);
+    assert_success(&fixture.reveal());
+    let current = active_ids(&fixture.mapping());
+    assert_eq!(current.len(), 1);
+
+    for _ in 0..2 {
+        assert!(stale_disclosure(&first).is_err());
+        assert!(stale_disclosure(&second).is_err());
+        assert_success(&fixture.reveal());
+    }
+
+    let mapping = fixture.mapping();
+    assert_eq!(
+        mapping["journals"].as_array().unwrap().len(),
+        3,
+        "{mapping}"
+    );
+    assert_eq!(active_ids(&mapping), current);
+    let counts: Vec<usize> = fixture
+        .journals()
+        .iter()
+        .map(|journal| fs::read_to_string(journal).unwrap().lines().count())
+        .collect();
+    let mut sorted = counts.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, [1, 1, 3], "{counts:?}");
+}
+
+#[test]
+fn a_failed_disclosure_keeps_the_rollback_indication_for_the_next_process() {
+    let fixture = Fixture::new();
+    assert_success(&fixture.reveal());
+    let earlier = fs::read(&fixture.vault).unwrap();
+    assert_success(
+        &fixture
+            .cli()
+            .args(["add", "LaterFake", "--secret", "fake-later"])
+            .output()
+            .unwrap(),
+    );
+    fs::write(&fixture.vault, &earlier).unwrap();
+
+    let journal = fixture.journals().remove(0);
+    let good = fs::read(&journal).unwrap();
+    let mut damaged = good.clone();
+    damaged.extend_from_slice(b"{\"seq\":3,\"ts\":\"torn");
+    fs::write(&journal, &damaged).unwrap();
+    let mapping = fs::read_to_string(fixture.root.join("mapping.json")).unwrap();
+
+    let refused = fixture.reveal();
+    assert!(!refused.status.success(), "{}", stdout(&refused));
+    assert!(!stdout(&refused).contains(SECRET), "{}", stdout(&refused));
+    assert_eq!(fs::read(&journal).unwrap(), damaged, "damaged bytes stay");
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("mapping.json")).unwrap(),
+        mapping,
+        "the mapping did not advance"
+    );
+
+    fs::write(&journal, &good).unwrap();
+    assert_success(&fixture.reveal());
+    assert_success(&fixture.reveal());
+    let actions: Vec<String> = fixture
+        .journal_text()
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap()["action"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        actions,
+        [
+            "reveal-requested",
+            "add-completed",
+            "vault-rolled-back",
+            "reveal-requested",
+            "reveal-requested"
+        ]
+    );
+}

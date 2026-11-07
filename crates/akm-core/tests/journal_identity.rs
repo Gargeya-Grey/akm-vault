@@ -379,3 +379,402 @@ fn a_root_below_a_junction_is_refused_even_when_the_target_is_private() {
     assert_eq!(fs::read_dir(target.join("journal")).unwrap().count(), 0);
     let _ = fs::remove_dir(&link);
 }
+
+// ----------------------------------- review 1, finding 5: a failed append consumes nothing
+
+impl Fixture {
+    fn mapping_bytes(&self) -> Vec<u8> {
+        fs::read(self.root.join("mapping.json")).unwrap()
+    }
+
+    /// Two versions of one vault are observed, then the first one is restored. Returns the
+    /// log of the restored version, with the journal holding `first` and `second`.
+    fn rolled_back_vault(&self) -> (PathBuf, AuditLog) {
+        let path = self.vault("a.kdbx", b"fake-one");
+        self.log(&path, b"fake-one", "root-a")
+            .append("first", None, None)
+            .unwrap();
+        fs::write(&path, b"fake-two").unwrap();
+        self.log(&path, b"fake-two", "root-a")
+            .append("second", None, None)
+            .unwrap();
+        fs::write(&path, b"fake-one").unwrap();
+        let restored = self.log(&path, b"fake-one", "root-a");
+        (path, restored)
+    }
+}
+
+#[test]
+fn a_damaged_journal_keeps_the_rollback_indication_for_the_retry() {
+    let f = Fixture::new();
+    let (_path, restored) = f.rolled_back_vault();
+    let journal = restored.journal_path().unwrap().unwrap();
+    let good = fs::read(&journal).unwrap();
+    let mapping = f.mapping_bytes();
+    let mut damaged = good.clone();
+    damaged.extend_from_slice(b"{\"seq\":3,\"ts\":\"torn");
+    fs::write(&journal, &damaged).unwrap();
+
+    let error = restored.append("third", None, None).unwrap_err();
+    assert!(error.to_string().contains("damaged"), "{error}");
+    assert_eq!(fs::read(&journal).unwrap(), damaged, "damaged bytes stay");
+    assert_eq!(f.mapping_bytes(), mapping, "the mapping did not advance");
+
+    fs::write(&journal, &good).unwrap();
+    restored.append("third", None, None).unwrap();
+    restored.append("fourth", None, None).unwrap();
+    assert_eq!(
+        actions(&restored),
+        ["first", "second", "vault-rolled-back", "third", "fourth"]
+    );
+}
+
+#[test]
+fn an_unopenable_journal_keeps_the_rollback_indication_for_the_retry() {
+    let f = Fixture::new();
+    let (_path, restored) = f.rolled_back_vault();
+    let journal = restored.journal_path().unwrap().unwrap();
+    let good = fs::read(&journal).unwrap();
+    let mapping = f.mapping_bytes();
+    fs::remove_file(&journal).unwrap();
+    fs::create_dir(&journal).unwrap();
+
+    assert!(restored.append("third", None, None).is_err());
+    assert_eq!(f.mapping_bytes(), mapping, "the mapping did not advance");
+
+    fs::remove_dir(&journal).unwrap();
+    fs::write(&journal, &good).unwrap();
+    restored.append("third", None, None).unwrap();
+    assert_eq!(
+        actions(&restored),
+        ["first", "second", "vault-rolled-back", "third"]
+    );
+}
+
+#[test]
+fn many_retries_after_a_failed_append_write_one_rollback_indication() {
+    let f = Fixture::new();
+    let (path, restored) = f.rolled_back_vault();
+    let journal = restored.journal_path().unwrap().unwrap();
+    let good = fs::read(&journal).unwrap();
+    let mut damaged = good.clone();
+    damaged.extend_from_slice(b"torn");
+    fs::write(&journal, &damaged).unwrap();
+    assert!(restored.append("refused", None, None).is_err());
+    fs::write(&journal, &good).unwrap();
+
+    let start = Arc::new(Barrier::new(6));
+    std::thread::scope(|scope| {
+        for _ in 0..6 {
+            let start = start.clone();
+            let f = &f;
+            let path = &path;
+            scope.spawn(move || {
+                let log = f.log(path, b"fake-one", "root-a");
+                start.wait();
+                log.append("retry", None, None).unwrap();
+            });
+        }
+    });
+    let all = actions(&restored);
+    assert_eq!(
+        all.iter()
+            .filter(|action| *action == "vault-rolled-back")
+            .count(),
+        1,
+        "{all:?}"
+    );
+    assert_eq!(all.iter().filter(|action| *action == "retry").count(), 6);
+    assert_eq!(restored.verify().unwrap(), None);
+}
+
+#[test]
+fn a_binding_that_only_creates_the_journal_path_does_not_consume_the_indication() {
+    let f = Fixture::new();
+    let (_path, restored) = f.rolled_back_vault();
+    let before = f.mapping_bytes();
+    restored.create_journal_path().unwrap();
+    assert_eq!(f.mapping_bytes(), before);
+    restored.append("third", None, None).unwrap();
+    assert_eq!(
+        actions(&restored),
+        ["first", "second", "vault-rolled-back", "third"]
+    );
+}
+
+// --------------------------- review 1, finding 4: a stale reader never rebinds the current vault
+
+mod stale {
+    use super::*;
+    use akm_core::{KeyDisclosure, Vault};
+    use serde_json::Value;
+
+    const PASSWORD_A: &str = "fake-stale-password-a";
+    const PASSWORD_B: &str = "fake-stale-password-b";
+
+    pub struct Pair {
+        pub _directory: tempfile::TempDir,
+        pub path: PathBuf,
+        pub root: PathBuf,
+        pub a: Vault,
+        pub b_bytes: Vec<u8>,
+    }
+
+    fn create(path: &Path, root: &Path, password: &str, title: &str) -> Vault {
+        let mut vault = Vault::create_in(path, password, None, JournalRoot::at(root)).unwrap();
+        vault
+            .add(akm_core::ApiKeyInput::new(title, "fake-secret-value"))
+            .unwrap();
+        vault
+    }
+
+    impl Pair {
+        /// Reader A is open on the vault at `path`. The bytes of vault B wait to replace it.
+        pub fn new() -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().join("journal");
+            let path = directory.path().join("shared.kdbx");
+            let elsewhere = directory.path().join("b-source.kdbx");
+            drop(create(
+                &elsewhere,
+                &directory.path().join("other-journal"),
+                PASSWORD_B,
+                "Beta",
+            ));
+            let b_bytes = fs::read(&elsewhere).unwrap();
+            let a = create(&path, &root, PASSWORD_A, "Alpha");
+            Self {
+                _directory: directory,
+                path,
+                root,
+                a,
+                b_bytes,
+            }
+        }
+
+        pub fn replace_with_b(&self) {
+            fs::write(&self.path, &self.b_bytes).unwrap();
+        }
+
+        pub fn open_b(&self) -> Vault {
+            Vault::open_in(&self.path, PASSWORD_B, JournalRoot::at(&self.root)).unwrap()
+        }
+
+        pub fn mapping(&self) -> Value {
+            serde_json::from_slice(&fs::read(self.root.join("mapping.json")).unwrap()).unwrap()
+        }
+
+        pub fn journal_files(&self) -> Vec<PathBuf> {
+            let mut found: Vec<PathBuf> = fs::read_dir(&self.root)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                    name.starts_with("j-") && name.ends_with(".jsonl")
+                })
+                .collect();
+            found.sort();
+            found
+        }
+    }
+
+    pub fn disclose(vault: &Vault) -> akm_core::Result<()> {
+        let key = vault.list().remove(0);
+        vault
+            .disclose_key(KeyDisclosure::Reveal, &key, None)
+            .map(|_| ())
+    }
+
+    pub fn active(mapping: &Value) -> Vec<Value> {
+        mapping["journals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|binding| binding["state"] == "active")
+            .cloned()
+            .collect()
+    }
+}
+
+#[test]
+fn a_stale_reader_cannot_detach_or_rebind_the_current_vault() {
+    let pair = stale::Pair::new();
+    stale::disclose(&pair.a).unwrap();
+    pair.replace_with_b();
+    let b = pair.open_b();
+    stale::disclose(&b).unwrap();
+    let after_b = pair.mapping();
+    let current = stale::active(&after_b);
+    assert_eq!(current.len(), 1);
+    let current_id = current[0]["id"].as_str().unwrap().to_string();
+    let current_seen = current[0]["seen"].clone();
+    let a_journal = pair.a.audit_log().journal_path().unwrap();
+    assert_eq!(a_journal, None, "A is no longer bound at this path");
+    let a_files: Vec<(PathBuf, Vec<u8>)> = pair
+        .journal_files()
+        .into_iter()
+        .map(|file| {
+            let bytes = fs::read(&file).unwrap();
+            (file, bytes)
+        })
+        .collect();
+
+    for round in 0..3 {
+        let error = stale::disclose(&pair.a).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no longer the one this session opened"),
+            "round {round}: {error}"
+        );
+        stale::disclose(&b).unwrap();
+    }
+
+    let mapping = pair.mapping();
+    let bindings = mapping["journals"].as_array().unwrap();
+    assert_eq!(bindings.len(), 2, "no third binding: {mapping}");
+    let current = stale::active(&mapping);
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0]["id"].as_str().unwrap(), current_id);
+    assert_eq!(current[0]["seen"], current_seen);
+    assert_eq!(pair.journal_files().len(), 2);
+
+    let records = b.audit_log().read(100).unwrap();
+    assert_eq!(
+        records.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        [1, 2, 3, 4],
+        "the current vault keeps one continuous history"
+    );
+    assert!(records
+        .iter()
+        .all(|record| record.action == "reveal-requested"));
+    let lines = |file: &PathBuf| {
+        fs::read(file)
+            .unwrap()
+            .iter()
+            .filter(|byte| **byte == 10)
+            .count()
+    };
+    for (file, bytes) in &a_files {
+        if lines(file) == 2 {
+            assert_eq!(&fs::read(file).unwrap(), bytes, "A's journal is untouched");
+        }
+    }
+    let a_records: usize = pair.journal_files().iter().map(lines).sum();
+    assert_eq!(
+        a_records, 6,
+        "two records of A and four of B, nothing merged"
+    );
+}
+
+#[test]
+fn a_stale_reader_reads_nothing_from_and_changes_nothing_in_the_current_journal() {
+    let pair = stale::Pair::new();
+    stale::disclose(&pair.a).unwrap();
+    pair.replace_with_b();
+    let b = pair.open_b();
+    stale::disclose(&b).unwrap();
+    let mapping = fs::read_to_string(pair.root.join("mapping.json")).unwrap();
+
+    let view = pair.a.audit_log().snapshot(10).unwrap();
+    assert_eq!(view.identity, Identity::Unconfirmed);
+    assert!(view.entries.is_empty(), "B's records are not A's");
+    assert_eq!(pair.a.audit_log().journal_path().unwrap(), None);
+    assert_eq!(
+        fs::read_to_string(pair.root.join("mapping.json")).unwrap(),
+        mapping
+    );
+
+    let current = b.audit_log().snapshot(10).unwrap();
+    assert_eq!(current.identity, Identity::Confirmed);
+    assert_eq!(current.entries.len(), 1);
+    let kinds: Vec<NoticeKind> = current.notices.iter().map(|notice| notice.kind).collect();
+    assert_eq!(
+        kinds,
+        [NoticeKind::EarlierJournal],
+        "A's journal stays discoverable"
+    );
+}
+
+#[test]
+fn a_stale_reader_of_the_same_vault_adds_no_false_rollback_and_keeps_the_order() {
+    let f = Fixture::new();
+    let path = f.vault("a.kdbx", b"fake-one");
+    f.log(&path, b"fake-one", "root-a")
+        .append("first", None, None)
+        .unwrap();
+    fs::write(&path, b"fake-two").unwrap();
+    f.log(&path, b"fake-two", "root-a")
+        .append("second", None, None)
+        .unwrap();
+    let mapping = f.mapping_bytes();
+
+    let stale_reader = f.log(&path, b"fake-one", "root-a");
+    stale_reader.append("from-stale", None, None).unwrap();
+    f.log(&path, b"fake-two", "root-a")
+        .append("from-current", None, None)
+        .unwrap();
+    stale_reader.append("from-stale-again", None, None).unwrap();
+    assert_eq!(
+        actions(&stale_reader),
+        [
+            "first",
+            "second",
+            "from-stale",
+            "from-current",
+            "from-stale-again"
+        ]
+    );
+    assert_eq!(
+        f.mapping_bytes(),
+        mapping,
+        "stale evidence changes no binding"
+    );
+}
+
+#[test]
+fn a_stale_reader_whose_vault_file_is_gone_still_records_in_its_own_journal() {
+    let f = Fixture::new();
+    let path = f.vault("a.kdbx", b"fake-one");
+    let reader = f.log(&path, b"fake-one", "root-a");
+    reader.append("first", None, None).unwrap();
+    fs::remove_file(&path).unwrap();
+    reader.append("second", None, None).unwrap();
+    assert_eq!(actions(&reader), ["first", "second"]);
+}
+
+#[test]
+fn stale_evidence_for_a_path_without_a_binding_creates_no_binding() {
+    let f = Fixture::new();
+    let path = f.vault("a.kdbx", b"fake-other");
+    let reader = f.log(&path, b"fake-one", "root-a");
+    let error = reader.append("first", None, None).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("no longer the one this session opened"),
+        "{error}"
+    );
+    assert!(
+        !f.root.join("mapping.json").exists(),
+        "no mapping was written for stale evidence"
+    );
+}
+
+#[test]
+fn a_locked_reader_that_was_made_before_the_vault_changed_still_shows_the_journal_unconfirmed() {
+    let f = Fixture::new();
+    let path = f.vault("a.kdbx", b"fake-one");
+    f.log(&path, b"fake-one", "root-a")
+        .append("first", None, None)
+        .unwrap();
+    fs::write(&path, b"fake-unseen").unwrap();
+    let locked = f.locked(&path);
+    fs::write(&path, b"fake-two").unwrap();
+    f.log(&path, b"fake-two", "root-a")
+        .append("second", None, None)
+        .unwrap();
+    let snapshot = locked.snapshot(10).unwrap();
+    assert_eq!(snapshot.identity, Identity::Unconfirmed);
+    assert_eq!(snapshot.entries.len(), 2);
+}
