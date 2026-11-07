@@ -44,6 +44,13 @@ pub struct Snapshot {
     pub presentation: u64,
 }
 
+impl Snapshot {
+    /// The same session and the same vault contents. The presentation is not part of it.
+    pub fn same_vault(&self, other: &Snapshot) -> bool {
+        self.ticket == other.ticket && self.revision == other.revision
+    }
+}
+
 pub struct Stamped<T> {
     pub snapshot: Snapshot,
     pub value: T,
@@ -474,16 +481,18 @@ impl Session {
         self.cell().clipboard.exit_attempted();
     }
 
-    pub fn activity(&self) -> Result<(), CommandError> {
+    /// Renews the idle deadline of the session that the request names. The page makes the request
+    /// when the user acts, but it can arrive after that session ended: a session that is not
+    /// the current one is refused, so it never keeps its replacement awake.
+    pub fn activity(&self, session_id: &str) -> Result<(), CommandError> {
+        let id = uuid::Uuid::parse_str(session_id).map_err(|_| CommandError::locked())?;
         let mut gate = self.gate()?;
-        let was_locked = gate.policy.is_locked();
-        let active = gate.policy.activity(self.clock.now());
-        if !was_locked && gate.policy.is_locked() {
-            self.locked_gate(&mut gate);
-        }
-        if !active {
-            return Err(CommandError::locked());
-        }
+        let current = self.current(&mut gate)?;
+        gate.owner
+            .as_ref()
+            .filter(|owner| owner.ticket == current.ticket && owner.id == id)
+            .ok_or_else(CommandError::locked)?;
+        gate.policy.activity(self.clock.now());
         Ok(())
     }
 
@@ -603,7 +612,30 @@ impl Session {
             .ok_or_else(CommandError::locked)
     }
 
+    /// Expires the presentation of the current session. For a native event (a minimize), which
+    /// happens now, in the window that the user sees.
     pub fn expire_presentation(&self) -> Result<Option<NativeViewNotice>, CommandError> {
+        self.expire_presentation_matching(None)
+    }
+
+    /// Expires the presentation of the session that a request names. The request was made by a
+    /// page earlier and may arrive after that session ended: a session that is not the current
+    /// one has nothing to expire, so the answer is `None` and the session that replaced it is
+    /// not touched. The check and the expiry share one hold of the gate.
+    pub fn expire_presentation_of(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<NativeViewNotice>, CommandError> {
+        let Ok(id) = uuid::Uuid::parse_str(session_id) else {
+            return Ok(None);
+        };
+        self.expire_presentation_matching(Some(id))
+    }
+
+    fn expire_presentation_matching(
+        &self,
+        only: Option<uuid::Uuid>,
+    ) -> Result<Option<NativeViewNotice>, CommandError> {
         let mut gate = self.gate()?;
         let Ok(current) = self.current(&mut gate) else {
             return Ok(None);
@@ -612,8 +644,12 @@ impl Session {
             .owner
             .as_ref()
             .filter(|owner| owner.ticket == current.ticket)
-            .map(|owner| owner.id.to_string())
+            .map(|owner| owner.id)
             .ok_or_else(CommandError::locked)?;
+        if only.is_some_and(|id| id != session_id) {
+            return Ok(None);
+        }
+        let session_id = session_id.to_string();
         gate.presentation = gate.presentation.wrapping_add(1);
         Ok(Some(NativeViewNotice {
             session_id,
@@ -716,6 +752,19 @@ impl Session {
         operation: impl FnOnce(&mut Vault) -> Result<T, CommandError>,
     ) -> Result<Stamped<T>, CommandError> {
         self.access_checked(Access::Read, Some(expected), false, operation)
+    }
+
+    /// An access bound to the session and the vault revision, not to the on-screen presentation.
+    /// An import is reviewed in a native window, so a hide, a page load or a discard does not
+    /// revoke what the user approved there. A lock, another session and another write do, and
+    /// they are checked under the gate at the moment of the access.
+    pub fn access_reviewed<T>(
+        &self,
+        access: Access,
+        expected: Snapshot,
+        operation: impl FnOnce(&mut Vault) -> Result<T, CommandError>,
+    ) -> Result<Stamped<T>, CommandError> {
+        self.access_checked(access, Some(expected), false, operation)
     }
 
     fn access_checked<T>(
@@ -922,9 +971,10 @@ impl Session {
         Ok(())
     }
 
-    /// An import request names the session it was made for. The reply of an older
-    /// session, or a request that arrives after a newer opening, is refused here.
-    pub fn begin_import(&self, session_id: &str) -> Result<Snapshot, CommandError> {
+    /// The snapshot of the current session, for a request that names the session it was made
+    /// for. A request of an older session, or one that arrives after a newer opening, is
+    /// refused here, so a page request never acts on a session other than its own.
+    pub fn snapshot_for(&self, session_id: &str) -> Result<Snapshot, CommandError> {
         let id = uuid::Uuid::parse_str(session_id).map_err(|_| CommandError::locked())?;
         let mut gate = self.gate()?;
         let current = self.current(&mut gate)?;
@@ -1668,6 +1718,10 @@ mod tests {
     #[test]
     fn status_and_commands_expire_without_frontend_polling_or_activity() {
         let f = fixture();
+        let owner = f
+            .session
+            .active_owner(f.session.snapshot().unwrap().ticket)
+            .unwrap();
         f.clock.set(599);
         let status = f
             .session
@@ -1681,8 +1735,49 @@ mod tests {
             .session
             .access(Access::Read, None, |vault| Ok(vault.list()))
             .is_err());
-        assert!(f.session.activity().is_err());
+        assert!(f.session.activity(&owner).is_err());
         assert_eq!(f.events.load(Ordering::SeqCst), 1);
+    }
+
+    /// P2R2-03, class B: a page request that renews the idle deadline names its session. A late
+    /// request of session A must not keep session B awake. B's own activity still does.
+    #[test]
+    fn p2r2_03_a_stale_sessions_activity_never_keeps_its_replacement_awake() {
+        let f = fixture();
+        let a = f
+            .session
+            .active_owner(f.session.snapshot().unwrap().ticket)
+            .unwrap();
+        reopen_fixture(&f);
+        let b = f
+            .session
+            .active_owner(f.session.snapshot().unwrap().ticket)
+            .unwrap();
+        assert_ne!(a, b);
+        f.clock.set(590);
+        assert_eq!(
+            f.session.activity(&a).unwrap_err().kind,
+            "locked",
+            "a request of the retired session is refused"
+        );
+        assert!(f.session.activity("not-an-id").is_err());
+        f.clock.set(600);
+        assert!(
+            f.session.snapshot().is_err(),
+            "the stale request did not renew the deadline of B, so B expires on time"
+        );
+
+        // Control: B's own activity does keep B awake.
+        let f = fixture();
+        reopen_fixture(&f);
+        let b = f
+            .session
+            .active_owner(f.session.snapshot().unwrap().ticket)
+            .unwrap();
+        f.clock.set(590);
+        f.session.activity(&b).unwrap();
+        f.clock.set(600);
+        assert!(f.session.snapshot().is_ok(), "B's own activity renewed it");
     }
 
     #[test]
@@ -3063,8 +3158,8 @@ mod tests {
                 ("ensure after expiry", true, true, |f, t, _| {
                     let _ = f.session.ensure(t);
                 }),
-                ("activity after expiry", true, true, |f, _, _| {
-                    let _ = f.session.activity();
+                ("activity after expiry", true, true, |f, _, owner| {
+                    let _ = f.session.activity(owner);
                 }),
                 ("path after expiry", true, true, |f, _, _| {
                     let _ = f.session.path();

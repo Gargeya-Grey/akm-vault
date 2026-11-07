@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { api } from "./api";
-import { adoptReservation, nativeOwner } from "./nativeSession";
+import { adoptReservation, nativeOwner, releaseNativeOwner } from "./nativeSession";
 import { acknowledgeNotices, retainedOperationNotices } from "./operationNotices";
 import { acknowledgeCompletions, COMPLETION_EVENT, invalidateSession, retainedCompletions, SESSION_LOSS_EVENT } from "./sessionBoundary";
 
@@ -166,4 +166,45 @@ test("a discard that finds its session locked does nothing more", async () => {
   native.invoke.mockRejectedValue({ kind: "locked", message: "The vault is locked." });
   await api.discardView(crypto.randomUUID());
   expect(lockCalls()).toEqual([]);
+});
+
+// P2R2-03, class B. Every request that acts on the open vault names the session in which the
+// page made it. Native refuses a request for a session that is not the current one.
+const SCOPED_REQUESTS: [string, () => Promise<unknown>][] = [
+  ["vault_activity", () => api.activity()],
+  ["vault_upgrade", () => api.upgrade()],
+  ["vault_reload", () => api.reload()],
+  ["keys_list", () => api.keys()],
+  ["key_reveal", () => api.reveal("fake-id")],
+  ["key_copy", () => api.copy("fake-id")],
+  ["key_add", () => api.add({ title: "Fake key", secret: "fake-secret" } as never)],
+  ["key_update", () => api.update("fake-id", { title: "Fake key" } as never)],
+  ["key_remove", () => api.remove("fake-id")],
+  ["key_rotate", () => api.rotate("fake-id", "fake-new-secret")],
+  ["recycled_list", () => api.recycled()],
+  ["key_restore", () => api.restore("fake-id")],
+  ["key_purge", () => api.purge("fake-id")],
+  ["audit_read", () => api.audit()],
+  ["env_export", () => api.exportEnv("fake-scope", "fake-env")],
+  ["env_copy", () => api.copyEnv("fake-scope", "fake-env")],
+  ["env_save", () => api.saveEnv("fake-scope", "fake-env")],
+  ["backup_info", () => api.backup()],
+];
+
+test.each(SCOPED_REQUESTS)("%s names the session that the page was in when it made the request", async (command, request) => {
+  const owner = nativeOwner();
+  expect(owner).not.toBeNull();
+  native.invoke.mockRejectedValue({ kind: "internal", message: "stop here" });
+  await request().catch(() => {});
+  const call = native.invoke.mock.calls.find(([name]) => name === command);
+  expect(call?.[1]).toMatchObject({ sessionId: owner });
+});
+
+test.each(SCOPED_REQUESTS)("%s sends no usable session when the page has none", async (command, request) => {
+  releaseNativeOwner(nativeOwner() as string);
+  expect(nativeOwner()).toBeNull();
+  native.invoke.mockRejectedValue({ kind: "locked", message: "The vault is locked." });
+  await request().catch(() => {});
+  const call = native.invoke.mock.calls.find(([name]) => name === command);
+  expect(call?.[1]).toMatchObject({ sessionId: "" });
 });

@@ -36,6 +36,7 @@ function boot(handlers: Record<string, (args?: Record<string, unknown>) => unkno
     if (handlers[command]) return handlers[command](args);
     throw new Error(command);
   });
+  return sessionId;
 }
 
 async function openDetail(title: string) {
@@ -76,7 +77,7 @@ test("a key with a rotation interval and no known change time is not shown as on
 
 test("a rotation sends the value once, clears the field and shows only the receipt", async () => {
   let current = key();
-  boot({
+  const sessionId = boot({
     key_rotate: () => {
       current = key({ secretChange: "known", secretChangedAt: "2026-11-07T08:15:33Z", historyCount: 1 });
       return { key: current, changedAt: "2026-11-07T08:15:33Z", previousChangedAt: null };
@@ -89,7 +90,7 @@ test("a rotation sends the value once, clears the field and shows only the recei
   fireEvent.change(input, { target: { value: NEW_SECRET } });
   fireEvent.click(screen.getByRole("button", { name: "Rotate secret", hidden: false }));
   await screen.findByText(/Rotated “Rotation proof”/);
-  expect(native.invoke.mock.calls.filter(([command]) => command === "key_rotate")).toEqual([["key_rotate", { id: "fake-id", secret: NEW_SECRET }]]);
+  expect(native.invoke.mock.calls.filter(([command]) => command === "key_rotate")).toEqual([["key_rotate", { id: "fake-id", secret: NEW_SECRET, sessionId }]]);
   expect(screen.queryByLabelText("New secret")).toBeNull();
   expect(document.body.textContent).not.toContain(NEW_SECRET);
   expect(document.body.textContent).toContain("Rotating here does not change the secret at the provider");
@@ -149,7 +150,7 @@ test("removing a key says it moved to the Recycle Bin, and the bin restores it",
 
 test("deleting for good needs a confirmation, and cancelling sends nothing", async () => {
   let bin = [{ key: key(), deletedAt: null as string | null }];
-  boot({
+  const sessionId = boot({
     recycled_list: () => bin,
     key_purge: () => { bin = []; },
   }, () => []);
@@ -165,7 +166,7 @@ test("deleting for good needs a confirmation, and cancelling sends nothing", asy
   fireEvent.click(screen.getByRole("button", { name: "Delete Rotation proof for good" }));
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete for good" }));
   await screen.findByText(/Deleted “Rotation proof” for good/);
-  expect(native.invoke.mock.calls.filter(([command]) => command === "key_purge")).toEqual([["key_purge", { id: "fake-id" }]]);
+  expect(native.invoke.mock.calls.filter(([command]) => command === "key_purge")).toEqual([["key_purge", { id: "fake-id", sessionId }]]);
   await waitFor(() => expect(screen.getByText("The Recycle Bin is empty.")).toBeTruthy());
 });
 

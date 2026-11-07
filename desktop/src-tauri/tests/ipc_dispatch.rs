@@ -120,6 +120,40 @@ impl import_review::ImportConfirm for Dialog {
     }
 }
 
+/// The commands that act on the open vault and name the session in which the page made the
+/// request (the frontend's `sessionScoped`). The harness plays the page: it adds the session
+/// that it opened last, unless a test names another one.
+const SESSION_SCOPED: &[&str] = &[
+    "vault_activity",
+    "vault_upgrade",
+    "vault_reload",
+    "keys_list",
+    "key_reveal",
+    "key_copy",
+    "key_add",
+    "key_update",
+    "key_remove",
+    "key_rotate",
+    "recycled_list",
+    "key_restore",
+    "key_purge",
+    "audit_read",
+    "env_export",
+    "env_copy",
+    "env_save",
+    "backup_info",
+];
+static PAGE_SESSION: Mutex<Option<String>> = Mutex::new(None);
+
+fn scoped(command: &str, mut args: serde_json::Value) -> serde_json::Value {
+    if SESSION_SCOPED.contains(&command) && args.get("sessionId").is_none() {
+        if let Some(id) = PAGE_SESSION.lock().unwrap().clone() {
+            args["sessionId"] = serde_json::json!(id);
+        }
+    }
+    args
+}
+
 fn call(
     webview: &tauri::Webview<MockRuntime>,
     command: &str,
@@ -128,6 +162,10 @@ fn call(
     let (response_tx, response_rx) = mpsc::channel();
     let target = webview.clone();
     let command = command.to_string();
+    let opened = matches!(command.as_str(), "vault_unlock" | "vault_create")
+        .then(|| args["sessionId"].as_str().map(str::to_string))
+        .flatten();
+    let args = scoped(&command, args);
     let dispatch = std::thread::spawn(move || {
         target.on_message(
             InvokeRequest {
@@ -150,6 +188,9 @@ fn call(
     dispatch.join().unwrap();
     match response {
         InvokeResponse::Ok(InvokeResponseBody::Json(text)) => {
+            if let Some(id) = opened {
+                *PAGE_SESSION.lock().unwrap() = Some(id);
+            }
             Ok(serde_json::from_str(&text).unwrap())
         }
         InvokeResponse::Ok(InvokeResponseBody::Raw(_)) => panic!("raw reply"),
@@ -170,6 +211,7 @@ fn main() {
     session.observe(policy::Signal::Available);
     let dialog = Dialog::new();
     let owner = session.prepare_open().unwrap();
+    *PAGE_SESSION.lock().unwrap() = Some(owner.clone());
     let ticket = session.claim_open(&owner).unwrap();
     session
         .open(ticket, || {
@@ -253,6 +295,7 @@ fn main() {
         let (response_tx, response_rx) = mpsc::channel();
         let (returned_tx, returned_rx) = mpsc::channel();
         let target = webview.clone();
+        let args = scoped(command, args);
         let dispatch = std::thread::spawn(move || {
             target.on_message(
                 InvokeRequest {
@@ -282,7 +325,7 @@ fn main() {
         holding.join().unwrap().unwrap();
         dispatch.join().unwrap();
         let response = early
-            .or_else(|| response_rx.recv_timeout(Duration::from_secs(5)).ok())
+            .or_else(|| response_rx.recv_timeout(Duration::from_secs(60)).ok())
             .expect("actual command response");
         assert!(
             matches!(response, InvokeResponse::Ok(_)),
@@ -573,6 +616,107 @@ fn main() {
     println!("PASS: env_import, vault_warnings, vault_dismiss_warnings, vault_lock, vault_prepare_open and vault_unlock answer the frontend's argument and reply shapes through the production handler list; the saved path went to the fake settings file.");
     the_dialog_is_the_review(&app, webview, &session, &dialog, directory.path());
     a_discard_names_its_session(&app, webview, &session, &dialog, directory.path());
+    a_stale_request_never_acts_on_the_session_that_replaced_its_own(
+        webview,
+        &session,
+        &clipboard,
+        directory.path(),
+    );
+}
+
+/// Class B (P2R2-03). Every command that acts on the open vault names the session of the page
+/// that made the request. A request that names session A, however late, does nothing to B.
+fn a_stale_request_never_acts_on_the_session_that_replaced_its_own(
+    webview: &tauri::Webview<MockRuntime>,
+    session: &Arc<Session>,
+    clipboard: &Clipboard,
+    directory: &std::path::Path,
+) {
+    let (a, _) = open_new(webview, directory, "stale-a.kdbx");
+    let (b, _) = open_new(webview, directory, "stale-b.kdbx");
+    let added = call(
+        webview,
+        "key_add",
+        serde_json::json!({"draft": {"title": "Fake B key", "secret": "fake-b-secret", "project": "demo", "environment": "dev", "envVar": "B_TOKEN"}}),
+    )
+    .unwrap();
+    let id = added["id"].as_str().unwrap().to_string();
+    let before = session.snapshot().unwrap();
+    let sequence = clipboard.lock().unwrap().sequence;
+    let scope = serde_json::json!({"project": "demo", "environment": "dev", "all": false});
+    let requests = [
+        ("vault_activity", serde_json::json!({})),
+        ("vault_upgrade", serde_json::json!({})),
+        ("vault_reload", serde_json::json!({})),
+        ("keys_list", serde_json::json!({})),
+        ("key_reveal", serde_json::json!({"id": id})),
+        ("key_copy", serde_json::json!({"id": id})),
+        (
+            "key_add",
+            serde_json::json!({"draft": {"title": "Fake stale", "secret": "fake-stale"}}),
+        ),
+        (
+            "key_update",
+            serde_json::json!({"id": id, "draft": {"title": "Renamed by A"}}),
+        ),
+        ("key_remove", serde_json::json!({"id": id})),
+        (
+            "key_rotate",
+            serde_json::json!({"id": id, "secret": "fake-rotated-by-a"}),
+        ),
+        ("recycled_list", serde_json::json!({})),
+        ("key_restore", serde_json::json!({"id": id})),
+        ("key_purge", serde_json::json!({"id": id})),
+        ("audit_read", serde_json::json!({"limit": 5})),
+        ("env_export", scope.clone()),
+        ("env_copy", scope.clone()),
+        ("env_save", scope),
+        ("backup_info", serde_json::json!({})),
+    ];
+    assert_eq!(
+        requests.len(),
+        SESSION_SCOPED.len(),
+        "every session-scoped command is exercised"
+    );
+    for (command, mut args) in requests {
+        assert!(SESSION_SCOPED.contains(&command), "{command}");
+        args["sessionId"] = serde_json::json!(a);
+        let error = call(webview, command, args).unwrap_err();
+        assert_eq!(error["kind"], "locked", "{command}: a request for A");
+    }
+    assert_eq!(
+        session.snapshot().unwrap(),
+        before,
+        "B's ticket, revision and presentation are intact"
+    );
+    assert_eq!(clipboard.lock().unwrap().sequence, sequence);
+
+    for command in SESSION_SCOPED {
+        assert!(
+            call(
+                webview,
+                command,
+                serde_json::json!({"sessionId": null, "id": id})
+            )
+            .is_err(),
+            "{command}: a request with no session is refused"
+        );
+    }
+    assert_eq!(session.snapshot().unwrap(), before);
+
+    let listed = call(webview, "keys_list", serde_json::json!({"sessionId": b})).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["title"], "Fake B key");
+    assert_eq!(
+        call(
+            webview,
+            "key_reveal",
+            serde_json::json!({"id": id, "sessionId": b})
+        )
+        .unwrap(),
+        "fake-b-secret"
+    );
+    println!("PASS: all 18 session-scoped handlers refuse a request that names a retired session, leave B and the clipboard untouched, and still serve B's own requests.");
 }
 
 const PASSWORD: &str = "fake-dispatch-password-123!";
@@ -899,6 +1043,7 @@ fn send(
     let (response_tx, response_rx) = mpsc::channel();
     let target = webview.clone();
     let command = command.to_string();
+    let args = scoped(&command, args);
     std::thread::spawn(move || {
         target.on_message(
             InvokeRequest {

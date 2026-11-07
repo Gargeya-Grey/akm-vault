@@ -15,7 +15,7 @@ import { acknowledgeCompletions, COMPLETION_EVENT, COMPLETION_MESSAGE, invalidat
 import type { OperationOutcome } from "./sessionBoundary";
 import { retainedApplicationWarnings, retainedOperationNotices } from "./operationNotices";
 import { NATIVE_CALL_DEADLINE_MS, REGISTRATION_DEADLINE_MS, STATUS_HEALTH_LIMIT_MS, withDeadline } from "./deadline";
-import { nativeOpening, NATIVE_INVALIDATION_EVENT, NATIVE_OPEN_EVENT, NATIVE_PROTOCOL_ERROR, receiveNativeLock, receiveNativeViewExpiry } from "./nativeSession";
+import { nativeOpening, nativeOwner, NATIVE_INVALIDATION_EVENT, NATIVE_OPEN_EVENT, NATIVE_PROTOCOL_ERROR, receiveNativeLock, receiveNativeViewExpiry } from "./nativeSession";
 
 const HEALTH_MESSAGE = "AKM stopped receiving the session status, so it locked the vault.";
 const WATCH_FAILED_MESSAGE = "AKM could not watch the session. Restart AKM.";
@@ -229,10 +229,16 @@ export function App() {
   }, [status?.unlocked, loadStatus, lock]);
 
   // Every view discards its protected state when the document hides. Native learns of it here,
-  // once, for all of them: it does not depend on a native minimize event.
+  // once, for all of them: it does not depend on a native minimize event. The call names the
+  // session that the page reads now, when it handles the hide, so a late call cannot reach a
+  // session that opened after it.
   useEffect(() => {
     if (!status?.unlocked) return;
-    const onVisibility = () => { if (document.hidden) void api.discardView(); };
+    const onVisibility = () => {
+      if (!document.hidden) return;
+      const sessionId = nativeOwner();
+      if (sessionId !== null) void api.discardView(sessionId);
+    };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [status?.unlocked]);
