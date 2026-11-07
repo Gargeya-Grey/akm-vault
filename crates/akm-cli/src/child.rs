@@ -3,6 +3,7 @@ use std::ops::Deref;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+use akm_core::model::reserved_class;
 use akm_core::{Error, Result};
 use zeroize::Zeroize;
 
@@ -41,16 +42,11 @@ pub fn validate(envs: &[(String, String)]) -> Result<()> {
 
 pub fn validate_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<()> {
     for name in names {
-        let upper = name.to_ascii_uppercase();
-        if is_akm_name(OsStr::new(name))
-            || matches!(
-                upper.as_str(),
-                "PATH" | "PATHEXT" | "COMSPEC" | "SYSTEMROOT" | "WINDIR"
-            )
-        {
-            return Err(Error::Invalid(
-                "a selected key uses a reserved process-control variable".into(),
-            ));
+        if let Some(class) = reserved_class(name) {
+            return Err(Error::Invalid(format!(
+                "a selected key uses the reserved variable {name:?}: {}",
+                class.reason()
+            )));
         }
     }
     Ok(())

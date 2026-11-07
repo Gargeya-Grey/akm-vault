@@ -499,6 +499,87 @@ fn imported_reserved_control_names_cannot_be_injected_or_exported() {
 }
 
 #[test]
+fn every_reserved_class_is_refused_by_run_and_export_with_the_key_title_and_never_the_value() {
+    for name in [
+        "PYTHONSTARTUP",
+        "PERL5OPT",
+        "RUBYOPT",
+        "JAVA_TOOL_OPTIONS",
+        "_JAVA_OPTIONS",
+        "JDK_JAVA_OPTIONS",
+        "DOTNET_STARTUP_HOOKS",
+        "COR_PROFILER_PATH",
+        "CORECLR_PROFILER",
+        "GIT_SSH_COMMAND",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+        "GIT_CONFIG_COUNT",
+        "BASH_ENV",
+        "ENV",
+        "PROMPT_COMMAND",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
+        "ELECTRON_RUN_AS_NODE",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "HOME",
+        "APPDATA",
+        "LOCALAPPDATA",
+    ] {
+        let fixture = Fixture::with_keys(&[
+            (
+                "Legacy hostile key",
+                name,
+                "fake-reserved-secret",
+                "demo",
+                "dev",
+            ),
+            (
+                "Fine key",
+                "FINE_TOKEN",
+                "fake-fine-secret",
+                "demo",
+                "other",
+            ),
+        ]);
+        let path = fixture.report("must-not-exist.json");
+        for verb in ["run", "export"] {
+            let mut command = fixture.cli();
+            command
+                .env("CLI_TEST_REPORT", &path)
+                .args([verb, "--project", "demo", "--env", "dev"]);
+            if verb == "run" {
+                command
+                    .arg("--")
+                    .arg(std::env::current_exe().unwrap())
+                    .args(["--exact", "child_probe", "--ignored", "--nocapture"]);
+            }
+            let output = command.output().unwrap();
+            let text = stderr(&output);
+            assert!(!output.status.success(), "accepted {name} for {verb}");
+            assert!(text.contains("reserved"), "{name} {verb}: {text}");
+            assert!(text.contains("Legacy hostile key"), "{name} {verb}: {text}");
+            assert!(text.contains(name), "{name} {verb}: {text}");
+            assert!(
+                !text.contains("fake-reserved-secret"),
+                "{name} {verb}: {text}"
+            );
+            assert!(output.stdout.is_empty());
+            assert!(!path.exists());
+        }
+    }
+}
+
+#[test]
 fn reveals_are_audited_before_any_secret_is_printed() {
     let fixture = Fixture::new();
     let audit = fixture.log();

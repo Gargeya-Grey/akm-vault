@@ -776,7 +776,9 @@ impl Vault {
             let id = self
                 .find_entry_id(&key.id)
                 .ok_or_else(|| Error::EntryNotFound(key.id.clone()))?;
-            validate_process_var(&name, &self.stored_secret(id))?;
+            validate_process_var(&name, &self.stored_secret(id)).map_err(|error| {
+                Error::Invalid(format!("key {:?} cannot be used: {error}", key.title))
+            })?;
             if !seen.insert(name.clone()) {
                 return Err(Error::Invalid(format!(
                     "two keys resolve to the same environment variable {name:?}; set AKM_ENV_VAR explicitly"
