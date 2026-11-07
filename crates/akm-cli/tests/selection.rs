@@ -364,3 +364,25 @@ fn the_readme_documents_the_selector_rule() {
         "README.md must state the selector rule"
     );
 }
+
+/// Review 1 class D: the help of every command that takes a selector states the rule that
+/// `select` enforces, and never the old substring search.
+#[test]
+fn the_help_of_every_selector_command_states_the_exact_rule() {
+    for command in ["get", "rotate", "rm", "history", "restore", "purge"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_akm"))
+            .args([command, "--help"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{command} --help failed");
+        let help = out(&output).to_lowercase();
+        assert!(
+            help.contains("id or exact title"),
+            "{command} --help must state the selector rule:\n{help}"
+        );
+        assert!(
+            !help.contains("substring"),
+            "{command} --help still describes a substring search:\n{help}"
+        );
+    }
+}

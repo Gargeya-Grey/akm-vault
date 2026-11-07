@@ -145,7 +145,8 @@ enum Commands {
 
     /// Show one key, masked by default
     Get {
-        /// Case-insensitive substring of title, project, tag, issuer or URL
+        /// Id or exact title of a key (any letter case). A partial word is refused
+        /// and the refusal lists candidates.
         query: String,
 
         /// Print a single field: id, title, secret, project, env, issuer, url,
@@ -161,7 +162,8 @@ enum Commands {
     /// Replace the secret of a key and record the time (the new secret comes from the
     /// prompt or from stdin, never from an argument)
     Rotate {
-        /// Case-insensitive substring of title, project, tag, issuer or URL
+        /// Id or exact title of a key (any letter case). A partial word is refused
+        /// and the refusal lists candidates.
         query: String,
 
         /// Read the new secret from stdin (single line, trailing newline stripped)
@@ -171,12 +173,13 @@ enum Commands {
 
     /// List the earlier versions of a key: times and field names, never values
     History {
-        /// Id or title of a key, live or in the Recycle Bin
+        /// Id or exact title of a key, live or in the Recycle Bin
         query: String,
     },
 
     /// Move a key to the Recycle Bin. Restore it with `restore`; delete it for good with `purge`
     Rm {
+        /// Id or exact title of a key (any letter case)
         query: String,
 
         #[arg(long)]
@@ -194,7 +197,7 @@ enum Commands {
 
     /// Delete for good: one key from the Recycle Bin, or every recycled key older than N days
     Purge {
-        /// Id or exact title of a key in the Recycle Bin
+        /// Id or exact title of a key in the Recycle Bin (with --live, a live key)
         #[arg(required_unless_present = "older_than_days")]
         query: Option<String>,
 
