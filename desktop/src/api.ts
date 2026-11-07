@@ -82,6 +82,11 @@ export const api = {
     await invoke<void>("vault_lock", { sessionId });
     confirmNativeLock(sessionId);
   },
+  lockCurrent: async () => {
+    // Fail-closed path: ask which session is current, then lock exactly that one.
+    const current = await invoke<Status>("vault_status");
+    if (current.unlocked) await api.lock();
+  },
   activity: () => invoke<void>("vault_activity"),
   upgrade: () => invoke<Status>("vault_upgrade"),
   reload: () => invoke<Status>("vault_reload"),

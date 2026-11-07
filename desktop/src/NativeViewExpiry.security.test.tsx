@@ -222,17 +222,15 @@ for (const phase of ["pending", "displayed", "error"] as const) {
   });
 }
 
-test("failed native expiry subscription explicitly attempts the expected application-owner lock", async () => {
+test("a failed native expiry subscription fails closed before any status is shown and locks the expected owner", async () => {
   const f = fixture();
-  const registration = deferred<() => void>();
   const ordinary = vi.mocked(listen).getMockImplementation()!;
-  vi.mocked(listen).mockImplementationOnce(ordinary).mockImplementationOnce(() => registration.promise);
-  await settings();
-  expect(f.active()).toBe(true);
-  await act(async () => registration.reject(new Error("fake-private-listener-failure")));
+  vi.mocked(listen).mockImplementationOnce(ordinary).mockImplementationOnce(() => Promise.reject(new Error("fake-private-listener-failure")));
+  render(<App />);
+  await screen.findByText("AKM could not watch the session. Restart AKM.");
+  expect(screen.queryByText("Current unlocked keys")).toBeNull();
   expect(f.active()).toBe(false);
   expect(native.invoke.mock.calls.filter(([command]) => command === "vault_lock")[0]?.[1]).toEqual({ sessionId: f.owner });
-  expect(document.body.textContent).toContain("Could not confirm the native lock");
   expect(document.body.textContent).not.toContain("fake-private-listener-failure");
 });
 
@@ -241,7 +239,8 @@ test("a disposed root's late expiry-subscription failure cannot lock its replace
   const registration = deferred<() => void>();
   const ordinary = vi.mocked(listen).getMockImplementation()!;
   vi.mocked(listen).mockImplementationOnce(ordinary).mockImplementationOnce(() => registration.promise);
-  const first = await settings();
+  const first = render(<App />);
+  await flush();
   first.unmount();
   const b = fixture();
   await settings();

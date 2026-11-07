@@ -12,7 +12,12 @@ import type { OperationNotice, Status, View, WarningReport } from "./types";
 import { acknowledgeCompletions, COMPLETION_EVENT, COMPLETION_MESSAGE, invalidateSession, retainedCompletions, sessionGeneration, SESSION_LOSS_EVENT, WARNING_EVENT } from "./sessionBoundary";
 import type { OperationOutcome } from "./sessionBoundary";
 import { retainedApplicationWarnings, retainedOperationNotices } from "./operationNotices";
+import { NATIVE_CALL_DEADLINE_MS, REGISTRATION_DEADLINE_MS, STATUS_HEALTH_LIMIT_MS, withDeadline } from "./deadline";
 import { nativeOpening, NATIVE_INVALIDATION_EVENT, NATIVE_OPEN_EVENT, NATIVE_PROTOCOL_ERROR, receiveNativeLock, receiveNativeViewExpiry } from "./nativeSession";
+
+const HEALTH_MESSAGE = "AKM stopped receiving the session status, so it locked the vault.";
+const WATCH_FAILED_MESSAGE = "AKM could not watch the session. Restart AKM.";
+const LOCK_UNCONFIRMED_MESSAGE = "Could not confirm the native lock. Close AKM before leaving this computer.";
 
 const OPERATION_MESSAGES: Record<OperationNotice["kind"], string> = {
   journal: "A vault change was saved, but its activity entry could not be confirmed. Do not repeat the saved operation. Check the relevant vault and its journal.",
@@ -52,6 +57,10 @@ export function App() {
   const [completions, setCompletions] = useState(retainedCompletions);
   const [bootInterrupted, setBootInterrupted] = useState(false);
   const [sessionEpoch, setSessionEpoch] = useState(0);
+  const [watch, setWatch] = useState<"registering" | "ready" | "failed">("registering");
+  const [lockUnconfirmed, setLockUnconfirmed] = useState(false);
+  const watchReady = useRef(false);
+  const lastAccepted = useRef(0);
   const epoch = useRef(0);
   const transition = useRef(0);
   const request = useRef(0);
@@ -69,6 +78,33 @@ export function App() {
     setConfirmUpgrade(false);
     setUpgradeBusy(false);
   }, []);
+
+  const lock = useCallback(async (reason?: string) => {
+    showLocked();
+    if (reason) setError(reason);
+    const currentEpoch = epoch.current;
+    const currentTransition = transition.current;
+    try {
+      await withDeadline(api.lock(), NATIVE_CALL_DEADLINE_MS);
+    } catch (cause) {
+      if (currentEpoch !== epoch.current || currentTransition !== transition.current) return;
+      setError(`Could not confirm the native lock. Close AKM before leaving this computer. ${errorText(cause)}`);
+    }
+  }, [showLocked]);
+
+  const failClosed = useCallback(async () => {
+    showLocked();
+    watchReady.current = false;
+    setWatch("failed");
+    setError(null);
+    setLockUnconfirmed(false);
+    const currentEpoch = epoch.current;
+    try {
+      await withDeadline(api.lockCurrent(), NATIVE_CALL_DEADLINE_MS);
+    } catch {
+      if (currentEpoch === epoch.current) setLockUnconfirmed(true);
+    }
+  }, [showLocked]);
 
   useEffect(() => {
     const opening = () => {
@@ -139,7 +175,7 @@ export function App() {
   }
 
   const loadStatus = useCallback(async () => {
-    if (nativeOpening()) return;
+    if (!watchReady.current || nativeOpening()) return;
     setBootInterrupted(false);
     const currentRequest = ++request.current;
     const currentEpoch = epoch.current;
@@ -147,6 +183,7 @@ export function App() {
     const current = () => !nativeOpening() && currentRequest === request.current && currentEpoch === epoch.current && currentTransition === transition.current;
     try {
       const next = await api.status();
+      if (currentEpoch === epoch.current && currentTransition === transition.current && next.unlocked) lastAccepted.current = Date.now();
       if (!current()) return;
       if (!next.unlocked) showLocked();
       setStatus(next);
@@ -157,11 +194,8 @@ export function App() {
   }, [showLocked]);
 
   useEffect(() => {
-    void loadStatus();
-  }, [loadStatus]);
-
-  useEffect(() => {
     if (!status?.unlocked) return;
+    lastAccepted.current = Date.now();
     const currentEpoch = epoch.current;
     let lastActivity = 0;
     const activity = () => {
@@ -172,46 +206,53 @@ export function App() {
     const poll = window.setInterval(() => {
       void loadStatus();
     }, 3000);
+    const health = window.setInterval(() => {
+      if (Date.now() - lastAccepted.current >= STATUS_HEALTH_LIMIT_MS) void lock(HEALTH_MESSAGE);
+    }, 1000);
     window.addEventListener("pointerdown", activity);
     window.addEventListener("keydown", activity);
     window.addEventListener("wheel", activity, { passive: true });
     return () => {
       window.clearInterval(poll);
+      window.clearInterval(health);
       window.removeEventListener("pointerdown", activity);
       window.removeEventListener("keydown", activity);
       window.removeEventListener("wheel", activity);
     };
-  }, [status?.unlocked, loadStatus]);
-
-  const lock = useCallback(async (reason?: string) => {
-    showLocked();
-    if (reason) setError(reason);
-    const currentEpoch = epoch.current;
-    const currentTransition = transition.current;
-    try {
-      await api.lock();
-    } catch (cause) {
-      if (currentEpoch !== epoch.current || currentTransition !== transition.current) return;
-      setError(`Could not confirm the native lock. Close AKM before leaving this computer. ${errorText(cause)}`);
-    }
-  }, [showLocked]);
+  }, [status?.unlocked, loadStatus, lock]);
 
   useEffect(() => {
-    let disposed = false;
-    const unlisten: (() => void)[] = [];
-    for (const [name, receive] of [["vault-locked", receiveNativeLock], ["vault-view-expired", receiveNativeViewExpiry]] as const) {
-      void listen<unknown>(name, (event) => {
-        if (!disposed && !receive(event?.payload)) void lock(NATIVE_PROTOCOL_ERROR);
+    const root = { disposed: false };
+    const cleanups: (() => void)[] = [];
+    watchReady.current = false;
+    setWatch("registering");
+    const register = (name: string, receive: (payload: unknown) => boolean) =>
+      listen<unknown>(name, (event) => {
+        if (!root.disposed && !receive(event?.payload)) void lock(NATIVE_PROTOCOL_ERROR);
       }).then((cleanup) => {
-        if (disposed) cleanup(); else unlisten.push(cleanup);
-      }).catch((cause) => {
-        if (disposed) return;
-        if (name === "vault-view-expired") void lock(NATIVE_PROTOCOL_ERROR);
-        else setError(errorText(cause));
+        if (root.disposed) cleanup(); else cleanups.push(cleanup);
       });
-    }
-    return () => { disposed = true; for (const cleanup of unlisten) cleanup(); request.current += 1; epoch.current += 1; invalidateSession(); };
-  }, [lock]);
+    void withDeadline(
+      Promise.all([register("vault-locked", receiveNativeLock), register("vault-view-expired", receiveNativeViewExpiry)]),
+      REGISTRATION_DEADLINE_MS,
+    ).then(
+      () => {
+        if (root.disposed) return;
+        watchReady.current = true;
+        setWatch("ready");
+        void loadStatus();
+      },
+      () => { if (!root.disposed) void failClosed(); },
+    );
+    return () => {
+      root.disposed = true;
+      watchReady.current = false;
+      for (const cleanup of cleanups) cleanup();
+      request.current += 1;
+      epoch.current += 1;
+      invalidateSession();
+    };
+  }, [lock, loadStatus, failClosed]);
 
   async function reload() {
     const currentEpoch = epoch.current;
@@ -287,7 +328,12 @@ export function App() {
         </section>
       )}
 
-      {status === null ? (
+      {watch === "failed" ? (
+        <main className="wrap view boot">
+          <Notice tone="error">{WATCH_FAILED_MESSAGE}</Notice>
+          {lockUnconfirmed && <Notice tone="error">{LOCK_UNCONFIRMED_MESSAGE}</Notice>}
+        </main>
+      ) : status === null ? (
         <main className="wrap view boot">
           {bootError ? (
             <Notice tone="error">{bootError}</Notice>
