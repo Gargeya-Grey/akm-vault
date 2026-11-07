@@ -29,6 +29,19 @@ Leave out `--offline` the first time, when dependencies are not yet fetched. Whi
 
 The installers go to `target\release\bundle\msi` and `target\release\bundle\nsis`. They are unsigned development builds. Do not install them.
 
+## Security checks
+
+These checks add no product code. Run them from the repository root:
+
+```powershell
+python tools/check_no_network.py
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_dependencies.ps1
+```
+
+- `check_no_network.py` fails when a networking crate is in the Windows dependency tree, or when the Tauri content security policy, the capabilities, the frontend packages or the sources allow a network path. It cannot prove that AKM makes no connection. Test it with `python tools/test_check_no_network.py`.
+- `check_dependencies.ps1` runs `cargo audit`, `cargo deny check` (settings in `deny.toml`) and `npm audit --omit=dev`. It needs network access for the advisory databases. If `cargo-audit` or `cargo-deny` is missing, install them into the ignored scratch folder: `cargo install --locked --root .scratch/cargo-tools cargo-deny cargo-audit`. The script finds them there.
+- A warning from `cargo audit` (an unmaintained or unsound crate) does not fail the script. Read each one and record it in [FINDINGS.md](FINDINGS.md) if AKM reaches the code.
+
 ## Real-surface tests
 
 **KeePassXC interchange.** This test uses temporary vaults and fake keys only:

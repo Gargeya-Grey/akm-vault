@@ -1,0 +1,77 @@
+# cargo-deny configuration. Run: tools/check_dependencies.ps1
+# AKM ships for Windows only (docs/PROJECT.md, non-goals), so the graph is the
+# Windows target. Crates that only Linux, macOS, Android or iOS builds use are
+# not part of the shipped program.
+
+[graph]
+targets = ["x86_64-pc-windows-msvc"]
+
+[advisories]
+# A vulnerability, unmaintained crate or yanked crate is an error. An advisory
+# that AKM cannot reach still shows here until a person reads it and lists it
+# in `ignore` with a reason (none today).
+ignore = []
+
+[licenses]
+# Every license that the Windows dependency graph uses today (cargo deny,
+# 2026-11-07). An "A OR B" crate passes when one side is allowed. Crates for
+# other targets add ISC (libloading), BSD-2-Clause and "Apache-2.0 WITH
+# LLVM-exception": add them if the graph targets grow.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "Zlib",
+    "Unicode-3.0",
+    "Unlicense",
+    "CC0-1.0",
+    "MIT-0",
+    "0BSD",
+    # Boost license: permissive. Used by clipboard-win and error-code (arboard).
+    "BSL-1.0",
+    # File-level copyleft. Used unmodified by cssparser, cssparser-macros,
+    # selectors and dtoa-short (Tauri's HTML handling) and option-ext (dirs).
+    # A release that ships these binaries must make their source available:
+    # review this entry again at the release gate.
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Duplicate versions are normal in a Tauri tree and are not a security finding.
+multiple-versions = "allow"
+# The local crates use path dependencies without a version. cargo-deny counts a
+# crate without `publish = false` as public and flags those. Fixing it means
+# editing Cargo.toml, which is outside this check. Registry wildcards still warn.
+wildcards = "warn"
+allow-wildcard-paths = true
+# Second layer behind tools/check_no_network.py: a networking stack on the
+# shipped target fails here too.
+deny = [
+    { crate = "reqwest" },
+    { crate = "hyper" },
+    { crate = "ureq" },
+    { crate = "curl" },
+    { crate = "isahc" },
+    { crate = "surf" },
+    { crate = "attohttpc" },
+    { crate = "tungstenite" },
+    { crate = "tokio-tungstenite" },
+    { crate = "h2" },
+    { crate = "rustls" },
+    { crate = "native-tls" },
+    { crate = "openssl" },
+    { crate = "mio" },
+    { crate = "socket2" },
+    { crate = "tauri-plugin-http" },
+    { crate = "tauri-plugin-updater" },
+    { crate = "tauri-plugin-shell" },
+    { crate = "tauri-plugin-opener" },
+    { crate = "tauri-plugin-websocket" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
