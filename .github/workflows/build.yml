@@ -28,8 +28,11 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to the toolchain of the local checks (Cargo.toml rust-version 1.90): a newer
+      # Clippy adds lints, which turned a passing branch red on 2026-11-07. Raise it on purpose.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.90.0
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
 
