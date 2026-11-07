@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+use crate::lifecycle::SecretChange;
+
 /// Custom field names written into the KDBX entry. KeePassXC preserves unknown
 /// fields, so the vault stays fully readable outside this app.
 pub const META_ID: &str = "AKM_ID";
@@ -11,6 +13,8 @@ pub const META_ENVIRONMENT: &str = "AKM_ENV";
 pub const META_SCOPES: &str = "AKM_SCOPES";
 pub const META_ENV_VAR: &str = "AKM_ENV_VAR";
 pub const META_ROTATION_DAYS: &str = "AKM_ROTATION_DAYS";
+/// When the secret last changed, `YYYY-MM-DDTHH:MM:SSZ` in UTC. Absent means unknown.
+pub const META_SECRET_CHANGED: &str = "AKM_SECRET_CHANGED";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +53,11 @@ pub struct ApiKey {
     pub rotation_days: Option<u32>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
+    /// When the secret last changed. `Some` only when `secret_change` is `Known`.
+    pub secret_changed_at: Option<DateTime<Utc>>,
+    pub secret_change: SecretChange,
+    /// The number of earlier versions in the native KDBX history.
+    pub history_count: usize,
 }
 
 impl ApiKey {

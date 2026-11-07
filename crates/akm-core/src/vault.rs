@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Timelike, Utc};
 use fs2::FileExt;
@@ -19,6 +20,7 @@ use crate::audit::AuditLog;
 use crate::disclosure::{Disclosure, EnvDisclosure, EnvPlan, KeyDisclosure};
 use crate::error::{Error, Result};
 use crate::journal::{JournalRoot, VaultEvidence};
+use crate::lifecycle::{Clock, HistoryVersion, RecycledKey, Rotation, SecretChange, SystemClock};
 use crate::model::*;
 
 /// Entries live under this top-level group so a vault can also hold unrelated
@@ -48,6 +50,7 @@ pub struct Vault {
     fingerprint: Option<String>,
     warnings: Vec<VaultWarning>,
     journal: JournalRoot,
+    clock: Arc<dyn Clock>,
 }
 
 struct ImportPlan {
@@ -98,6 +101,7 @@ impl Vault {
             fingerprint: None,
             warnings: Vec::new(),
             journal,
+            clock: Arc::new(SystemClock),
         };
         vault.save()?;
         Ok(vault)
@@ -126,7 +130,14 @@ impl Vault {
             fingerprint,
             warnings: Vec::new(),
             journal,
+            clock: Arc::new(SystemClock),
         })
+    }
+
+    /// Replaces the clock that stamps every time this vault writes (design D9).
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     pub fn path(&self) -> &Path {
@@ -240,7 +251,7 @@ impl Vault {
     pub fn add(&mut self, input: ApiKeyInput) -> Result<ApiKey> {
         self.ensure_writable()?;
         input.validate()?;
-        let now = Utc::now();
+        let now = self.clock.now();
         let mut candidate = self.db.clone();
 
         let key = {
@@ -263,7 +274,7 @@ impl Vault {
     pub fn update(&mut self, id: &str, input: ApiKeyInput) -> Result<ApiKey> {
         self.ensure_writable()?;
         input.validate()?;
-        let now = Utc::now();
+        let now = self.clock.now();
         let mut candidate = self.db.clone();
 
         let key = {
@@ -301,6 +312,37 @@ impl Vault {
         self.commit(candidate)?;
         self.log_committed("remove", Some(&key), None);
         Ok(key)
+    }
+
+    /// Replaces the secret of one key and records the time (design D3). Not built yet.
+    pub fn rotate(&mut self, _id: &str, _secret: Secret) -> Result<Rotation> {
+        Err(Error::Invalid("not implemented".into()))
+    }
+
+    /// The earlier versions of one key, newest first. Not built yet.
+    pub fn history(&self, _id: &str) -> Result<Vec<HistoryVersion>> {
+        Err(Error::Invalid("not implemented".into()))
+    }
+
+    /// The keys in the Recycle Bin. Not built yet.
+    pub fn recycled(&self) -> Vec<RecycledKey> {
+        Vec::new()
+    }
+
+    pub fn find_recycled(&self, _query: &str) -> Result<RecycledKey> {
+        Err(Error::Invalid("not implemented".into()))
+    }
+
+    pub fn restore(&mut self, _id: &str) -> Result<ApiKey> {
+        Err(Error::Invalid("not implemented".into()))
+    }
+
+    pub fn purge(&mut self, _id: &str) -> Result<ApiKey> {
+        Err(Error::Invalid("not implemented".into()))
+    }
+
+    pub fn purge_recycled_older_than(&mut self, _days: u32) -> Result<Vec<ApiKey>> {
+        Err(Error::Invalid("not implemented".into()))
     }
 
     pub fn preview_import_env(
@@ -394,7 +436,7 @@ impl Vault {
             return Ok((0, 0));
         }
         let mut candidate = self.db.clone();
-        let now = Utc::now();
+        let now = self.clock.now();
         for (id, secret) in plan.replacements {
             let mut entry = candidate
                 .entry_mut(id)
@@ -565,7 +607,7 @@ impl Vault {
     }
 
     pub fn expiring(&self, within_days: i64) -> Vec<ApiKey> {
-        let cutoff = Utc::now() + Duration::days(within_days);
+        let cutoff = self.clock.now() + Duration::days(within_days);
         let mut keys: Vec<ApiKey> = self
             .list()
             .into_iter()
@@ -1082,6 +1124,9 @@ fn read_entry(entry: &Entry) -> ApiKey {
             .and_then(|raw| raw.parse().ok()),
         created_at: entry.times.creation.map(|ts| ts.and_utc()),
         updated_at: entry.times.last_modification.map(|ts| ts.and_utc()),
+        secret_changed_at: None,
+        secret_change: SecretChange::Unknown,
+        history_count: entry.history.as_ref().map_or(0, |h| h.get_entries().len()),
     }
 }
 
