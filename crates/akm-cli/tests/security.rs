@@ -1590,9 +1590,14 @@ fn file_export_that_cannot_confirm_removal_of_its_plaintext_temp_says_so_and_nam
         1,
         "the injected failed delete leaves the temp: {left:?}"
     );
+    // The user deletes the file by hand, so the message names it without the `\\?\` prefix.
+    // Compare the canonical long path: a temp path can hold a short name such as `RUNNER~1`.
+    assert!(!message.contains(r"\\?\"), "{message}");
+    let canonical = left[0].canonicalize().unwrap().display().to_string();
+    let shown = canonical.strip_prefix(r"\\?\").unwrap_or(&canonical);
     assert!(
-        message.contains(&left[0].display().to_string()),
-        "the message names the leftover file {left:?}: {message}"
+        message.contains(shown),
+        "the message names the leftover file {shown}: {message}"
     );
 }
 

@@ -165,8 +165,18 @@ pub(super) fn write_new_with(
         Err(error) if io.discard(&temp.file) => Err(error),
         Err(error) => Err(Error::Io(std::io::Error::other(format!(
             "{error}; could not confirm cleanup: the plaintext temporary file {} may still hold the exported values. Delete it yourself",
-            temp.path.display()
+            shown_path(&temp.path)
         )))),
+    }
+}
+
+/// A path as the user types it: the canonical parent carries the `\\?\` prefix, which
+/// Explorer and most shells do not accept.
+fn shown_path(path: &Path) -> String {
+    let text = path.display().to_string();
+    match text.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => text.strip_prefix(r"\\?\").unwrap_or(&text).to_string(),
     }
 }
 
