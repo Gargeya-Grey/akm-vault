@@ -136,3 +136,22 @@ fn a_plan_and_an_update_input_never_print_the_secret() {
         .unwrap();
     assert_eq!(&*vault.secret(&key.id, &proof).unwrap(), SECRET);
 }
+
+#[test]
+fn candidate_lists_and_the_recycle_bin_hold_no_secret_bytes() {
+    let (_directory, _path, mut vault) = fake_vault();
+    let added = vault.add(input()).unwrap();
+    let live = vault.candidates("dem");
+    assert_eq!(live.len(), 1);
+    vault.remove(&added.id).unwrap();
+    let recycled = vault.recycled_candidates("dem");
+    assert_eq!(recycled.len(), 1);
+    for text in [
+        format!("{live:?}"),
+        serde_json::to_string(&live).unwrap(),
+        format!("{recycled:?}"),
+        serde_json::to_string(&recycled).unwrap(),
+    ] {
+        assert!(!text.contains(SECRET), "{text}");
+    }
+}
