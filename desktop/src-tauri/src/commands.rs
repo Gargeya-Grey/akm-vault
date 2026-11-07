@@ -16,6 +16,7 @@ use crate::{
     error::CommandError,
     import_review::{ConfirmState, ImportConfirm, ImportReview},
     private_export,
+    reminders::{ReminderState, ReminderStatus},
     session::{
         Access, OperationWarningKind, Session, Snapshot, Stamped, VaultState, WarningReport,
     },
@@ -53,7 +54,10 @@ macro_rules! production_handlers {
             env_copy,
             env_save,
             env_import,
-            backup_info
+            backup_info,
+            reminders_status,
+            reminders_set,
+            reminders_notify
         ]
     };
 }
@@ -852,6 +856,29 @@ fn run_import(
         },
     );
     applied.map(Some)
+}
+
+#[tauri::command]
+pub fn reminders_status(state: State<'_, ReminderState>) -> Result<ReminderStatus, CommandError> {
+    state.0.status()
+}
+
+#[tauri::command]
+pub fn reminders_set(
+    state: State<'_, ReminderState>,
+    enabled: bool,
+) -> Result<ReminderStatus, CommandError> {
+    state.0.set_enabled(enabled)
+}
+
+/// The page sends a count and nothing else. The text of the notification is built natively.
+#[tauri::command]
+pub fn reminders_notify(
+    vault: State<'_, VaultState>,
+    state: State<'_, ReminderState>,
+    count: u32,
+) -> Result<ReminderStatus, CommandError> {
+    state.0.notify(&vault.0, count)
 }
 
 #[tauri::command]
