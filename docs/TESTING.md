@@ -37,13 +37,15 @@ The installers go to `target\release\bundle\msi` and `target\release\bundle\nsis
 python tools/verify_keepassxc.py --akm target/release/akm.exe --keepassxc "C:/path/to/keepassxc-cli.exe"
 ```
 
+Since unit 2 it also covers rotation, native history, the Recycle Bin, restore, purge and stale-copy merges. KeePassXC 2.8.0 `merge` applies no `DeletedObjects` record, so the merge check compares an AKM purge with a KeePassXC permanent delete (finding 2-W-01).
+
 Use the portable KeePassXC 2.8.0. `tools/fetch_keepassxc.ps1` downloads the official x64 zip from the KeePassXC GitHub release, checks its SHA-256 against the `.DIGEST` file of that release, and extracts it outside the repository (default `W:\AKM-archive\tools\keepassxc-2.8.0\`). It stops on a digest mismatch:
 
 ```powershell
 ./tools/fetch_keepassxc.ps1
 ```
 
-**kdbxweb second reader.** This test uses a second, independent KDBX library (kdbxweb with hash-wasm for Argon2) and temporary vaults with fake keys only. It reads an AKM vault (KDF, cipher, version, AKM custom fields), then writes a vault with a foreign group, a foreign entry with history and an attachment, lets AKM change keys, and checks that the foreign data is identical. It prints one `PASS` or `FAIL` line per check and exits non-zero on any failure:
+**kdbxweb second reader.** This test uses a second, independent KDBX library (kdbxweb with hash-wasm for Argon2) and temporary vaults with fake keys only. It reads an AKM vault (KDF, cipher, version, AKM custom fields), then writes a vault with a foreign group, a foreign entry with history and an attachment, lets AKM change keys, and checks that the foreign data is identical. Part C (unit 2) runs rotate, rm, restore and purge and merges stale copies in both directions; kdbxweb applies `DeletedObjects` on merge. It prints one `PASS` or `FAIL` line per check and exits non-zero on any failure:
 
 ```powershell
 cd tools/verify_kdbxweb

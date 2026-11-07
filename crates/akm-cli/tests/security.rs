@@ -1997,7 +1997,15 @@ fn the_readme_names_the_recorded_audit_actions_in_their_order() {
             word.ends_with("-requested") || word.ends_with("-completed") || word.ends_with("-start")
         })
         .collect();
-    let expected: std::collections::BTreeSet<&str> = recorded.iter().copied().collect();
+    // The lifecycle actions are recorded by other commands; lifecycle.rs asserts that each is written.
+    let lifecycle = [
+        "rotate-completed",
+        "remove-completed",
+        "restore-completed",
+        "purge-completed",
+    ];
+    let expected: std::collections::BTreeSet<&str> =
+        recorded.iter().copied().chain(lifecycle).collect();
     assert_eq!(
         named, expected,
         "the README must name exactly the recorded actions"
