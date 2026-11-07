@@ -37,7 +37,19 @@ The installers go to `target\release\bundle\msi` and `target\release\bundle\nsis
 python tools/verify_keepassxc.py --akm target/release/akm.exe --keepassxc "C:/path/to/keepassxc-cli.exe"
 ```
 
-Use the portable KeePassXC 2.8.0.
+Use the portable KeePassXC 2.8.0. `tools/fetch_keepassxc.ps1` downloads the official x64 zip from the KeePassXC GitHub release, checks its SHA-256 against the `.DIGEST` file of that release, and extracts it outside the repository (default `W:\AKM-archive\tools\keepassxc-2.8.0\`). It stops on a digest mismatch:
+
+```powershell
+./tools/fetch_keepassxc.ps1
+```
+
+**kdbxweb second reader.** This test uses a second, independent KDBX library (kdbxweb with hash-wasm for Argon2) and temporary vaults with fake keys only. It reads an AKM vault (KDF, cipher, version, AKM custom fields), then writes a vault with a foreign group, a foreign entry with history and an attachment, lets AKM change keys, and checks that the foreign data is identical. It prints one `PASS` or `FAIL` line per check and exits non-zero on any failure:
+
+```powershell
+cd tools/verify_kdbxweb
+npm ci
+node verify.mjs --akm ../../target/release/akm.exe
+```
 
 **Native GUI proof.** This proof drives only its own AKM process, with fake vaults:
 
@@ -47,7 +59,7 @@ Use the portable KeePassXC 2.8.0.
 
 - The proof refuses to start while another AKM process runs or the clipboard has content. `-SkipClipboard` skips the clipboard checks and keeps the user's clipboard. The skipped checks stay unproved.
 - `-JournalOnly` and `-JournalExportOnly` run the journal, backup and export flows only. They do not touch the clipboard or minimize the window.
-  - Known limit (2026-11-02): the filter step (`Select-FilterOnce`) can fail before AKM is ready, with `Missing select option` or `Unsupported Pattern`. Run the proof again before you suspect AKM. The fix is open: wait for the combo box pattern and its options, and retry the Expand call.
+  - Known limit (2026-11-02): the filter step (`Select-FilterOnce`) could fail before AKM was ready, with `Missing select option` or `Unsupported Pattern`. The step now waits, with a bounded deadline, for the combo box, its ExpandCollapse pattern and the option, retries Expand, and re-opens the list when the option is missing. On a final failure it prints `DIAG:` lines (supported patterns, option names, enabled state, and a hint that separates a UI Automation race from an app failure) before it throws. A GUI proof run has not yet confirmed this fix.
 - `-OutcomeOnly -OwnerReadyForVisibility` minimizes and restores the AKM window that the proof owns. Run it only after the owner confirms in chat (AGENTS.md). Run it once per confirmation, and stop if it fails. Its full command and pass conditions are under R4-04 in [FINDINGS.md](FINDINGS.md).
 - `-OutcomeRehearsal` runs the outcome-record, cancellation, no-resurrection and Key Detail checks of `-OutcomeOnly` without any minimize. It uses Hide, a delayed reveal and two native Cancels. It needs no owner confirmation, and it never passes R4-04. Run it after any change to the outcome checks.
 - `powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_proof_snapshot.ps1` tests the snapshot logic of those checks (`tools/ProofSnapshot.psm1`) without the app. Run it after any change to that module.
