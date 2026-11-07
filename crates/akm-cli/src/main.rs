@@ -1,5 +1,5 @@
 use std::io::{IsTerminal, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use akm_core::audit::AuditLog;
 use akm_core::{ApiKey, ApiKeyInput, EnvDisclosure, EnvPlan, Error, KeyDisclosure, Result, Vault};
@@ -201,11 +201,25 @@ enum Commands {
     },
 }
 
-/// The process outputs, and the journal append for the export-completion record.
-/// `main` builds the real ones (design `unit1a-repair.md`, section 2.6).
+/// Where a file export is published. `main` builds the real one; a test can watch the
+/// file path (unit 1h, design D10).
+trait FilePublisher {
+    fn write_new(&mut self, path: &Path, envs: &[(String, String)]) -> Result<()>;
+}
+
+struct SystemFiles;
+impl FilePublisher for SystemFiles {
+    fn write_new(&mut self, path: &Path, envs: &[(String, String)]) -> Result<()> {
+        export::write_new(path, envs)
+    }
+}
+
+/// The process outputs, the file publisher, and the journal append for the export-completion
+/// record. `main` builds the real ones (design `unit1a-repair.md`, section 2.6).
 struct Io<'a> {
     out: &'a mut dyn Write,
     err: &'a mut dyn Write,
+    files: &'a mut dyn FilePublisher,
     complete: fn(&AuditLog, &str) -> Result<()>,
 }
 
@@ -217,6 +231,7 @@ fn main() {
         &mut Io {
             out: &mut out,
             err: &mut err,
+            files: &mut SystemFiles,
             complete: append_completion,
         },
     );
@@ -463,7 +478,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             drop(vault);
 
             match output {
-                Some(path) => export::write_new(&path, &envs)?,
+                Some(path) => io.files.write_new(&path, &envs)?,
                 None => write_stdout_export(&mut io.out, &envs)?,
             }
             if let Some(warning) = record_export_completed(
@@ -986,6 +1001,7 @@ mod tests {
             &mut Io {
                 out: &mut out,
                 err: &mut err,
+                files: &mut SystemFiles,
                 complete,
             },
         );
@@ -1082,6 +1098,7 @@ mod tests {
             &mut Io {
                 out: &mut out,
                 err: &mut err,
+                files: &mut SystemFiles,
                 complete: append_completion,
             },
         );
@@ -1093,6 +1110,166 @@ mod tests {
         }
         let after: Vec<String> = export_journal(&path).into_iter().map(|(a, _)| a).collect();
         assert_eq!(after, ["export-requested", "export-completed"]);
+    }
+
+    /// What a file export showed at each step that can disclose or finish it (1A-A2-03).
+    #[derive(Default)]
+    struct FileObservations {
+        /// The journal actions when the first byte reached the temporary file.
+        first_byte: Option<Vec<String>>,
+        /// The journal actions, and whether the destination existed, just before publication.
+        at_publication: Option<(Vec<String>, bool)>,
+        bytes_before_publication: Vec<u8>,
+    }
+
+    struct ObservedFiles {
+        vault: std::path::PathBuf,
+        seen: FileObservations,
+    }
+
+    /// The real temporary file, real write and real publication, with a look at the journal
+    /// before the first byte and before the rename.
+    struct Probe<'a> {
+        vault: &'a Path,
+        seen: &'a mut FileObservations,
+    }
+
+    struct FirstByte<'a> {
+        file: &'a mut std::fs::File,
+        vault: &'a Path,
+        seen: &'a mut FileObservations,
+    }
+
+    fn journal_actions(vault: &Path) -> Vec<String> {
+        export_journal(vault).into_iter().map(|(a, _)| a).collect()
+    }
+
+    impl Write for FirstByte<'_> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.seen.first_byte.is_none() {
+                self.seen.first_byte = Some(journal_actions(self.vault));
+            }
+            self.seen.bytes_before_publication.extend_from_slice(buf);
+            self.file.write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.file.flush()
+        }
+    }
+
+    impl export::ExportIo for Probe<'_> {
+        fn write(&mut self, file: &mut std::fs::File, envs: &[(String, String)]) -> Result<()> {
+            let mut sink = FirstByte {
+                file,
+                vault: self.vault,
+                seen: &mut *self.seen,
+            };
+            export::write(&mut sink, envs)
+        }
+
+        fn publish(&mut self, file: &std::fs::File, destination: &Path) -> Result<()> {
+            self.seen.at_publication = Some((journal_actions(self.vault), destination.exists()));
+            export::publish_new(file, destination)
+        }
+    }
+
+    impl FilePublisher for ObservedFiles {
+        fn write_new(&mut self, path: &Path, envs: &[(String, String)]) -> Result<()> {
+            export::write_new_with(
+                path,
+                envs,
+                &mut Probe {
+                    vault: &self.vault,
+                    seen: &mut self.seen,
+                },
+            )
+        }
+    }
+
+    fn export_file_cli(path: &Path, output: &Path) -> Cli {
+        Cli::try_parse_from([
+            "akm",
+            "--vault",
+            path.to_str().unwrap(),
+            "export",
+            "--project",
+            "demo",
+            "--env",
+            "dev",
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .unwrap()
+    }
+
+    // 1A-A2-03: the request is in the journal before the first byte reaches the temporary
+    // file, and the completion record follows publication.
+    #[test]
+    fn a_file_export_records_its_request_before_its_first_byte_and_its_completion_after_publication(
+    ) {
+        let (directory, path) = fake_export_vault();
+        let target = directory.path().join("fake-export.env");
+        let mut files = ObservedFiles {
+            vault: path.clone(),
+            seen: FileObservations::default(),
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run_with(
+            export_file_cli(&path, &target),
+            &mut Io {
+                out: &mut out,
+                err: &mut err,
+                files: &mut files,
+                complete: append_completion,
+            },
+        );
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
+        assert!(out.is_empty(), "a file export prints no secret to stdout");
+        assert_eq!(
+            files.seen.first_byte.as_deref(),
+            Some(&["export-requested".to_string()][..]),
+            "the request is journaled before the first temporary-file byte"
+        );
+        assert_eq!(
+            files.seen.at_publication,
+            Some((vec!["export-requested".to_string()], false)),
+            "no completion record before publication, and no destination yet"
+        );
+        assert!(String::from_utf8_lossy(&files.seen.bytes_before_publication).contains(SECRET));
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "DEMO_SECRET=fake-export-secret\n"
+        );
+        assert_eq!(
+            journal_actions(&path),
+            ["export-requested", "export-completed"]
+        );
+    }
+
+    struct RefusingFiles;
+    impl FilePublisher for RefusingFiles {
+        fn write_new(&mut self, _: &Path, _: &[(String, String)]) -> Result<()> {
+            Err(std::io::Error::other("injected publication failure").into())
+        }
+    }
+
+    #[test]
+    fn a_file_export_that_failed_to_publish_leaves_no_completion_record() {
+        let (directory, path) = fake_export_vault();
+        let target = directory.path().join("fake-export.env");
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run_with(
+            export_file_cli(&path, &target),
+            &mut Io {
+                out: &mut out,
+                err: &mut err,
+                files: &mut RefusingFiles,
+                complete: append_completion,
+            },
+        );
+        assert_ne!(code, 0);
+        assert_eq!(journal_actions(&path), ["export-requested"]);
+        assert!(!target.exists());
     }
 
     fn actions(run: &Exported) -> Vec<&str> {
