@@ -18,12 +18,13 @@ function key(overrides: Partial<KeyView> = {}): KeyView {
   return {
     id: "fake-id", title: "Rotation proof", username: null, issuer: null, project: "demo", environment: "dev",
     scopes: [], envVar: "FAKE_KEY", resolvedEnvVar: "FAKE_KEY", url: null, notes: null, tags: [], expiresAt: null,
-    rotationDays: null, createdAt: null, updatedAt: null, expired: false, rotationDueIn: null,
+    rotationDays: null, createdAt: null, updatedAt: null, rotationDueAt: null,
     secretChangedAt: null, secretChange: "unknown", historyCount: 0, ...overrides,
   };
 }
 
-afterEach(() => { cleanup(); acknowledgeCompletions(retainedCompletions().map(({ id }) => id)); native.invoke.mockReset(); });
+beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-11-08T09:00:00Z")); });
+afterEach(() => { cleanup(); vi.useRealTimers(); acknowledgeCompletions(retainedCompletions().map(({ id }) => id)); native.invoke.mockReset(); });
 
 function boot(handlers: Record<string, (args?: Record<string, unknown>) => unknown>, keys: () => KeyView[]) {
   const sessionId = crypto.randomUUID();
@@ -64,7 +65,7 @@ test("Key Detail shows the secret-change time or unknown, and the history count"
 });
 
 test("a key with a rotation interval and no known change time is not shown as on schedule", async () => {
-  boot({}, () => [key({ rotationDays: 30 }), key({ id: "other", title: "No interval" }), key({ id: "known", title: "On schedule", rotationDays: 30, rotationDueIn: 20, secretChange: "known", secretChangedAt: "2026-11-07T08:15:33Z" })]);
+  boot({}, () => [key({ rotationDays: 30 }), key({ id: "other", title: "No interval" }), key({ id: "known", title: "On schedule", rotationDays: 30, rotationDueAt: "2026-12-07T08:15:33Z", secretChange: "known", secretChangedAt: "2026-11-07T08:15:33Z" })]);
   await act(async () => { render(<App />); });
   const state = async (title: string) => (await screen.findByRole("button", { name: `Open ${title}` })).querySelector(".state")?.textContent;
   expect(await state("Rotation proof")).toBe("Rotation unknown");

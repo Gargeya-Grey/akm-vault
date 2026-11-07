@@ -31,7 +31,7 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
       project: "demo", environment: "dev", scopes: ["chat"], tags: [],
       envVar: "OPENAI_API_KEY", resolvedEnvVar: "OPENAI_API_KEY", url: null,
       notes: null, expiresAt: null, rotationDays: null, createdAt: null,
-      updatedAt: null, expired: false, rotationDueIn: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0,
+      updatedAt: null, rotationDueAt: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0,
     };
     const emitNotice = (sessionId: string) => {
       const listener = listeners.get("vault-locked");

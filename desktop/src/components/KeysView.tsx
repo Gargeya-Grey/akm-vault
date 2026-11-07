@@ -8,6 +8,7 @@ import {
   rotationLabel,
 } from "../format";
 import type { KeyView, RotationReceipt } from "../types";
+import { useNow } from "../useNow";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
 import { KeyDetail } from "./KeyDetail";
 import { Icon } from "./Icon";
@@ -31,6 +32,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
   const [deletingBusy, setDeletingBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [rotating, setRotating] = useState<KeyView | null>(null);
+  const now = useNow(keys);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -90,7 +92,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
   }, [keys, query, project, environment]);
 
   const selected = keys.find((key) => key.id === selectedId) ?? null;
-  const attention = keys.filter(needsAttention).length;
+  const attention = keys.filter((key) => needsAttention(key, now)).length;
 
   function clearFilters() {
     setQuery("");
@@ -271,7 +273,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
         ) : (
           <ul className="key-rows">
             {visible.map((item) => {
-              const state = keyState(item);
+              const state = keyState(item, now);
               return (
                 <li key={item.id}>
                   <button
@@ -300,7 +302,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
                       <span className="key-sub">
                         {item.rotationDays === null
                           ? "no rotation"
-                          : `rotate ${rotationLabel(item)}`}
+                          : `rotate ${rotationLabel(item, now)}`}
                       </span>
                     </span>
                     <span className={`state state-${state.tone}`}>

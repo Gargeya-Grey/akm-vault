@@ -48,8 +48,9 @@ pub struct KeyView {
     rotation_days: Option<u32>,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
-    expired: bool,
-    rotation_due_in: Option<i64>,
+    /// When the rotation interval elapses. The page works out "due" and "overdue" from this
+    /// and the time of the moment, so a state never goes stale while the list stays open.
+    rotation_due_at: Option<DateTime<Utc>>,
     /// When the secret last changed. `None` when AKM knows no such time.
     secret_changed_at: Option<DateTime<Utc>>,
     secret_change: SecretChange,
@@ -58,7 +59,6 @@ pub struct KeyView {
 
 impl From<&ApiKey> for KeyView {
     fn from(key: &ApiKey) -> Self {
-        let now = Utc::now();
         Self {
             id: key.id.clone(),
             title: key.title.clone(),
@@ -76,8 +76,7 @@ impl From<&ApiKey> for KeyView {
             rotation_days: key.rotation_days,
             created_at: key.created_at,
             updated_at: key.updated_at,
-            expired: key.is_expired(now),
-            rotation_due_in: key.rotation_due_in(now),
+            rotation_due_at: key.rotation_due_at(),
             secret_changed_at: key.secret_changed_at,
             secret_change: key.secret_change,
             history_count: key.history_count,

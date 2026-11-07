@@ -25,8 +25,8 @@ export interface KeyView {
   rotationDays: number | null;
   createdAt: string | null;
   updatedAt: string | null;
-  expired: boolean;
-  rotationDueIn: number | null;
+  /** When the rotation interval elapses. Null when AKM has no secret-change time or no interval. */
+  rotationDueAt: string | null;
   /** When the secret last changed. Null when AKM has no such time. */
   secretChangedAt: string | null;
   secretChange: SecretChange;

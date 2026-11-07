@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { api, errorText } from "../api";
 import { clipboardCopyText } from "../clipboardText";
-import { formatDate, formatDateTime, keyState, plural, rotationLabel, secretChangeLabel } from "../format";
+import { formatDate, formatDateTime, isExpired, keyState, plural, rotationLabel, secretChangeLabel } from "../format";
 import type { KeyView } from "../types";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { useDialogFocus } from "./useDialogFocus";
 import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
+import { useNow } from "../useNow";
 
 interface Props {
   item: KeyView;
@@ -56,9 +57,10 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
   useEffect(() => {
     if (!secret) return;
     setSeconds(HIDE_SECONDS);
-    const started = Date.now();
+    // A monotonic clock: a wall clock that moves back must not keep the secret on screen.
+    const started = performance.now();
     timer.current = window.setInterval(() => {
-      const left = HIDE_SECONDS - Math.floor((Date.now() - started) / 1000);
+      const left = HIDE_SECONDS - Math.floor((performance.now() - started) / 1000);
       if (left <= 0) {
         setSecret(null);
         if (timer.current !== null) window.clearInterval(timer.current);
@@ -113,7 +115,8 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
     }
   }
 
-  const state = keyState(item);
+  const now = useNow([item]);
+  const state = keyState(item, now);
   const facts: { key: string; value: React.ReactNode }[] = [];
 
   if (item.issuer) facts.push({ key: "Issuer", value: item.issuer });
@@ -158,7 +161,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
     value: item.expiresAt ? (
       <span>
         <span className="mono">{formatDate(item.expiresAt)}</span>
-        {item.expired && <span className="danger-text"> · expired</span>}
+        {isExpired(item, now) && <span className="danger-text"> · expired</span>}
       </span>
     ) : (
       "Not set"
@@ -169,7 +172,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
     value:
       item.rotationDays === null
         ? "Not set"
-        : `every ${item.rotationDays} days · ${rotationLabel(item)}`,
+        : `every ${item.rotationDays} days · ${rotationLabel(item, now)}`,
   });
   facts.push({
     key: "Secret changed",

@@ -15,7 +15,7 @@ test(`a committed delete with ${warningKind} does not promise recovery`, async (
   const sessionId = crypto.randomUUID();
   native.invoke.mockImplementation(async (command: string) => {
     if (command === "vault_status") return { sessionId, path: "C:/fake/vault.kdbx", exists: true, unlocked: true, keyCount: deleted ? 0 : 1, vaultName: "Fake", needsUpgrade: false };
-    if (command === "keys_list") return [{ id: "fake-id", title: "Delete proof", username: null, issuer: null, project: null, environment: null, scopes: [], envVar: "FAKE_KEY", resolvedEnvVar: "FAKE_KEY", url: null, notes: null, tags: [], expiresAt: null, rotationDays: null, createdAt: null, updatedAt: null, expired: false, rotationDueIn: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0 }];
+    if (command === "keys_list") return [{ id: "fake-id", title: "Delete proof", username: null, issuer: null, project: null, environment: null, scopes: [], envVar: "FAKE_KEY", resolvedEnvVar: "FAKE_KEY", url: null, notes: null, tags: [], expiresAt: null, rotationDays: null, createdAt: null, updatedAt: null, rotationDueAt: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0 }];
     if (command === "key_remove") { deleted = true; return; }
     if (command === "vault_warnings") return { application: [], operations: deleted ? [{ id: `delete-${warningKind}-warning`, originSession: "A", kind: warningKind }] : [] };
     if (command === "vault_activity") return;

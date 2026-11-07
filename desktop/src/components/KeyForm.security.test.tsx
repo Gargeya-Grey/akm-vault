@@ -12,7 +12,7 @@ test("a notes-only edit preserves an existing access-key username", async () => 
     id: "native-entry-uuid", title: "AWS", username: "AKIAEXAMPLE", issuer: "AWS",
     project: "demo", environment: "dev", scopes: [], envVar: "AWS_SECRET_ACCESS_KEY",
     resolvedEnvVar: "AWS_SECRET_ACCESS_KEY", url: null, notes: null, tags: [],
-    expiresAt: null, rotationDays: null, createdAt: null, updatedAt: null, expired: false, rotationDueIn: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0,
+    expiresAt: null, rotationDays: null, createdAt: null, updatedAt: null, rotationDueAt: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0,
   };
   render(<KeyForm item={item} onSaved={() => {}} onClose={() => {}} />);
   fireEvent.change(screen.getByLabelText("Notes"), { target: { value: "A new note" } });

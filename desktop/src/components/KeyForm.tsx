@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, errorText } from "../api";
+import { dateOnlyExpiry } from "../schedule";
 import type { KeyDraft, KeyView } from "../types";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
@@ -90,7 +91,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
       url: url.trim() || null,
       notes: notes.trim() || null,
       tags: splitList(tags),
-      expiresAt: expires ? `${expires}T23:59:59Z` : null,
+      expiresAt: expires ? dateOnlyExpiry(expires) : null,
       rotationDays,
     };
 
