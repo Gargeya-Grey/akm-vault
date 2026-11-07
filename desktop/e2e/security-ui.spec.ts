@@ -51,6 +51,9 @@ test("hiding the document with an import confirmation pending reaches native wit
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await expect.poll(() => page.evaluate(() => window.__akmTest.calls.filter(({ command }) => command === "view_discard").length)).toBe(1);
+  const owner = await page.evaluate(() => window.__akmTest.owner());
+  expect(owner).not.toBeNull();
+  expect(await page.evaluate(() => window.__akmTest.calls.filter(({ command }) => command === "view_discard").map(({ args }) => args))).toEqual([{ sessionId: owner }]);
   expect(await page.evaluate(() => window.__akmTest.calls.filter(({ command }) => command === "vault_lock").length)).toBe(0);
 });
 

@@ -20,6 +20,17 @@ const mutations = new Set(["vault_create", "vault_upgrade", "key_add", "key_upda
 const declinable = new Set(["env_import", "env_save"]);
 const statusReplies = new Set(["vault_status", "vault_unlock", "vault_create", "vault_upgrade", "vault_reload"]);
 
+// Every command that reads or changes the open vault, or renews its idle deadline, names the
+// session in which the page made the request. Native refuses a request for a session that is not
+// the current one, so a request that arrives late cannot act on a vault that opened after it. The
+// commands that start a session, probe which one is current, or concern the whole application do
+// not name one.
+const sessionScoped = new Set(["vault_activity", "vault_upgrade", "vault_reload", "keys_list", "key_reveal", "key_copy", "key_add", "key_update", "key_remove", "key_rotate", "recycled_list", "key_restore", "key_purge", "audit_read", "env_export", "env_copy", "env_save", "backup_info"]);
+
+function withSession(command: string, args?: Record<string, unknown>) {
+  return sessionScoped.has(command) ? { ...args, sessionId: nativeOwner() ?? "" } : args;
+}
+
 async function invoke<T>(command: string, args?: Record<string, unknown>, expectedOwner?: string, operation?: string): Promise<T> {
   const generation = sessionGeneration();
   const bootstrap = command === "vault_status" && nativeOwner() === null;
@@ -29,7 +40,7 @@ async function invoke<T>(command: string, args?: Record<string, unknown>, expect
   const cancelled = () => ({ kind: "locked", message: "The session changed. Unlock the vault again." });
   let knownSuccess = false;
   try {
-    const result = await nativeInvoke<T>(command, args);
+    const result = await nativeInvoke<T>(command, withSession(command, args));
     const declined = declinable.has(command) && result === null;
     knownSuccess = !declined;
     if (declined && outcome !== undefined) settleOutcome(outcome, "cancelled");
@@ -89,32 +100,35 @@ async function open(command: "vault_unlock" | "vault_create", args: Record<strin
   } finally { endNativeOpen(token); }
 }
 
+async function lockSession(sessionId: string | null): Promise<void> {
+  await invoke<void>("vault_lock", { sessionId });
+  confirmNativeLock(sessionId);
+}
+
 export const api = {
   status: () => invoke<Status>("vault_status"),
   unlock: (path: string, password: string) =>
     open("vault_unlock", { path, password }),
   create: (path: string, password: string, name: string | null) =>
     open("vault_create", { path, password, name }),
-  lock: async () => {
-    const sessionId = nativeOwner();
-    await invoke<void>("vault_lock", { sessionId });
-    confirmNativeLock(sessionId);
-  },
+  lock: () => lockSession(nativeOwner()),
   lockCurrent: async () => {
     // Fail-closed path: ask which session is current, then lock exactly that one.
     const current = await invoke<Status>("vault_status");
     if (current.unlocked) await api.lock();
   },
   activity: () => invoke<void>("vault_activity"),
-  // The document hid and the page discarded its views. Native expires its side of them too
-  // (an open import dialog stops being able to apply). A native refusal other than "locked"
-  // means that the expiry is not certain, so the vault locks.
-  discardView: async () => {
+  // The document hid and the page discarded its views, in the session it names. Native expires
+  // that session's side of them too. The call can arrive after the session ended: native then
+  // does nothing and answers success. A native refusal other than "locked" means that the
+  // expiry is not certain, so the vault locks. That lock names the same session and never asks
+  // which session is current, so a newer vault is not locked for an older one's failure.
+  discardView: async (sessionId: string) => {
     try {
-      await nativeInvoke<void>("view_discard");
+      await nativeInvoke<void>("view_discard", { sessionId });
     } catch (error) {
       if (errorKind(error) === "locked") return;
-      try { await api.lockCurrent(); } catch { /* the native fail-closed paths already warn */ }
+      try { await lockSession(sessionId); } catch { /* the native fail-closed paths already warn */ }
     }
   },
   upgrade: () => invoke<Status>("vault_upgrade"),

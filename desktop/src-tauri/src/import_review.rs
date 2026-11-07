@@ -94,8 +94,9 @@ impl ImportReview {
 /// window that the webview cannot script.
 pub trait ImportConfirm: Send + Sync {
     fn confirm(&self, review: &ImportReview) -> bool;
-    /// Whether the main window is shown and not minimized right now. An answer from a
-    /// window that nobody can see is not an approval of what the page showed.
+    /// Whether the main window is shown and not minimized right now. Native asks it only
+    /// before the dialog opens, so that no dialog appears over a window nobody can see. It
+    /// does not gate the answer: the user's click in the dialog stands.
     fn window_live(&self) -> bool;
 }
 

@@ -240,8 +240,11 @@ pub fn vault_lock(
 }
 
 #[tauri::command]
-pub fn vault_activity(state: State<'_, VaultState>) -> Result<(), CommandError> {
-    state.0.activity()
+pub fn vault_activity(
+    state: State<'_, VaultState>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    state.0.activity(&session_id)
 }
 
 #[tauri::command]
@@ -258,9 +261,12 @@ pub fn vault_dismiss_warnings(
 }
 
 #[tauri::command]
-pub async fn vault_upgrade(state: State<'_, VaultState>) -> Result<Status, CommandError> {
+pub async fn vault_upgrade(
+    state: State<'_, VaultState>,
+    session_id: String,
+) -> Result<Status, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     let status = run_session(session.clone(), expected, Access::Upgrade, |vault| {
         vault.upgrade()?;
         Ok(status_for(vault))
@@ -277,9 +283,12 @@ pub async fn vault_upgrade(state: State<'_, VaultState>) -> Result<Status, Comma
 }
 
 #[tauri::command]
-pub async fn vault_reload(state: State<'_, VaultState>) -> Result<Status, CommandError> {
+pub async fn vault_reload(
+    state: State<'_, VaultState>,
+    session_id: String,
+) -> Result<Status, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     let status = run_session(session.clone(), expected, Access::Reload, |vault| {
         vault.reload()?;
         Ok(status_for(vault))
@@ -319,9 +328,12 @@ async fn blocking<T: Send + 'static>(
 }
 
 #[tauri::command]
-pub async fn keys_list(state: State<'_, VaultState>) -> Result<Vec<KeyView>, CommandError> {
+pub async fn keys_list(
+    state: State<'_, VaultState>,
+    session_id: String,
+) -> Result<Vec<KeyView>, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Read, |vault| {
         Ok(vault.list().iter().map(KeyView::from).collect())
     })
@@ -329,9 +341,13 @@ pub async fn keys_list(state: State<'_, VaultState>) -> Result<Vec<KeyView>, Com
 }
 
 #[tauri::command]
-pub async fn key_reveal(state: State<'_, VaultState>, id: String) -> Result<String, CommandError> {
+pub async fn key_reveal(
+    state: State<'_, VaultState>,
+    session_id: String,
+    id: String,
+) -> Result<String, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     blocking(move || {
         let secret = requested_key_at(&session, expected, &id, KeyDisclosure::Reveal)?;
         session.reveal(secret)
@@ -362,9 +378,13 @@ fn requested_key_at(
 }
 
 #[tauri::command]
-pub async fn key_copy(state: State<'_, VaultState>, id: String) -> Result<u64, CommandError> {
+pub async fn key_copy(
+    state: State<'_, VaultState>,
+    session_id: String,
+    id: String,
+) -> Result<u64, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     blocking(move || {
         let secret = requested_key_at(&session, expected, &id, KeyDisclosure::Copy)?;
         session.copy_stamped(secret)?;
@@ -376,10 +396,11 @@ pub async fn key_copy(state: State<'_, VaultState>, id: String) -> Result<u64, C
 #[tauri::command]
 pub async fn key_add(
     state: State<'_, VaultState>,
+    session_id: String,
     draft: KeyDraft,
 ) -> Result<KeyView, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Write, move |vault| {
         let key = vault.add(draft.into_input(None)?)?;
         Ok(KeyView::from(&key))
@@ -390,11 +411,12 @@ pub async fn key_add(
 #[tauri::command]
 pub async fn key_update(
     state: State<'_, VaultState>,
+    session_id: String,
     id: String,
     draft: KeyDraft,
 ) -> Result<KeyView, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Write, move |vault| {
         let existing = vault.edit_input(&id)?;
         let key = vault.update(&id, draft.into_input(Some(existing))?)?;
@@ -404,9 +426,13 @@ pub async fn key_update(
 }
 
 #[tauri::command]
-pub async fn key_remove(state: State<'_, VaultState>, id: String) -> Result<(), CommandError> {
+pub async fn key_remove(
+    state: State<'_, VaultState>,
+    session_id: String,
+    id: String,
+) -> Result<(), CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Write, move |vault| {
         vault.remove(&id)?;
         Ok(())
@@ -419,11 +445,12 @@ pub async fn key_remove(state: State<'_, VaultState>, id: String) -> Result<(), 
 #[tauri::command]
 pub async fn key_rotate(
     state: State<'_, VaultState>,
+    session_id: String,
     id: String,
     secret: String,
 ) -> Result<RotationView, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Write, move |vault| {
         rotate_key(vault, &id, secret)
     })
@@ -438,9 +465,10 @@ fn rotate_key(vault: &mut Vault, id: &str, secret: String) -> Result<RotationVie
 #[tauri::command]
 pub async fn recycled_list(
     state: State<'_, VaultState>,
+    session_id: String,
 ) -> Result<Vec<RecycledView>, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Read, |vault| {
         Ok(vault.recycled().iter().map(RecycledView::from).collect())
     })
@@ -450,10 +478,11 @@ pub async fn recycled_list(
 #[tauri::command]
 pub async fn key_restore(
     state: State<'_, VaultState>,
+    session_id: String,
     id: String,
 ) -> Result<KeyView, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Write, move |vault| {
         let key = vault.restore(&id)?;
         Ok(KeyView::from(&key))
@@ -464,9 +493,13 @@ pub async fn key_restore(
 /// Deletes a key for good. It accepts only a key that is in the Recycle Bin, so a live key
 /// can never be purged from here.
 #[tauri::command]
-pub async fn key_purge(state: State<'_, VaultState>, id: String) -> Result<(), CommandError> {
+pub async fn key_purge(
+    state: State<'_, VaultState>,
+    session_id: String,
+    id: String,
+) -> Result<(), CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Write, move |vault| {
         purge_recycled(vault, &id)
     })
@@ -482,10 +515,11 @@ fn purge_recycled(vault: &mut Vault, id: &str) -> Result<(), CommandError> {
 #[tauri::command]
 pub async fn audit_read(
     state: State<'_, VaultState>,
+    session_id: String,
     limit: Option<usize>,
 ) -> Result<AuditReport, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Read, move |vault| {
         let snapshot = vault.audit_log().snapshot(limit.unwrap_or(500))?;
         // The journal holds key IDs only. Titles, projects and environments are read from
@@ -621,13 +655,14 @@ fn extract_export_at(
 #[tauri::command]
 pub async fn env_export(
     state: State<'_, VaultState>,
+    session_id: String,
     project: Option<String>,
     environment: Option<String>,
     all: bool,
 ) -> Result<String, CommandError> {
     let scope = ExportScope::new(project, environment, all)?;
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     blocking(move || {
         let exported = extract_export_at(&session, expected, &scope, ".env preview")?;
         session.reveal(exported)
@@ -638,13 +673,14 @@ pub async fn env_export(
 #[tauri::command]
 pub async fn env_copy(
     state: State<'_, VaultState>,
+    session_id: String,
     project: Option<String>,
     environment: Option<String>,
     all: bool,
 ) -> Result<u64, CommandError> {
     let scope = ExportScope::new(project, environment, all)?;
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     blocking(move || {
         let exported = extract_export_at(&session, expected, &scope, "clipboard")?;
         if exported.value.is_empty() {
@@ -663,13 +699,14 @@ pub async fn env_copy(
 pub async fn env_save<R: tauri::Runtime>(
     app: AppHandle<R>,
     state: State<'_, VaultState>,
+    session_id: String,
     project: Option<String>,
     environment: Option<String>,
     all: bool,
 ) -> Result<Option<String>, CommandError> {
     let scope = ExportScope::new(project, environment, all)?;
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         // FileSaveDialog keeps its default overwrite-approval prompt. No session mutex spans the dialog.
         let selected = app
@@ -767,26 +804,27 @@ fn publish_and_record(
     Ok(saved)
 }
 
-fn ensure_window_live(confirm: &dyn ImportConfirm) -> Result<(), CommandError> {
+fn ensure_window_shown(confirm: &dyn ImportConfirm) -> Result<(), CommandError> {
     if confirm.window_live() {
         Ok(())
     } else {
-        Err(window_hidden())
+        Err(CommandError::new(
+            "viewChanged",
+            "The AKM window is not shown, so no confirmation window was opened. Nothing was imported. Start it again.",
+        ))
     }
-}
-
-fn window_hidden() -> CommandError {
-    CommandError::new(
-        "viewChanged",
-        "The window was hidden while the import waited for confirmation. Nothing was imported. Start it again.",
-    )
 }
 
 /// The whole import in one command. The webview names the session and the data. A
 /// native window shows the names and the scope, and only the user's click there lets
-/// the import run. No review state is kept between the request and the answer, so
-/// there is nothing for the webview to cancel, edit or replay. `None` means that the
-/// user declined.
+/// the import run: that dialog is the review. No review state is kept between the request
+/// and the answer, so there is nothing for the webview to cancel, edit or replay. `None`
+/// means that the user declined.
+///
+/// After the dialog returns, the approval is refused only by a lock, another session, or a
+/// change of the vault since the preview was read. A hide, a page load, a discard from the
+/// page or a hidden window do not refuse it: the user answered in the dialog, and the page
+/// learns the result from the reply or, when it discarded its form, from the outcome record.
 #[tauri::command]
 pub async fn env_import(
     state: State<'_, VaultState>,
@@ -826,10 +864,10 @@ fn run_import(
     let operation = uuid::Uuid::parse_str(operation_id)
         .map_err(|_| CommandError::new("invalid", "The import request is malformed."))?
         .to_string();
-    let expected = session.begin_import(session_id)?;
+    let expected = session.snapshot_for(session_id)?;
     let (project, environment) = (clean(project), clean(environment));
     let entries = SecretEntries(dotenv::parse(&text)?);
-    let reviewed = session.access(Access::Read, Some(expected), |vault| {
+    let reviewed = session.access_reviewed(Access::Read, expected, |vault| {
         vault
             .preview_import_env(&entries.0, project.as_deref(), environment.as_deref())
             .map_err(Into::into)
@@ -841,11 +879,11 @@ fn run_import(
     )?;
     let ticket = reviewed.snapshot.ticket;
     if review.changes_anything() {
-        // A dialog for a window nobody sees, or for a session that already ended, is not shown.
-        // The modal cannot be shown under the session gate, so the write below stays bound
-        // to the snapshot too.
-        ensure_window_live(confirm)?;
-        if session.snapshot()? != reviewed.snapshot {
+        // No dialog for a window nobody sees, or for a vault that is no longer what was read.
+        // A modal dialog cannot be shown under the session gate, so the write below checks
+        // the session and the revision again, under the gate.
+        ensure_window_shown(confirm)?;
+        if !session.snapshot()?.same_vault(&reviewed.snapshot) {
             return Err(CommandError::new(
                 "stalePreview",
                 "The vault changed before the confirmation could be shown. Start it again.",
@@ -855,20 +893,12 @@ fn run_import(
             session.record_import(ticket, &operation, OperationWarningKind::ImportDeclined);
             return Ok(None);
         }
-        // The page discards its review when the document hides and tells native with
-        // `view_discard`. This is the native side's own check: an answer that arrives while
-        // the window is hidden or minimized does not apply what the page showed.
-        if ensure_window_live(confirm).is_err() {
-            let refused = window_hidden();
-            session.record_import(ticket, &operation, OperationWarningKind::ImportFailed);
-            return Err(refused);
-        }
     }
-    // The write is bound to the snapshot of the request: a lock, a hide, a reload, a
-    // page load or another write since then makes it stale. It must also still equal
-    // what the user was shown.
+    // The write is bound to the session and the revision of the request: a lock, another
+    // session or another write since then makes it stale. The presentation is not part of the
+    // binding. The plan must also still equal what the user was shown.
     let applied = session
-        .access(Access::Write, Some(reviewed.snapshot), |vault| {
+        .access_reviewed(Access::Write, reviewed.snapshot, |vault| {
             let current =
                 vault.preview_import_env(&entries.0, project.as_deref(), environment.as_deref())?;
             if &current != review.preview() {
@@ -896,25 +926,29 @@ fn run_import(
     applied.map(Some)
 }
 
-/// The page tells native that it discarded its protected views (the document was hidden).
-/// Native then does what a minimize does: it expires the presentation, so a result, a
-/// preview or an open import dialog that belongs to the discarded view can no longer
-/// apply. Native view state never depends on a window event alone.
+/// The page tells native that it discarded its protected views (the document was hidden), and
+/// names the session it was in when it handled the hide. Native then does what a minimize does
+/// to that session: it expires the presentation, so a reveal, a preview or an export result of
+/// the discarded view can no longer apply. The request can arrive late. A session that is not
+/// the current one has nothing to expire, so the answer is success and nothing else happens.
+/// The discard does not decide an import: the native dialog does.
 #[tauri::command]
 pub fn view_discard<R: tauri::Runtime>(
     app: AppHandle<R>,
     state: State<'_, VaultState>,
+    session_id: String,
 ) -> Result<(), CommandError> {
-    discard_view(&state.0, |notice| {
+    discard_view(&state.0, &session_id, |notice| {
         tauri::Emitter::emit(&app, "vault-view-expired", notice).map_err(|_| ())
     })
 }
 
 fn discard_view(
     session: &Session,
+    session_id: &str,
     emit: impl FnOnce(&crate::session::NativeViewNotice) -> Result<(), ()>,
 ) -> Result<(), CommandError> {
-    crate::visibility::expire_and_notify(session, emit).map(|_| ())
+    crate::visibility::expire_and_notify_for(session, session_id, emit).map(|_| ())
 }
 
 #[tauri::command]
@@ -943,9 +977,12 @@ pub fn reminders_notify(
 }
 
 #[tauri::command]
-pub async fn backup_info(state: State<'_, VaultState>) -> Result<BackupInfo, CommandError> {
+pub async fn backup_info(
+    state: State<'_, VaultState>,
+    session_id: String,
+) -> Result<BackupInfo, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Read, |vault| {
         let mut backup = vault.path().as_os_str().to_os_string();
         backup.push(".bak");
@@ -968,6 +1005,107 @@ mod tests {
     use super::*;
     use crate::settings::Settings;
     use std::sync::Mutex;
+
+    /// The commands that do not name a session, each with its reason. Every other command takes
+    /// `session_id`, so a request cannot act on a session other than the one it was made in
+    /// (fault class B of AGENTS.md). A new command lands in one list or the other, or this
+    /// test fails.
+    const NO_SESSION: &[(&str, &str)] = &[
+        ("vault_status", "asks which session is current"),
+        ("vault_prepare_open", "starts a session"),
+        ("vault_warnings", "application-wide, carries no vault data"),
+        (
+            "vault_dismiss_warnings",
+            "application-wide, takes record ids",
+        ),
+        ("reminders_status", "application-wide preference"),
+        ("reminders_set", "application-wide preference"),
+    ];
+
+    /// Commands that take `session_id` and that the page sets by hand, not through the
+    /// `sessionScoped` list of `api.ts`.
+    const SESSION_SET_BY_HAND: &[&str] = &[
+        "vault_unlock",
+        "vault_create",
+        "vault_lock",
+        "env_import",
+        "view_discard",
+        "reminders_notify",
+    ];
+
+    /// How many times the identifier `session_id` appears in the text, as a whole word.
+    fn session_id_words(text: &str) -> usize {
+        text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|word| *word == "session_id")
+            .count()
+    }
+
+    /// Each command: its name, the number of times `session_id` appears in its header, and the
+    /// number of times it appears in its body. A command that takes the id and never uses it
+    /// has a body count of zero.
+    fn command_headers() -> Vec<(String, usize, usize)> {
+        let source = include_str!("commands.rs");
+        let code = &source[..source.find("\nmod tests {").unwrap()];
+        let mut found = Vec::new();
+        for part in code.split("#[tauri::command]").skip(1) {
+            let start = part.find(" fn ").expect("a command function") + 4;
+            let name_end = part[start..]
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap();
+            let name = part[start..start + name_end].to_string();
+            let body_start = part.find('{').unwrap();
+            found.push((
+                name,
+                session_id_words(&part[start..body_start]),
+                session_id_words(&part[body_start..]),
+            ));
+        }
+        found
+    }
+
+    #[test]
+    fn p2r2_03_every_command_that_acts_on_the_vault_names_its_session() {
+        let headers = command_headers();
+        assert!(headers.len() >= 30, "the scan finds the commands");
+        for (name, in_header, in_body) in &headers {
+            let exempt = NO_SESSION.iter().any(|(exempt, _)| exempt == name);
+            assert_eq!(
+                *in_header > 0,
+                !exempt,
+                "{name}: takes session_id unless it is on NO_SESSION"
+            );
+            assert!(
+                exempt || *in_body > 0,
+                "{name}: takes session_id and uses it"
+            );
+        }
+        for (exempt, _) in NO_SESSION {
+            assert!(
+                headers.iter().any(|(name, _, _)| name == exempt),
+                "{exempt} is a command"
+            );
+        }
+
+        // The page side: api.ts adds the session to exactly the commands that Rust expects it
+        // for, apart from the ones the page sets by hand.
+        let page = include_str!("../../src/api.ts");
+        let list = &page[page.find("const sessionScoped = new Set([").unwrap()..];
+        let list = &list[..list.find("]);").unwrap()];
+        let mut scoped: Vec<&str> = list.split('"').skip(1).step_by(2).collect();
+        scoped.sort_unstable();
+        let mut expected: Vec<&str> = headers
+            .iter()
+            .filter(|(name, in_header, _)| {
+                *in_header > 0 && !SESSION_SET_BY_HAND.contains(&name.as_str())
+            })
+            .map(|(name, _, _)| name.as_str())
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(
+            scoped, expected,
+            "api.ts sessionScoped matches the commands"
+        );
+    }
 
     fn test_session() -> (Session, tempfile::TempDir) {
         use crate::{
@@ -1746,17 +1884,24 @@ mod tests {
 
     #[test]
     fn every_change_while_the_dialog_is_open_leaves_the_import_unapplied_and_recorded() {
-        for change in ["lock", "hide", "page-load", "write", "reload"] {
+        for change in ["lock", "session", "write", "reload"] {
             let (session, directory) = test_session();
             let session = Arc::new(session);
             let confirm = {
                 let session = session.clone();
+                let other = directory.path().join("other.kdbx");
                 ScriptedConfirm::during(true, move || match change {
                     "lock" => session.lock().unwrap(),
-                    "hide" => {
-                        session.expire_presentation().unwrap();
+                    "session" => {
+                        session.lock().unwrap();
+                        let ticket = session.begin_open().unwrap();
+                        session
+                            .open(ticket, || {
+                                Vault::create(&other, "fake-test-password-123!", None)
+                                    .map_err(Into::into)
+                            })
+                            .unwrap();
                     }
-                    "page-load" => session.document_started(),
                     "write" => {
                         session
                             .access(Access::Write, None, |vault| {
@@ -1801,87 +1946,84 @@ mod tests {
             assert_eq!(record.len(), 1, "{change}");
             assert_eq!(record[0]["id"], operation.as_str());
             assert_eq!(record[0]["kind"], "importFailed", "{change}");
+            for name in ["vault.kdbx", "other.kdbx"] {
+                let path = directory.path().join(name);
+                if path.exists() {
+                    let reopened = Vault::open(path, "fake-test-password-123!").unwrap();
+                    assert!(
+                        crate::test_support::env_of(&reopened, "app", "dev").is_empty(),
+                        "{change}: nothing was imported into {name}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn p2r2_02_the_click_in_the_dialog_stands_after_a_hide_a_page_load_a_discard_or_a_hidden_window(
+    ) {
+        for change in ["hide", "page-load", "discard", "window"] {
+            let (session, directory) = test_session();
+            let session = Arc::new(session);
+            let window = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let confirm = {
+                let (session, hidden) = (session.clone(), window.clone());
+                let id = owner(&session);
+                ScriptedConfirm::during(true, move || match change {
+                    "hide" => {
+                        session.expire_presentation().unwrap();
+                    }
+                    "page-load" => session.document_started(),
+                    "discard" => discard_view(&session, &id, |_| Ok(())).unwrap(),
+                    "window" => hidden.store(false, std::sync::atomic::Ordering::SeqCst),
+                    _ => unreachable!(),
+                })
+                .on_window(window)
+            };
+            let operation = new_operation();
+            let report = run_import(
+                &session,
+                &confirm,
+                &owner(&session),
+                &operation,
+                Zeroizing::new("TOKEN=fake-approved\n".into()),
+                Some("app".into()),
+                Some("dev".into()),
+            )
+            .unwrap_or_else(|error| panic!("{change}: the approval was refused: {error:?}"))
+            .unwrap();
+            assert_eq!((report.added, report.updated), (1, 0), "{change}");
+            assert_eq!(confirm.shown().len(), 1, "{change}");
+            let record = notices(&session);
+            assert_eq!(record.len(), 1, "{change}");
+            assert_eq!(record[0]["id"], operation.as_str());
+            assert_eq!(record[0]["kind"], "importApplied", "{change}");
+            assert!(session.snapshot().is_ok(), "{change}: still unlocked");
             let reopened = Vault::open(
                 directory.path().join("vault.kdbx"),
                 "fake-test-password-123!",
             )
             .unwrap();
-            assert!(
-                crate::test_support::env_of(&reopened, "app", "dev").is_empty(),
-                "{change}: nothing was imported"
+            assert_eq!(
+                crate::test_support::env_of(&reopened, "app", "dev"),
+                [("TOKEN".into(), "fake-approved".into())],
+                "{change}"
             );
         }
     }
 
     #[test]
-    fn review1_1_a_hidden_document_discards_the_native_view_even_without_a_minimize() {
+    fn p2r2_02_a_discard_that_native_cannot_take_locks_the_session_and_the_lock_refuses_the_approval(
+    ) {
         let (session, directory) = test_session();
         let session = Arc::new(session);
-        let emitted = Arc::new(Mutex::new(Vec::new()));
         let confirm = {
-            let (session, emitted) = (session.clone(), emitted.clone());
+            let session = session.clone();
+            let id = owner(&session);
             ScriptedConfirm::during(true, move || {
-                discard_view(&session, |notice| {
-                    emitted.lock().unwrap().push(notice.session_id.clone());
-                    Ok(())
-                })
-                .unwrap();
+                assert!(discard_view(&session, &id, |_| Err(())).is_err());
             })
         };
-        let id = owner(&session);
-        let operation = new_operation();
-        let error = run_import(
-            &session,
-            &confirm,
-            &id,
-            &operation,
-            Zeroizing::new("TOKEN=fake-late\n".into()),
-            Some("app".into()),
-            Some("dev".into()),
-        )
-        .err()
-        .expect("the import ran after the document was hidden");
-        assert_eq!(error.kind, "stalePreview");
-        assert_eq!(*emitted.lock().unwrap(), [id]);
-        let record = notices(&session);
-        assert_eq!(record.len(), 1);
-        assert_eq!(record[0]["id"], operation.as_str());
-        assert_eq!(record[0]["kind"], "importFailed");
-        let reopened = Vault::open(
-            directory.path().join("vault.kdbx"),
-            "fake-test-password-123!",
-        )
-        .unwrap();
-        assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
-        assert!(
-            session.snapshot().is_ok(),
-            "discarding a view does not lock the session"
-        );
-    }
-
-    #[test]
-    fn review1_1_a_discard_whose_notice_is_lost_locks_that_owner_and_a_locked_session_ignores_it() {
-        let (session, _directory) = test_session();
-        assert!(discard_view(&session, |_| Err(())).is_err());
-        assert_eq!(session.snapshot().unwrap_err().kind, "locked");
-        let mut emitted = false;
-        discard_view(&session, |_| {
-            emitted = true;
-            Ok(())
-        })
-        .unwrap();
-        assert!(!emitted, "a locked session has no view to discard");
-    }
-
-    #[test]
-    fn review1_1_an_approval_from_a_window_that_is_hidden_when_the_dialog_returns_is_refused() {
-        let (session, directory) = test_session();
-        let window = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let hide = window.clone();
-        let confirm = ScriptedConfirm::during(true, move || {
-            hide.store(false, std::sync::atomic::Ordering::SeqCst)
-        })
-        .on_window(window);
         let operation = new_operation();
         let error = run_import(
             &session,
@@ -1893,17 +2035,10 @@ mod tests {
             Some("dev".into()),
         )
         .err()
-        .expect("the import ran from a hidden window");
-        assert_eq!(error.kind, "viewChanged");
-        assert!(
-            error.message.contains("Nothing was imported"),
-            "{}",
-            error.message
-        );
-        assert_eq!(confirm.shown().len(), 1);
+        .expect("the import ran after the session was locked");
+        assert_eq!(error.kind, "locked");
         let record = notices(&session);
         assert_eq!(record.len(), 1);
-        assert_eq!(record[0]["id"], operation.as_str());
         assert_eq!(record[0]["kind"], "importFailed");
         let reopened = Vault::open(
             directory.path().join("vault.kdbx"),
@@ -1911,6 +2046,87 @@ mod tests {
         )
         .unwrap();
         assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
+    }
+
+    #[test]
+    fn review1_1_a_discard_whose_notice_is_lost_locks_that_owner_and_a_locked_session_ignores_it() {
+        let (session, _directory) = test_session();
+        let id = owner(&session);
+        assert!(discard_view(&session, &id, |_| Err(())).is_err());
+        assert_eq!(session.snapshot().unwrap_err().kind, "locked");
+        let mut emitted = false;
+        discard_view(&session, &id, |_| {
+            emitted = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(!emitted, "a locked session has no view to discard");
+    }
+
+    fn reopen(session: &Session, directory: &tempfile::TempDir, name: &str) -> String {
+        let owner = session.prepare_open().unwrap();
+        let ticket = session.claim_open(&owner).unwrap();
+        session
+            .open(ticket, || {
+                Vault::create(directory.path().join(name), "fake-test-password-123!", None)
+                    .map_err(Into::into)
+            })
+            .unwrap();
+        owner
+    }
+
+    #[test]
+    fn p2r2_03_a_discard_for_a_session_that_is_not_current_succeeds_and_changes_nothing() {
+        let (session, directory) = test_session();
+        let a = owner(&session);
+        let b = reopen(&session, &directory, "b.kdbx");
+        let before = session.snapshot().unwrap();
+        for stale in [
+            a.clone(),
+            uuid::Uuid::new_v4().to_string(),
+            "not-an-id".into(),
+        ] {
+            let mut emitted = false;
+            discard_view(&session, &stale, |_| {
+                emitted = true;
+                Ok(())
+            })
+            .unwrap();
+            assert!(!emitted, "{stale}: no notice names the current session");
+            assert_eq!(session.snapshot().unwrap(), before, "{stale}");
+        }
+        discard_view(&session, &a, |_| Err(())).expect("a stale discard never reaches the emit");
+        assert!(session.snapshot().is_ok());
+        let mut named = Vec::new();
+        discard_view(&session, &b, |notice| {
+            named.push(notice.session_id.clone());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(named, [b]);
+        assert_ne!(
+            session.snapshot().unwrap().presentation,
+            before.presentation
+        );
+    }
+
+    #[test]
+    fn p2r2_03_a_failed_discard_of_session_a_never_locks_the_session_that_replaced_it() {
+        let (session, directory) = test_session();
+        let a = owner(&session);
+        let mut b = None;
+        let error = discard_view(&session, &a, |notice| {
+            assert_eq!(notice.session_id, a);
+            b = Some(reopen(&session, &directory, "b.kdbx"));
+            Err(())
+        })
+        .unwrap_err();
+        assert_eq!(error.kind, "internal");
+        assert_eq!(
+            owner(&session),
+            b.unwrap(),
+            "B is still the unlocked session"
+        );
     }
 
     #[test]
@@ -1937,16 +2153,13 @@ mod tests {
 
     #[test]
     fn review1_1_a_change_after_the_review_was_read_and_before_the_dialog_shows_no_dialog() {
-        for change in ["lock", "hide", "write"] {
+        for change in ["lock", "write"] {
             let (session, directory) = test_session();
             let session = Arc::new(session);
             let confirm = {
                 let session = session.clone();
                 ScriptedConfirm::new(true).on_probe(move || match change {
                     "lock" => session.lock().unwrap(),
-                    "hide" => {
-                        session.expire_presentation().unwrap();
-                    }
                     _ => {
                         session
                             .access(Access::Write, None, |vault| {
@@ -1985,6 +2198,31 @@ mod tests {
             .unwrap();
             assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
         }
+    }
+
+    #[test]
+    fn p2r2_02_a_hide_before_the_dialog_opens_does_not_withhold_the_dialog() {
+        let (session, _directory) = test_session();
+        let session = Arc::new(session);
+        let confirm = {
+            let session = session.clone();
+            ScriptedConfirm::new(true).on_probe(move || {
+                session.expire_presentation().unwrap();
+            })
+        };
+        let report = run_import(
+            &session,
+            &confirm,
+            &owner(&session),
+            &new_operation(),
+            Zeroizing::new("TOKEN=fake-approved\n".into()),
+            Some("app".into()),
+            Some("dev".into()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!((report.added, report.updated), (1, 0));
+        assert_eq!(confirm.shown().len(), 1);
     }
 
     #[test]
