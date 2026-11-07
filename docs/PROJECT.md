@@ -26,6 +26,7 @@ Reuse established encrypted storage and cryptographic implementations. Do not in
 - Clipboard exclusions, memory cleanup and capture exclusion are defense in depth, not absolute confidentiality guarantees.
 - Short local locks do not provide distributed consensus or atomic cloud compare-and-swap. Other applications and sync clients can race a final local check.
 - The current plaintext journal is not authenticated evidence. Its historical truncation/tampering limitations must not be hidden by a new location or hash chain.
+- [THREAT_MODEL.md](THREAT_MODEL.md) lists each attacker and states whether AKM stops it, makes it harder or does not help.
 
 ## Established implementation
 
