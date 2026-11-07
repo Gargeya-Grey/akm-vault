@@ -878,16 +878,16 @@ try {
       New-Item -ItemType Directory -Path $legacyBackup | Out-Null
       Click-Control 'Keys'
       Click-Control 'Open OpenAI prod proof'
-      Click-Control 'Delete key'
+      Click-Control 'Move to Recycle Bin'
       $beforeDelete = (Get-FileHash -LiteralPath $vault -Algorithm SHA256).Hash
-      Assert-Proof (Wait-Text 'recovery depends on their contents and retention') 'delete confirmation does not promise recovery regardless of maintenance outcomes'
-      Click-Control 'Delete key'
-      Assert-Proof (Wait-Text 'Check backup notices and your encrypted backups before relying on recovery') 'successful deletion does not unconditionally promise retained recovery'
+      Assert-Proof (Wait-Text 'Nothing is deleted for good until you ask') 'the confirmation says the key moves to the Recycle Bin and is not deleted for good (unit 2)'
+      Click-Control 'Move to Recycle Bin'
+      Assert-Proof (Wait-Text 'Check backup notices before you rely on encrypted backups') 'a move to the Recycle Bin does not unconditionally promise backup recovery'
       Assert-Proof (Wait-Text 'convenience backup could not be refreshed') 'the actual failed backup refresh appears separately from deletion success'
       $exactOriginal = @(Get-ChildItem -LiteralPath $work -Filter 'vault.kdbx.bak.*.kdbx' -File | Where-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash -eq $beforeDelete })
       Assert-Proof ($exactOriginal.Count -ge 1) 'the exact immediate pre-deletion encrypted original remains, not merely an arbitrary dated file'
       $deletedKeys = Invoke-TestCli @('list', '--json') | Out-String | ConvertFrom-Json
-      Assert-Proof (@($deletedKeys | Where-Object { $_.title -eq 'OpenAI prod proof' }).Count -eq 0) 'the CLI confirms the deletion despite the convenience-backup failure'
+      Assert-Proof (@($deletedKeys | Where-Object { $_.title -eq 'OpenAI prod proof' }).Count -eq 0) 'the CLI list no longer shows the key moved to the Recycle Bin, despite the convenience-backup failure'
       $activeProofVault = $vault
       try {
         $vault = $exactOriginal[0].FullName
@@ -897,15 +897,17 @@ try {
       Click-Control 'Dismiss saved-operation notices'
       Remove-Item -LiteralPath $legacyBackup
       Click-Control 'Activity'
-      # Valid unknown-action fixture using the journal's existing public hash encoding.
+      # Valid unknown-action fixture in the unit 1b chain: the first record links to sha256("akm-journal-v1`n" + journal id),
+      # and each hash covers prev, seq, ts, action, key_id and detail (crates/akm-core/src/audit.rs).
       $sha = [Security.Cryptography.SHA256]::Create()
-      $previous = ''
+      $journalId = [IO.Path]::GetFileNameWithoutExtension($journal).Substring(2)
+      $previous = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("akm-journal-v1`n" + $journalId))).Replace('-', '').ToLowerInvariant()
       $sequence = 0
       $fixtureLines = @()
       foreach ($action in @('__proto__', 'constructor', 'toString')) {
         $sequence++
         $timestamp = '2026-10-31T00:00:00+00:00'
-        $payload = @($previous, [string]$sequence, $timestamp, $action, '', '', '', '', '') -join "`n"
+        $payload = @($previous, [string]$sequence, $timestamp, $action, '', '') -join "`n"
         $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($payload))).Replace('-', '').ToLowerInvariant()
         $fixtureLines += ([ordered]@{seq=$sequence;ts=$timestamp;action=$action;prev=$previous;hash=$hash} | ConvertTo-Json -Compress)
         $previous = $hash
