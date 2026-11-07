@@ -778,3 +778,559 @@ fn a_locked_reader_that_was_made_before_the_vault_changed_still_shows_the_journa
     assert_eq!(snapshot.identity, Identity::Unconfirmed);
     assert_eq!(snapshot.entries.len(), 2);
 }
+
+// ------------------------------- review 2, finding 4: clones share a root and never share a journal
+//
+// Real fake KDBX vaults. A clone shares the root group UUID of its source, so the UUID cannot
+// say which instance a file is. A version that this device saw belongs to the journal that
+// recorded it, wherever that version shows up (unit 1b, D12).
+
+mod clones {
+    use super::*;
+    use akm_core::{ApiKeyInput, Vault};
+    use serde_json::Value;
+
+    pub const PASSWORD: &str = "fake-clone-password";
+
+    pub struct World {
+        pub directory: tempfile::TempDir,
+        pub root: PathBuf,
+    }
+
+    impl World {
+        pub fn new() -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().join("journal");
+            Self { directory, root }
+        }
+
+        pub fn path(&self, name: &str) -> PathBuf {
+            self.directory.path().join(name)
+        }
+
+        /// A new vault with one key. Its journal gets `add-completed`.
+        pub fn create(&self, name: &str) -> Vault {
+            let mut vault =
+                Vault::create_in(self.path(name), PASSWORD, None, JournalRoot::at(&self.root))
+                    .unwrap();
+            vault
+                .add(ApiKeyInput::new("Alpha", "fake-secret-value"))
+                .unwrap();
+            vault
+        }
+
+        pub fn open(&self, name: &str) -> Vault {
+            Vault::open_in(self.path(name), PASSWORD, JournalRoot::at(&self.root)).unwrap()
+        }
+
+        pub fn copy(&self, from: &str, to: &str) {
+            fs::copy(self.path(from), self.path(to)).unwrap();
+        }
+
+        pub fn bytes(&self, name: &str) -> Vec<u8> {
+            fs::read(self.path(name)).unwrap()
+        }
+
+        /// Overwrites the file in place, so its file ID stays.
+        pub fn put(&self, name: &str, bytes: &[u8]) {
+            fs::write(self.path(name), bytes).unwrap();
+        }
+
+        pub fn mapping_text(&self) -> String {
+            fs::read_to_string(self.root.join("mapping.json")).unwrap()
+        }
+
+        pub fn mapping(&self) -> Value {
+            serde_json::from_str(&self.mapping_text()).unwrap()
+        }
+
+        pub fn journal_files(&self) -> Vec<PathBuf> {
+            let mut found: Vec<PathBuf> = fs::read_dir(&self.root)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                    name.starts_with("j-") && name.ends_with(".jsonl")
+                })
+                .collect();
+            found.sort();
+            found
+        }
+
+        fn actions_in(file: &Path) -> Vec<String> {
+            fs::read_to_string(file)
+                .unwrap()
+                .lines()
+                .map(|line| {
+                    serde_json::from_str::<Value>(line).unwrap()["action"]
+                        .as_str()
+                        .unwrap()
+                        .to_string()
+                })
+                .collect()
+        }
+
+        /// The journal file that holds `marker`. There must be exactly one.
+        pub fn journal_with(&self, marker: &str) -> PathBuf {
+            let holding: Vec<PathBuf> = self
+                .journal_files()
+                .into_iter()
+                .filter(|file| Self::actions_in(file).iter().any(|action| action == marker))
+                .collect();
+            assert_eq!(holding.len(), 1, "{marker}: {holding:?}");
+            holding.into_iter().next().unwrap()
+        }
+
+        /// The actions of the journal that holds `marker`.
+        pub fn actions_with(&self, marker: &str) -> Vec<String> {
+            Self::actions_in(&self.journal_with(marker))
+        }
+
+        /// A password-less read of the vault at `name`, as `akm audit` does it.
+        pub fn view(&self, name: &str) -> akm_core::audit::AuditSnapshot {
+            AuditLog::new(
+                JournalRoot::at(&self.root),
+                VaultEvidence::from_file(&self.path(name)),
+            )
+            .snapshot(100)
+            .unwrap()
+        }
+    }
+
+    pub fn mark(vault: &Vault, action: &str) -> akm_core::Result<()> {
+        vault.audit_log().append(action, None, None)
+    }
+
+    pub fn change(vault: &mut Vault, title: &str) {
+        vault
+            .add(ApiKeyInput::new(title, "fake-secret-value"))
+            .unwrap();
+    }
+
+    pub fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| (*item).to_string()).collect()
+    }
+
+    pub fn seen_lengths(mapping: &Value) -> Vec<usize> {
+        mapping["journals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|binding| binding["seen"].as_array().unwrap().len())
+            .collect()
+    }
+}
+
+#[test]
+fn a_clone_that_replaces_its_original_keeps_its_own_journal_and_the_original_keeps_its_own() {
+    use clones::*;
+    let w = World::new();
+    let original = w.create("a.kdbx");
+    mark(&original, "original-marker").unwrap();
+    w.copy("a.kdbx", "b.kdbx");
+    let mut clone = w.open("b.kdbx");
+    change(&mut clone, "Beta");
+    mark(&clone, "clone-marker").unwrap();
+    let original_journal = w.journal_with("original-marker");
+    let clone_journal = w.journal_with("clone-marker");
+    assert_ne!(original_journal, clone_journal);
+    let original_before = fs::read(&original_journal).unwrap();
+
+    w.copy("b.kdbx", "a.kdbx");
+    let replacement = w.open("a.kdbx");
+    mark(&replacement, "replacement-marker").unwrap();
+
+    assert_eq!(
+        w.actions_with("original-marker"),
+        strings(&["add-completed", "original-marker"]),
+        "the original's journal gained nothing from the clone's bytes"
+    );
+    assert_eq!(
+        fs::read(&original_journal).unwrap(),
+        original_before,
+        "the original's journal bytes are unchanged"
+    );
+    assert_eq!(
+        w.actions_with("clone-marker"),
+        strings(&["add-completed", "clone-marker", "replacement-marker"]),
+        "the replacement is the clone's version, so its record is the clone's"
+    );
+    let mapping = w.mapping();
+    assert_eq!(
+        mapping["journals"].as_array().unwrap().len(),
+        2,
+        "{mapping}"
+    );
+    assert!(
+        mapping["journals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|binding| binding["state"] == "active"),
+        "no binding was detached: {mapping}"
+    );
+    assert_eq!(
+        seen_lengths(&mapping),
+        [1, 1],
+        "no version moved between bindings"
+    );
+}
+
+#[test]
+fn a_reader_at_the_replaced_path_sees_the_clone_journal_and_a_notice_for_the_original_one() {
+    use clones::*;
+    let w = World::new();
+    let original = w.create("a.kdbx");
+    mark(&original, "original-marker").unwrap();
+    w.copy("a.kdbx", "b.kdbx");
+    let mut clone = w.open("b.kdbx");
+    change(&mut clone, "Beta");
+    mark(&clone, "clone-marker").unwrap();
+    w.copy("b.kdbx", "a.kdbx");
+    let original_journal = w.journal_with("original-marker");
+    let mapping = w.mapping_text();
+
+    let view = w.view("a.kdbx");
+    assert_eq!(view.identity, Identity::Confirmed);
+    let shown: Vec<&str> = view
+        .entries
+        .iter()
+        .map(|entry| entry.action.as_str())
+        .collect();
+    assert_eq!(shown, ["add-completed", "clone-marker"]);
+    let named = view
+        .notices
+        .iter()
+        .filter(|notice| {
+            notice
+                .message
+                .contains(&original_journal.display().to_string())
+        })
+        .count();
+    assert_eq!(
+        named, 1,
+        "the original's journal file is named: {:?}",
+        view.notices
+    );
+    assert_eq!(w.mapping_text(), mapping, "a read changes nothing");
+
+    let at_clone = w.view("b.kdbx");
+    assert_eq!(at_clone.identity, Identity::Confirmed);
+    assert_eq!(at_clone.entries.len(), 2);
+}
+
+#[test]
+fn a_session_that_saves_after_the_replacement_stays_with_the_journal_of_the_version_it_opened() {
+    use clones::*;
+    let w = World::new();
+    let original = w.create("a.kdbx");
+    mark(&original, "original-marker").unwrap();
+    w.copy("a.kdbx", "b.kdbx");
+    let mut clone = w.open("b.kdbx");
+    change(&mut clone, "Beta");
+    mark(&clone, "clone-marker").unwrap();
+    w.copy("b.kdbx", "a.kdbx");
+
+    let mut replacement = w.open("a.kdbx");
+    mark(&replacement, "opened-marker").unwrap();
+    change(&mut replacement, "Gamma");
+    mark(&replacement, "saved-marker").unwrap();
+    change(&mut replacement, "Delta");
+    let mut next = w.open("a.kdbx");
+    mark(&next, "next-process-marker").unwrap();
+    change(&mut next, "Epsilon");
+    let later = w.open("a.kdbx");
+    mark(&later, "later-process-marker").unwrap();
+
+    assert_eq!(
+        w.actions_with("original-marker"),
+        strings(&["add-completed", "original-marker"]),
+        "saves of the replacement never reach the original's journal"
+    );
+    assert_eq!(
+        w.actions_with("clone-marker"),
+        strings(&[
+            "add-completed",
+            "clone-marker",
+            "opened-marker",
+            "add-completed",
+            "saved-marker",
+            "add-completed",
+            "next-process-marker",
+            "add-completed",
+            "later-process-marker",
+        ])
+    );
+    assert_eq!(w.journal_files().len(), 2);
+}
+
+#[test]
+fn stale_and_current_sessions_alternate_reads_and_disclosures_without_crossing_journals() {
+    use clones::*;
+    let w = World::new();
+    let original = w.create("a.kdbx");
+    mark(&original, "original-marker").unwrap();
+    w.copy("a.kdbx", "b.kdbx");
+    let mut clone = w.open("b.kdbx");
+    change(&mut clone, "Beta");
+    mark(&clone, "clone-marker").unwrap();
+    w.copy("b.kdbx", "a.kdbx");
+    let replacement = w.open("a.kdbx");
+
+    for round in 0..3 {
+        stale::disclose(&original).unwrap_or_else(|error| panic!("round {round}: {error}"));
+        stale::disclose(&replacement).unwrap();
+        stale::disclose(&clone).unwrap();
+        mark(&replacement, "replacement-marker").unwrap();
+        let reader = w.view("a.kdbx");
+        assert_eq!(reader.identity, Identity::Confirmed, "round {round}");
+        assert_eq!(
+            reader.entries.last().map(|entry| entry.action.as_str()),
+            Some("replacement-marker")
+        );
+    }
+
+    let mut expected_original = strings(&["add-completed", "original-marker"]);
+    expected_original.extend(strings(&["reveal-requested"; 3]));
+    assert_eq!(w.actions_with("original-marker"), expected_original);
+    let mut expected_clone = strings(&["add-completed", "clone-marker"]);
+    for _ in 0..3 {
+        expected_clone.extend(strings(&[
+            "reveal-requested",
+            "reveal-requested",
+            "replacement-marker",
+        ]));
+    }
+    assert_eq!(w.actions_with("clone-marker"), expected_clone);
+    let mapping = w.mapping();
+    assert_eq!(
+        mapping["journals"].as_array().unwrap().len(),
+        2,
+        "{mapping}"
+    );
+    let records = AuditLog::new(
+        JournalRoot::at(&w.root),
+        VaultEvidence::from_file(&w.path("b.kdbx")),
+    )
+    .read(100)
+    .unwrap();
+    assert_eq!(
+        records.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        (1..=records.len() as u64).collect::<Vec<_>>(),
+        "the clone's chain is one continuous sequence"
+    );
+}
+
+#[test]
+fn putting_the_original_back_returns_to_its_journal_even_when_a_copy_saw_the_same_version() {
+    use clones::*;
+    let w = World::new();
+    let original = w.create("a.kdbx");
+    mark(&original, "original-marker").unwrap();
+    let original_bytes = w.bytes("a.kdbx");
+    w.copy("a.kdbx", "fresh.kdbx");
+    let fresh = w.open("fresh.kdbx");
+    mark(&fresh, "fresh-marker").unwrap();
+    w.copy("a.kdbx", "b.kdbx");
+    let mut clone = w.open("b.kdbx");
+    change(&mut clone, "Beta");
+    mark(&clone, "clone-marker").unwrap();
+    w.copy("b.kdbx", "a.kdbx");
+    mark(&w.open("a.kdbx"), "replacement-marker").unwrap();
+
+    w.put("a.kdbx", &original_bytes);
+    mark(&w.open("a.kdbx"), "restored-marker").unwrap();
+
+    assert_eq!(
+        w.actions_with("original-marker"),
+        strings(&["add-completed", "original-marker", "restored-marker"]),
+        "the version is in the original's list and in the fresh copy's list; the path decides"
+    );
+    assert_eq!(w.actions_with("fresh-marker"), strings(&["fresh-marker"]));
+    assert_eq!(
+        w.actions_with("clone-marker"),
+        strings(&["add-completed", "clone-marker", "replacement-marker"])
+    );
+}
+
+#[test]
+fn a_rollback_indication_lands_in_the_journal_of_the_instance_that_went_back() {
+    use clones::*;
+    let w = World::new();
+    let mut original = w.create("a.kdbx");
+    mark(&original, "a-one").unwrap();
+    let a_earlier = w.bytes("a.kdbx");
+    change(&mut original, "Alpha2");
+    w.copy("a.kdbx", "b.kdbx");
+    let mut clone = w.open("b.kdbx");
+    change(&mut clone, "Beta");
+    mark(&clone, "b-one").unwrap();
+    let b_earlier = w.bytes("b.kdbx");
+    change(&mut clone, "Gamma");
+
+    w.put("a.kdbx", &b_earlier);
+    mark(&w.open("a.kdbx"), "b-old-version-at-a").unwrap();
+    mark(&w.open("b.kdbx"), "b-current").unwrap();
+    assert_eq!(
+        w.actions_with("b-one")[2..],
+        ["add-completed", "b-old-version-at-a", "b-current"],
+        "the old version of the clone at the original's path is recorded in the clone's journal"
+    );
+    assert!(
+        !w.actions_with("a-one")
+            .iter()
+            .any(|a| a == "b-old-version-at-a"),
+        "and not in the original's"
+    );
+    assert!(
+        !w.actions_with("b-one")
+            .iter()
+            .any(|a| a == "vault-rolled-back"),
+        "an old version of the clone at another path is not a rollback of the clone's own file: {:?}",
+        w.actions_with("b-one")
+    );
+
+    w.put("b.kdbx", &b_earlier);
+    mark(&w.open("b.kdbx"), "b-back").unwrap();
+    let b_actions = w.actions_with("b-one");
+    let at = b_actions.iter().position(|a| a == "b-back").unwrap();
+    assert_eq!(b_actions[at - 1], "vault-rolled-back", "{b_actions:?}");
+    assert_eq!(
+        b_actions
+            .iter()
+            .filter(|a| *a == "vault-rolled-back")
+            .count(),
+        1
+    );
+    assert!(
+        !w.actions_with("a-one")
+            .iter()
+            .any(|a| a == "vault-rolled-back"),
+        "the original has not gone back yet"
+    );
+
+    w.put("a.kdbx", &a_earlier);
+    mark(&w.open("a.kdbx"), "a-back").unwrap();
+    let a_actions = w.actions_with("a-one");
+    let at = a_actions.iter().position(|a| a == "a-back").unwrap();
+    assert_eq!(a_actions[at - 1], "vault-rolled-back", "{a_actions:?}");
+    assert_eq!(
+        w.actions_with("b-one")
+            .iter()
+            .filter(|a| *a == "vault-rolled-back")
+            .count(),
+        1,
+        "the original's rollback is not written to the clone's journal"
+    );
+}
+
+#[test]
+fn a_version_that_two_journals_recorded_fails_closed_at_a_path_bound_to_a_third() {
+    use clones::*;
+    let w = World::new();
+    let original = w.create("a.kdbx");
+    mark(&original, "a-marker").unwrap();
+    let shared = w.bytes("a.kdbx");
+    w.copy("a.kdbx", "c.kdbx");
+    mark(&w.open("c.kdbx"), "c-marker").unwrap();
+    w.copy("a.kdbx", "d.kdbx");
+    let mut third = w.open("d.kdbx");
+    change(&mut third, "Delta");
+    mark(&third, "d-marker").unwrap();
+
+    w.put("d.kdbx", &shared);
+    let mapping = w.mapping_text();
+    let files: Vec<(PathBuf, Vec<u8>)> = w
+        .journal_files()
+        .into_iter()
+        .map(|file| (file.clone(), fs::read(&file).unwrap()))
+        .collect();
+    let reopened = w.open("d.kdbx");
+    for round in 0..2 {
+        let error = mark(&reopened, "ambiguous-marker").unwrap_err();
+        assert!(
+            error.to_string().contains("more than one journal"),
+            "round {round}: {error}"
+        );
+        assert!(
+            stale::disclose(&reopened).is_err(),
+            "a disclosure fails closed too"
+        );
+    }
+    assert_eq!(w.mapping_text(), mapping, "nothing was stored");
+    for (file, bytes) in &files {
+        assert_eq!(&fs::read(file).unwrap(), bytes, "{}", file.display());
+    }
+
+    let view = w.view("d.kdbx");
+    assert_eq!(view.identity, Identity::Unconfirmed);
+    assert!(view.entries.is_empty(), "no guessed journal is shown");
+    let kinds: Vec<NoticeKind> = view.notices.iter().map(|notice| notice.kind).collect();
+    assert_eq!(kinds[0], NoticeKind::IdentityUnconfirmed);
+    assert!(
+        view.notices
+            .iter()
+            .any(|notice| notice.message.contains("c.kdbx")),
+        "the candidates are named: {:?}",
+        view.notices
+    );
+
+    w.copy("d.kdbx", "e.kdbx");
+    mark(&w.open("e.kdbx"), "e-marker").unwrap();
+    assert_eq!(w.actions_with("e-marker"), strings(&["e-marker"]));
+    assert_eq!(w.mapping()["journals"].as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn a_fresh_copy_at_a_new_path_still_starts_its_own_journal() {
+    use clones::*;
+    let w = World::new();
+    let original = w.create("a.kdbx");
+    mark(&original, "original-marker").unwrap();
+    w.copy("a.kdbx", "copy.kdbx");
+    let mut copy = w.open("copy.kdbx");
+    assert_eq!(w.view("copy.kdbx").entries.len(), 0, "no journal yet");
+    mark(&copy, "copy-marker").unwrap();
+    change(&mut copy, "Beta");
+    mark(&copy, "copy-saved-marker").unwrap();
+
+    assert_eq!(
+        w.actions_with("original-marker"),
+        strings(&["add-completed", "original-marker"])
+    );
+    assert_eq!(
+        w.actions_with("copy-marker"),
+        strings(&["copy-marker", "add-completed", "copy-saved-marker"])
+    );
+    assert_eq!(w.mapping()["journals"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn a_renamed_replacement_is_not_moved_onto_the_journal_of_the_file_it_replaced() {
+    use clones::*;
+    let w = World::new();
+    let original = w.create("a.kdbx");
+    mark(&original, "original-marker").unwrap();
+    w.copy("a.kdbx", "b.kdbx");
+    let mut clone = w.open("b.kdbx");
+    change(&mut clone, "Beta");
+    mark(&clone, "clone-marker").unwrap();
+
+    w.put("a.kdbx", &w.bytes("b.kdbx"));
+    fs::rename(w.path("a.kdbx"), w.path("c.kdbx")).unwrap();
+    mark(&w.open("c.kdbx"), "renamed-marker").unwrap();
+
+    assert_eq!(
+        w.actions_with("original-marker"),
+        strings(&["add-completed", "original-marker"]),
+        "the file ID of the replaced file does not make the clone the original"
+    );
+    assert_eq!(
+        w.actions_with("clone-marker"),
+        strings(&["add-completed", "clone-marker"])
+    );
+    assert_eq!(
+        w.actions_with("renamed-marker"),
+        strings(&["renamed-marker"])
+    );
+}

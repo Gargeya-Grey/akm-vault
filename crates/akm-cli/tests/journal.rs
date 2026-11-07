@@ -1001,3 +1001,306 @@ fn a_failed_disclosure_keeps_the_rollback_indication_for_the_next_process() {
         ]
     );
 }
+
+// ----------------------- review 2, finding 4: clones share a root and never share a journal
+//
+// The same rule through the real binary, one process per command. A version that this device
+// saw belongs to the journal that recorded it, wherever it shows up (unit 1b, D12).
+
+fn plain(path: &Path) -> String {
+    let real = fs::canonicalize(path).unwrap();
+    real.to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .to_lowercase()
+}
+
+/// The actions of the journal that the mapping binds to `vault`'s path.
+fn bound_actions(root: &Path, vault: &Path) -> Vec<String> {
+    let mapping: Value =
+        serde_json::from_slice(&fs::read(root.join("mapping.json")).unwrap()).unwrap();
+    let wanted = plain(vault);
+    let bound: Vec<&Value> = mapping["journals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|binding| {
+            binding["state"] == "active"
+                && binding["path"].as_str().unwrap().to_lowercase() == wanted
+        })
+        .collect();
+    assert_eq!(bound.len(), 1, "{wanted}: {mapping}");
+    let file = root.join(format!("j-{}.jsonl", bound[0]["id"].as_str().unwrap()));
+    actions_of(&file)
+}
+
+fn actions_of(file: &Path) -> Vec<String> {
+    fs::read_to_string(file)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap()["action"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect()
+}
+
+fn strings(items: &[&str]) -> Vec<String> {
+    items.iter().map(|item| (*item).to_string()).collect()
+}
+
+impl Fixture {
+    fn at(&self, name: &str) -> PathBuf {
+        self.vault_dir().join(name)
+    }
+
+    fn reveal_at(&self, vault: &Path) -> Output {
+        self.command(vault, Some(PASSWORD))
+            .args(["get", TITLE, "--field", "secret"])
+            .output()
+            .unwrap()
+    }
+
+    fn add_at(&self, vault: &Path, title: &str) -> Output {
+        self.command(vault, Some(PASSWORD))
+            .args(["add", title, "--secret", "fake-clone-secret"])
+            .output()
+            .unwrap()
+    }
+
+    fn audit_at(&self, vault: &Path) -> Output {
+        self.command(vault, None)
+            .args(["audit", "--limit", "100"])
+            .output()
+            .unwrap()
+    }
+}
+
+#[test]
+fn a_clone_that_replaces_its_original_keeps_every_record_in_its_own_journal_across_processes() {
+    let fixture = Fixture::new();
+    let a = fixture.vault.clone();
+    let b = fixture.at("b.kdbx");
+    assert_success(&fixture.reveal_at(&a));
+    let original_bytes = fs::read(&a).unwrap();
+    fs::copy(&a, &b).unwrap();
+    assert_success(&fixture.add_at(&b, "CloneKey"));
+    assert_success(&fixture.reveal_at(&b));
+    assert_eq!(
+        bound_actions(&fixture.root, &a),
+        strings(&["reveal-requested"])
+    );
+    assert_eq!(
+        bound_actions(&fixture.root, &b),
+        strings(&["add-completed", "reveal-requested"])
+    );
+    let original_journal = journals_in(&fixture.root)
+        .into_iter()
+        .find(|file| actions_of(file) == strings(&["reveal-requested"]))
+        .unwrap();
+    let original_before = fs::read(&original_journal).unwrap();
+
+    fs::copy(&b, &a).unwrap();
+    assert_success(&fixture.reveal_at(&a));
+    assert_success(&fixture.add_at(&a, "ReplacementKey"));
+    assert_success(&fixture.reveal_at(&a));
+    assert_success(&fixture.reveal_at(&b));
+
+    assert!(
+        fs::read(&original_journal).unwrap() == original_before,
+        "the original's journal is byte-identical"
+    );
+    assert_eq!(
+        bound_actions(&fixture.root, &b),
+        strings(&[
+            "add-completed",
+            "reveal-requested",
+            "reveal-requested",
+            "add-completed",
+            "reveal-requested",
+            "reveal-requested",
+        ]),
+        "every record of the replacement and of the clone is in the clone's journal"
+    );
+    assert_eq!(fixture.journals().len(), 2);
+    let mapping = fixture.mapping();
+    assert_eq!(
+        active_ids(&mapping).len(),
+        2,
+        "no binding was detached: {mapping}"
+    );
+
+    let audit = fixture.audit_at(&a);
+    assert_success(&audit);
+    let text = stdout(&audit);
+    assert!(text.contains("#6") && !text.contains("#7"), "{text}");
+    assert!(
+        text.contains(
+            &original_journal
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        ),
+        "the notice names the original's journal file: {text}"
+    );
+
+    fs::write(&a, &original_bytes).unwrap();
+    assert_success(&fixture.reveal_at(&a));
+    assert_eq!(
+        bound_actions(&fixture.root, &a),
+        strings(&["reveal-requested", "reveal-requested"]),
+        "putting the original back returns to the original's journal, with no rollback record"
+    );
+    assert_eq!(
+        bound_actions(&fixture.root, &b).len(),
+        6,
+        "the clone's journal is unchanged"
+    );
+}
+
+#[test]
+fn a_rollback_indication_lands_in_the_journal_of_the_instance_that_went_back_across_processes() {
+    let fixture = Fixture::new();
+    let a = fixture.vault.clone();
+    let b = fixture.at("b.kdbx");
+    assert_success(&fixture.reveal_at(&a));
+    fs::copy(&a, &b).unwrap();
+    assert_success(&fixture.add_at(&b, "CloneKey"));
+    let b_earlier = fs::read(&b).unwrap();
+    assert_success(&fixture.add_at(&b, "CloneKeyTwo"));
+
+    fs::write(&a, &b_earlier).unwrap();
+    assert_success(&fixture.reveal_at(&a));
+    assert_success(&fixture.reveal_at(&b));
+    assert_eq!(
+        bound_actions(&fixture.root, &b),
+        strings(&[
+            "add-completed",
+            "add-completed",
+            "reveal-requested",
+            "reveal-requested"
+        ]),
+        "the clone's old version at the original's path is no rollback of the clone"
+    );
+
+    fs::write(&b, &b_earlier).unwrap();
+    assert_success(&fixture.reveal_at(&b));
+    assert_eq!(
+        bound_actions(&fixture.root, &b),
+        strings(&[
+            "add-completed",
+            "add-completed",
+            "reveal-requested",
+            "reveal-requested",
+            "vault-rolled-back",
+            "reveal-requested",
+        ])
+    );
+    assert_eq!(
+        bound_actions(&fixture.root, &a),
+        strings(&["reveal-requested"]),
+        "the original's journal has no rollback record from the clone"
+    );
+}
+
+#[test]
+fn stale_and_current_processes_alternate_without_crossing_journals() {
+    let fixture = Fixture::new();
+    let a = fixture.vault.clone();
+    let b = fixture.at("b.kdbx");
+    let stale = akm_core::Vault::open_in(
+        &a,
+        PASSWORD,
+        akm_core::journal::JournalRoot::at(&fixture.root),
+    )
+    .unwrap();
+    stale_disclosure(&stale).unwrap();
+    fs::copy(&a, &b).unwrap();
+    assert_success(&fixture.add_at(&b, "CloneKey"));
+    fs::copy(&b, &a).unwrap();
+
+    for round in 0..3 {
+        stale_disclosure(&stale).unwrap_or_else(|error| panic!("round {round}: {error}"));
+        assert_success(&fixture.reveal_at(&a));
+        assert_success(&fixture.reveal_at(&b));
+        assert_success(&fixture.add_at(&a, &format!("Round{round}")));
+    }
+
+    assert_eq!(
+        bound_actions(&fixture.root, &b)
+            .iter()
+            .filter(|action| *action == "reveal-requested")
+            .count(),
+        6,
+        "two current disclosures in each of three rounds"
+    );
+    assert_eq!(
+        bound_actions(&fixture.root, &a),
+        strings(&[
+            "reveal-requested",
+            "reveal-requested",
+            "reveal-requested",
+            "reveal-requested"
+        ]),
+        "the stale session's own four disclosures, and nothing else"
+    );
+    assert_eq!(fixture.journals().len(), 2);
+    assert_eq!(active_ids(&fixture.mapping()).len(), 2);
+}
+
+#[test]
+fn a_version_that_two_journals_recorded_fails_closed_across_processes() {
+    let fixture = Fixture::new();
+    let a = fixture.vault.clone();
+    let c = fixture.at("c.kdbx");
+    let d = fixture.at("d.kdbx");
+    let e = fixture.at("e.kdbx");
+    assert_success(&fixture.reveal_at(&a));
+    let shared = fs::read(&a).unwrap();
+    fs::copy(&a, &c).unwrap();
+    assert_success(&fixture.reveal_at(&c));
+    fs::copy(&a, &d).unwrap();
+    assert_success(&fixture.add_at(&d, "DeltaKey"));
+    fs::write(&d, &shared).unwrap();
+
+    let mapping = fs::read_to_string(fixture.root.join("mapping.json")).unwrap();
+    let before: Vec<Vec<u8>> = fixture
+        .journals()
+        .iter()
+        .map(|file| fs::read(file).unwrap())
+        .collect();
+    let refused = fixture.reveal_at(&d);
+    assert!(!refused.status.success(), "{}", stdout(&refused));
+    assert!(!stdout(&refused).contains(SECRET), "{}", stdout(&refused));
+    assert!(
+        stderr(&refused).contains("more than one journal"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("mapping.json")).unwrap(),
+        mapping,
+        "the mapping is as it was"
+    );
+    let after: Vec<Vec<u8>> = fixture
+        .journals()
+        .iter()
+        .map(|file| fs::read(file).unwrap())
+        .collect();
+    assert_eq!(before, after, "no journal changed");
+
+    let audit = fixture.audit_at(&d);
+    assert_success(&audit);
+    let text = stdout(&audit);
+    assert!(text.contains("more than one journal"), "{text}");
+    assert!(text.contains("No records displayed"), "{text}");
+
+    fs::copy(&a, &e).unwrap();
+    assert_success(&fixture.reveal_at(&e));
+    assert_eq!(
+        bound_actions(&fixture.root, &e),
+        strings(&["reveal-requested"])
+    );
+}
