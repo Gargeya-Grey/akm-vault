@@ -228,6 +228,15 @@ export function App() {
     };
   }, [status?.unlocked, loadStatus, lock]);
 
+  // Every view discards its protected state when the document hides. Native learns of it here,
+  // once, for all of them: it does not depend on a native minimize event.
+  useEffect(() => {
+    if (!status?.unlocked) return;
+    const onVisibility = () => { if (document.hidden) void api.discardView(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [status?.unlocked]);
+
   useEffect(() => {
     const root = { disposed: false };
     const cleanups: (() => void)[] = [];

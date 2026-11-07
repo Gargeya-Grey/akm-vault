@@ -106,6 +106,17 @@ export const api = {
     if (current.unlocked) await api.lock();
   },
   activity: () => invoke<void>("vault_activity"),
+  // The document hid and the page discarded its views. Native expires its side of them too
+  // (an open import dialog stops being able to apply). A native refusal other than "locked"
+  // means that the expiry is not certain, so the vault locks.
+  discardView: async () => {
+    try {
+      await nativeInvoke<void>("view_discard");
+    } catch (error) {
+      if (errorKind(error) === "locked") return;
+      try { await api.lockCurrent(); } catch { /* the native fail-closed paths already warn */ }
+    }
+  },
   upgrade: () => invoke<Status>("vault_upgrade"),
   reload: () => invoke<Status>("vault_reload"),
   warnings: async () => {

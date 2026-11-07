@@ -86,6 +86,9 @@ impl import_review::ImportConfirm for Answer {
     fn confirm(&self, _: &import_review::ImportReview) -> bool {
         self.0.load(Ordering::SeqCst)
     }
+    fn window_live(&self) -> bool {
+        true
+    }
 }
 
 fn call(
@@ -491,6 +494,16 @@ fn main() {
         "a request that names no session is refused"
     );
     assert_eq!(toasts.0.lock().unwrap().len(), shown_so_far);
+
+    // The page reports a hidden document; native expires the presentation as a minimize does.
+    let before_hide = session.snapshot().unwrap();
+    assert_eq!(
+        call(webview, "view_discard", serde_json::json!({})).unwrap(),
+        serde_json::Value::Null
+    );
+    let after_hide = session.snapshot().unwrap();
+    assert_eq!(after_hide.ticket, before_hide.ticket);
+    assert_ne!(after_hide.presentation, before_hide.presentation);
 
     call(
         webview,

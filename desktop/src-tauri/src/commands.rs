@@ -54,6 +54,7 @@ macro_rules! production_handlers {
             env_copy,
             env_save,
             env_import,
+            view_discard,
             backup_info,
             reminders_status,
             reminders_set,
@@ -766,6 +767,21 @@ fn publish_and_record(
     Ok(saved)
 }
 
+fn ensure_window_live(confirm: &dyn ImportConfirm) -> Result<(), CommandError> {
+    if confirm.window_live() {
+        Ok(())
+    } else {
+        Err(window_hidden())
+    }
+}
+
+fn window_hidden() -> CommandError {
+    CommandError::new(
+        "viewChanged",
+        "The window was hidden while the import waited for confirmation. Nothing was imported. Start it again.",
+    )
+}
+
 /// The whole import in one command. The webview names the session and the data. A
 /// native window shows the names and the scope, and only the user's click there lets
 /// the import run. No review state is kept between the request and the answer, so
@@ -824,9 +840,29 @@ fn run_import(
         reviewed.value,
     )?;
     let ticket = reviewed.snapshot.ticket;
-    if review.changes_anything() && !confirm.confirm(&review) {
-        session.record_import(ticket, &operation, OperationWarningKind::ImportDeclined);
-        return Ok(None);
+    if review.changes_anything() {
+        // A dialog for a window nobody sees, or for a session that already ended, is not shown.
+        // The modal cannot be shown under the session gate, so the write below stays bound
+        // to the snapshot too.
+        ensure_window_live(confirm)?;
+        if session.snapshot()? != reviewed.snapshot {
+            return Err(CommandError::new(
+                "stalePreview",
+                "The vault changed before the confirmation could be shown. Start it again.",
+            ));
+        }
+        if !confirm.confirm(&review) {
+            session.record_import(ticket, &operation, OperationWarningKind::ImportDeclined);
+            return Ok(None);
+        }
+        // The page discards its review when the document hides and tells native with
+        // `view_discard`. This is the native side's own check: an answer that arrives while
+        // the window is hidden or minimized does not apply what the page showed.
+        if ensure_window_live(confirm).is_err() {
+            let refused = window_hidden();
+            session.record_import(ticket, &operation, OperationWarningKind::ImportFailed);
+            return Err(refused);
+        }
     }
     // The write is bound to the snapshot of the request: a lock, a hide, a reload, a
     // page load or another write since then makes it stale. It must also still equal
@@ -858,6 +894,27 @@ fn run_import(
         },
     );
     applied.map(Some)
+}
+
+/// The page tells native that it discarded its protected views (the document was hidden).
+/// Native then does what a minimize does: it expires the presentation, so a result, a
+/// preview or an open import dialog that belongs to the discarded view can no longer
+/// apply. Native view state never depends on a window event alone.
+#[tauri::command]
+pub fn view_discard<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, VaultState>,
+) -> Result<(), CommandError> {
+    discard_view(&state.0, |notice| {
+        tauri::Emitter::emit(&app, "vault-view-expired", notice).map_err(|_| ())
+    })
+}
+
+fn discard_view(
+    session: &Session,
+    emit: impl FnOnce(&crate::session::NativeViewNotice) -> Result<(), ()>,
+) -> Result<(), CommandError> {
+    crate::visibility::expire_and_notify(session, emit).map(|_| ())
 }
 
 #[tauri::command]
@@ -1487,6 +1544,8 @@ mod tests {
         answer: bool,
         shown: Mutex<Vec<String>>,
         while_open: Box<dyn Fn() + Send + Sync>,
+        window: Arc<std::sync::atomic::AtomicBool>,
+        probe: Box<dyn Fn() + Send + Sync>,
     }
     impl ScriptedConfirm {
         fn new(answer: bool) -> Self {
@@ -1497,7 +1556,19 @@ mod tests {
                 answer,
                 shown: Mutex::new(Vec::new()),
                 while_open: Box::new(while_open),
+                window: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                probe: Box::new(|| {}),
             }
+        }
+        /// The shared flag says whether the window is shown and not minimized.
+        fn on_window(mut self, window: Arc<std::sync::atomic::AtomicBool>) -> Self {
+            self.window = window;
+            self
+        }
+        /// Runs each time native asks about the window: the last moment before the dialog.
+        fn on_probe(mut self, probe: impl Fn() + Send + Sync + 'static) -> Self {
+            self.probe = Box::new(probe);
+            self
         }
         fn shown(&self) -> Vec<String> {
             self.shown.lock().unwrap().clone()
@@ -1508,6 +1579,10 @@ mod tests {
             self.shown.lock().unwrap().push(review.message());
             (self.while_open)();
             self.answer
+        }
+        fn window_live(&self) -> bool {
+            (self.probe)();
+            self.window.load(std::sync::atomic::Ordering::SeqCst)
         }
     }
 
@@ -1735,6 +1810,180 @@ mod tests {
                 crate::test_support::env_of(&reopened, "app", "dev").is_empty(),
                 "{change}: nothing was imported"
             );
+        }
+    }
+
+    #[test]
+    fn review1_1_a_hidden_document_discards_the_native_view_even_without_a_minimize() {
+        let (session, directory) = test_session();
+        let session = Arc::new(session);
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        let confirm = {
+            let (session, emitted) = (session.clone(), emitted.clone());
+            ScriptedConfirm::during(true, move || {
+                discard_view(&session, |notice| {
+                    emitted.lock().unwrap().push(notice.session_id.clone());
+                    Ok(())
+                })
+                .unwrap();
+            })
+        };
+        let id = owner(&session);
+        let operation = new_operation();
+        let error = run_import(
+            &session,
+            &confirm,
+            &id,
+            &operation,
+            Zeroizing::new("TOKEN=fake-late\n".into()),
+            Some("app".into()),
+            Some("dev".into()),
+        )
+        .err()
+        .expect("the import ran after the document was hidden");
+        assert_eq!(error.kind, "stalePreview");
+        assert_eq!(*emitted.lock().unwrap(), [id]);
+        let record = notices(&session);
+        assert_eq!(record.len(), 1);
+        assert_eq!(record[0]["id"], operation.as_str());
+        assert_eq!(record[0]["kind"], "importFailed");
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
+        assert!(
+            session.snapshot().is_ok(),
+            "discarding a view does not lock the session"
+        );
+    }
+
+    #[test]
+    fn review1_1_a_discard_whose_notice_is_lost_locks_that_owner_and_a_locked_session_ignores_it() {
+        let (session, _directory) = test_session();
+        assert!(discard_view(&session, |_| Err(())).is_err());
+        assert_eq!(session.snapshot().unwrap_err().kind, "locked");
+        let mut emitted = false;
+        discard_view(&session, |_| {
+            emitted = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(!emitted, "a locked session has no view to discard");
+    }
+
+    #[test]
+    fn review1_1_an_approval_from_a_window_that_is_hidden_when_the_dialog_returns_is_refused() {
+        let (session, directory) = test_session();
+        let window = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let hide = window.clone();
+        let confirm = ScriptedConfirm::during(true, move || {
+            hide.store(false, std::sync::atomic::Ordering::SeqCst)
+        })
+        .on_window(window);
+        let operation = new_operation();
+        let error = run_import(
+            &session,
+            &confirm,
+            &owner(&session),
+            &operation,
+            Zeroizing::new("TOKEN=fake-late\n".into()),
+            Some("app".into()),
+            Some("dev".into()),
+        )
+        .err()
+        .expect("the import ran from a hidden window");
+        assert_eq!(error.kind, "viewChanged");
+        assert!(
+            error.message.contains("Nothing was imported"),
+            "{}",
+            error.message
+        );
+        assert_eq!(confirm.shown().len(), 1);
+        let record = notices(&session);
+        assert_eq!(record.len(), 1);
+        assert_eq!(record[0]["id"], operation.as_str());
+        assert_eq!(record[0]["kind"], "importFailed");
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
+    }
+
+    #[test]
+    fn review1_1_a_window_that_is_not_shown_gets_no_dialog_and_leaves_no_record() {
+        let (session, _directory) = test_session();
+        let confirm = ScriptedConfirm::new(true)
+            .on_window(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+        let error = run_import(
+            &session,
+            &confirm,
+            &owner(&session),
+            &new_operation(),
+            Zeroizing::new("TOKEN=fake-late\n".into()),
+            Some("app".into()),
+            Some("dev".into()),
+        )
+        .err()
+        .expect("a dialog for a window nobody sees");
+        assert_eq!(error.kind, "viewChanged");
+        assert!(confirm.shown().is_empty());
+        assert!(notices(&session).is_empty());
+        assert_eq!(exported(&session, "app", "dev"), "");
+    }
+
+    #[test]
+    fn review1_1_a_change_after_the_review_was_read_and_before_the_dialog_shows_no_dialog() {
+        for change in ["lock", "hide", "write"] {
+            let (session, directory) = test_session();
+            let session = Arc::new(session);
+            let confirm = {
+                let session = session.clone();
+                ScriptedConfirm::new(true).on_probe(move || match change {
+                    "lock" => session.lock().unwrap(),
+                    "hide" => {
+                        session.expire_presentation().unwrap();
+                    }
+                    _ => {
+                        session
+                            .access(Access::Write, None, |vault| {
+                                vault.add(akm_core::ApiKeyInput::new("Other", "fake-other"))?;
+                                Ok(())
+                            })
+                            .unwrap();
+                    }
+                })
+            };
+            let error = run_import(
+                &session,
+                &confirm,
+                &owner(&session),
+                &new_operation(),
+                Zeroizing::new("TOKEN=fake-late\n".into()),
+                Some("app".into()),
+                Some("dev".into()),
+            )
+            .err()
+            .unwrap_or_else(|| panic!("{change}: the import ran"));
+            assert_eq!(
+                error.kind,
+                if change == "lock" {
+                    "locked"
+                } else {
+                    "stalePreview"
+                },
+                "{change}"
+            );
+            assert!(confirm.shown().is_empty(), "{change}: a dialog was shown");
+            let reopened = Vault::open(
+                directory.path().join("vault.kdbx"),
+                "fake-test-password-123!",
+            )
+            .unwrap();
+            assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
         }
     }
 

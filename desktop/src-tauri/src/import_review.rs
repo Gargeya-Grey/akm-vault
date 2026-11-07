@@ -94,6 +94,9 @@ impl ImportReview {
 /// window that the webview cannot script.
 pub trait ImportConfirm: Send + Sync {
     fn confirm(&self, review: &ImportReview) -> bool;
+    /// Whether the main window is shown and not minimized right now. An answer from a
+    /// window that nobody can see is not an approval of what the page showed.
+    fn window_live(&self) -> bool;
 }
 
 pub struct ConfirmState(pub Arc<dyn ImportConfirm>);
@@ -120,6 +123,12 @@ impl<R: tauri::Runtime> ImportConfirm for NativeConfirm<R> {
             dialog = dialog.parent(&window);
         }
         dialog.blocking_show()
+    }
+
+    fn window_live(&self) -> bool {
+        self.0.get_webview_window("main").is_some_and(|window| {
+            window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(true)
+        })
     }
 }
 
