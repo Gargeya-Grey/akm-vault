@@ -14,6 +14,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tools/test_check_docs.py reads two past commits
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -24,6 +26,12 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
 
+      - name: Documentation check (stale test names, control characters)
+        run: |
+          python tools/check_docs.py
+          python tools/test_check_docs.py
+      - name: KeePassXC fetch tool never deletes what it does not own
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_fetch_keepassxc.ps1
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm ci
@@ -60,6 +68,15 @@ jobs:
           "KPXC_CLI=$($cli.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
       - name: Independent reader and writer interoperability
         run: python tools/verify_keepassxc.py --akm target/release/akm.exe --keepassxc "$env:KPXC_CLI"
+      - name: No-network check
+        run: |
+          python tools/check_no_network.py
+          python tools/test_check_no_network.py
+      - name: Second KDBX reader (kdbxweb)
+        working-directory: tools/verify_kdbxweb
+        run: |
+          npm ci
+          node verify.mjs --akm ../../target/release/akm.exe
       - name: Collect development artifacts and checksums
         shell: pwsh
         run: |
