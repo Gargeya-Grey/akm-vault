@@ -37,7 +37,8 @@ $destFull = [IO.Path]::GetFullPath($Destination).TrimEnd('\') + '\'
 if ($destFull.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Destination $destFull is inside the repository $repoRoot. Choose a folder outside it."
 }
-if ($null -eq [IO.Directory]::GetParent($destFull.TrimEnd('\'))) {
+# Compare with the root itself: "D:" without its backslash means the current folder on D:.
+if ([IO.Path]::GetPathRoot($destFull) -eq $destFull) {
     throw "Destination $destFull is a drive root. Choose a folder of its own."
 }
 

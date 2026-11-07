@@ -81,9 +81,12 @@ try {
     $r = Fetch (Join-Path $junction 'below') $good
     Check ($r.Exit -ne 0 -and @(Get-ChildItem -LiteralPath $target -Force).Count -eq 1) 'a destination below a junction is refused and the junction target is unchanged'
 
-    $drive = [IO.Path]::GetPathRoot($root)
-    $r = Fetch $drive $good
-    Check ($r.Exit -ne 0 -and $r.Output -match 'drive root') "a drive root ($drive) is refused"
+    # Both the temp drive and the drive of the current folder: CI found that "D:" without its
+    # backslash resolved to the current folder on D:, so the old check missed that drive's root.
+    foreach ($drive in @([IO.Path]::GetPathRoot($root), [IO.Path]::GetPathRoot((Get-Location).Path)) | Select-Object -Unique) {
+        $r = Fetch $drive $good
+        Check ($r.Exit -ne 0 -and $r.Output -match 'drive root') "a drive root ($drive) is refused"
+    }
 } finally {
     if (Test-Path -LiteralPath (Join-Path $root 'junction')) { cmd /c rmdir "$(Join-Path $root 'junction')" | Out-Null }
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue

@@ -20,7 +20,7 @@ On `3d663e0`, the head after the review 2 redesigns (2026-11-07, fake data only,
 - Build: `npm run tauri -- build -- --locked --offline` built the GUI and the unsigned MSI and NSIS installers. None is installed.
 - Security checks: `check_no_network.py` PASS and its test; `check_dependencies.ps1` PASS, with the two Linux-only `cargo audit` warnings of SEC-01.
 - Real readers: KeePassXC 2.8.0 interchange PASS (rotation, Recycle Bin, restore, purge, stale-copy merges); kdbxweb all checks PASS, 0 FAIL.
-- Tools: `check_docs.py` PASS and its test; `test_fetch_keepassxc.ps1` 9 of 9; `test_proof_snapshot.ps1` all cases.
+- Tools: `check_docs.py` PASS and its test; `test_fetch_keepassxc.ps1` 10 of 10 (after `ba628e8`: CI found a drive-root bug, fixed in the next commit); `test_proof_snapshot.ps1` all cases.
 - Native GUI proofs on these builds, after the verification skill's doctor check: `-JournalOnly` 27 checks PASS, `-JournalExportOnly` 9 checks PASS. No clipboard access, no minimize. The settings file was byte-identical afterwards (`dacba49a…9115`), and no `akm-desktop` process remained.
 - Not run: R4-04, the real clipboard test, the full native GUI proof, the native import dialog, the Windows toast and a real window hide. They need the owner present ([FIRST_USE.md](FIRST_USE.md)).
 
