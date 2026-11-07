@@ -265,9 +265,7 @@ function Select-Filter([string]$label, [string]$value) {
   throw "The $label combo box did not keep the value '$value' after 3 attempts"
 }
 
-function Select-FilterOnce([string]$label, [string]$value) {
-  $combo = Find-Control $label ([System.Windows.Automation.ControlType]::ComboBox)
-  $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+function Get-OwnedProcessIds {
   $ownedIds = New-Object 'System.Collections.Generic.HashSet[int]'
   [void]$ownedIds.Add($process.Id)
   $queue = New-Object 'System.Collections.Generic.Queue[int]'
@@ -278,29 +276,134 @@ function Select-FilterOnce([string]$label, [string]$value) {
       if ($ownedIds.Add([int]$child.ProcessId)) { $queue.Enqueue([int]$child.ProcessId) }
     }
   }
+  return ,$ownedIds
+}
+
+function Get-OwnedTopWindows($ownedIds) {
+  foreach ($window in $AE::RootElement.FindAll($TS::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+    $rootOwner = [AkmProofClipboard]::GetAncestor([IntPtr]$window.Current.NativeWindowHandle, 3)
+    if (!$ownedIds.Contains($window.Current.ProcessId) -and $rootOwner -ne $process.MainWindowHandle) { continue }
+    $window
+  }
+}
+
+# Activates the enabled, visible option named $value in a window of the test process. Returns $true when it did.
+function Invoke-FilterOption($ownedIds, $combo, [string]$value) {
   $condition = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $value)
-  $until = [DateTime]::UtcNow.AddSeconds(12)
-  do {
-    foreach ($window in $AE::RootElement.FindAll($TS::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
-      $rootOwner = [AkmProofClipboard]::GetAncestor([IntPtr]$window.Current.NativeWindowHandle, 3)
-      if (!$ownedIds.Contains($window.Current.ProcessId) -and $rootOwner -ne $process.MainWindowHandle) { continue }
-      foreach ($item in $window.FindAll($TS::Descendants, $condition)) {
-        if (!$item.Current.IsEnabled -or $item.Current.IsOffscreen) { continue }
-        $action = $null
-        if ($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$action)) {
-          $action.Invoke()
-          return
-        }
-        if ($item.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$action)) {
-          $action.Select()
-          $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Collapse()
-          return
-        }
+  foreach ($window in @(Get-OwnedTopWindows $ownedIds)) {
+    foreach ($item in $window.FindAll($TS::Descendants, $condition)) {
+      if (!$item.Current.IsEnabled -or $item.Current.IsOffscreen) { continue }
+      $action = $null
+      if ($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$action)) {
+        $action.Invoke()
+        return $true
+      }
+      if ($item.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$action)) {
+        $action.Select()
+        $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Collapse()
+        return $true
       }
     }
+  }
+  return $false
+}
+
+function Get-FilterOptionNames($ownedIds) {
+  $types = @([System.Windows.Automation.ControlType]::ListItem, [System.Windows.Automation.ControlType]::MenuItem, [System.Windows.Automation.ControlType]::DataItem)
+  $condition = New-Object System.Windows.Automation.OrCondition(@($types | ForEach-Object { New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $_) }))
+  $names = New-Object 'System.Collections.Generic.List[string]'
+  foreach ($window in @(Get-OwnedTopWindows $ownedIds)) {
+    foreach ($item in $window.FindAll($TS::Descendants, $condition)) {
+      if ($names.Count -ge 40) { break }
+      $names.Add(('{0} (enabled={1}, offscreen={2})' -f $item.Current.Name, $item.Current.IsEnabled, $item.Current.IsOffscreen))
+    }
+  }
+  return $names.ToArray()
+}
+
+# Turns the last stage of a failed filter step into a hint that separates a UI Automation race from an app failure.
+function Get-FilterFailureHint([string]$stage, [string[]]$optionNames, [string]$value) {
+  switch ($stage) {
+    'combo-not-found' { return 'The control was never visible to UI Automation: the app is not in the expected view (app or navigation failure).' }
+    'combo-unreadable' { return 'The combo box element became unavailable while it was read: the view re-rendered during the wait (a UI Automation race is likely).' }
+    'combo-disabled' { return 'The combo box stayed disabled for the whole wait: the app did not enable it (app failure likely).' }
+    'no-expand-pattern' { return 'The combo box existed but never exposed ExpandCollapse in the wait: a UI Automation race is likely.' }
+    'expand-failed' { return 'The combo box exposed ExpandCollapse but every Expand call failed: a UI Automation race is likely.' }
+    'option-missing' {
+      if ($optionNames.Count -eq 0) { return 'The expanded list exposed no options to UI Automation: a UI Automation race or a popup that never rendered.' }
+      if (@($optionNames | Where-Object { $_ -like "$value (*" }).Count -gt 0) { return 'The expected option is listed but was disabled, offscreen or not actionable.' }
+      return 'Options were listed but the expected one is absent: the app did not offer this value (app failure likely).'
+    }
+    default { return 'No stage was recorded.' }
+  }
+}
+
+function Write-FilterDiagnostic([string]$label, [string]$value, $combo, [string]$stage, [string]$detail, $ownedIds) {
+  try {
+    Write-Output "DIAG: filter step '$label' / '$value' failed at stage '$stage'. Last error: $detail"
+    if ($combo) {
+      $patterns = @($combo.GetSupportedPatterns() | ForEach-Object { $_.ProgrammaticName -replace 'PatternIdentifiers\.Pattern$', '' })
+      Write-Output ('DIAG: combo box supported patterns: ' + $(if ($patterns.Count) { $patterns -join ', ' } else { '(none)' }))
+      Write-Output ('DIAG: combo box enabled={0}, offscreen={1}, class={2}, automation id={3}' -f $combo.Current.IsEnabled, $combo.Current.IsOffscreen, $combo.Current.ClassName, $combo.Current.AutomationId)
+      $pattern = $null
+      if ($combo.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$pattern)) {
+        Write-Output "DIAG: combo box expand state: $($pattern.Current.ExpandCollapseState)"
+      }
+    } else {
+      Write-Output 'DIAG: the combo box element was never found.'
+    }
+    $optionNames = @(Get-FilterOptionNames $ownedIds)
+    Write-Output ('DIAG: option names found in windows of the test process: ' + $(if ($optionNames.Count) { $optionNames -join '; ' } else { '(none)' }))
+    Write-Output ('DIAG: ' + (Get-FilterFailureHint $stage $optionNames $value))
+  } catch {
+    Write-Output "DIAG: collecting the diagnostic failed: $($_.Exception.Message)"
+  }
+}
+
+# UI Automation can expose the combo box, its ExpandCollapse pattern and its options a little after the control appears.
+# Wait for each with a bounded deadline, retry Expand, and re-open the list when the option does not show up.
+function Select-FilterOnce([string]$label, [string]$value) {
+  $deadline = [DateTime]::UtcNow.AddSeconds(15)
+  $stage = 'combo-not-found'
+  $detail = ''
+  $combo = $null
+  $ownedIds = Get-OwnedProcessIds
+  while ([DateTime]::UtcNow -lt $deadline) {
+    try {
+      try {
+        $combo = Find-Control $label ([System.Windows.Automation.ControlType]::ComboBox) 1000
+      } catch {
+        $stage = 'combo-not-found'; $detail = $_.Exception.Message
+        continue
+      }
+      $stage = 'combo-unreadable'; $detail = 'the combo box element was not readable'
+      $expand = $null
+      if (!$combo.Current.IsEnabled) {
+        $stage = 'combo-disabled'; $detail = 'the combo box is not enabled'
+      } elseif (!$combo.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$expand)) {
+        $stage = 'no-expand-pattern'; $detail = 'ExpandCollapse is not exposed yet'
+      } else {
+        $stage = 'expand-failed'
+        $expand.Expand()
+        $stage = 'option-missing'; $detail = "no enabled option named '$value' was found"
+        $ownedIds = Get-OwnedProcessIds
+        $scanUntil = [DateTime]::UtcNow.AddSeconds(5)
+        if ($scanUntil -gt $deadline) { $scanUntil = $deadline }
+        do {
+          if (Invoke-FilterOption $ownedIds $combo $value) { return }
+          Start-Sleep -Milliseconds 100
+        } while ([DateTime]::UtcNow -lt $scanUntil)
+        try { $expand.Collapse() } catch { }
+      }
+    } catch {
+      $detail = $_.Exception.Message
+      if ($stage -eq 'option-missing') { $detail = "option scan failed: $detail" }
+    }
     Start-Sleep -Milliseconds 100
-  } while ([DateTime]::UtcNow -lt $until)
-  throw "Missing select option in the test process: $label / $value"
+  }
+  Write-FilterDiagnostic $label $value $combo $stage $detail $ownedIds
+  if ($stage -eq 'option-missing') { throw "Missing select option in the test process: $label / $value" }
+  throw "Filter combo box did not become usable in the test process ($stage): $label / $value. Last error: $detail"
 }
 
 function Wait-SaveDialog {
