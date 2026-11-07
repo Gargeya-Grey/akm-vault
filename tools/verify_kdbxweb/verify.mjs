@@ -268,7 +268,7 @@ async function partA(akmExe, work) {
     equal(fieldText(entry, 'Password'), 'fake-openai-secret', 'Password');
     equal([...entry.tags].sort(), ['ai', 'fake'], 'tags');
     equal(entry.times.expires, true, 'expires flag');
-    equal(entry.times.expiryTime.toISOString(), '2027-03-15T00:00:00.000Z', 'expiry time');
+    equal(entry.times.expiryTime.toISOString(), '2027-03-15T23:59:59.000Z', 'expiry time (date-only expiry is the end of that UTC day, docs/design/unit3.md)');
     isTrue(entry.times.creationTime instanceof Date, 'creation time missing');
   });
   await check('A10 full entry: every AKM custom field', () => {

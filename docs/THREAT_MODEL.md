@@ -24,13 +24,13 @@ AKM has had no professional audit, and the only measured score is 40.5/100 ([bas
 
 | # | Attacker | Verdict | Contract | Real test |
 |---|---|---|---|---|
-| 1 | Stolen or copied vault file | Stops reading the secrets. The plaintext journal and old backups travel with it. | C2 | `crates/akm-core/tests/vault.rs :: creates_vaults_with_a_hardened_kdf` |
-| 2 | Synced cloud copy | Stops reading the secrets. Does not stop metadata leaks today (journal). Makes stale overwrites harder. | C2, C3 | `crates/akm-core/tests/vault.rs :: refuses_to_overwrite_a_vault_changed_on_disk` |
+| 1 | Stolen or copied vault file | Stops reading the secrets. Old backups travel with it; the journal does not (unit 1b). | C2 | `crates/akm-core/tests/vault.rs :: creates_vaults_with_a_hardened_kdf` |
+| 2 | Synced cloud copy | Stops reading the secrets. Puts no journal beside the vault. Makes stale overwrites harder. | C2, C3 | `crates/akm-cli/tests/journal.rs :: nothing_but_the_vault_and_its_backups_appears_beside_a_synced_vault` |
 | 3 | Malware that runs as the same Windows user | Does not help | none | none |
 | 4 | Keylogger | Does not help | none | none |
 | 5 | AI coding agent or other local program in the user's shell | Makes harder for accidents. Does not stop a deliberate read. | C7, C11 | `crates/akm-cli/tests/security.rs :: run_scrubs_all_akm_variables_preserves_normal_environment_and_child_exit` |
 | 6 | Screen capture, or a person watching | Makes harder for software capture. Does not stop a camera or a person. | C6 (lock policy) | `desktop/src-tauri/src/commands.rs :: native_window_configuration_excludes_screenshots` |
-| 7 | Hostile `.env` file | Makes harder (reviewed, scoped, partly blocklisted) | C7 | `crates/akm-core/tests/vault.rs :: import_requires_scope_and_safe_process_variables` |
+| 7 | Hostile `.env` file | Makes harder (native review, scoped, reserved variable classes, size limits) | C7 | `crates/akm-cli/tests/security.rs :: every_reserved_class_is_refused_by_run_and_export_with_the_key_title_and_never_the_value` |
 | 8 | Another Windows user or program that reads exported files | Makes harder for exports. Does not protect the vault file by ACL. | C8 | `crates/akm-cli/tests/security.rs :: file_export_rejects_an_ignored_private_dacl_before_writing` |
 | 9 | Clipboard history, cloud clipboard or a clipboard reader | Makes harder. Does not stop a reader that is fast. | C10 | `desktop/src-tauri/src/clipboard.rs :: success_publishes_utf16_and_all_three_zero_exclusions_in_one_interval` |
 | 10 | Memory dump, crash dump, page file or hibernation file | Does not help (best-effort cleanup only) | none | none |
@@ -46,18 +46,19 @@ Rows 1 to 7 are the attackers named in the security proposals ([ROADMAP.md](ROAD
 
 ### 1. Stolen or copied vault file
 
-- **Gets:** the `.kdbx` file. The folder also holds the convenience `.bak`, up to five dated encrypted backups, and the plaintext journal `<vault>.audit.jsonl` (read: `crates/akm-core/src/vault.rs`, `audit.rs`).
+- **Gets:** the `.kdbx` file. The folder also holds the convenience `.bak`, up to five dated encrypted backups, and, for vaults that older AKM versions used, a legacy plaintext journal `<vault>.audit.jsonl` that AKM now reports and never writes (read: `crates/akm-core/src/vault.rs`, `journal.rs`; test: `crates/akm-core/tests/journal_identity.rs :: a_legacy_sidecar_is_reported_and_stays_byte_identical`).
 - **AKM does:** the file is encrypted and authenticated by the KDBX format. Test: a wrong password does not open it (`crates/akm-core/tests/vault.rs :: rejects_the_wrong_password`). Test: new vaults use KDBX 4.1 and Argon2id with 64 MiB, 3 iterations and parallelism 4 (`creates_vaults_with_a_hardened_kdf`). Test: a new vault needs 12 Unicode characters (`create_requires_twelve_unicode_characters_before_any_files_are_written`).
 - **Limits:**
   - Offline guessing is limited only by the password and the KDF. AKM does not check password strength.
   - Backups keep old values of rotated secrets. The backups use the same password (read; test: `retains_the_five_latest_encrypted_originals_and_a_legacy_backup`).
-  - The journal is not encrypted. Today it holds action names, key titles, projects, environments and timestamps. It holds no secret value (read: `crates/akm-cli/src/main.rs`, the reveal record says only "disclosure requested"). The journal moves to a private per-device folder in unit 1b ([ROADMAP.md](ROADMAP.md#unit-1b-private-per-device-journal)). Until then it sits next to the vault.
+  - The vault keeps native KDBX history, so old secret values stay inside the encrypted file until a purge (unit 2; test: `crates/akm-core/tests/lifecycle.rs :: rotate_replaces_the_secret_records_time_history_and_a_secret_free_record`).
+  - The journal lives in a private per-device folder (`%LOCALAPPDATA%\akm\journal\`), not beside the vault, so a copied vault folder does not carry it. It is not encrypted. It holds action names, key IDs, counts and timestamps, and no title, project, environment, export path or secret ([design/unit1b.md](design/unit1b.md) D3; test: `crates/akm-cli/tests/journal.rs :: akm_audit_runs_without_a_password_and_shows_key_ids_only`). A legacy sidecar that already synced stays wherever it synced.
   - No second factor exists ([ROADMAP.md](ROADMAP.md) item 12).
 
 ### 2. Synced cloud copy
 
-- **Gets:** everything in row 1, from the cloud provider or from anyone who has the cloud account. The sync folder holds the vault, its backups and (today) the journal.
-- **AKM does:** the vault content is encrypted as in row 1. AKM detects a vault that changed on disk since it was opened and refuses to overwrite it (test: `crates/akm-core/tests/vault.rs :: refuses_to_overwrite_a_vault_changed_on_disk`, `two_snapshots_can_open_and_the_stale_writer_is_refused`; `crates/akm-core/src/vault.rs :: source_replaced_while_serializing_is_not_overwritten_or_backed_up_as_ours`). The CLI's default vault path is `%APPDATA%kmault.kdbx`, the Roaming application data folder (read: `default_vault_path` in `crates/akm-cli/src/main.rs`). Ordinary Windows does not sync it, but a domain roaming profile can. The user can choose any folder, including a sync folder. Detection and refusal cover only a fully downloaded folder.
+- **Gets:** everything in row 1, from the cloud provider or from anyone who has the cloud account. The sync folder holds the vault and its backups. The journal is not there (unit 1b), except a legacy sidecar from an older AKM version.
+- **AKM does:** the vault content is encrypted as in row 1. AKM detects a vault that changed on disk since it was opened and refuses to overwrite it (test: `crates/akm-core/tests/vault.rs :: refuses_to_overwrite_a_vault_changed_on_disk`, `two_snapshots_can_open_and_the_stale_writer_is_refused`; `crates/akm-core/src/vault.rs :: source_replaced_while_serializing_is_not_overwritten_or_backed_up_as_ours`). The CLI's default vault path is `%APPDATA%\akm\vault.kdbx`, the Roaming application data folder (read: `default_vault_path` in `crates/akm-cli/src/main.rs`). Ordinary Windows does not sync it, but a domain roaming profile can. The user can choose any folder, including a sync folder. Detection and refusal cover only a fully downloaded folder.
 - **Limits:**
   - Today the plaintext journal leaks access patterns (which key, when) to the cloud provider if the vault folder syncs. Unit 1b removes the journal from the vault folder. It cannot remove copies that already synced.
   - A short local lock gives no consensus and no atomic compare-and-swap in the cloud. A sync client can race the final check (PROJECT.md, trust boundaries).
@@ -90,7 +91,7 @@ This attacker runs as the user, in a terminal or a build tool, and may start chi
   - If `AKM_PASSWORD` is set in the shell, any program in that shell can read it and unlock the vault. The README recommends the prompt for this reason (`crates/akm-cli/README.md`).
   - `run` puts the selected secrets in the child's environment. The child and every process it starts can read them. Child output is not masked, so a captured log can hold them.
   - `get --reveal`, `get --field secret` and `export` print secrets on purpose. The CLI cannot tell a person from an agent.
-  - The journal is plaintext and readable. It records what was revealed, but an agent can also read it, and it is not authenticated evidence.
+  - The journal is plaintext in the user's private folder, so an agent that runs as the user can read it. It records which key ID was revealed, not its title, and it is not authenticated evidence.
 - **Verdict:** AKM reduces accidental leaks. It does not stop an agent that decides to read a key. The proposed agent guardrails are in [ROADMAP.md](ROADMAP.md) group D and have the same limit. The real boundary is a separate Windows account, a container, or a broker that holds the keys.
 
 ### 6. Screen capture, or a person watching the screen
@@ -142,7 +143,7 @@ This attacker supplies a `.env` file that the user imports (for example from a c
 ### 13. Someone who can write to the journal
 
 - **AKM does:** the journal has a hash chain, and AKM reports damage and preserves the damaged bytes (`crates/akm-core/tests/audit_states.rs :: audit_snapshot_distinguishes_absent_empty_and_consistent_without_modifying_bytes`, `audit_damage_is_structured_and_display_limit_does_not_skip_verification`).
-- **Limits:** the chain has no independent anchor. Truncating the file, or rewriting it with a new valid chain, is not detected. The journal is not authenticated evidence (C12 and PROJECT.md). Unit 1b changes where the journal lives. It must not claim more integrity than this ([ROADMAP.md](ROADMAP.md#unit-1b-private-per-device-journal)).
+- **Limits:** the chain has no independent anchor. Truncating the file at a record boundary, or rewriting it with a new valid chain, is not detected ([design/unit1b.md](design/unit1b.md) D7). The journal is not authenticated evidence (C12 and PROJECT.md). Unit 1b moved it to a private folder that grants only the current user (test: `crates/akm-core/tests/journal_identity.rs :: a_folder_with_an_extra_account_is_refused_and_nothing_is_written`), so another Windows user cannot write it; the same user still can.
 
 ### 14. Malicious or vulnerable dependency (supply chain)
 
@@ -164,4 +165,4 @@ Hardware attacks, a malicious operating system, a compromised Windows administra
 
 ## Keep this document true
 
-Change a row when a contract, a test or a seam changes. Do not add a claim that has no test or source reading behind it. When unit 1b lands, update rows 1, 2 and 13.
+Change a row when a contract, a test or a seam changes. Do not add a claim that has no test or source reading behind it.

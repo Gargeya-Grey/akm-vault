@@ -46,10 +46,33 @@ impl JournalRoot {
     /// `AKM_JOURNAL_ROOT` if it is set, else `%LOCALAPPDATA%\akm\journal`. A value that
     /// cannot be used makes the journal unavailable. It never selects another place.
     pub fn from_environment() -> Self {
-        if let Some(value) = std::env::var_os(ROOT_ENV) {
+        Self::resolve(
+            std::env::var_os(ROOT_ENV),
+            std::env::var_os("LOCALAPPDATA"),
+            cfg!(debug_assertions) && std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+        )
+    }
+
+    /// `under_cargo`: a debug build that cargo started. Without an explicit root it never uses
+    /// the real profile folder, so a test run from outside the repository fails instead of
+    /// writing fake journals there (`.cargo/config.toml` sets the root only below the repository).
+    fn resolve(
+        explicit: Option<std::ffi::OsString>,
+        local_app_data: Option<std::ffi::OsString>,
+        under_cargo: bool,
+    ) -> Self {
+        if let Some(value) = explicit {
             return Self::checked(PathBuf::from(value), ROOT_ENV);
         }
-        match std::env::var_os("LOCALAPPDATA") {
+        if under_cargo {
+            return Self {
+                location: Err(format!(
+                    "{ROOT_ENV} is not set in a debug build that cargo started; \
+                     the real profile folder is never used for tests"
+                )),
+            };
+        }
+        match local_app_data {
             Some(base) => {
                 let mut root = Self::checked(PathBuf::from(base), "LOCALAPPDATA");
                 if let Ok(path) = &mut root.location {
@@ -646,6 +669,24 @@ pub(crate) fn locate(root: &JournalRoot, evidence: &VaultEvidence) -> Result<Loc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_debug_build_under_cargo_without_a_root_never_selects_the_profile_folder() {
+        let profile = std::ffi::OsString::from(r"C:\Users\fake\AppData\Local");
+        let guarded = JournalRoot::resolve(None, Some(profile.clone()), true);
+        let message = guarded.path().unwrap_err().to_string();
+        assert!(message.contains("AKM_JOURNAL_ROOT is not set"), "{message}");
+
+        let explicit =
+            JournalRoot::resolve(Some(r"C:\fake\journal".into()), Some(profile.clone()), true);
+        assert_eq!(explicit.path().unwrap(), Path::new(r"C:\fake\journal"));
+
+        let normal = JournalRoot::resolve(None, Some(profile), false);
+        assert_eq!(
+            normal.path().unwrap(),
+            Path::new(r"C:\Users\fake\AppData\Local\akm\journal")
+        );
+    }
 
     fn binding(path: &str, file_id: Option<&str>, root: Option<&str>, seen: &[&str]) -> Binding {
         Binding {
