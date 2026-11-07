@@ -1,6 +1,10 @@
 use std::{
+    ops::{Deref, DerefMut},
     path::PathBuf,
-    sync::{Arc, Mutex, MutexGuard, TryLockError},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, MutexGuard, PoisonError, TryLockError,
+    },
     time::{Duration, Instant},
 };
 
@@ -126,8 +130,9 @@ struct Gate {
     owner: Option<NativeOwner>,
     revision: u64,
     presentation: u64,
-    clipboard: ClipboardLease,
-    cleanup_episode: Option<u64>,
+    /// A lock transition was seen and its cleanup attempt is still owed. The guard that
+    /// saw the transition settles it after it released the gate (unit 1h, design D2).
+    cleanup_owed: bool,
     path: Option<PathBuf>,
     warnings: Vec<ApplicationNotice>,
     notices: Vec<OperationNotice>,
@@ -139,8 +144,60 @@ struct StoredVault {
     vault: Option<Vault>,
 }
 
+/// The clipboard lease and the bookkeeping that belongs to it. Lock order is vault, then this
+/// cell, then the gate: code that holds the gate never waits for the cell.
+struct LeaseCell {
+    clipboard: ClipboardLease,
+    /// The session that made the current lease; a lease of any other ticket is stale.
+    ticket: Option<Ticket>,
+    /// The lease generation whose cleanup failure already has a warning.
+    episode: Option<u64>,
+}
+
+/// A gate guard. A lock transition that the call saw is settled when the guard is dropped,
+/// after the gate was released, so a cleanup never runs under the gate.
+struct GateGuard<'a> {
+    session: &'a Session,
+    guard: Option<MutexGuard<'a, Gate>>,
+    flush: bool,
+}
+
+impl Deref for GateGuard<'_> {
+    type Target = Gate;
+    fn deref(&self) -> &Gate {
+        self.guard.as_ref().expect("the guard lives until drop")
+    }
+}
+
+impl DerefMut for GateGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Gate {
+        self.guard.as_mut().expect("the guard lives until drop")
+    }
+}
+
+impl Drop for GateGuard<'_> {
+    fn drop(&mut self) {
+        let Some(mut guard) = self.guard.take() else {
+            return;
+        };
+        let owed = self.flush && std::mem::take(&mut guard.cleanup_owed);
+        drop(guard);
+        if owed {
+            self.session.settle(false);
+        }
+    }
+}
+
+enum Step {
+    None,
+    Clear,
+    Tick(Duration),
+}
+
 pub struct Session {
     gate: Mutex<Gate>,
+    lease: Mutex<LeaseCell>,
+    exiting: AtomicBool,
     vault: Mutex<StoredVault>,
     open_serial: Mutex<()>,
     clock: Arc<dyn Clock>,
@@ -162,12 +219,17 @@ impl Session {
                 owner: None,
                 revision: 0,
                 presentation: 0,
-                clipboard: ClipboardLease::new(clipboard),
-                cleanup_episode: None,
+                cleanup_owed: false,
                 path: None,
                 warnings: Vec::new(),
                 notices: Vec::new(),
             }),
+            lease: Mutex::new(LeaseCell {
+                clipboard: ClipboardLease::new(clipboard),
+                ticket: None,
+                episode: None,
+            }),
+            exiting: AtomicBool::new(false),
             vault: Mutex::new(StoredVault::default()),
             open_serial: Mutex::new(()),
             clock,
@@ -175,7 +237,19 @@ impl Session {
         }
     }
 
-    fn gate(&self) -> Result<MutexGuard<'_, Gate>, CommandError> {
+    /// The gate. A guard that saw a lock transition makes the owed cleanup attempt when it
+    /// is dropped.
+    fn gate(&self) -> Result<GateGuard<'_>, CommandError> {
+        self.gate_with(true)
+    }
+
+    /// The gate, for a caller that settles the cleanup itself (it holds the lease cell, or
+    /// it is a tick or an open, which settle exactly once).
+    fn gate_deferred(&self) -> Result<GateGuard<'_>, CommandError> {
+        self.gate_with(false)
+    }
+
+    fn gate_with(&self, flush: bool) -> Result<GateGuard<'_>, CommandError> {
         match self.gate.lock() {
             Ok(mut gate) => {
                 let was_locked = gate.policy.is_locked();
@@ -183,12 +257,21 @@ impl Session {
                 if !was_locked && gate.policy.is_locked() {
                     self.locked_gate(&mut gate);
                 }
-                Ok(gate)
+                Ok(GateGuard {
+                    session: self,
+                    guard: Some(gate),
+                    flush,
+                })
             }
             Err(poisoned) => {
                 let mut gate = poisoned.into_inner();
                 gate.policy.observe(Signal::Unobservable);
                 self.locked_gate(&mut gate);
+                drop(GateGuard {
+                    session: self,
+                    guard: Some(gate),
+                    flush,
+                });
                 Err(CommandError::internal(
                     "The native session state failed. Restart AKM.",
                 ))
@@ -196,9 +279,95 @@ impl Session {
         }
     }
 
+    /// A lock transition: the notice goes out first, under the gate. The cleanup attempt is
+    /// owed, and happens after the gate was released (design D2).
     fn locked_gate(&self, gate: &mut Gate) {
-        cleanup_clipboard(gate, None);
+        gate.cleanup_owed = true;
         self.retire_owner(gate);
+    }
+
+    fn cell(&self) -> MutexGuard<'_, LeaseCell> {
+        self.lease.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn raw_gate(&self) -> MutexGuard<'_, Gate> {
+        self.gate.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    #[cfg(test)]
+    fn cell_for_test(&self) -> MutexGuard<'_, LeaseCell> {
+        self.cell()
+    }
+
+    /// The cleanup attempt of one public call (at most one, never a loop). `tick` also
+    /// expires a due lease of the current session.
+    fn settle(&self, tick: bool) {
+        let mut cell = self.cell();
+        self.settle_held(&mut cell, tick, false);
+    }
+
+    fn settle_held(&self, cell: &mut LeaseCell, tick: bool, only_if_owed: bool) {
+        let step = {
+            let mut gate = self.raw_gate();
+            let owed = std::mem::take(&mut gate.cleanup_owed);
+            if (only_if_owed && !owed && !tick) || cell.clipboard.owned_generation().is_none() {
+                Step::None
+            } else {
+                // A tick keeps the due time of a lease that outlived its session, as unit 1a
+                // accepted. Any other settle is a lock transition: it cleans a lease that
+                // does not belong to the active session, so a late settle of an older session
+                // cannot touch a newer session's copy.
+                let stale = match cell.ticket {
+                    Some(ticket) => gate.policy.is_locked() || gate.policy.generation() != ticket.0,
+                    None => true,
+                };
+                if tick {
+                    if gate.policy.is_locked() {
+                        Step::Clear
+                    } else {
+                        Step::Tick(self.clock.now())
+                    }
+                } else if stale {
+                    Step::Clear
+                } else {
+                    Step::None
+                }
+            }
+        };
+        let lease = cell.clipboard.owned_generation();
+        let result = match step {
+            Step::Clear => cell.clipboard.clear(),
+            Step::Tick(now) => cell.clipboard.tick(now),
+            Step::None => Ok(()),
+        };
+        let failure = result
+            .err()
+            .zip(lease)
+            .map(|(error, lease_generation)| CleanupFailure {
+                lease_generation,
+                error,
+            });
+        self.account_cleanup(cell, failure);
+    }
+
+    fn account_cleanup(&self, cell: &mut LeaseCell, failure: Option<CleanupFailure>) {
+        if let Some(failure) = failure {
+            if cell.episode != Some(failure.lease_generation) {
+                cell.episode = Some(failure.lease_generation);
+                application_warning(&mut self.raw_gate(), failure.error.message);
+            }
+        }
+        for note in cell.clipboard.take_notes() {
+            application_warning(&mut self.raw_gate(), note.message().to_string());
+        }
+        // An actual relinquishment or replacement ends the old episode. A successful
+        // not-due tick retains the same owned lease, so it does not count as recovery.
+        if cell.clipboard.owned_generation() != cell.episode {
+            cell.episode = None;
+        }
+        if cell.clipboard.owned_generation().is_none() {
+            cell.ticket = None;
+        }
     }
 
     fn retire_owner(&self, gate: &mut Gate) {
@@ -266,11 +435,20 @@ impl Session {
     }
 
     pub fn tick(&self) {
-        if let Ok(mut gate) = self.gate() {
-            let due = (!gate.policy.is_locked()).then(|| self.clock.now());
-            cleanup_clipboard(&mut gate, due);
-        }
+        // Expiry seen here is settled by the one attempt below.
+        drop(self.gate_deferred());
+        self.settle(true);
         self.discard_locked_vault();
+    }
+
+    /// Window close and application exit: lock, with one cleanup attempt, once. Later calls
+    /// do nothing until the next open. The lease's own drop does not attempt again.
+    pub fn shutdown(&self) {
+        if self.exiting.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let _ = self.lock();
+        self.cell().clipboard.exit_attempted();
     }
 
     pub fn activity(&self) -> Result<(), CommandError> {
@@ -312,11 +490,11 @@ impl Session {
     }
 
     fn start_open(&self) -> Result<(Ticket, uuid::Uuid), CommandError> {
-        let reservation = {
-            let mut gate = self.gate()?;
+        self.exiting.store(false, Ordering::SeqCst);
+        let reservation = (|| {
+            let mut gate = self.gate_deferred()?;
             let ticket = gate.policy.begin_open(self.clock.now());
-            cleanup_clipboard(&mut gate, None);
-            self.retire_owner(&mut gate);
+            self.locked_gate(&mut gate);
             let ticket = ticket.ok_or_else(|| {
                 CommandError::new(
                     "sessionUnavailable",
@@ -329,10 +507,12 @@ impl Session {
                 ticket,
                 claimed: false,
             });
-            (ticket, id)
-        };
+            Ok((ticket, id))
+        })();
+        // The older owner was retired above; the one attempt for its lease is here.
+        self.settle(false);
         self.discard_locked_vault();
-        Ok(reservation)
+        reservation
     }
 
     pub fn claim_open(&self, session_id: &str) -> Result<Ticket, CommandError> {
@@ -595,30 +775,47 @@ impl Session {
         presentation: Option<u64>,
         text: Zeroizing<String>,
     ) -> Result<(), CommandError> {
-        // This gate serializes copy with lock/close/expiry. No Vault mutex is held here.
-        let mut gate = self.gate()?;
-        let current = self.current(&mut gate)?;
-        if current.ticket != ticket {
-            return Err(CommandError::locked());
+        // The cell serializes copy with cleanup. No Vault mutex and no gate is held while the
+        // OS clipboard is used, so a lock is never delayed by the copy (design D1).
+        let mut cell = self.cell();
+        let result = self.copy_held(&mut cell, ticket, presentation, text);
+        self.settle_held(&mut cell, false, true);
+        result
+    }
+
+    fn copy_held(
+        &self,
+        cell: &mut LeaseCell,
+        ticket: Ticket,
+        presentation: Option<u64>,
+        text: Zeroizing<String>,
+    ) -> Result<(), CommandError> {
+        let check = |this: &Self| -> Result<(), CommandError> {
+            let mut gate = this.gate_deferred()?;
+            let current = this.current(&mut gate)?;
+            if current.ticket != ticket {
+                return Err(CommandError::locked());
+            }
+            if presentation.is_some_and(|expected| expected != current.presentation) {
+                return Err(view_changed());
+            }
+            Ok(())
+        };
+        check(self)?;
+        let before = cell.clipboard.owned_generation();
+        let outcome = cell.clipboard.copy_reported(text, self.clock.now());
+        let after = cell.clipboard.owned_generation();
+        if after.is_some() && after != before {
+            cell.ticket = Some(ticket);
         }
-        if presentation.is_some_and(|expected| expected != current.presentation) {
-            return Err(view_changed());
-        }
-        match gate.clipboard.copy_reported(text, self.clock.now()) {
-            Ok(_) => account_cleanup(&mut gate, None),
+        match outcome {
+            Ok(_) => self.account_cleanup(cell, None),
             Err(failure) => {
-                account_cleanup(&mut gate, failure.cleanup);
+                self.account_cleanup(cell, failure.cleanup);
                 return Err(failure.error);
             }
         }
-        let current = self.current(&mut gate)?;
-        if current.ticket != ticket {
-            return Err(CommandError::locked());
-        }
-        if presentation.is_some_and(|expected| expected != current.presentation) {
-            return Err(view_changed());
-        }
-        Ok(())
+        check(self)
     }
 
     pub fn reveal(&self, secret: Stamped<Zeroizing<String>>) -> Result<String, CommandError> {
@@ -768,36 +965,6 @@ fn view_changed() -> CommandError {
         "viewChanged",
         "The protected view expired. Start this disclosure or preview again.",
     )
-}
-
-fn cleanup_clipboard(gate: &mut Gate, due: Option<Duration>) {
-    let lease = gate.clipboard.owned_generation();
-    let result = match due {
-        Some(now) => gate.clipboard.tick(now),
-        None => gate.clipboard.clear(),
-    };
-    let failure = result
-        .err()
-        .zip(lease)
-        .map(|(error, lease_generation)| CleanupFailure {
-            lease_generation,
-            error,
-        });
-    account_cleanup(gate, failure);
-}
-
-fn account_cleanup(gate: &mut Gate, failure: Option<CleanupFailure>) {
-    if let Some(failure) = failure {
-        if gate.cleanup_episode != Some(failure.lease_generation) {
-            gate.cleanup_episode = Some(failure.lease_generation);
-            application_warning(gate, failure.error.message);
-        }
-    }
-    // An actual relinquishment or replacement ends the old episode. A successful
-    // not-due tick retains the same owned lease, so it does not count as recovery.
-    if gate.clipboard.owned_generation() != gate.cleanup_episode {
-        gate.cleanup_episode = None;
-    }
 }
 
 fn application_warning(gate: &mut Gate, message: String) {
@@ -1000,8 +1167,7 @@ mod tests {
         );
         assert!(f
             .session
-            .gate()
-            .unwrap()
+            .cell_for_test()
             .clipboard
             .owned_generation()
             .is_none());
@@ -1622,7 +1788,7 @@ mod tests {
         for partial in [false, true] {
             let f = fixture();
             let busy = Arc::new(AtomicBool::new(true));
-            f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(BusyCleanup {
+            f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(BusyCleanup {
                 data: f.clipboard.clone(),
                 busy: busy.clone(),
                 partial,
@@ -1657,7 +1823,7 @@ mod tests {
             let expected = if newer_copy { "fake-busy-value" } else { "" };
             assert_eq!(f.clipboard.lock().unwrap().text, expected);
             assert_eq!(f.clipboard.lock().unwrap().clears, usize::from(!newer_copy));
-            assert_eq!(f.session.gate().unwrap().clipboard.owned_generation(), None);
+            assert_eq!(f.session.cell_for_test().clipboard.owned_generation(), None);
             // The kept warning is history: it never promised a retry that has now ended.
             let kept = f.session.warnings().unwrap().application;
             assert_eq!(kept.len(), 1);
@@ -1702,7 +1868,7 @@ mod tests {
         let f = fixture();
         let roll_back = Arc::new(AtomicBool::new(false));
         let clear_calls = Arc::new(AtomicUsize::new(0));
-        f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(RollbackAfterLease {
+        f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(RollbackAfterLease {
             data: f.clipboard.clone(),
             roll_back: roll_back.clone(),
             clear_calls: clear_calls.clone(),
@@ -1720,7 +1886,7 @@ mod tests {
             error.message,
             "Fake rolled-back publication The earlier clipboard content was removed, and the new value was not copied. Copy again."
         );
-        assert_eq!(f.session.gate().unwrap().clipboard.owned_generation(), None);
+        assert_eq!(f.session.cell_for_test().clipboard.owned_generation(), None);
         f.clock.set(30);
         f.session.tick();
         f.session.lock().unwrap();
@@ -1752,7 +1918,7 @@ mod tests {
     fn cleanup_fault(f: &Fixture) -> (Arc<AtomicBool>, Arc<AtomicUsize>) {
         let fail = Arc::new(AtomicBool::new(true));
         let attempts = Arc::new(AtomicUsize::new(0));
-        f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(CleanupFault {
+        f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(CleanupFault {
             data: f.clipboard.clone(),
             fail: fail.clone(),
             attempts: attempts.clone(),
@@ -1965,7 +2131,7 @@ mod tests {
     fn partial_cleanup_fault(f: &Fixture) -> (Arc<AtomicBool>, Arc<AtomicBool>) {
         let partial = Arc::new(AtomicBool::new(true));
         let fail = Arc::new(AtomicBool::new(true));
-        f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(PartialCleanupFault {
+        f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(PartialCleanupFault {
             data: f.clipboard.clone(),
             partial: partial.clone(),
             fail_clear: fail.clone(),
@@ -2599,7 +2765,7 @@ mod tests {
         let stamp = f.session.snapshot().unwrap();
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(BlockingClipboard {
+        f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(BlockingClipboard {
             data: f.clipboard.clone(),
             started: started_tx,
             release: release_rx,
@@ -2613,7 +2779,13 @@ mod tests {
         let session = f.session.clone();
         let close = std::thread::spawn(move || session.lock());
         release_tx.send(()).unwrap();
-        copy.join().unwrap().unwrap();
+        // The lock no longer waits for the gate behind a copy (1H-01). It can end the session
+        // while the copy runs, so the copy answers `locked`; either way the lock's cleanup
+        // removes what the copy published.
+        match copy.join().unwrap() {
+            Ok(()) => {}
+            Err(error) => assert_eq!(error.kind, "locked"),
+        }
         close.join().unwrap().unwrap();
         assert_eq!(f.clipboard.lock().unwrap().text, "");
         assert_eq!(f.clipboard.lock().unwrap().clears, 1);
@@ -2626,7 +2798,7 @@ mod tests {
         let stamp = f.session.snapshot().unwrap();
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(BlockingClipboard {
+        f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(BlockingClipboard {
             data: f.clipboard.clone(),
             started: started_tx,
             release: release_rx,
@@ -2654,12 +2826,372 @@ mod tests {
         assert_eq!(f.clipboard.lock().unwrap().text, "");
     }
 
+    /// Unit 1h, 1H-01 and 1H-02: the lock notice comes first, and one public call makes at
+    /// most one cleanup attempt (design D1 to D3).
+    mod lock_order {
+        use super::*;
+        use crate::clipboard::Publication;
+
+        /// Counts cleanup attempts and records how many lock notices had been delivered at
+        /// each one. A busy clipboard keeps the lease, as the production backend does.
+        struct Counting {
+            inner: FakeClipboard,
+            notices: Arc<AtomicUsize>,
+            attempts: Arc<Mutex<Vec<usize>>>,
+            busy: Arc<AtomicBool>,
+        }
+        impl ClipboardBackend for Counting {
+            fn set_private(&mut self, text: &str) -> Publication {
+                self.inner.set_private(text)
+            }
+            fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
+                self.attempts
+                    .lock()
+                    .unwrap()
+                    .push(self.notices.load(Ordering::SeqCst));
+                if self.busy.load(Ordering::SeqCst) {
+                    return Err(CommandError::new(
+                        "clipboard",
+                        "The clipboard is busy. Try copying again.",
+                    ));
+                }
+                self.inner.clear_matching(sequence, text)
+            }
+        }
+
+        struct Counted {
+            f: Fixture,
+            attempts: Arc<Mutex<Vec<usize>>>,
+            busy: Arc<AtomicBool>,
+        }
+
+        /// A session that owns a copy, with a busy clipboard.
+        fn counted() -> Counted {
+            let f = fixture();
+            let attempts = Arc::new(Mutex::new(Vec::new()));
+            let busy = Arc::new(AtomicBool::new(true));
+            f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(Counting {
+                inner: FakeClipboard(f.clipboard.clone()),
+                notices: f.events.clone(),
+                attempts: attempts.clone(),
+                busy: busy.clone(),
+            }));
+            let ticket = f.session.snapshot().unwrap().ticket;
+            f.session
+                .copy(ticket, Zeroizing::new("fake-owned-copy".into()))
+                .unwrap();
+            Counted { f, attempts, busy }
+        }
+
+        type Entry = (&'static str, bool, bool, fn(&Fixture, Ticket, &str));
+
+        // Columns: entry, the session expires before the call, a lock notice is expected,
+        // the call. Each entry is a public call of `Session` that can see a lock transition.
+        fn entries() -> Vec<Entry> {
+            vec![
+                ("lock", false, true, |f, _, _| {
+                    let _ = f.session.lock();
+                }),
+                ("lock_owned", false, true, |f, _, owner| {
+                    let _ = f.session.lock_owned(Some(owner));
+                }),
+                ("observe locked", false, true, |f, _, _| {
+                    f.session.observe(Signal::Locked)
+                }),
+                ("observe suspend", false, true, |f, _, _| {
+                    f.session.observe(Signal::Suspend)
+                }),
+                ("observe unobservable", false, true, |f, _, _| {
+                    f.session.observe(Signal::Unobservable)
+                }),
+                ("shutdown", false, true, |f, _, _| f.session.shutdown()),
+                ("prepare_open", false, true, |f, _, _| {
+                    let _ = f.session.prepare_open();
+                }),
+                ("prepare_open after expiry", true, true, |f, _, _| {
+                    let _ = f.session.prepare_open();
+                }),
+                ("tick after expiry", true, true, |f, _, _| f.session.tick()),
+                ("snapshot after expiry", true, true, |f, _, _| {
+                    let _ = f.session.snapshot();
+                }),
+                ("ensure after expiry", true, true, |f, t, _| {
+                    let _ = f.session.ensure(t);
+                }),
+                ("activity after expiry", true, true, |f, _, _| {
+                    let _ = f.session.activity();
+                }),
+                ("path after expiry", true, true, |f, _, _| {
+                    let _ = f.session.path();
+                }),
+                ("warnings after expiry", true, true, |f, _, _| {
+                    let _ = f.session.warnings();
+                }),
+                ("warn after expiry", true, true, |f, _, _| {
+                    f.session.warn("fake".into())
+                }),
+                ("document_started after expiry", true, true, |f, _, _| {
+                    f.session.document_started()
+                }),
+                ("expire_presentation after expiry", true, true, |f, _, _| {
+                    let _ = f.session.expire_presentation();
+                }),
+                ("active_owner after expiry", true, true, |f, t, _| {
+                    let _ = f.session.active_owner(t);
+                }),
+                ("access after expiry", true, true, |f, _, _| {
+                    let _ = f.session.access(Access::Read, None, |_| Ok(()));
+                }),
+                ("copy after expiry", true, true, |f, t, _| {
+                    let _ = f.session.copy(t, Zeroizing::new("fake-late".into()));
+                }),
+                ("claim_open after expiry", true, true, |f, _, _| {
+                    let _ = f.session.claim_open(&uuid::Uuid::new_v4().to_string());
+                }),
+                ("dismiss_warnings after expiry", true, true, |f, _, _| {
+                    let _ = f.session.dismiss_warnings(&[]);
+                }),
+            ]
+        }
+
+        #[test]
+        fn every_public_entry_sends_its_notice_first_and_makes_exactly_one_attempt() {
+            for (name, expire, notice, call) in entries() {
+                let c = counted();
+                let ticket = c.f.session.snapshot().unwrap().ticket;
+                let owner = c.f.session.active_owner(ticket).unwrap();
+                if expire {
+                    c.f.clock.set(601);
+                }
+                call(&c.f, ticket, &owner);
+                let attempts = c.attempts.lock().unwrap().clone();
+                assert_eq!(attempts.len(), 1, "{name}: attempts {attempts:?}");
+                assert_eq!(
+                    attempts[0],
+                    usize::from(notice),
+                    "{name}: the notice goes out before the attempt"
+                );
+                assert_eq!(c.f.events.load(Ordering::SeqCst), 1, "{name}: one notice");
+                assert!(
+                    c.f.session
+                        .cell_for_test()
+                        .clipboard
+                        .owned_generation()
+                        .is_some(),
+                    "{name}: a busy attempt keeps the lease"
+                );
+                // The next public call is a new call: at most one more attempt, never a loop.
+                call(&c.f, ticket, &owner);
+                assert!(
+                    c.attempts.lock().unwrap().len() <= 2,
+                    "{name}: a second call made {} attempts",
+                    c.attempts.lock().unwrap().len()
+                );
+            }
+        }
+
+        #[test]
+        fn a_tick_when_the_lease_is_due_makes_one_attempt_and_no_notice() {
+            let c = counted();
+            c.f.clock.set(30);
+            c.f.session.tick();
+            assert_eq!(*c.attempts.lock().unwrap(), vec![0]);
+            assert_eq!(c.f.events.load(Ordering::SeqCst), 0);
+        }
+
+        #[test]
+        fn window_and_app_exit_events_make_one_attempt_in_all() {
+            let c = counted();
+            for _ in 0..4 {
+                c.f.session.shutdown();
+            }
+            assert_eq!(*c.attempts.lock().unwrap(), vec![1]);
+            let Counted { f, attempts, .. } = c;
+            let Fixture { session, .. } = f;
+            drop(session);
+            assert_eq!(
+                attempts.lock().unwrap().len(),
+                1,
+                "the lease's own drop makes no second exit attempt"
+            );
+        }
+
+        #[test]
+        fn a_copy_after_a_cancelled_close_gets_its_own_exit_attempt() {
+            let c = counted();
+            c.f.session.shutdown();
+            c.busy.store(false, Ordering::SeqCst);
+            reopen_fixture(&c.f);
+            let ticket = c.f.session.snapshot().unwrap().ticket;
+            c.f.session
+                .copy(ticket, Zeroizing::new("fake-second-copy".into()))
+                .unwrap();
+            c.busy.store(true, Ordering::SeqCst);
+            let before = c.attempts.lock().unwrap().len();
+            c.f.session.shutdown();
+            assert_eq!(c.attempts.lock().unwrap().len(), before + 1);
+            let Counted { f, attempts, .. } = c;
+            let Fixture { session, .. } = f;
+            drop(session);
+            assert_eq!(attempts.lock().unwrap().len(), before + 1);
+        }
+
+        #[test]
+        fn the_window_and_exit_events_call_shutdown_and_never_lock() {
+            let source = include_str!("lib.rs");
+            assert_eq!(source.matches(".shutdown()").count(), 2);
+            assert!(
+                !source.contains(".lock()"),
+                "a close or exit event that calls lock can make a second attempt"
+            );
+        }
+
+        /// A backend whose first cleanup attempt waits until the test releases it.
+        struct StalledCleanup {
+            inner: FakeClipboard,
+            started: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+            stall: bool,
+        }
+        impl ClipboardBackend for StalledCleanup {
+            fn set_private(&mut self, text: &str) -> Publication {
+                self.inner.set_private(text)
+            }
+            fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
+                if std::mem::take(&mut self.stall) {
+                    self.started.send(()).unwrap();
+                    self.release.recv().unwrap();
+                }
+                self.inner.clear_matching(sequence, text)
+            }
+        }
+
+        // 1H-01: a stalled tick cleanup holds the lease cell, never the gate.
+        #[test]
+        fn a_lock_delivers_its_notice_while_a_tick_cleanup_is_stalled_and_the_gate_stays_free() {
+            let f = fixture();
+            let (started_tx, started_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(StalledCleanup {
+                inner: FakeClipboard(f.clipboard.clone()),
+                started: started_tx,
+                release: release_rx,
+                stall: true,
+            }));
+            let ticket = f.session.snapshot().unwrap().ticket;
+            f.session
+                .copy(ticket, Zeroizing::new("fake-stalled".into()))
+                .unwrap();
+            f.clock.set(30);
+            let session = f.session.clone();
+            let tick = std::thread::spawn(move || session.tick());
+            started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+            let (free_tx, free_rx) = mpsc::channel();
+            let session = f.session.clone();
+            std::thread::spawn(move || {
+                let _ = session.warnings();
+                let _ = session.snapshot();
+                free_tx.send(()).unwrap();
+            });
+            free_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("a stalled cleanup must not hold the gate");
+
+            let session = f.session.clone();
+            let lock = std::thread::spawn(move || session.lock());
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while f.events.load(Ordering::SeqCst) == 0 {
+                assert!(
+                    Instant::now() < deadline,
+                    "the notice must arrive before the stalled cleanup ends"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(
+                !lock.is_finished(),
+                "the lock's own attempt waits for the cleanup in progress (recorded limit)"
+            );
+            assert_eq!(f.clipboard.lock().unwrap().text, "fake-stalled");
+            release_tx.send(()).unwrap();
+            tick.join().unwrap();
+            lock.join().unwrap().unwrap();
+            assert_eq!(f.clipboard.lock().unwrap().text, "");
+            assert_eq!(f.clipboard.lock().unwrap().clears, 1);
+            assert_eq!(f.events.load(Ordering::SeqCst), 1);
+        }
+
+        // The fence of design D2: a settle that follows a newer session's copy leaves it.
+        #[test]
+        fn a_late_settle_of_an_older_session_cannot_clean_a_newer_sessions_copy() {
+            let c = counted();
+            c.f.session.lock().unwrap();
+            assert!(c
+                .f
+                .session
+                .cell_for_test()
+                .clipboard
+                .owned_generation()
+                .is_some());
+            reopen_fixture(&c.f);
+            c.busy.store(false, Ordering::SeqCst);
+            let ticket = c.f.session.snapshot().unwrap().ticket;
+            c.f.session
+                .copy(ticket, Zeroizing::new("fake-newer-copy".into()))
+                .unwrap();
+            let before = c.attempts.lock().unwrap().len();
+            c.f.session.settle(false);
+            c.f.session.tick();
+            assert_eq!(c.attempts.lock().unwrap().len(), before);
+            assert_eq!(c.f.clipboard.lock().unwrap().text, "fake-newer-copy");
+        }
+
+        // A copy that waits behind a stalled cleanup holds no gate while it waits.
+        #[test]
+        fn a_copy_waiting_behind_a_stalled_cleanup_leaves_the_gate_free() {
+            let f = fixture();
+            let (started_tx, started_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(StalledCleanup {
+                inner: FakeClipboard(f.clipboard.clone()),
+                started: started_tx,
+                release: release_rx,
+                stall: true,
+            }));
+            let ticket = f.session.snapshot().unwrap().ticket;
+            f.session
+                .copy(ticket, Zeroizing::new("fake-first".into()))
+                .unwrap();
+            f.clock.set(30);
+            let session = f.session.clone();
+            let tick = std::thread::spawn(move || session.tick());
+            started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            let session = f.session.clone();
+            let copy = std::thread::spawn(move || {
+                session.copy(ticket, Zeroizing::new("fake-second".into()))
+            });
+            let (free_tx, free_rx) = mpsc::channel();
+            let session = f.session.clone();
+            std::thread::spawn(move || {
+                let _ = session.snapshot();
+                free_tx.send(()).unwrap();
+            });
+            free_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("a waiting copy must not hold the gate");
+            release_tx.send(()).unwrap();
+            tick.join().unwrap();
+            copy.join().unwrap().unwrap();
+            assert_eq!(f.clipboard.lock().unwrap().text, "fake-second");
+        }
+    }
+
     /// Unit 1a, design revision 3, section 3.1: the real publisher and cleanup over the fake
     /// Win32 API, through `copy_stamped` (the function both production copy commands call).
     #[cfg(windows)]
     mod real_publisher {
         use super::*;
-        use crate::clipboard::win32_fake::{FakeApi, FakeState, Fault, TransactionBackend};
+        use crate::clipboard_fake::{FakeApi, FakeState, Fault, TransactionBackend};
 
         const A: &str = "fake-copy-A";
         const B: &str = "fake-copy-B";
@@ -2684,7 +3216,7 @@ mod tests {
 
         fn install(f: &Fixture) -> Arc<Mutex<FakeState>> {
             let state = Arc::new(Mutex::new(FakeState::default()));
-            f.session.gate().unwrap().clipboard =
+            f.session.cell_for_test().clipboard =
                 ClipboardLease::new(Box::new(TransactionBackend(FakeApi(state.clone()))));
             state
         }
@@ -2697,7 +3229,7 @@ mod tests {
         }
 
         fn generation(f: &Fixture) -> Option<u64> {
-            f.session.gate().unwrap().clipboard.owned_generation()
+            f.session.cell_for_test().clipboard.owned_generation()
         }
 
         fn uncertain() -> String {
@@ -2737,6 +3269,31 @@ mod tests {
             opens: usize,
             empties: usize,
             sets: usize,
+        }
+
+        /// 1A-A2-02: the fake clipboard's sequence change for each row, counted from the
+        /// calls the row makes (an empty, a set, a rollback empty), and the same with or
+        /// without an earlier copy. A row that changes it differently has changed behaviour.
+        fn sequence_delta(name: &str) -> u32 {
+            match name {
+                "NUL in the value"
+                | "register"
+                | "allocate"
+                | "owner"
+                | "open busy"
+                | "empty fails, sequence unchanged" => 0,
+                "empty fails, sequence changed" => 1,
+                "exclusion set" => 2,
+                "exclusion check" | "empty frame set" => 5,
+                "rollback fails after the first secret set" => 8,
+                "first secret set" => 9,
+                "later secret set"
+                | "rollback fails, sequence unchanged"
+                | "rollback fails, sequence changed" => 10,
+                "success" => 11,
+                "read-back unreadable" => 12,
+                other => panic!("no sequence for {other}"),
+            }
         }
 
         struct Case {
@@ -2957,10 +3514,16 @@ mod tests {
                 };
                 s.faults = (case.faults)(&base);
             }
+            let sequence_before = state.lock().unwrap().sequence;
             let result = copy(&f, case.text);
             assert!(
                 state.lock().unwrap().faults.is_empty(),
                 "{label}: the fault was not reached"
+            );
+            assert_eq!(
+                state.lock().unwrap().sequence - sequence_before,
+                sequence_delta(case.name),
+                "{label}: fake sequence"
             );
             let after = generation(&f);
             let lease = match (before, after) {
@@ -3021,17 +3584,33 @@ mod tests {
                     result.err().map(|e| e.message)
                 ),
             }
-            let warned = application_messages(&f).iter().any(|m| m == &uncertain());
+            let expected_warning = case.warns && (earlier || case.name.starts_with("rollback"));
+            let warnings = application_messages(&f);
             assert_eq!(
-                warned,
-                case.warns && (earlier || case.name.starts_with("rollback")),
-                "{label}: warning"
+                warnings,
+                if expected_warning {
+                    vec![uncertain()]
+                } else {
+                    vec![]
+                },
+                "{label}: the exact warnings"
+            );
+            let ids = application_ids(&f);
+            assert_eq!(
+                ids.len(),
+                usize::from(expected_warning),
+                "{label}: warning IDs"
             );
             // Later cleanup: a lease that is gone causes no further clipboard calls.
             let empties = state.lock().unwrap().empty_calls;
             f.clock.set(30);
             f.session.tick();
             f.session.lock().unwrap();
+            assert_eq!(
+                application_ids(&f),
+                ids,
+                "{label}: tick and lock add no second warning for the same episode"
+            );
             let s = state.lock().unwrap();
             match expected {
                 Lease::Gone => assert_eq!(
@@ -3041,6 +3620,64 @@ mod tests {
                 Lease::Kept | Lease::New => {
                     assert_eq!(s.text(), "", "{label}: the lease was cleaned up")
                 }
+            }
+        }
+
+        /// 1A-A2-02: a second failure episode, while the first warning is still pending (not
+        /// dismissed), is a new occurrence with its own ID. It never reuses the first.
+        #[test]
+        fn a_second_failure_episode_while_the_first_warning_is_pending_gets_its_own_id() {
+            let warning_rows = [
+                "empty fails, sequence changed",
+                "rollback fails after the first secret set",
+                "rollback fails, sequence changed",
+            ];
+            for name in warning_rows {
+                let f = fixture();
+                let state = install(&f);
+                let attempt = |case: &Case| {
+                    let mut s = state.lock().unwrap();
+                    let base = Base {
+                        registered: s.registered_names.len(),
+                        allocations: s.allocations,
+                        opens: s.open_calls,
+                        empties: s.empty_calls,
+                        sets: s.set_calls,
+                    };
+                    s.faults = (case.faults)(&base);
+                    drop(s);
+                    let before = state.lock().unwrap().sequence;
+                    copy(&f, case.text).unwrap_err();
+                    assert_eq!(
+                        state.lock().unwrap().sequence - before,
+                        sequence_delta(case.name),
+                        "{name}: fake sequence"
+                    );
+                };
+                let case = || cases().into_iter().find(|c| c.name == name).unwrap();
+                copy(&f, A).unwrap();
+                attempt(&case());
+                let first = application_ids(&f);
+                assert_eq!(first.len(), 1, "{name}: first episode");
+                // A lease again, then the same failure again; the first warning is still there.
+                copy(&f, A).unwrap();
+                attempt(&case());
+                let both = application_ids(&f);
+                assert_eq!(both.len(), 2, "{name}: second episode");
+                assert_eq!(both[0], first[0], "{name}: the first warning is untouched");
+                assert_ne!(
+                    both[1], first[0],
+                    "{name}: the second episode has its own ID"
+                );
+                assert_eq!(
+                    application_messages(&f),
+                    vec![uncertain(), uncertain()],
+                    "{name}"
+                );
+                f.clock.set(30);
+                f.session.tick();
+                f.session.lock().unwrap();
+                assert_eq!(application_ids(&f), both, "{name}: no third warning");
             }
         }
 

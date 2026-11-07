@@ -1,9 +1,14 @@
 mod clipboard;
+#[cfg(test)]
+mod clipboard_fake;
 mod commands;
-mod error;
+#[doc(hidden)]
+pub mod error;
 mod import_review;
 mod policy;
 mod private_export;
+#[doc(hidden)]
+pub mod publication;
 mod session;
 mod settings;
 #[cfg(test)]
@@ -63,7 +68,7 @@ pub fn run() {
                 tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
             ) {
                 if let Some(state) = window.try_state::<VaultState>() {
-                    let _ = state.0.lock();
+                    state.0.shutdown();
                 }
             }
         })
@@ -76,7 +81,7 @@ pub fn run() {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
         ) {
             if let Some(state) = app.try_state::<VaultState>() {
-                let _ = state.0.lock();
+                state.0.shutdown();
             }
             if let Some(monitor) = app.try_state::<windows_session::Monitor>() {
                 monitor.stop();

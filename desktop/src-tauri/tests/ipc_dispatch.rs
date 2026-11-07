@@ -1,8 +1,10 @@
 //! Real generated IPC handlers on Tauri's mock runtime. No OS window or clipboard.
 //! A standalone harness avoids executing the source modules' unit suites twice.
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 #[path = "../src/clipboard.rs"]
 mod clipboard;
+#[path = "../src/clipboard_fake.rs"]
+mod clipboard_fake;
 #[path = "../src/commands.rs"]
 #[allow(unused_imports)]
 mod commands;
@@ -16,11 +18,16 @@ mod import_review;
 mod policy;
 #[path = "../src/private_export.rs"]
 mod private_export;
+#[path = "../src/publication.rs"]
+#[allow(unused_imports)]
+mod publication;
 #[path = "../src/session.rs"]
 #[allow(unused_imports)]
 mod session;
 #[path = "../src/settings.rs"]
 mod settings;
+#[path = "../src/test_support.rs"]
+mod test_support;
 #[path = "../src/views.rs"]
 #[allow(unused_imports)]
 mod views;
@@ -33,7 +40,7 @@ use session::{Access, MonotonicClock, Session, VaultState};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        mpsc, Arc, Mutex,
     },
     time::Duration,
 };
@@ -43,14 +50,10 @@ use tauri::{
     webview::InvokeRequest,
 };
 
-struct FakeClipboard;
-impl clipboard::ClipboardBackend for FakeClipboard {
-    fn set_private(&mut self, _: &str) -> clipboard::Publication {
-        clipboard::Publication::fake_published(1)
-    }
-    fn clear_matching(&mut self, _: u32, _: &str) -> Result<bool, error::CommandError> {
-        Ok(true)
-    }
+type Clipboard = Arc<Mutex<clipboard_fake::FakeState>>;
+
+fn clipboard_text(state: &Clipboard) -> String {
+    state.lock().unwrap().text()
 }
 
 struct Answer(Arc<AtomicBool>);
@@ -99,9 +102,12 @@ fn call(
 
 fn main() {
     let directory = tempfile::tempdir().unwrap();
+    let clipboard: Clipboard = Arc::default();
     let session = Arc::new(Session::new(
         Arc::new(MonotonicClock::default()),
-        Box::new(FakeClipboard),
+        Box::new(clipboard_fake::TransactionBackend(clipboard_fake::FakeApi(
+            clipboard.clone(),
+        ))),
         Arc::new(|_| {}),
     ));
     session.observe(policy::Signal::Available);
@@ -183,6 +189,7 @@ fn main() {
             })
         });
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let sequence_before = clipboard.lock().unwrap().sequence;
         let (response_tx, response_rx) = mpsc::channel();
         let (returned_tx, returned_rx) = mpsc::channel();
         let target = webview.clone();
@@ -205,6 +212,11 @@ fn main() {
         });
         let returned_before_release = returned_rx.recv_timeout(Duration::from_millis(500)).is_ok();
         let early = response_rx.try_recv().ok();
+        assert_eq!(
+            clipboard.lock().unwrap().sequence,
+            sequence_before,
+            "{command}: a delayed command must not touch the clipboard before its snapshot is read"
+        );
         let completed_while_stalled = early.is_some();
         release_tx.send(()).unwrap(); // Always release/join on a desired-behavior failure.
         holding.join().unwrap().unwrap();
@@ -222,6 +234,15 @@ fn main() {
         );
         if !returned_before_release {
             stalled.push(command);
+        }
+        match command {
+            "key_copy" => assert_eq!(clipboard_text(&clipboard), "fake-dispatch-value"),
+            "env_copy" => assert_eq!(
+                clipboard_text(&clipboard),
+                "TOKEN=fake-dispatch-value
+"
+            ),
+            _ => {}
         }
         println!("{command}: invocationReturnedWhileStalled={returned_before_release}; realResponseAfterRelease=true");
     }
@@ -327,8 +348,127 @@ fn main() {
     .unwrap();
     assert_eq!(status["sessionId"], reserved.as_str());
     assert_eq!(status["unlocked"], true);
+    clipboard_through_the_handlers(&session, webview, &clipboard, &reserved, &second_vault);
+    println!("PASS: key_copy through the generated handler publishes with the real publisher over the fake Win32 API, a lock after it cleans up once, and a copy delayed past a lock leaves the clipboard untouched.");
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&settings_file).unwrap()).unwrap();
     assert_eq!(saved["vaultPath"], second_vault.display().to_string());
     println!("PASS: env_import, vault_warnings, vault_dismiss_warnings, vault_lock, vault_prepare_open and vault_unlock answer the frontend's argument and reply shapes through the production handler list; the saved path went to the fake settings file.");
+}
+
+fn send(
+    webview: &tauri::Webview<MockRuntime>,
+    command: &str,
+    args: serde_json::Value,
+) -> mpsc::Receiver<InvokeResponse> {
+    let (response_tx, response_rx) = mpsc::channel();
+    let target = webview.clone();
+    let command = command.to_string();
+    std::thread::spawn(move || {
+        target.on_message(
+            InvokeRequest {
+                cmd: command,
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: "http://tauri.localhost".parse().unwrap(),
+                body: InvokeBody::Json(args),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.into(),
+            },
+            Box::new(move |_, _, response, _, _| {
+                response_tx.send(response).unwrap();
+            }),
+        );
+    });
+    response_rx
+}
+
+/// A copy command and a session change, through the generated handlers and the real publisher
+/// over the fake Win32 API (1H-08). A lock after the copy cleans it up once. A lock that ends
+/// the session while a delayed copy waits for the vault leaves the clipboard untouched.
+fn clipboard_through_the_handlers(
+    session: &Arc<Session>,
+    webview: &tauri::Webview<MockRuntime>,
+    clipboard: &Clipboard,
+    owner: &str,
+    vault: &std::path::Path,
+) {
+    let added = call(
+        webview,
+        "key_add",
+        serde_json::json!({"draft": {"title": "Fake handler copy", "secret": "fake-handler-secret"}}),
+    )
+    .unwrap();
+    let id = added["id"].as_str().unwrap().to_string();
+
+    assert_eq!(
+        call(webview, "key_copy", serde_json::json!({"id": id})).unwrap(),
+        serde_json::json!(30)
+    );
+    assert_eq!(clipboard_text(clipboard), "fake-handler-secret");
+    let (after_copy, clears_before) = {
+        let state = clipboard.lock().unwrap();
+        (state.sequence, state.clears)
+    };
+    call(
+        webview,
+        "vault_lock",
+        serde_json::json!({"sessionId": owner}),
+    )
+    .unwrap();
+    {
+        let state = clipboard.lock().unwrap();
+        assert_eq!(state.text(), "", "a lock cleans up the copy it owns");
+        assert_eq!(state.clears, clears_before + 1);
+        assert!(state.sequence > after_copy);
+        assert_eq!(state.opens, state.closes);
+    }
+
+    let reserved = call(webview, "vault_prepare_open", serde_json::json!({})).unwrap();
+    let reserved = reserved.as_str().unwrap().to_string();
+    call(
+        webview,
+        "vault_unlock",
+        serde_json::json!({"path": vault.display().to_string(), "password": "fake-dispatch-password-123!", "sessionId": reserved}),
+    )
+    .unwrap();
+
+    let (sequence, clears_after_lock) = {
+        let state = clipboard.lock().unwrap();
+        (state.sequence, state.clears)
+    };
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let holder = session.clone();
+    let holding = std::thread::spawn(move || {
+        let _ = holder.access(Access::Read, None, |_| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(())
+        });
+    });
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let response = send(webview, "key_copy", serde_json::json!({"id": id}));
+    call(
+        webview,
+        "vault_lock",
+        serde_json::json!({"sessionId": reserved}),
+    )
+    .unwrap();
+    release_tx.send(()).unwrap();
+    holding.join().unwrap();
+    let reply = response
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the delayed copy answers");
+    let InvokeResponse::Err(error) = reply else {
+        panic!("a copy delayed past a lock must fail");
+    };
+    assert_eq!(error.0["kind"], "locked");
+    let state = clipboard.lock().unwrap();
+    assert_eq!(state.text(), "");
+    assert_eq!(
+        state.sequence, sequence,
+        "the delayed copy never reached the clipboard"
+    );
+    assert_eq!(state.clears, clears_after_lock);
 }
