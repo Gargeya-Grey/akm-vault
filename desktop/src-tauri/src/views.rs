@@ -1,7 +1,6 @@
-use akm_core::{ApiKey, ApiKeyInput, Vault};
+use akm_core::{ApiKey, ApiKeyInput, Secret, Vault};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
 
 use crate::error::CommandError;
 
@@ -18,11 +17,7 @@ pub struct Status {
 }
 
 pub fn status_for(vault: &Vault) -> Status {
-    let mut keys = vault.list();
-    let key_count = keys.len();
-    for key in &mut keys {
-        key.secret.zeroize();
-    }
+    let key_count = vault.list().len();
     Status {
         session_id: None, // Filled from the completed native policy ticket at the IPC boundary.
         path: vault.path().display().to_string(),
@@ -104,12 +99,16 @@ pub struct KeyDraft {
 }
 
 impl KeyDraft {
-    pub fn into_input(mut self, existing: Option<ApiKey>) -> Result<ApiKeyInput, CommandError> {
+    pub fn into_input(
+        mut self,
+        existing: Option<ApiKeyInput>,
+    ) -> Result<ApiKeyInput, CommandError> {
         let secret = self
             .secret
             .take()
             .filter(|value| !value.is_empty())
-            .or_else(|| existing.as_ref().map(|key| key.secret.clone()))
+            .map(Secret::from)
+            .or_else(|| existing.as_ref().map(|input| input.secret.clone()))
             .ok_or_else(|| CommandError::new("invalid", "The secret must not be empty."))?;
         let username = self
             .username
@@ -266,8 +265,14 @@ mod tests {
         let key = vault.add(existing).unwrap();
         let draft: KeyDraft =
             serde_json::from_value(serde_json::json!({ "title": "Renamed" })).unwrap();
-        let input = draft.into_input(Some(key)).unwrap();
+        let input = draft
+            .into_input(Some(vault.edit_input(&key.id).unwrap()))
+            .unwrap();
         assert_eq!(input.username.as_deref(), Some("alice"));
-        assert_eq!(input.secret, "fake-secret");
+        vault.update(&key.id, input).unwrap();
+        assert_eq!(
+            crate::test_support::secret_of(&vault, &key.id),
+            "fake-secret"
+        );
     }
 }

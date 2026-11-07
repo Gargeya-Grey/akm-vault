@@ -107,6 +107,23 @@ fn write_database(path: &Path, password: &str, keys: &[(&str, &str, &str, &str, 
     .unwrap();
 }
 
+/// The stored secret of a key, read from the raw database so that the test adds no
+/// journal record.
+fn stored_secret(vault: &Path, title: &str) -> String {
+    let mut db = Database::open(
+        &mut fs::File::open(vault).unwrap(),
+        DatabaseKey::new().with_password(PASSWORD),
+    )
+    .unwrap();
+    let mut found = None;
+    db.foreach_entry_mut(|entry| {
+        if entry.get(fields::TITLE) == Some(title) {
+            found = entry.get(fields::PASSWORD).map(str::to_string);
+        }
+    });
+    found.expect("a key with that title")
+}
+
 fn report(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
@@ -879,8 +896,7 @@ fn committed_changes_exit_zero_with_closed_output_pipes() {
             Some(b"fake-added-secret\n"),
         );
         assert_eq!(add.code(), Some(0), "add: {case}");
-        let saved = Vault::open(&fixture.vault, PASSWORD).unwrap();
-        assert_eq!(saved.find("Added").unwrap().secret, "fake-added-secret");
+        assert_eq!(stored_secret(&fixture.vault, "Added"), "fake-added-secret");
 
         let mut rm = fixture.cli();
         rm.args(["rm", "Added", "--yes"]);
@@ -1005,14 +1021,7 @@ fn committed_mutations_report_audit_warnings_without_false_failure() {
     assert_success(&output);
     assert!(stderr(&output).contains("warning:"), "{}", stderr(&output));
     assert!(!stderr(&output).contains("error:"));
-    assert_eq!(
-        Vault::open(&fixture.vault, PASSWORD)
-            .unwrap()
-            .find("Added")
-            .unwrap()
-            .secret,
-        "fake-added-secret"
-    );
+    assert_eq!(stored_secret(&fixture.vault, "Added"), "fake-added-secret");
 
     let output = fixture
         .cli()

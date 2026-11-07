@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use akm_core::{audit::AuditLog, dotenv, Vault};
+use akm_core::{audit::AuditLog, dotenv, EnvDisclosure, KeyDisclosure, Vault};
 use chrono::{DateTime, Utc};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -311,12 +311,7 @@ pub async fn keys_list(state: State<'_, VaultState>) -> Result<Vec<KeyView>, Com
     let session = state.0.clone();
     let expected = session.snapshot()?;
     run_session(session, expected, Access::Read, |vault| {
-        let mut keys = vault.list();
-        let views = keys.iter().map(KeyView::from).collect();
-        for key in &mut keys {
-            key.secret.zeroize();
-        }
-        Ok(views)
+        Ok(vault.list().iter().map(KeyView::from).collect())
     })
     .await
 }
@@ -326,7 +321,7 @@ pub async fn key_reveal(state: State<'_, VaultState>, id: String) -> Result<Stri
     let session = state.0.clone();
     let expected = session.snapshot()?;
     blocking(move || {
-        let secret = requested_key_at(&session, expected, &id, "reveal-requested")?;
+        let secret = requested_key_at(&session, expected, &id, KeyDisclosure::Reveal)?;
         session.reveal(secret)
     })
     .await
@@ -336,7 +331,7 @@ pub async fn key_reveal(state: State<'_, VaultState>, id: String) -> Result<Stri
 fn requested_key(
     session: &Session,
     id: &str,
-    action: &str,
+    action: KeyDisclosure,
 ) -> Result<Stamped<Zeroizing<String>>, CommandError> {
     requested_key_at(session, session.snapshot()?, id, action)
 }
@@ -345,13 +340,12 @@ fn requested_key_at(
     session: &Session,
     expected: Snapshot,
     id: &str,
-    action: &str,
+    action: KeyDisclosure,
 ) -> Result<Stamped<Zeroizing<String>>, CommandError> {
     session.access(Access::Read, Some(expected), |vault| {
-        let mut key = vault.get_by_id(id)?;
-        let secret = Zeroizing::new(std::mem::take(&mut key.secret));
-        vault.log(action, Some(&key), None)?;
-        Ok(secret)
+        let key = vault.get_by_id(id)?;
+        let proof = vault.disclose_key(action, &key, None)?;
+        Ok(vault.secret(id, &proof)?)
     })
 }
 
@@ -360,7 +354,7 @@ pub async fn key_copy(state: State<'_, VaultState>, id: String) -> Result<u64, C
     let session = state.0.clone();
     let expected = session.snapshot()?;
     blocking(move || {
-        let secret = requested_key_at(&session, expected, &id, "copy-requested")?;
+        let secret = requested_key_at(&session, expected, &id, KeyDisclosure::Copy)?;
         session.copy_stamped(secret)?;
         Ok(CLEAR_AFTER.as_secs())
     })
@@ -375,10 +369,8 @@ pub async fn key_add(
     let session = state.0.clone();
     let expected = session.snapshot()?;
     run_session(session, expected, Access::Write, move |vault| {
-        let mut key = vault.add(draft.into_input(None)?)?;
-        let view = KeyView::from(&key);
-        key.secret.zeroize();
-        Ok(view)
+        let key = vault.add(draft.into_input(None)?)?;
+        Ok(KeyView::from(&key))
     })
     .await
 }
@@ -392,11 +384,9 @@ pub async fn key_update(
     let session = state.0.clone();
     let expected = session.snapshot()?;
     run_session(session, expected, Access::Write, move |vault| {
-        let existing = vault.get_by_id(&id)?;
-        let mut key = vault.update(&id, draft.into_input(Some(existing))?)?;
-        let view = KeyView::from(&key);
-        key.secret.zeroize();
-        Ok(view)
+        let existing = vault.edit_input(&id)?;
+        let key = vault.update(&id, draft.into_input(Some(existing))?)?;
+        Ok(KeyView::from(&key))
     })
     .await
 }
@@ -406,8 +396,7 @@ pub async fn key_remove(state: State<'_, VaultState>, id: String) -> Result<(), 
     let session = state.0.clone();
     let expected = session.snapshot()?;
     run_session(session, expected, Access::Write, move |vault| {
-        let mut removed = vault.remove(&id)?;
-        removed.secret.zeroize();
+        vault.remove(&id)?;
         Ok(())
     })
     .await
@@ -489,12 +478,20 @@ impl Drop for SecretEntries {
 fn export_body(
     vault: &Vault,
     scope: &ExportScope,
+    kind: EnvDisclosure,
+    detail: impl FnOnce(usize) -> String,
+    refuse_empty: Option<&str>,
 ) -> Result<(Zeroizing<String>, usize), CommandError> {
-    let vars = SecretEntries(vault.env_vars(
+    let plan = vault.plan_env(
         scope.project.as_deref(),
         scope.environment.as_deref(),
         scope.all,
-    )?);
+    )?;
+    if let (true, Some(message)) = (plan.is_empty(), refuse_empty) {
+        return Err(CommandError::new("invalid", message));
+    }
+    let proof = vault.disclose_env(kind, &plan, Some(&detail(plan.len())))?;
+    let vars = SecretEntries(vault.env_vars(&plan, &proof)?);
     let mut body = Zeroizing::new(String::new());
     for (name, value) in &vars.0 {
         let line = Zeroizing::new(dotenv::line(name, value));
@@ -520,11 +517,12 @@ fn extract_export_at(
     target: &str,
 ) -> Result<Stamped<Zeroizing<String>>, CommandError> {
     session.access(Access::Read, Some(expected), |vault| {
-        let (body, count) = export_body(vault, scope)?;
-        vault.log(
-            "export-requested",
+        let (body, _) = export_body(
+            vault,
+            scope,
+            EnvDisclosure::Export,
+            |count| format!("{count} keys to {target}"),
             None,
-            Some(&format!("{count} keys to {target}")),
         )?;
         Ok(body)
     })
@@ -651,17 +649,12 @@ fn requested_file_export_at(
 ) -> Result<FileExport, CommandError> {
     session
         .read_for_publication(expected, |vault| {
-            let (body, count) = export_body(vault, scope)?;
-            if count == 0 {
-                return Err(CommandError::new(
-                    "invalid",
-                    "No keys match that export scope.",
-                ));
-            }
-            vault.log(
-                "export-requested",
-                None,
-                Some(&format!("file export requested; {count} keys")),
+            let (body, count) = export_body(
+                vault,
+                scope,
+                EnvDisclosure::Export,
+                |count| format!("file export requested; {count} keys"),
+                Some("No keys match that export scope."),
             )?;
             Ok(FileExport {
                 body,
@@ -931,7 +924,7 @@ mod tests {
             })
             .unwrap()
             .value;
-        let requested = requested_key(&session, &key.id, "reveal-requested").unwrap();
+        let requested = requested_key(&session, &key.id, KeyDisclosure::Reveal).unwrap();
         session.lock().unwrap();
         assert_eq!(session.reveal(requested).unwrap_err().kind, "locked");
         let log = AuditLog::for_vault(&directory.path().join("vault.kdbx"));
@@ -947,7 +940,7 @@ mod tests {
                 .map_err(Into::into)
             })
             .unwrap();
-        let requested = requested_key(&session, &key.id, "copy-requested").unwrap();
+        let requested = requested_key(&session, &key.id, KeyDisclosure::Copy).unwrap();
         session.lock().unwrap();
         assert_eq!(
             session
@@ -1004,7 +997,7 @@ mod tests {
             })
             .unwrap()
             .value;
-        let requested = requested_key(&session, &key.id, "copy-requested").unwrap();
+        let requested = requested_key(&session, &key.id, KeyDisclosure::Copy).unwrap();
         assert_eq!(
             session
                 .copy(requested.snapshot.ticket, requested.value)
@@ -1016,8 +1009,8 @@ mod tests {
         assert_eq!(log.read(1).unwrap()[0].action, "copy-requested");
         std::fs::remove_file(log.path()).unwrap();
         std::fs::create_dir(log.path()).unwrap();
-        assert!(requested_key(&session, &key.id, "reveal-requested").is_err());
-        assert!(requested_key(&session, &key.id, "copy-requested").is_err());
+        assert!(requested_key(&session, &key.id, KeyDisclosure::Reveal).is_err());
+        assert!(requested_key(&session, &key.id, KeyDisclosure::Copy).is_err());
     }
 
     #[test]
@@ -1042,7 +1035,7 @@ mod tests {
             b" \t\r".to_vec(),
         ] {
             std::fs::write(log.path(), &bytes).unwrap();
-            for action in ["reveal-requested", "copy-requested"] {
+            for action in [KeyDisclosure::Reveal, KeyDisclosure::Copy] {
                 let error = requested_key(&session, &key.id, action)
                     .err()
                     .expect("unsafe append disclosed a native secret");
@@ -1073,8 +1066,7 @@ mod tests {
                         input.project = Some("demo".into());
                         input.environment = Some(environment.into());
                         input.env_var = Some("TOKEN".into());
-                        let mut key = vault.add(input)?;
-                        key.secret.zeroize();
+                        vault.add(input)?;
                     }
                     Ok(())
                 })
@@ -1456,10 +1448,7 @@ mod tests {
             )
             .unwrap();
             assert!(
-                reopened
-                    .env_vars(Some("app"), Some("dev"), false)
-                    .unwrap()
-                    .is_empty(),
+                crate::test_support::env_of(&reopened, "app", "dev").is_empty(),
                 "{change}: nothing was imported"
             );
         }
@@ -1626,7 +1615,7 @@ mod tests {
         assert_eq!(record[0]["kind"], "importSessionEnded");
         let reopened = Vault::open(path, "fake-test-password-123!").unwrap();
         assert_eq!(
-            reopened.env_vars(Some("app"), Some("dev"), false).unwrap(),
+            crate::test_support::env_of(&reopened, "app", "dev"),
             [("TOKEN".into(), "fake-saved-once".into())]
         );
     }

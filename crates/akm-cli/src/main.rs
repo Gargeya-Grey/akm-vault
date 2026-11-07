@@ -2,7 +2,7 @@ use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 
 use akm_core::audit::AuditLog;
-use akm_core::{ApiKey, ApiKeyInput, Error, Result, Vault};
+use akm_core::{ApiKey, ApiKeyInput, EnvDisclosure, EnvPlan, Error, KeyDisclosure, Result, Vault};
 use chrono::{DateTime, NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
 use zeroize::Zeroizing;
@@ -286,7 +286,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
 
             let input = ApiKeyInput {
                 title,
-                secret,
+                secret: secret.into(),
                 username,
                 issuer,
                 project,
@@ -336,11 +336,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             keys.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
 
             if json {
-                let mut redacted = keys;
-                for key in &mut redacted {
-                    key.secret = "***".to_string();
-                }
-                writeln!(io.out, "{}", serde_json::to_string_pretty(&redacted)?)?;
+                writeln!(io.out, "{}", listing_json(&keys)?)?;
                 return Ok(0);
             }
 
@@ -361,19 +357,32 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                 .as_deref()
                 .is_some_and(|field| field.trim().eq_ignore_ascii_case("secret"));
             let disclosure = secret_field || (field.is_none() && reveal);
-            if disclosure {
-                vault.log("reveal-requested", Some(&key), Some("disclosure requested"))?;
-            }
+            // 1H-04: only the two disclosures read the secret, and `Vault::secret` needs the
+            // proof that `disclose_key` returns after the journal append. A failed append
+            // returns here, before any secret is read.
+            let secret = if disclosure {
+                let proof = vault.disclose_key(
+                    KeyDisclosure::Reveal,
+                    &key,
+                    Some("disclosure requested"),
+                )?;
+                Some(vault.secret(&key.id, &proof)?)
+            } else {
+                None
+            };
 
-            // 1A-R8-01: only the two disclosures read `key.secret`, after their record.
-            // The default view and every other field receive `KeyMetadata`, which has none.
+            // 1A-R8-01: the default view and every other field receive `KeyMetadata`.
             let metadata = KeyMetadata::from(&key);
             let out = &mut *io.out;
-            let shown = match field.as_deref() {
-                Some(_) if secret_field => writeln!(out, "{}", key.secret).map_err(Error::from),
-                Some(field) => print_field(out, &metadata, field),
-                None => print_key(out, &metadata, disclosure.then_some(key.secret.as_str()))
-                    .map_err(Error::from),
+            let shown = match (
+                field.as_deref(),
+                secret.as_ref().map(|secret| secret.as_str()),
+            ) {
+                (Some(_), Some(secret)) if secret_field => {
+                    writeln!(out, "{secret}").map_err(Error::from)
+                }
+                (Some(field), _) => print_field(out, &metadata, field),
+                (None, revealed) => print_key(out, &metadata, revealed).map_err(Error::from),
             };
             match shown {
                 Err(Error::Io(error)) if disclosure => {
@@ -419,13 +428,14 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                 let password = master_password(false)?;
                 let vault = Vault::open(&path, &password)?;
                 drop(password);
-                let envs = selected_envs(&vault, &selection)?;
-                child::inject(&mut command, &envs)?;
-                vault.log(
-                    "run-requested",
-                    None,
-                    Some(&format!("launch requested; {} keys selected", envs.len())),
+                let plan = planned_envs(&vault, &selection)?;
+                let envs = disclosed_envs(
+                    &vault,
+                    EnvDisclosure::Run,
+                    &plan,
+                    &format!("launch requested; {} keys selected", plan.len()),
                 )?;
+                child::inject(&mut command, &envs)?;
             }
 
             let mut child = command.spawn()?;
@@ -438,17 +448,17 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             let password = master_password(false)?;
             let vault = Vault::open(&path, &password)?;
             drop(password);
-            let envs = selected_envs(&vault, &selection)?;
+            let plan = planned_envs(&vault, &selection)?;
             // Pairs the two records; the destination stays out of the plaintext journal.
             let operation = uuid::Uuid::new_v4();
-
-            vault.log(
-                "export-requested",
-                None,
-                Some(&format!(
+            let envs = disclosed_envs(
+                &vault,
+                EnvDisclosure::Export,
+                &plan,
+                &format!(
                     "operation {operation}; disclosure requested; {} keys selected",
-                    envs.len()
-                )),
+                    plan.len()
+                ),
             )?;
             drop(vault);
 
@@ -554,19 +564,44 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
     Ok(0)
 }
 
-fn selected_envs(vault: &Vault, selection: &Selection) -> Result<child::Secrets> {
-    let envs = child::Secrets(vault.env_vars(
+/// The selection's names, checked before anything is journaled or read.
+fn planned_envs(vault: &Vault, selection: &Selection) -> Result<EnvPlan> {
+    let plan = vault.plan_env(
         selection.project.as_deref(),
         selection.environment.as_deref(),
         selection.all,
-    )?);
-    if envs.is_empty() {
+    )?;
+    if plan.is_empty() {
         return Err(Error::Invalid(
             "no keys matched the explicit selection".into(),
         ));
     }
-    child::validate(&envs)?;
-    Ok(envs)
+    child::validate_names(plan.names())?;
+    Ok(plan)
+}
+
+/// Records the request, then reads the values. A failed record returns before any value
+/// is read (contract 12).
+fn disclosed_envs(
+    vault: &Vault,
+    kind: EnvDisclosure,
+    plan: &EnvPlan,
+    detail: &str,
+) -> Result<child::Secrets> {
+    let proof = vault.disclose_env(kind, plan, Some(detail))?;
+    Ok(child::Secrets(vault.env_vars(plan, &proof)?))
+}
+
+/// `list --json`: the key fields, and the legacy `"secret": "***"` placeholder that
+/// scripts read. A key carries no secret to leak here.
+fn listing_json(keys: &[ApiKey]) -> Result<String> {
+    let mut value = serde_json::to_value(keys)?;
+    for key in value.as_array_mut().into_iter().flatten() {
+        if let Some(object) = key.as_object_mut() {
+            object.insert("secret".into(), "***".into());
+        }
+    }
+    Ok(serde_json::to_string_pretty(&value)?)
 }
 
 fn print_warnings(io: &mut Io, vault: &mut Vault) {

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 /// Custom field names written into the KDBX entry. KeePassXC preserves unknown
 /// fields, so the vault stays fully readable outside this app.
@@ -28,12 +29,12 @@ pub struct ImportChange {
     pub action: String,
 }
 
+/// A key's metadata. It carries no secret: a secret leaves the vault only through
+/// [`crate::Vault::secret`] or [`crate::Vault::env_vars`], each with a [`crate::Disclosure`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiKey {
     pub id: String,
     pub title: String,
-    /// The secret itself, stored in the KDBX Password field (protected).
-    pub secret: String,
     pub username: Option<String>,
     pub issuer: Option<String>,
     pub project: Option<String>,
@@ -92,10 +93,53 @@ impl ApiKey {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// A secret value on its way into the vault. `Debug` and `Serialize` never show it, and no
+/// accessor outside this crate returns its text.
+#[derive(Clone, Default)]
+pub struct Secret(Zeroizing<String>);
+
+impl Secret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(Zeroizing::new(value.into()))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for Secret {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&str> for Secret {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(<redacted>)")
+    }
+}
+
+impl Serialize for Secret {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str("***")
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ApiKeyInput {
     pub title: String,
-    pub secret: String,
+    pub secret: Secret,
     pub username: Option<String>,
     pub issuer: Option<String>,
     pub project: Option<String>,
@@ -113,7 +157,7 @@ impl ApiKeyInput {
     pub fn new(title: impl Into<String>, secret: impl Into<String>) -> Self {
         Self {
             title: title.into(),
-            secret: secret.into(),
+            secret: Secret::new(secret),
             ..Default::default()
         }
     }
@@ -139,27 +183,6 @@ impl ApiKeyInput {
             }
         }
         Ok(())
-    }
-}
-
-/// Reuse an existing key's metadata when changing only its secret.
-impl From<&ApiKey> for ApiKeyInput {
-    fn from(key: &ApiKey) -> Self {
-        Self {
-            title: key.title.clone(),
-            secret: key.secret.clone(),
-            username: key.username.clone(),
-            issuer: key.issuer.clone(),
-            project: key.project.clone(),
-            environment: key.environment.clone(),
-            scopes: key.scopes.clone(),
-            env_var: key.env_var.clone(),
-            url: key.url.clone(),
-            notes: key.notes.clone(),
-            tags: key.tags.clone(),
-            expires_at: key.expires_at,
-            rotation_days: key.rotation_days,
-        }
     }
 }
 

@@ -6,6 +6,8 @@ mod policy;
 mod private_export;
 mod session;
 mod settings;
+#[cfg(test)]
+mod test_support;
 mod views;
 mod visibility;
 mod windows_session;

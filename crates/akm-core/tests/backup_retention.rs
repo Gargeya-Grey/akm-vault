@@ -76,8 +76,12 @@ fn protected_original_survives_future_names_and_failed_convenience_refresh() {
         "the verified immediate pre-deletion original must not be pruned by wall-clock names"
     );
     let recovered = Vault::open(exact.unwrap(), PASSWORD).unwrap();
+    let found = recovered.get_by_id(&key.id).unwrap();
+    let proof = recovered
+        .disclose_key(akm_core::KeyDisclosure::Reveal, &found, Some("test"))
+        .unwrap();
     assert_eq!(
-        recovered.get_by_id(&key.id).unwrap().secret,
+        *recovered.secret(&key.id, &proof).unwrap(),
         "fake-only-retained-value"
     );
 }

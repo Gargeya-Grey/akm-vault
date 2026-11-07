@@ -36,7 +36,11 @@ pub fn prepare(program: &str, args: &[String]) -> Result<Command> {
 }
 
 pub fn validate(envs: &[(String, String)]) -> Result<()> {
-    for (name, _) in envs {
+    validate_names(envs.iter().map(|(name, _)| name.as_str()))
+}
+
+pub fn validate_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<()> {
+    for name in names {
         let upper = name.to_ascii_uppercase();
         if is_akm_name(OsStr::new(name))
             || matches!(

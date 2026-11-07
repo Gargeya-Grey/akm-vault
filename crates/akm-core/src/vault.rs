@@ -13,8 +13,10 @@ use keepass::db::{fields, Database, Entry, EntryId, EntryRef, GroupId, Value};
 use keepass::DatabaseKey;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::audit::AuditLog;
+use crate::disclosure::{Disclosure, EnvDisclosure, EnvPlan, KeyDisclosure};
 use crate::error::{Error, Result};
 use crate::model::*;
 
@@ -329,13 +331,13 @@ impl Vault {
         };
         for (name, secret) in entries {
             let (title, action) = if let Some(existing) = index.get(name) {
-                if existing.secret == *secret {
+                let id = self
+                    .find_entry_id(&existing.id)
+                    .ok_or_else(|| Error::EntryNotFound(existing.id.clone()))?;
+                if *self.stored_secret(id) == *secret {
                     plan.preview.unchanged += 1;
                     (existing.title.clone(), "unchanged")
                 } else {
-                    let id = self
-                        .find_entry_id(&existing.id)
-                        .ok_or_else(|| Error::EntryNotFound(existing.id.clone()))?;
                     plan.replacements.push((id, secret.clone()));
                     plan.preview.updated += 1;
                     (existing.title.clone(), "update")
@@ -399,14 +401,15 @@ impl Vault {
         Ok((added, updated))
     }
 
-    /// Environment variables for a project/environment slice. Refuses duplicate
-    /// names so one key can never silently shadow another at injection time.
-    pub fn env_vars(
+    /// The variables that a project/environment slice would disclose: names and key IDs, no
+    /// values. Refuses duplicate names, so one key can never silently shadow another at
+    /// injection time, and values that cannot be injected.
+    pub fn plan_env(
         &self,
         project: Option<&str>,
         environment: Option<&str>,
         all: bool,
-    ) -> Result<Vec<(String, String)>> {
+    ) -> Result<EnvPlan> {
         if all {
             if project.is_some() || environment.is_some() {
                 return Err(Error::Invalid(
@@ -432,17 +435,114 @@ impl Vault {
             }
 
             let name = key.resolved_env_var();
-            validate_process_var(&name, &key.secret)?;
+            let id = self
+                .find_entry_id(&key.id)
+                .ok_or_else(|| Error::EntryNotFound(key.id.clone()))?;
+            validate_process_var(&name, &self.stored_secret(id))?;
             if !seen.insert(name.clone()) {
                 return Err(Error::Invalid(format!(
                     "two keys resolve to the same environment variable {name:?}; set AKM_ENV_VAR explicitly"
                 )));
             }
-            out.push((name, key.secret));
+            out.push((key.id, name));
         }
 
-        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out.sort_by(|a, b| a.1.cmp(&b.1));
+        Ok(EnvPlan::new(out))
+    }
+
+    /// Journals a request to disclose one key's secret. The proof exists only when the
+    /// record was appended: a journal failure is an error and no secret can be read.
+    pub fn disclose_key(
+        &self,
+        action: KeyDisclosure,
+        key: &ApiKey,
+        detail: Option<&str>,
+    ) -> Result<Disclosure> {
+        self.log(action.action(), Some(key), detail)?;
+        Ok(Disclosure::key(action, key.id.clone()))
+    }
+
+    /// Journals a request to disclose a planned scope, before any value is read.
+    pub fn disclose_env(
+        &self,
+        action: EnvDisclosure,
+        plan: &EnvPlan,
+        detail: Option<&str>,
+    ) -> Result<Disclosure> {
+        self.log(action.action(), None, detail)?;
+        Ok(Disclosure::env(action, plan.key_ids()))
+    }
+
+    /// One key's secret, for the key that `proof` names.
+    pub fn secret(&self, id: &str, proof: &Disclosure) -> Result<Zeroizing<String>> {
+        if !proof.covers_key(id) {
+            return Err(Error::Invalid(
+                "this disclosure record does not cover that key".into(),
+            ));
+        }
+        let entry = self
+            .find_entry_id(id)
+            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+        Ok(self.stored_secret(entry))
+    }
+
+    /// The variables of a plan, with their values. `proof` must be the record of this plan.
+    pub fn env_vars(&self, plan: &EnvPlan, proof: &Disclosure) -> Result<Vec<(String, String)>> {
+        if !proof.covers_env(plan) {
+            return Err(Error::Invalid(
+                "this disclosure record does not cover that selection".into(),
+            ));
+        }
+        let mut out = Vec::with_capacity(plan.len());
+        for (id, name) in plan.entries() {
+            let entry = self
+                .find_entry_id(id)
+                .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+            let key = self.get_by_id(id)?;
+            if key.resolved_env_var() != name {
+                return Err(Error::Invalid(
+                    "the vault changed since the selection was planned".into(),
+                ));
+            }
+            let value = self.stored_secret(entry);
+            validate_process_var(name, &value)?;
+            out.push((name.to_string(), (*value).clone()));
+        }
         Ok(out)
+    }
+
+    /// An input that holds a key's stored metadata and secret, for an update that keeps
+    /// the secret. It is not a disclosure: the secret goes back into the vault.
+    pub fn edit_input(&self, id: &str) -> Result<ApiKeyInput> {
+        let key = self.get_by_id(id)?;
+        let entry = self
+            .find_entry_id(id)
+            .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
+        Ok(ApiKeyInput {
+            title: key.title,
+            secret: Secret::new((*self.stored_secret(entry)).clone()),
+            username: key.username,
+            issuer: key.issuer,
+            project: key.project,
+            environment: key.environment,
+            scopes: key.scopes,
+            env_var: key.env_var,
+            url: key.url,
+            notes: key.notes,
+            tags: key.tags,
+            expires_at: key.expires_at,
+            rotation_days: key.rotation_days,
+        })
+    }
+
+    fn stored_secret(&self, id: EntryId) -> Zeroizing<String> {
+        Zeroizing::new(
+            self.db
+                .entry(id)
+                .and_then(|entry| entry.get(fields::PASSWORD).map(str::to_string))
+                .unwrap_or_default(),
+        )
     }
 
     pub fn expiring(&self, within_days: i64) -> Vec<ApiKey> {
@@ -893,7 +993,7 @@ fn write_entry(
         fields::USERNAME,
         input.username.as_deref().unwrap_or("api-key"),
     );
-    entry.set_protected(fields::PASSWORD, &input.secret);
+    entry.set_protected(fields::PASSWORD, input.secret.as_str());
 
     set_or_remove(entry, fields::URL, input.url.as_deref());
     set_or_remove(entry, fields::NOTES, input.notes.as_deref());
@@ -942,7 +1042,6 @@ fn read_entry(entry: &Entry) -> ApiKey {
     ApiKey {
         id: entry.id().to_string(),
         title: entry.get(fields::TITLE).unwrap_or_default().to_string(),
-        secret: entry.get(fields::PASSWORD).unwrap_or_default().to_string(),
         username: owned(entry.get(fields::USERNAME)).filter(|v| v != "api-key"),
         issuer: owned(entry.get(META_ISSUER)),
         project: owned(entry.get(META_PROJECT)),
@@ -1109,12 +1208,13 @@ mod tests {
             let added = vault
                 .add(ApiKeyInput::new("Fake committed", "fake-committed-value"))
                 .unwrap();
+            let reopened = Vault::open(&path, PASSWORD).unwrap();
+            let found = reopened.get_by_id(&added.id).unwrap();
+            let proof = reopened
+                .disclose_key(KeyDisclosure::Reveal, &found, None)
+                .unwrap();
             assert_eq!(
-                Vault::open(&path, PASSWORD)
-                    .unwrap()
-                    .get_by_id(&added.id)
-                    .unwrap()
-                    .secret,
+                *reopened.secret(&added.id, &proof).unwrap(),
                 "fake-committed-value"
             );
             let warnings = vault.take_warning_records();
@@ -1193,7 +1293,6 @@ mod tests {
         let key = vault
             .add(ApiKeyInput::new("Saved once", "fake-sync-secret"))
             .unwrap();
-        assert_eq!(vault.get_by_id(&key.id).unwrap().secret, "fake-sync-secret");
         assert_eq!(
             Vault::open(path, PASSWORD)
                 .unwrap()
@@ -1213,5 +1312,11 @@ mod tests {
             "add-completed"
         );
         assert!(vault.take_warnings().is_empty());
+        // The stored secret is read after the journal checks: a disclosure adds a record.
+        let found = vault.get_by_id(&key.id).unwrap();
+        let proof = vault
+            .disclose_key(KeyDisclosure::Reveal, &found, None)
+            .unwrap();
+        assert_eq!(*vault.secret(&key.id, &proof).unwrap(), "fake-sync-secret");
     }
 }

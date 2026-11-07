@@ -835,7 +835,6 @@ mod tests {
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc,
     };
-    use zeroize::Zeroize;
 
     #[derive(Default)]
     struct TestClock(AtomicU64);
@@ -1024,12 +1023,11 @@ mod tests {
         let session = f.session.clone();
         let writer = std::thread::spawn(move || {
             session.access(Access::Write, Some(before), |vault| {
-                let mut key = vault.add(akm_core::ApiKeyInput::new(
+                let key = vault.add(akm_core::ApiKeyInput::new(
                     "Fake presentation commit",
                     "fake-committed-value",
                 ))?;
                 let id = key.id.clone();
-                key.secret.zeroize();
                 committed_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
                 Ok(id)
@@ -1150,11 +1148,10 @@ mod tests {
             } else {
                 f.session
                     .access(Access::Write, None, |vault| {
-                        let mut key = vault.add(akm_core::ApiKeyInput::new(
+                        vault.add(akm_core::ApiKeyInput::new(
                             "Fake intervening revision",
                             "fake-revision-value",
                         ))?;
-                        key.secret.zeroize();
                         Ok(())
                     })
                     .unwrap();
@@ -2282,13 +2279,13 @@ mod tests {
         let session = f.session.clone();
         let writer = std::thread::spawn(move || {
             session.access(Access::Write, None, |vault| {
-                let key = vault.add(akm_core::ApiKeyInput::new(
+                vault.add(akm_core::ApiKeyInput::new(
                     "Saved once",
                     "fake-private-result",
                 ))?;
                 committed_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
-                Ok(Zeroizing::new(key.secret))
+                Ok(Zeroizing::new("fake-private-result".to_string()))
             })
         });
         committed_rx.recv_timeout(Duration::from_secs(20)).unwrap();
@@ -2308,7 +2305,7 @@ mod tests {
         .unwrap();
         assert_eq!(reopened.list().len(), 1);
         assert_eq!(
-            reopened.find("Saved once").unwrap().secret,
+            crate::test_support::secret_titled(&reopened, "Saved once"),
             "fake-private-result"
         );
     }
