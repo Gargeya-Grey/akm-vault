@@ -36,6 +36,7 @@ const OPERATION_MESSAGES: Record<OperationNotice["kind"], string> = {
 };
 
 function outcomeMessage({ operation, outcome }: OperationOutcome) {
+  if (operation === "terminal") return "A terminal opened with keys. It keeps them until you close it, even after AKM locks. Open another one only if you need it.";
   const name = operation === "import" ? "Import" : operation === "export" ? "File export" : "Operation";
   switch (outcome) {
     case "pending": return `${name} is awaiting an outcome. Do not repeat it while it is pending.`;

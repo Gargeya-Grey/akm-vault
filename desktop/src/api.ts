@@ -52,6 +52,8 @@ async function invoke<T>(command: string, args?: Record<string, unknown>, expect
     }
     if (statusReplies.has(command)) acceptNativeStatus(result as Status, expectedOwner);
     if (outcome !== undefined) settleOutcome(outcome, "completed");
+    // The page can expire and drop this reply, and a window that holds keys must still be on record.
+    if (command === "env_launch_terminal" && !declined) settleOutcome(beginOutcome("terminal", generation), "completed");
     return result;
   } catch (error) {
     if (operation !== undefined && errorKind(error) !== "unknown") acknowledgeImportRecord(operation);

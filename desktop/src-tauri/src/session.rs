@@ -543,6 +543,11 @@ impl Session {
         Ok(effect(&Held::new()))
     }
 
+    #[cfg(test)]
+    pub fn vault_is_released(&self) -> bool {
+        self.vault.try_lock().is_ok()
+    }
+
     pub fn path(&self) -> Result<Option<PathBuf>, CommandError> {
         Ok(self.gate()?.path.clone())
     }

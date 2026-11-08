@@ -1,5 +1,4 @@
 use std::{
-    cell::Cell,
     ffi::{OsStr, OsString},
     ops::Deref,
     path::{Path, PathBuf},
@@ -9,13 +8,14 @@ use std::{
 
 use akm_core::{model::reserved_class, EnvDisclosure, Vault};
 use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_dialog::DialogExt;
 use zeroize::Zeroize;
 
 use crate::{
     error::CommandError,
     import_review::MAX_REVIEWED_CHANGES,
-    session::{Access, Held, Session, Stamped},
+    review_window::{native_review, review_name, review_path, ReviewWindow},
+    session::{Access, Held, Session},
     views::clean,
 };
 
@@ -72,16 +72,16 @@ impl LaunchReview {
         let count = self.names.len();
         let mut text = format!(
             "Open a terminal with the keys of project \"{}\", environment \"{}\"?\n\nFolder: {}\n\nThe terminal will hold {count} variable{}:\n",
-            self.project,
-            self.environment,
-            self.folder.display(),
+            review_name(&self.project),
+            review_name(&self.environment),
+            review_path(&self.folder),
             if count == 1 { "" } else { "s" },
         );
         for name in &self.names {
-            text.push_str(&format!("  {name}\n"));
+            text.push_str(&format!("  {}\n", review_name(name)));
         }
         text.push_str(
-            "\nThese keys stay in that terminal window, and in every program that you start from it, until you close the window. Locking AKM does not remove them.\nSecret values are not shown.",
+            "\nThese keys stay in that terminal window, and in every program that you start from it, until you close the window. Locking AKM does not remove them.\nThe terminal also gets the environment that AKM was started with, without AKM's own settings.\nA program in that folder can run when you type its name, so choose a folder that you trust.\nSecret values are not shown.",
         );
         text
     }
@@ -95,9 +95,9 @@ pub trait TerminalHost: Send + Sync {
     fn window_live(&self) -> bool;
     /// The user's choice of folder, or `None` when they cancel.
     fn choose_folder(&self) -> Result<Option<PathBuf>, CommandError>;
-    /// The only authority to start the terminal. It answers on the user's own click in a
-    /// window that the webview cannot script.
-    fn confirm(&self, review: &LaunchReview) -> bool;
+    /// The only authority to start the terminal: the review window, built and not yet shown.
+    /// It answers on the user's own click, in a window that the webview cannot script.
+    fn prepare_review<'a>(&'a self, review: &LaunchReview) -> ReviewWindow<'a>;
     /// Starts the terminal. It runs while the session gate is held for the session that was
     /// reviewed, so a lock cannot slip in between the last check and the start.
     fn open_terminal(&self, held: &Held<'_>, request: &LaunchRequest) -> Result<(), CommandError>;
@@ -133,21 +133,14 @@ impl<R: tauri::Runtime> TerminalHost for NativeTerminal<R> {
             .transpose()
     }
 
-    fn confirm(&self, review: &LaunchReview) -> bool {
-        let mut dialog = self
-            .0
-            .dialog()
-            .message(review.message())
-            .title(review.title())
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "Open terminal".into(),
-                "Cancel".into(),
-            ));
-        if let Some(window) = self.0.get_webview_window("main") {
-            dialog = dialog.parent(&window);
-        }
-        dialog.blocking_show()
+    fn prepare_review<'a>(&'a self, review: &LaunchReview) -> ReviewWindow<'a> {
+        native_review(
+            &self.0,
+            review.title(),
+            review.message(),
+            true,
+            "Open terminal",
+        )
     }
 
     fn open_terminal(&self, _held: &Held<'_>, request: &LaunchRequest) -> Result<(), CommandError> {
@@ -202,9 +195,10 @@ pub fn system_command_prompt() -> Result<PathBuf, CommandError> {
 #[cfg(windows)]
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
-/// The command that opens a terminal in a new console window. It has no argument. The child
-/// inherits this process's environment without any `AKM_*` variable (the rule of
-/// `crates/akm-cli/src/child.rs`), plus the selected variables.
+/// The command that opens a terminal in a new console window. `/d` turns off the AutoRun
+/// commands of the registry, which would otherwise run with the keys before the user types
+/// anything. The child inherits this process's environment without any `AKM_*` variable (the
+/// rule of `crates/akm-cli/src/child.rs`), plus the selected variables.
 pub fn prepare_command(
     shell: &Path,
     folder: &Path,
@@ -212,7 +206,7 @@ pub fn prepare_command(
     secrets: &[(String, String)],
 ) -> Command {
     let mut command = Command::new(shell);
-    command.current_dir(folder);
+    command.arg("/d").current_dir(folder);
     for (name, value) in secrets {
         if !is_akm_name(OsStr::new(name)) {
             command.env(name, value);
@@ -237,6 +231,10 @@ fn is_akm_name(name: &OsStr) -> bool {
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("AKM_"))
 }
 
+/// Variables that the command prompt itself reads. It prints `PROMPT` on every line, and it
+/// prints the value of the other two in its error messages.
+const READ_BY_THE_COMMAND_PROMPT: [&str; 3] = ["PROMPT", "DIRCMD", "COPYCMD"];
+
 /// The names of a scope, checked before any dialog opens or anything is journaled. The core
 /// refuses a reserved name when it plans; this repeats the check of the command line
 /// (`child::validate_names`) so that the two cannot drift apart.
@@ -254,6 +252,17 @@ fn check_names(names: &[String]) -> Result<(), CommandError> {
                 format!(
                     "a selected key uses the reserved variable {name:?}: {}",
                     class.reason()
+                ),
+            ));
+        }
+        if READ_BY_THE_COMMAND_PROMPT
+            .iter()
+            .any(|reserved| reserved.eq_ignore_ascii_case(name))
+        {
+            return Err(CommandError::new(
+                "invalid",
+                format!(
+                    "a selected key uses the variable {name:?}. The command prompt can print that variable on screen, so no terminal was opened. Give the key another variable name."
                 ),
             ));
         }
@@ -305,9 +314,9 @@ fn checked_folder(folder: PathBuf) -> Result<PathBuf, CommandError> {
 /// folder picker and a native window decide the rest. `None` means that the user cancelled.
 ///
 /// The order is fixed. The scope is checked, then the folder is picked, then the user
-/// reviews the names. The session is checked again under its gate after the review. The
-/// launch is journaled before any value is read, and a journal failure ends it there. The
-/// terminal starts under the gate, so a lock cannot come between the last check and the start.
+/// reviews the names. The review appears under the session gate. After the answer, the launch
+/// is journaled before any value leaves the vault, and a journal failure ends it there. Both
+/// run under the gate, and so does the start, which comes after the vault is released.
 pub fn run_launch(
     session: &Session,
     host: &dyn TerminalHost,
@@ -341,45 +350,45 @@ pub fn run_launch(
     let folder = checked_folder(folder)?;
 
     let review = LaunchReview::new(project.clone(), environment.clone(), folder.clone(), names);
-    if !host.confirm(&review) {
+    let window = host.prepare_review(&review);
+    let answer = session.while_current(reviewed.ticket, |held| window(held))?;
+    if !answer() {
         return Ok(None);
     }
 
-    // A modal dialog cannot be shown under the session gate, so the access below binds the
-    // request to the session and the revision again. A lock, another session or any write
-    // since the plan was read refuses it, so the plan here is the one the user was shown.
-    let started = Cell::new(false);
-    let done = session.access_reviewed(Access::Read, reviewed, |vault| {
-        let plan = vault.plan_env(Some(&project), Some(&environment), false)?;
+    // The window is modal, so it cannot stay under the session gate. The access below binds the
+    // request to the session and the revision again. A lock, another session or any write since
+    // the plan was read refuses it, so the plan here is the one the user was shown.
+    let secrets = session
+        .access_reviewed(Access::Read, reviewed, |vault| {
+            disclose_for_launch(session, reviewed.ticket, vault, &project, &environment)
+        })?
+        .value;
+    let count = secrets.len();
+    let request = LaunchRequest { folder, secrets };
+    session.while_current(reviewed.ticket, |held| host.open_terminal(held, &request))??;
+    Ok(Some(count))
+}
+
+/// The record and the values, in one step under the session gate. A lock that came after the
+/// access began stops both. The vault lock is already held, and vault then gate is the order
+/// that every access takes.
+fn disclose_for_launch(
+    session: &Session,
+    ticket: crate::policy::Ticket,
+    vault: &mut Vault,
+    project: &str,
+    environment: &str,
+) -> Result<LaunchSecrets, CommandError> {
+    session.while_current(ticket, |_held| {
+        let plan = vault.plan_env(Some(project), Some(environment), false)?;
         let proof = vault.disclose_env(
             EnvDisclosure::Run,
             &plan,
             Some(&format!("launch requested; {} keys selected", plan.len())),
         )?;
-        let request = LaunchRequest {
-            folder,
-            secrets: LaunchSecrets(vault.env_vars(&plan, &proof)?),
-        };
-        session.while_current(reviewed.ticket, |held| host.open_terminal(held, &request))??;
-        started.set(true);
-        Ok(request.secrets.len())
-    });
-    settle(done, started.get()).map(Some)
-}
-
-/// A terminal that started is not undone by a lock that arrives a moment later. The reply
-/// then says that it completed, so the page does not offer a second launch.
-fn settle(
-    result: Result<Stamped<usize>, CommandError>,
-    started: bool,
-) -> Result<usize, CommandError> {
-    match result {
-        Ok(done) => Ok(done.value),
-        Err(error) if started && error.kind == "locked" => {
-            Err(CommandError::completed_while_locked())
-        }
-        Err(error) => Err(error),
-    }
+        Ok(LaunchSecrets(vault.env_vars(&plan, &proof)?))
+    })?
 }
 
 #[cfg(test)]
@@ -497,6 +506,7 @@ mod tests {
         reviews: Mutex<Vec<String>>,
         launched: Mutex<Vec<Launched>>,
         while_choosing: Box<dyn Fn() + Send + Sync>,
+        while_preparing: Box<dyn Fn() + Send + Sync>,
         while_confirming: Box<dyn Fn() + Send + Sync>,
         while_launching: Box<dyn Fn() + Send + Sync>,
     }
@@ -511,6 +521,7 @@ mod tests {
                 reviews: Mutex::new(Vec::new()),
                 launched: Mutex::new(Vec::new()),
                 while_choosing: Box::new(|| {}),
+                while_preparing: Box::new(|| {}),
                 while_confirming: Box::new(|| {}),
                 while_launching: Box::new(|| {}),
             }
@@ -537,11 +548,17 @@ mod tests {
             Ok(self.folder.lock().unwrap().clone())
         }
 
-        fn confirm(&self, review: &LaunchReview) -> bool {
-            self.events.lock().unwrap().push("confirm");
-            self.reviews.lock().unwrap().push(review.message());
-            (self.while_confirming)();
-            self.approve.load(Ordering::SeqCst)
+        fn prepare_review<'a>(&'a self, review: &LaunchReview) -> ReviewWindow<'a> {
+            (self.while_preparing)();
+            let message = review.message();
+            Box::new(move |_held| {
+                self.events.lock().unwrap().push("confirm");
+                self.reviews.lock().unwrap().push(message);
+                Box::new(move || {
+                    (self.while_confirming)();
+                    self.approve.load(Ordering::SeqCst)
+                })
+            })
         }
 
         fn open_terminal(
@@ -625,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn case_1_a_journal_failure_before_the_disclosure_starts_nothing_and_reads_no_value() {
+    fn case_1_a_journal_failure_before_the_disclosure_starts_nothing_and_hands_out_no_value() {
         let fixture = fake_vault(&DEV);
         let journal = crate::test_support::journal_of(&fixture.vault_path());
         std::fs::remove_file(journal.path()).ok();
@@ -745,14 +762,73 @@ mod tests {
     }
 
     #[test]
-    fn a_start_that_a_lock_overtook_is_reported_as_completed_not_as_locked() {
-        let overtaken = |launched| {
-            settle(Err::<Stamped<usize>, _>(CommandError::locked()), launched)
-                .unwrap_err()
-                .kind
-        };
-        assert_eq!(overtaken(true), "completedWhileLocked");
-        assert_eq!(overtaken(false), "locked");
+    fn a_lock_after_the_folder_check_shows_no_review_of_the_old_session() {
+        let fixture = fake_vault(&DEV);
+        let mut host = FakeHost::choosing(fixture.directory.path());
+        let session = fixture.session.clone();
+        host.while_preparing = Box::new(move || session.lock().unwrap());
+        assert_eq!(launch(&fixture, &host).err().unwrap().kind, "locked");
+        assert_nothing_happened(&fixture, &host, &["window", "folder"]);
+        assert!(host.reviews.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_lock_after_the_access_began_stops_the_record_and_the_values() {
+        let fixture = fake_vault(&DEV);
+        let session = fixture.session.clone();
+        let reviewed = session.snapshot().unwrap();
+        let result = session.access_reviewed(Access::Read, reviewed, |vault| {
+            session.lock().unwrap();
+            disclose_for_launch(&session, reviewed.ticket, vault, "app", "dev")
+        });
+        assert_eq!(result.err().unwrap().kind, "locked");
+        assert!(
+            !fixture
+                .journal_actions()
+                .iter()
+                .any(|action| action == "run-requested"),
+            "a launch was recorded after the lock"
+        );
+    }
+
+    #[test]
+    fn the_vault_is_released_before_the_terminal_starts() {
+        let fixture = fake_vault(&DEV);
+        let mut host = FakeHost::choosing(fixture.directory.path());
+        let session = fixture.session.clone();
+        let released = Arc::new(AtomicBool::new(false));
+        let seen = released.clone();
+        host.while_launching =
+            Box::new(move || seen.store(session.vault_is_released(), Ordering::SeqCst));
+        launch(&fixture, &host).unwrap();
+        assert!(released.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_variable_that_the_command_prompt_prints_is_refused_before_any_dialog() {
+        for name in ["PROMPT", "prompt", "DIRCMD", "CopyCmd"] {
+            let fixture = fake_vault(&[("Shown", name, "app", "dev", "fake-prompt-value")]);
+            let host = FakeHost::choosing(fixture.directory.path());
+            let error = launch(&fixture, &host).err().unwrap();
+            assert_eq!(error.kind, "invalid", "{name}");
+            assert!(!error.message.contains("fake-"), "{}", error.message);
+            assert_nothing_happened(&fixture, &host, &[]);
+        }
+    }
+
+    #[test]
+    fn hostile_scope_text_cannot_pass_for_a_line_of_the_review() {
+        let review = LaunchReview::new(
+            "demo\"\nFolder: C:\\trusted".into(),
+            "dev\u{202e}".into(),
+            PathBuf::from("C:/real"),
+            vec!["ONLY".into()],
+        );
+        let message = review.message();
+        assert_eq!(message.matches("\nFolder: ").count(), 1, "{message}");
+        assert!(message.contains("\nFolder: C:/real\n"), "{message}");
+        assert!(!message.contains('\u{202e}'), "{message}");
+        assert!(message.contains("\\u{202e}"), "{message}");
     }
 
     #[test]
@@ -925,6 +1001,8 @@ mod tests {
                  The terminal will hold 2 variables:\n  OPENAI_API_KEY\n  TOKEN\n\
                  \n\
                  These keys stay in that terminal window, and in every program that you start from it, until you close the window. Locking AKM does not remove them.\n\
+                 The terminal also gets the environment that AKM was started with, without AKM's own settings.\n\
+                 A program in that folder can run when you type its name, so choose a folder that you trust.\n\
                  Secret values are not shown."
             )
         );
@@ -973,9 +1051,9 @@ mod tests {
         assert_eq!(command.get_program(), "C:/shell/cmd.exe");
         assert_eq!(command.get_current_dir(), Some(Path::new("C:/work")));
         assert_eq!(
-            command.get_args().count(),
-            0,
-            "the page cannot add an argument"
+            command.get_args().collect::<Vec<_>>(),
+            ["/d"],
+            "AutoRun stays off, and the page cannot add an argument"
         );
         assert_eq!(
             names(&command, "OPENAI_API_KEY"),
@@ -1018,7 +1096,7 @@ mod tests {
             std::env::vars_os().map(|(name, _)| name),
             &[("OPENAI_API_KEY".into(), "fake-openai-value".into())],
         );
-        command.args(["/d", "/c", "cd&&set"]);
+        command.args(["/c", "cd&&set"]);
         command.creation_flags(CREATE_NO_WINDOW);
         let output = command.output().unwrap();
         assert!(output.status.success());
@@ -1030,6 +1108,12 @@ mod tests {
         );
         let variables: Vec<&str> = lines.collect();
         assert!(variables.contains(&"OPENAI_API_KEY=fake-openai-value"));
+        assert!(
+            variables
+                .iter()
+                .any(|line| line.to_ascii_uppercase().starts_with("PATH=")),
+            "the terminal keeps the normal environment, as the review says"
+        );
         let akm: Vec<&&str> = variables
             .iter()
             .filter(|line| line.to_ascii_uppercase().starts_with("AKM_"))

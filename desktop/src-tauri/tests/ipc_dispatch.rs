@@ -26,6 +26,9 @@ mod private_export;
 mod publication;
 #[path = "../src/reminders.rs"]
 mod reminders;
+#[path = "../src/review_window.rs"]
+#[allow(unused_imports)]
+mod review_window;
 #[path = "../src/session.rs"]
 #[allow(unused_imports)]
 mod session;
@@ -108,15 +111,22 @@ impl Dialog {
     }
 }
 impl import_review::ImportConfirm for Dialog {
-    fn confirm(&self, _: &import_review::ImportReview) -> bool {
-        let held = self.hold.lock().unwrap().take();
-        if let Some((entered, release)) = held {
-            entered.send(()).unwrap();
-            release
-                .recv_timeout(Duration::from_secs(60))
-                .expect("the test answers the dialog");
-        }
-        self.approve.load(Ordering::SeqCst)
+    fn prepare_review<'a>(
+        &'a self,
+        _: &import_review::ImportReview,
+    ) -> review_window::ReviewWindow<'a> {
+        Box::new(move |_held| {
+            Box::new(move || {
+                let held = self.hold.lock().unwrap().take();
+                if let Some((entered, release)) = held {
+                    entered.send(()).unwrap();
+                    release
+                        .recv_timeout(Duration::from_secs(60))
+                        .expect("the test answers the dialog");
+                }
+                self.approve.load(Ordering::SeqCst)
+            })
+        })
     }
     fn window_live(&self) -> bool {
         self.window_live.load(Ordering::SeqCst)
@@ -138,8 +148,8 @@ impl launch::TerminalHost for Terminal {
     fn choose_folder(&self) -> Result<Option<std::path::PathBuf>, error::CommandError> {
         Ok(Some(self.folder.clone()))
     }
-    fn confirm(&self, _: &launch::LaunchReview) -> bool {
-        self.approve.load(Ordering::SeqCst)
+    fn prepare_review<'a>(&'a self, _: &launch::LaunchReview) -> review_window::ReviewWindow<'a> {
+        Box::new(move |_held| Box::new(move || self.approve.load(Ordering::SeqCst)))
     }
     fn open_terminal(
         &self,

@@ -223,6 +223,25 @@ From [UI rebuild review 1](reviews/2026-11-08-ui-rebuild-review1.md), on `49a54e
 | UI-R1-04 | P3 | Fixed, not accepted | UI rebuild | H | Settings showed the last polled key count after a change. It now reads the key list when it opens. Test: `Settings.reminders.test.tsx`. |
 | UI-R1-05 | P3 | Fixed, not accepted | UI rebuild | D | The export recipe named Settings, and STATE.md said the proof script still needed its import steps. Both now match the app and the script. The adapted script path stays unproved on the real GUI. |
 
+## Terminal launch review 1 (2026-11-08)
+
+From [terminal launch review 1](reviews/2026-11-08-terminal-review1.md), on `4830db0`.
+
+| ID | Severity | Status | Unit | Class | Problem |
+|---|---|---|---|---|---|
+| T-R1-01 | P1 | Fixed, not accepted | Terminal | Disclosure | A key named `PROMPT` printed its value in the terminal. `PROMPT`, `DIRCMD` and `COPYCMD` are now refused before any window. Test: `a_variable_that_the_command_prompt_prints_is_refused_before_any_dialog`. |
+| T-R1-02 | P2 | Fixed, not accepted | Terminal | Disclosure | AutoRun commands could run with the keys. The terminal starts with `/d`. A test reads the arguments and runs the real command. No test sets a real AutoRun value, because that writes the user's registry. |
+| T-R1-03 | P2 | Fixed, not accepted | Terminal | Disclosure | The terminal inherits AKM's environment. It still does, because programs need it, and the review now says so. It also warns about programs in the folder. Test: `case_9_the_review_lists_the_scope_the_folder_and_each_name_but_no_value`. |
+| T-R1-04 | P2 | Fixed, not accepted | Terminal | I | Scope text could pass for lines of the review. Names and paths are escaped, in both the launch and the import review. Tests: `hostile_scope_text_cannot_pass_for_a_line_of_the_review`, `hostile_names_cannot_pass_for_a_line_of_the_import_review`. |
+| T-R1-05 | P2 | Fixed, not accepted | Terminal | A | A lock just before the review could show the old names. The review now appears under the session gate, in both the launch and the import. Tests: `a_lock_after_the_folder_check_shows_no_review_of_the_old_session`, `a_lock_just_before_the_import_review_shows_no_review`. |
+| T-R1-06 | P2 | Fixed, not accepted | Terminal | A | The journal write and the value copy could run after a lock. Both now run under the session gate. Test: `a_lock_after_the_access_began_stops_the_record_and_the_values`. |
+| T-R1-07 | P2 | Partly fixed; owner decision | Terminal | Contract 11 | The vault lock is now released before the start (`the_vault_is_released_before_the_terminal_starts`). The session stays open while the terminal runs. The owner decides whether to amend contract 11 for the desktop. |
+| T-R1-08 | P2 | Fixed, not accepted | Terminal | Disclosure | A custom KDBX field name could hold sensitive text and reached the page. Only known field names reach it now; any other shows as "another field". Test: `a_custom_field_name_in_the_history_never_reaches_the_page`. |
+| T-R1-09 | P2 | Fixed, not accepted | Terminal | C | A hidden view dropped the reply of a launch that succeeded. The API layer now keeps a notice. Test: `a terminal launch leaves a record that survives the page dropping its reply`. |
+| T-R1-10 | P2 | Fixed, not accepted | Terminal | I | The confirm button was the default. `review_window.rs` calls the Windows task dialog with Cancel as the default, for the launch and the import. Test: `only_the_confirm_button_approves_and_it_is_not_the_default`. The real window is an owner-present test. |
+| T-R1-11 | P3 | Fixed, not accepted | Terminal | D | The design said that no value is read before the record. It now says that no value leaves the vault before it, and the test name says so too. |
+| T-R1-12 | P3 | Open | Release | Memory | `std::process::Command` keeps a copy of each value that is not zeroed. The CLI has the same limit. Named for the release review. |
+
 ## Found in use (2026-11-08)
 
 From a run of the first-use commands on the CI build of `ee7b353`, with a fake vault. No review read the fix, because the owner limited phase two to two reviews.

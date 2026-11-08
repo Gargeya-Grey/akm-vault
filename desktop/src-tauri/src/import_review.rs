@@ -1,9 +1,11 @@
 use akm_core::ImportPreview;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
-use crate::error::CommandError;
+use crate::{
+    error::CommandError,
+    review_window::{native_review, review_name, ReviewWindow},
+};
 
 /// One dialog lists every change. A bigger import is refused instead of cut short,
 /// so the user never approves names that the dialog did not show.
@@ -56,7 +58,8 @@ impl ImportReview {
     pub fn message(&self) -> String {
         let mut text = format!(
             "Import into project \"{}\", environment \"{}\"?\n",
-            self.project, self.environment
+            review_name(&self.project),
+            review_name(&self.environment)
         );
         let listed = |action: &str| {
             self.preview
@@ -69,14 +72,18 @@ impl ImportReview {
         if !added.is_empty() {
             text.push_str(&format!("\nAdd {}:\n", added.len()));
             for change in added {
-                text.push_str(&format!("  {}\n", change.name));
+                text.push_str(&format!("  {}\n", review_name(&change.name)));
             }
         }
         let replaced = listed("update");
         if !replaced.is_empty() {
             text.push_str(&format!("\nReplace the secret of {}:\n", replaced.len()));
             for change in replaced {
-                text.push_str(&format!("  {} (entry \"{}\")\n", change.name, change.title));
+                text.push_str(&format!(
+                    "  {} (entry \"{}\")\n",
+                    review_name(&change.name),
+                    review_name(&change.title)
+                ));
             }
         }
         if self.preview.unchanged > 0 {
@@ -93,7 +100,7 @@ impl ImportReview {
 /// The only authority to apply an import. It answers on the user's own click in a
 /// window that the webview cannot script.
 pub trait ImportConfirm: Send + Sync {
-    fn confirm(&self, review: &ImportReview) -> bool;
+    fn prepare_review<'a>(&'a self, review: &ImportReview) -> ReviewWindow<'a>;
     /// Whether the main window is shown and not minimized right now. Native asks it only
     /// before the dialog opens, so that no dialog appears over a window nobody can see. It
     /// does not gate the answer: the user's click in the dialog stands.
@@ -105,25 +112,14 @@ pub struct ConfirmState(pub Arc<dyn ImportConfirm>);
 pub struct NativeConfirm<R: tauri::Runtime>(pub AppHandle<R>);
 
 impl<R: tauri::Runtime> ImportConfirm for NativeConfirm<R> {
-    fn confirm(&self, review: &ImportReview) -> bool {
-        let mut dialog = self
-            .0
-            .dialog()
-            .message(review.message())
-            .title(review.title())
-            .kind(if review.replaces_secrets() {
-                MessageDialogKind::Warning
-            } else {
-                MessageDialogKind::Info
-            })
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "Import".into(),
-                "Cancel".into(),
-            ));
-        if let Some(window) = self.0.get_webview_window("main") {
-            dialog = dialog.parent(&window);
-        }
-        dialog.blocking_show()
+    fn prepare_review<'a>(&'a self, review: &ImportReview) -> ReviewWindow<'a> {
+        native_review(
+            &self.0,
+            review.title(),
+            review.message(),
+            review.replaces_secrets(),
+            "Import",
+        )
     }
 
     fn window_live(&self) -> bool {
@@ -178,6 +174,25 @@ mod tests {
         );
         assert!(review.replaces_secrets());
         assert!(review.changes_anything());
+    }
+
+    #[test]
+    fn hostile_names_cannot_pass_for_a_line_of_the_import_review() {
+        let review = ImportReview::new(
+            "demo\"\nKeep unchanged: 0".into(),
+            "dev\u{202e}".into(),
+            ImportPreview {
+                added: 0,
+                updated: 1,
+                unchanged: 0,
+                changes: vec![change("OLD", "title\nAdd 9:", "update")],
+            },
+        )
+        .unwrap();
+        let message = review.message();
+        assert!(!message.contains("\nKeep unchanged"), "{message}");
+        assert!(!message.contains("\nAdd 9:"), "{message}");
+        assert!(!message.contains('\u{202e}'), "{message}");
     }
 
     #[test]

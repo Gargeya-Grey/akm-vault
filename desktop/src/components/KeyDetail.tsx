@@ -26,12 +26,12 @@ const HIDE_SECONDS = 30;
 const FIELD_WORDS: Record<string, string> = {
   Title: "title", UserName: "username", URL: "URL", Notes: "notes", Tags: "tags", Expiry: "expiry",
   AKM_ISSUER: "issuer", AKM_PROJECT: "project", AKM_ENV: "environment", AKM_SCOPES: "scopes",
-  AKM_ENV_VAR: "variable name", AKM_ROTATION_DAYS: "rotation interval",
+  AKM_ENV_VAR: "variable name", AKM_ROTATION_DAYS: "rotation interval", Other: "another field",
 };
 const SECRET_FIELDS = new Set(["Password", "AKM_SECRET_CHANGED"]);
 
 function changedText(version: HistoryVersion): string {
-  const others = version.changed.filter((name) => !SECRET_FIELDS.has(name) && name !== "AKM_ID").map((name) => FIELD_WORDS[name] ?? name);
+  const others = version.changed.filter((name) => !SECRET_FIELDS.has(name) && name !== "AKM_ID").map((name) => FIELD_WORDS[name] ?? "another field");
   const all = version.secretChanged ? ["secret", ...others] : others;
   return all.length > 0 ? `Changed: ${all.join(", ")}` : "No field changed";
 }

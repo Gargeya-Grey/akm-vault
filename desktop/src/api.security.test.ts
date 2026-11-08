@@ -219,6 +219,12 @@ test("a terminal launch sends the session and the scope and no program, folder o
   expect(native.invoke).toHaveBeenCalledExactlyOnceWith("env_launch_terminal", { project: "fake-project", environment: "fake-env", sessionId: nativeOwner() });
 });
 
+test("a terminal launch leaves a record that survives the page dropping its reply", async () => {
+  native.invoke.mockResolvedValueOnce(2);
+  await api.launchTerminal("fake-project", "fake-env");
+  expect(retainedCompletions()).toMatchObject([{ operation: "terminal", outcome: "completed" }]);
+});
+
 test("a cancelled terminal launch answers null and leaves no completion record", async () => {
   native.invoke.mockResolvedValueOnce(null);
   expect(await api.launchTerminal("fake-project", "fake-env")).toBeNull();

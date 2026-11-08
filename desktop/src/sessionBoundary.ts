@@ -3,7 +3,7 @@ export const SESSION_LOSS_EVENT = "akm-completed-session-lost";
 export const WARNING_EVENT = "akm-operation-notices";
 export const COMPLETION_MESSAGE = "An operation completed, but its originating session is no longer available. Do not repeat it. Open the relevant vault or check its export to inspect the saved result.";
 
-export type Operation = "import" | "export" | "operation";
+export type Operation = "import" | "export" | "terminal" | "operation";
 export type Outcome = "pending" | "completed" | "reportedError" | "cancelled" | "unconfirmed" | "completedWhileLocked";
 export interface OperationOutcome {
   id: number;
@@ -38,7 +38,7 @@ export function completedWhileLocked() {
   return { kind: "completedWhileLocked", message: COMPLETION_MESSAGE };
 }
 
-export function beginOutcome(operation: "import" | "export", origin: number, nativeOperation?: string) {
+export function beginOutcome(operation: "import" | "export" | "terminal", origin: number, nativeOperation?: string) {
   const id = ++nextReceipt;
   receipts.set(id, { id, generation: origin, operation, outcome: "pending" });
   if (nativeOperation !== undefined) nativeOperations.set(nativeOperation, id);

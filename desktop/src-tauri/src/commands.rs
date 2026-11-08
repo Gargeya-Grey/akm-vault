@@ -478,12 +478,45 @@ pub struct HistoryView {
     secret_changed: bool,
 }
 
+/// The fields that AKM and KDBX name themselves. A custom field in a foreign vault can have
+/// any name, even a secret pasted there, so the page gets only that some other field changed.
+const KNOWN_HISTORY_FIELDS: [&str; 15] = [
+    "Title",
+    "UserName",
+    "URL",
+    "Notes",
+    "Password",
+    "Tags",
+    "Expiry",
+    akm_core::model::META_ID,
+    akm_core::model::META_ISSUER,
+    akm_core::model::META_PROJECT,
+    akm_core::model::META_ENVIRONMENT,
+    akm_core::model::META_SCOPES,
+    akm_core::model::META_ENV_VAR,
+    akm_core::model::META_ROTATION_DAYS,
+    akm_core::model::META_SECRET_CHANGED,
+];
+const OTHER_HISTORY_FIELD: &str = "Other";
+
+fn shown_history_fields(changed: &[String]) -> Vec<String> {
+    let mut shown: Vec<String> = changed
+        .iter()
+        .filter(|name| KNOWN_HISTORY_FIELDS.contains(&name.as_str()))
+        .cloned()
+        .collect();
+    if shown.len() < changed.len() {
+        shown.push(OTHER_HISTORY_FIELD.to_string());
+    }
+    shown
+}
+
 impl From<&HistoryVersion> for HistoryView {
     fn from(version: &HistoryVersion) -> Self {
         Self {
             index: version.index,
             modified_at: version.modified_at,
-            changed: version.changed.clone(),
+            changed: shown_history_fields(&version.changed),
             secret_changed: version.secret_changed,
         }
     }
@@ -954,7 +987,9 @@ fn run_import(
                 "The vault changed before the confirmation could be shown. Start it again.",
             ));
         }
-        if !confirm.confirm(&review) {
+        let window = confirm.prepare_review(&review);
+        let answer = session.while_current(ticket, |held| window(held))?;
+        if !answer() {
             session.record_import(ticket, &operation, OperationWarningKind::ImportDeclined);
             return Ok(None);
         }
@@ -1333,6 +1368,39 @@ mod tests {
             assert!(!wire.to_string().contains(secret), "{secret}");
         }
         assert_eq!(history("not-a-key").unwrap_err().kind, "notFound");
+    }
+
+    #[test]
+    fn a_lock_just_before_the_import_review_shows_no_review() {
+        let (session, _directory) = test_session();
+        let session = Arc::new(session);
+        let locker = session.clone();
+        let confirm = ScriptedConfirm::new(true).on_prepare(move || locker.lock().unwrap());
+        let error = import(&session, &confirm, "FAKE_KEY=fake-value\n", "app", "dev")
+            .err()
+            .unwrap();
+        assert_eq!(error.kind, "locked");
+        assert!(confirm.shown().is_empty());
+    }
+
+    #[test]
+    fn a_custom_field_name_in_the_history_never_reaches_the_page() {
+        let version = HistoryVersion {
+            index: 0,
+            modified_at: None,
+            changed: vec![
+                "Title".into(),
+                "fake-secret-in-a-field-name".into(),
+                "another-fake-name".into(),
+                "AKM_PROJECT".into(),
+            ],
+            secret_changed: false,
+        };
+        let wire = serde_json::to_value(HistoryView::from(&version)).unwrap();
+        assert_eq!(
+            wire["changed"],
+            serde_json::json!(["Title", "AKM_PROJECT", "Other"])
+        );
     }
 
     #[test]
@@ -1743,7 +1811,6 @@ mod tests {
     #[test]
     fn export_uses_core_validation_not_only_native_or_frontend_scope_checks() {
         use akm_core::model::{META_ENVIRONMENT, META_ENV_VAR, META_PROJECT};
-        use keepass::db::fields;
         use std::sync::Mutex;
         // 3-SA-01: `add` now refuses PATH, so the key is an older entry written to the file.
         let directory = tempfile::tempdir().unwrap();
@@ -1755,6 +1822,7 @@ mod tests {
             let mut group = root.add_group();
             group.name = "API Keys".into();
             let mut entry = group.add_entry();
+            use keepass::db::fields;
             entry.set_unprotected(fields::TITLE, "Process control");
             entry.set_protected(fields::PASSWORD, "fake");
             entry.set_unprotected(META_ENV_VAR, "PATH");
@@ -1814,6 +1882,7 @@ mod tests {
         while_open: Box<dyn Fn() + Send + Sync>,
         window: Arc<std::sync::atomic::AtomicBool>,
         probe: Box<dyn Fn() + Send + Sync>,
+        preparing: Box<dyn Fn() + Send + Sync>,
     }
     impl ScriptedConfirm {
         fn new(answer: bool) -> Self {
@@ -1826,7 +1895,13 @@ mod tests {
                 while_open: Box::new(while_open),
                 window: Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 probe: Box::new(|| {}),
+                preparing: Box::new(|| {}),
             }
+        }
+        /// Runs after the last check and before the review appears.
+        fn on_prepare(mut self, preparing: impl Fn() + Send + Sync + 'static) -> Self {
+            self.preparing = Box::new(preparing);
+            self
         }
         /// The shared flag says whether the window is shown and not minimized.
         fn on_window(mut self, window: Arc<std::sync::atomic::AtomicBool>) -> Self {
@@ -1843,10 +1918,19 @@ mod tests {
         }
     }
     impl ImportConfirm for ScriptedConfirm {
-        fn confirm(&self, review: &ImportReview) -> bool {
-            self.shown.lock().unwrap().push(review.message());
-            (self.while_open)();
-            self.answer
+        fn prepare_review<'a>(
+            &'a self,
+            review: &ImportReview,
+        ) -> crate::review_window::ReviewWindow<'a> {
+            (self.preparing)();
+            let message = review.message();
+            Box::new(move |_held| {
+                self.shown.lock().unwrap().push(message);
+                Box::new(move || {
+                    (self.while_open)();
+                    self.answer
+                })
+            })
         }
         fn window_live(&self) -> bool {
             (self.probe)();

@@ -29,4 +29,4 @@ Preconditions: fake vault only. A terminal window is a visible window and a nati
 - The native window and the picker belong to the AKM process, not to the page. Find them among its top-level windows.
 - The terminal keeps its keys after AKM locks or exits. That is the design, and the window says so.
 - A debug build started from a terminal hands that terminal's standard handles to the child. Check the real flow with a release build.
-- Not verified in this unit: the real console window, the real dialogs, and the default button of the review window. The plugin cannot choose it.
+- Not verified in this unit: the real console window, the real dialogs, and the default button of the review window. Its default is Cancel in code (`review_window.rs`); Enter and Escape are an owner-present test.
