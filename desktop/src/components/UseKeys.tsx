@@ -206,6 +206,26 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     }
   }
 
+  async function openTerminal() {
+    if (!scoped) return;
+    const currentRequest = ++sideEffectRequest.current;
+    setMessage(null);
+    setBusy("launch");
+    try {
+      const count = await api.launchTerminal(project, environment);
+      if (currentRequest !== sideEffectRequest.current) return;
+      setMessage(
+        count === null
+          ? { tone: "ok", text: "Nothing was opened. You cancelled in the folder window or the confirmation window." }
+          : { tone: "ok", text: `Opened a terminal with ${plural(count, "key")}. That window keeps them until you close it, even after AKM locks.` },
+      );
+    } catch (cause) {
+      if (currentRequest === sideEffectRequest.current) setMessage({ tone: "error", text: errorText(cause) });
+    } finally {
+      if (currentRequest === sideEffectRequest.current) setBusy(null);
+    }
+  }
+
   function openImport() {
     editImport();
     setImporting(true);
@@ -286,7 +306,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
               placeholder="Choose a project"
               options={projects}
               onChange={chooseProject}
-              disabled={busy === "save" || busy === "copy"}
+              disabled={busy === "save" || busy === "copy" || busy === "launch"}
             />
             <FilterSelect
               id="env-environment"
@@ -295,7 +315,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
               placeholder="Choose an environment"
               options={environments}
               onChange={chooseEnvironment}
-              disabled={busy === "save" || busy === "copy"}
+              disabled={busy === "save" || busy === "copy" || busy === "launch"}
             />
           </div>
 
@@ -328,11 +348,29 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
             >
               {busy === "copy" ? "Copying…" : "Copy to clipboard"}
             </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => void openTerminal()}
+              disabled={busy !== null || !scoped}
+              aria-busy={busy === "launch" || undefined}
+            >
+              Open terminal with keys…
+            </button>
           </div>
 
           <p className="field-note">
             {scoped ? `${plural(matchCount, "key")} selected in ${project} / ${environment}.` : "Choose a project and environment to enable export."}
           </p>
+          <p className="field-note">
+            Open terminal starts a command prompt in a folder that you choose. Every program you run there can read these keys until you close it.
+          </p>
+
+          {busy === "launch" && (
+            <Notice tone="info">
+              Choose the folder and answer the confirmation window. Nothing opens until you confirm there.
+            </Notice>
+          )}
 
           {message && (
             <Notice tone={message.tone === "ok" ? "ok" : "error"}>

@@ -14,6 +14,9 @@ mod error;
 #[path = "../src/import_review.rs"]
 #[allow(unused_imports)]
 mod import_review;
+#[path = "../src/launch.rs"]
+#[allow(unused_imports)]
+mod launch;
 #[path = "../src/policy.rs"]
 mod policy;
 #[path = "../src/private_export.rs"]
@@ -120,6 +123,37 @@ impl import_review::ImportConfirm for Dialog {
     }
 }
 
+/// The native terminal, scripted. It opens no window and starts no process: it records what
+/// native code would have started.
+type Started = Vec<(std::path::PathBuf, Vec<(String, String)>)>;
+struct Terminal {
+    folder: std::path::PathBuf,
+    approve: AtomicBool,
+    started: Mutex<Started>,
+}
+impl launch::TerminalHost for Terminal {
+    fn window_live(&self) -> bool {
+        true
+    }
+    fn choose_folder(&self) -> Result<Option<std::path::PathBuf>, error::CommandError> {
+        Ok(Some(self.folder.clone()))
+    }
+    fn confirm(&self, _: &launch::LaunchReview) -> bool {
+        self.approve.load(Ordering::SeqCst)
+    }
+    fn open_terminal(
+        &self,
+        _: &Held<'_>,
+        request: &launch::LaunchRequest,
+    ) -> Result<(), error::CommandError> {
+        self.started
+            .lock()
+            .unwrap()
+            .push((request.folder.clone(), request.secrets.to_vec()));
+        Ok(())
+    }
+}
+
 /// The commands that act on the open vault and name the session in which the page made the
 /// request (the frontend's `sessionScoped`). The harness plays the page: it adds the session
 /// that it opened last, unless a test names another one.
@@ -141,6 +175,8 @@ const SESSION_SCOPED: &[&str] = &[
     "env_export",
     "env_copy",
     "env_save",
+    "env_launch_terminal",
+    "key_history",
     "backup_info",
 ];
 static PAGE_SESSION: Mutex<Option<String>> = Mutex::new(None);
@@ -210,6 +246,11 @@ fn main() {
     ));
     session.observe(policy::Signal::Available);
     let dialog = Dialog::new();
+    let terminal = Arc::new(Terminal {
+        folder: directory.path().to_path_buf(),
+        approve: AtomicBool::new(true),
+        started: Mutex::default(),
+    });
     let owner = session.prepare_open().unwrap();
     *PAGE_SESSION.lock().unwrap() = Some(owner.clone());
     let ticket = session.claim_open(&owner).unwrap();
@@ -251,6 +292,7 @@ fn main() {
             ),
         )))
         .manage(import_review::ConfirmState(dialog.clone()))
+        .manage(launch::TerminalState(terminal.clone()))
         .invoke_handler(commands::production_handlers!())
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -616,6 +658,8 @@ fn main() {
     println!("PASS: env_import, vault_warnings, vault_dismiss_warnings, vault_lock, vault_prepare_open and vault_unlock answer the frontend's argument and reply shapes through the production handler list; the saved path went to the fake settings file.");
     the_dialog_is_the_review(&app, webview, &session, &dialog, directory.path());
     a_discard_names_its_session(&app, webview, &session, &dialog, directory.path());
+    the_launch_command_takes_a_scope_and_no_program(webview, &terminal, directory.path());
+    the_history_command_answers_times_and_field_names(webview, directory.path());
     a_stale_request_never_acts_on_the_session_that_replaced_its_own(
         webview,
         &session,
@@ -670,7 +714,9 @@ fn a_stale_request_never_acts_on_the_session_that_replaced_its_own(
         ("audit_read", serde_json::json!({"limit": 5})),
         ("env_export", scope.clone()),
         ("env_copy", scope.clone()),
-        ("env_save", scope),
+        ("env_save", scope.clone()),
+        ("env_launch_terminal", scope),
+        ("key_history", serde_json::json!({"id": id})),
         ("backup_info", serde_json::json!({})),
     ];
     assert_eq!(
@@ -716,10 +762,110 @@ fn a_stale_request_never_acts_on_the_session_that_replaced_its_own(
         .unwrap(),
         "fake-b-secret"
     );
-    println!("PASS: all 18 session-scoped handlers refuse a request that names a retired session, leave B and the clipboard untouched, and still serve B's own requests.");
+    println!("PASS: all 20 session-scoped handlers refuse a request that names a retired session, leave B and the clipboard untouched, and still serve B's own requests.");
 }
 
 const PASSWORD: &str = "fake-dispatch-password-123!";
+
+/// The terminal command through the production handler list. Whatever else the page sends,
+/// native code starts only what its own host chose: the folder comes from the host and the
+/// variables from the vault.
+fn the_launch_command_takes_a_scope_and_no_program(
+    webview: &tauri::Webview<MockRuntime>,
+    terminal: &Arc<Terminal>,
+    directory: &std::path::Path,
+) {
+    let (owner, _) = open_new(webview, directory, "launch.kdbx");
+    call(
+        webview,
+        "key_add",
+        serde_json::json!({"draft": {"title": "Fake launch", "secret": "fake-launch-secret", "project": "demo", "environment": "dev", "envVar": "LAUNCH_TOKEN"}}),
+    )
+    .unwrap();
+    let hostile = serde_json::json!({
+        "project": "demo", "environment": "dev",
+        "program": "calc.exe", "command": "calc.exe", "path": "C:/evil", "cwd": "C:/evil",
+        "folder": "C:/evil", "workingDirectory": "C:/evil", "args": ["/c", "calc"],
+        "env": {"AKM_PASSWORD": "fake-leak"}, "shell": "powershell.exe",
+    });
+    assert_eq!(
+        call(webview, "env_launch_terminal", hostile.clone()).unwrap(),
+        serde_json::json!(1)
+    );
+    let started = terminal.started.lock().unwrap().clone();
+    assert_eq!(
+        started,
+        vec![(
+            directory.to_path_buf(),
+            vec![("LAUNCH_TOKEN".to_string(), "fake-launch-secret".to_string())]
+        )],
+        "only the host's folder and the vault's variable reached the launcher"
+    );
+
+    terminal.approve.store(false, Ordering::SeqCst);
+    assert_eq!(
+        call(webview, "env_launch_terminal", hostile.clone()).unwrap(),
+        serde_json::Value::Null,
+        "a decline answers null"
+    );
+    terminal.approve.store(true, Ordering::SeqCst);
+    assert_eq!(terminal.started.lock().unwrap().len(), 1);
+
+    let mut stale = hostile.clone();
+    stale["sessionId"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
+    assert_eq!(
+        call(webview, "env_launch_terminal", stale).unwrap_err()["kind"],
+        "locked"
+    );
+    let mut unscoped = serde_json::json!({"project": "demo"});
+    unscoped["sessionId"] = serde_json::json!(owner);
+    assert_eq!(
+        call(webview, "env_launch_terminal", unscoped).unwrap_err()["kind"],
+        "invalid",
+        "a scope needs both parts"
+    );
+    assert_eq!(terminal.started.lock().unwrap().len(), 1);
+    println!("PASS: env_launch_terminal is registered, answers a count or null, ignores every program, path and argument that a page adds, and refuses a stale session.");
+}
+
+/// The history command answers times and field names, with the camelCase shape of api.ts.
+fn the_history_command_answers_times_and_field_names(
+    webview: &tauri::Webview<MockRuntime>,
+    directory: &std::path::Path,
+) {
+    open_new(webview, directory, "history.kdbx");
+    let added = call(
+        webview,
+        "key_add",
+        serde_json::json!({"draft": {"title": "Fake history", "secret": "fake-history-one"}}),
+    )
+    .unwrap();
+    let id = added["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        call(webview, "key_history", serde_json::json!({"id": id})).unwrap(),
+        serde_json::json!([])
+    );
+    call(
+        webview,
+        "key_rotate",
+        serde_json::json!({"id": id, "secret": "fake-history-two"}),
+    )
+    .unwrap();
+    let history = call(webview, "key_history", serde_json::json!({"id": id})).unwrap();
+    assert_eq!(history.as_array().unwrap().len(), 1);
+    assert_eq!(history[0]["index"], 0);
+    assert!(history[0]["modifiedAt"].is_string());
+    assert_eq!(history[0]["secretChanged"], true);
+    assert!(history[0]["changed"].is_array());
+    assert!(!history.to_string().contains("fake-history"));
+    assert_eq!(
+        call(webview, "key_history", serde_json::json!({"id": "missing"})).unwrap_err()["kind"],
+        "notFound"
+    );
+    println!(
+        "PASS: key_history answers index, modifiedAt, changed and secretChanged, and no value."
+    );
+}
 
 fn reply(rx: &mpsc::Receiver<InvokeResponse>) -> Result<serde_json::Value, serde_json::Value> {
     match rx

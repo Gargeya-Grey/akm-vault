@@ -29,3 +29,4 @@ This folder is the maintained source for proving AKM's user-facing behaviour. Re
 - [Export and run](./export-and-run.md): scoped dotenv export to stdout or a file, and `run` with injected variables.
 - [Rotation and Recycle Bin](./rotation-and-recycle-bin.md): `rotate`, `history`, `rm`, `bin`, `restore`, `purge`.
 - [Import and clipboard](./import-and-clipboard.md): the desktop `.env` import with its native confirmation, and private clipboard copy. Owner present.
+- [Terminal and history](./terminal-and-history.md): the desktop terminal that holds one project's keys, and a key's earlier versions. The real flow needs the owner present.

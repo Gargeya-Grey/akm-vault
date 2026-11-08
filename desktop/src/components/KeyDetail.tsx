@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, errorText } from "../api";
 import { clipboardCopyText } from "../clipboardText";
 import { formatDate, formatDateTime, isExpired, keyState, plural, rotationLabel, secretChangeLabel } from "../format";
-import type { KeyView } from "../types";
+import type { HistoryVersion, KeyView } from "../types";
 import { KeyCut } from "./glyphs";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
@@ -21,6 +21,21 @@ interface Props {
 
 const HIDE_SECONDS = 30;
 
+// The names a vault entry gives its fields, in words. The marker of the secret's change time says
+// nothing a reader needs: the secret already counts as changed.
+const FIELD_WORDS: Record<string, string> = {
+  Title: "title", UserName: "username", URL: "URL", Notes: "notes", Tags: "tags", Expiry: "expiry",
+  AKM_ISSUER: "issuer", AKM_PROJECT: "project", AKM_ENV: "environment", AKM_SCOPES: "scopes",
+  AKM_ENV_VAR: "variable name", AKM_ROTATION_DAYS: "rotation interval",
+};
+const SECRET_FIELDS = new Set(["Password", "AKM_SECRET_CHANGED"]);
+
+function changedText(version: HistoryVersion): string {
+  const others = version.changed.filter((name) => !SECRET_FIELDS.has(name) && name !== "AKM_ID").map((name) => FIELD_WORDS[name] ?? name);
+  const all = version.secretChanged ? ["secret", ...others] : others;
+  return all.length > 0 ? `Changed: ${all.join(", ")}` : "No field changed";
+}
+
 export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly = false }: Props) {
   const dialogRef = useDialogFocus<HTMLDivElement>();
   const [secret, setSecret] = useState<string | null>(null);
@@ -28,6 +43,8 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [history, setHistory] = useState<HistoryVersion[] | null>(null);
+  const [historyBusy, setHistoryBusy] = useState(false);
   const timer = useRef<number | null>(null);
   const presentation = useRef(0);
 
@@ -35,6 +52,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
     const expire = () => {
       presentation.current += 1;
       setSecret(null); setBusy(false); setError(null); setCopied(null);
+      setHistory(null); setHistoryBusy(false);
     };
     expire();
     const hidden = () => { if (document.hidden) expire(); };
@@ -105,6 +123,20 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
     setSecret(null);
   }
 
+  async function showHistory() {
+    const view = presentation.current;
+    setHistoryBusy(true);
+    setError(null);
+    try {
+      const versions = await api.history(item.id);
+      if (view === presentation.current) setHistory(versions);
+    } catch (cause) {
+      if (view === presentation.current) setError(errorText(cause));
+    } finally {
+      if (view === presentation.current) setHistoryBusy(false);
+    }
+  }
+
   async function copy() {
     const view = presentation.current;
     setError(null);
@@ -118,7 +150,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
 
   const now = useNow([item]);
   const state = keyState(item, now);
-  const facts: { key: string; value: React.ReactNode }[] = [];
+  const facts: { key: string; value: React.ReactNode; below?: React.ReactNode }[] = [];
 
   if (item.issuer) facts.push({ key: "Issuer", value: item.issuer });
   if (item.project) facts.push({ key: "Project", value: item.project });
@@ -192,6 +224,29 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
       item.historyCount === 0
         ? "No earlier versions"
         : `${plural(item.historyCount, "earlier version")} in the vault history`,
+    below: item.historyCount > 0 && (
+      <div className="history-fact">
+        {history === null ? (
+          <button type="button" className="text-button history-toggle" onClick={() => void showHistory()} disabled={historyBusy} aria-busy={historyBusy || undefined}>
+            Show earlier versions
+          </button>
+        ) : (
+          <>
+            <button type="button" className="text-button history-toggle" onClick={() => setHistory(null)}>
+              Hide earlier versions
+            </button>
+            <ol className="history-list" aria-label="Earlier versions">
+              {history.map((version) => (
+                <li key={version.index}>
+                  {version.modifiedAt ? <span className="mono">{formatDateTime(version.modifiedAt)}</span> : <span>Time unknown</span>}
+                  <span className="history-change">{changedText(version)}</span>
+                </li>
+              ))}
+            </ol>
+          </>
+        )}
+      </div>
+    ),
   });
   if (item.createdAt)
     facts.push({
@@ -288,6 +343,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
             <div className="fact-row" key={fact.key}>
               <span className="fact-key">{fact.key}</span>
               <span className="fact-value">{fact.value}</span>
+              {fact.below}
             </div>
           ))}
         </div>

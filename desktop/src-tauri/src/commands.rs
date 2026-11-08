@@ -5,7 +5,9 @@ use std::{
     sync::Arc,
 };
 
-use akm_core::{audit::AuditLog, dotenv, ApiKey, EnvDisclosure, KeyDisclosure, Secret, Vault};
+use akm_core::{
+    audit::AuditLog, dotenv, ApiKey, EnvDisclosure, HistoryVersion, KeyDisclosure, Secret, Vault,
+};
 use chrono::{DateTime, Utc};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -15,6 +17,7 @@ use crate::{
     clipboard::CLEAR_AFTER,
     error::CommandError,
     import_review::{ConfirmState, ImportConfirm, ImportReview},
+    launch::{self, TerminalState},
     private_export,
     reminders::{ReminderState, ReminderStatus},
     session::{
@@ -46,6 +49,7 @@ macro_rules! production_handlers {
             key_update,
             key_remove,
             key_rotate,
+            key_history,
             recycled_list,
             key_restore,
             key_purge,
@@ -53,6 +57,7 @@ macro_rules! production_handlers {
             env_export,
             env_copy,
             env_save,
+            env_launch_terminal,
             env_import,
             view_discard,
             backup_info,
@@ -462,6 +467,48 @@ fn rotate_key(vault: &mut Vault, id: &str, secret: String) -> Result<RotationVie
     Ok(RotationView::from(&rotation))
 }
 
+/// One earlier version of a key. It holds a time and the names of the fields that changed,
+/// never a value.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryView {
+    index: usize,
+    modified_at: Option<DateTime<Utc>>,
+    changed: Vec<String>,
+    secret_changed: bool,
+}
+
+impl From<&HistoryVersion> for HistoryView {
+    fn from(version: &HistoryVersion) -> Self {
+        Self {
+            index: version.index,
+            modified_at: version.modified_at,
+            changed: version.changed.clone(),
+            secret_changed: version.secret_changed,
+        }
+    }
+}
+
+fn history_views(vault: &Vault, id: &str) -> Result<Vec<HistoryView>, CommandError> {
+    Ok(vault.history(id)?.iter().map(HistoryView::from).collect())
+}
+
+/// The earlier versions of one key, newest first. A read: the page may show it, and it has
+/// no secret in it.
+#[tauri::command]
+pub async fn key_history(
+    state: State<'_, VaultState>,
+    session_id: String,
+    id: String,
+) -> Result<Vec<HistoryView>, CommandError> {
+    let session = state.0.clone();
+    let expected = session.snapshot_for(&session_id)?;
+    run_session(session, expected, Access::Read, move |vault| {
+        history_views(vault, &id)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn recycled_list(
     state: State<'_, VaultState>,
@@ -802,6 +849,24 @@ fn publish_and_record(
         session.warn_for(expected.ticket, OperationWarningKind::ExportJournal);
     }
     Ok(saved)
+}
+
+/// Opens a terminal that holds one project's keys. The page names the session and the scope.
+/// It cannot name a program, a folder or an argument: native code shows the folder picker
+/// and the review, and starts the system command prompt. `None` means that the user
+/// cancelled in one of those windows. The number is how many keys the terminal holds.
+#[tauri::command]
+pub async fn env_launch_terminal(
+    state: State<'_, VaultState>,
+    terminal: State<'_, TerminalState>,
+    session_id: String,
+    project: Option<String>,
+    environment: Option<String>,
+) -> Result<Option<usize>, CommandError> {
+    let session = state.0.clone();
+    let host = terminal.0.clone();
+    blocking(move || launch::run_launch(&session, host.as_ref(), &session_id, project, environment))
+        .await
 }
 
 fn ensure_window_shown(confirm: &dyn ImportConfirm) -> Result<(), CommandError> {
@@ -1221,6 +1286,71 @@ mod tests {
             .unwrap()
             .value;
         assert_eq!((live, recycled), (0, 0));
+    }
+
+    #[test]
+    fn the_history_command_returns_times_and_changed_field_names_and_never_a_value() {
+        let (session, _directory) = test_session();
+        let key = session
+            .access(Access::Write, None, |vault| {
+                Ok(vault.add(akm_core::ApiKeyInput::new("Kept", "fake-first-secret"))?)
+            })
+            .unwrap()
+            .value;
+        let history = |id: &str| {
+            session
+                .access(Access::Read, None, |vault| history_views(vault, id))
+                .map(|stamped| stamped.value)
+        };
+        assert!(history(&key.id).unwrap().is_empty());
+        session
+            .access(Access::Write, None, |vault| {
+                rotate_key(vault, &key.id, "fake-second-secret".into())
+            })
+            .unwrap();
+        session
+            .access(Access::Write, None, |vault| {
+                rotate_key(vault, &key.id, "fake-third-secret".into())
+            })
+            .unwrap();
+        let views = history(&key.id).unwrap();
+        assert_eq!(views.len(), 2);
+        let wire = serde_json::to_value(&views).unwrap();
+        assert_eq!(wire[0]["index"], 0);
+        assert!(wire[0]["modifiedAt"].is_string());
+        assert_eq!(wire[0]["secretChanged"], true);
+        assert!(wire[0]["changed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "Password"));
+        assert!(wire[0].get("modified_at").is_none() && wire[0].get("secret_changed").is_none());
+        for secret in [
+            "fake-first-secret",
+            "fake-second-secret",
+            "fake-third-secret",
+        ] {
+            assert!(!wire.to_string().contains(secret), "{secret}");
+        }
+        assert_eq!(history("not-a-key").unwrap_err().kind, "notFound");
+    }
+
+    #[test]
+    fn the_launch_command_takes_a_session_and_a_scope_and_nothing_that_names_a_program() {
+        let source = include_str!("commands.rs");
+        let code = &source[..source.find("\nmod tests {").unwrap()];
+        let start = code.find("pub async fn env_launch_terminal(").unwrap();
+        let header = &code[start..start + code[start..].find(") ->").unwrap()];
+        let parameters: Vec<&str> = header
+            .lines()
+            .skip(1)
+            .filter_map(|line| line.trim().split(':').next())
+            .filter(|name| !name.is_empty())
+            .collect();
+        assert_eq!(
+            parameters,
+            ["state", "terminal", "session_id", "project", "environment"]
+        );
     }
 
     #[test]

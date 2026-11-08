@@ -43,6 +43,16 @@ export interface RotationReceipt {
   previousChangedAt: string | null;
 }
 
+/** One earlier version of a key. It holds a time and field names, never a value. */
+export interface HistoryVersion {
+  /** 0 is the version that the newest change replaced. */
+  index: number;
+  modifiedAt: string | null;
+  /** The KDBX field names that differ from the version that replaced this one. */
+  changed: string[];
+  secretChanged: boolean;
+}
+
 export interface RecycledKey {
   key: KeyView;
   deletedAt: string | null;

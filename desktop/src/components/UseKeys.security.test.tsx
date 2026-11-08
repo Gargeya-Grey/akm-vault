@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   keys: vi.fn().mockResolvedValue([]),
   importEnv: vi.fn().mockResolvedValue({ added: 1, updated: 1 }),
   exportEnv: vi.fn(),
+  launchTerminal: vi.fn(),
 }));
 
 vi.mock("../api", () => ({
@@ -157,4 +158,103 @@ test("hiding the window invalidates a plaintext preview that has not arrived yet
   hide();
   await act(async () => resolve("TOKEN=fake-hidden-secret\n"));
   expect(screen.queryByText("TOKEN=fake-hidden-secret")).toBeNull();
+});
+
+const TERMINAL = "Open terminal with keys…";
+const terminalButton = () => screen.getByRole("button", { name: TERMINAL }) as HTMLButtonElement;
+
+async function chooseScope(project = "demo", environment = "dev") {
+  mocks.keys.mockResolvedValueOnce([{ project, environment }]);
+  await act(async () => { render(<UseKeys />); });
+  fireEvent.change(screen.getByLabelText("Project"), { target: { value: project } });
+  fireEvent.change(screen.getByLabelText("Environment"), { target: { value: environment } });
+}
+
+test("the terminal button stays disabled until a specific project and environment are chosen", async () => {
+  mocks.keys.mockResolvedValueOnce([{ project: "demo", environment: "dev" }]);
+  await act(async () => { render(<UseKeys />); });
+  expect(terminalButton().disabled).toBe(true);
+  expect(terminalButton().className).toContain("btn-secondary");
+  fireEvent.change(screen.getByLabelText("Project"), { target: { value: "demo" } });
+  expect(terminalButton().disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "dev" } });
+  expect(terminalButton().disabled).toBe(false);
+  fireEvent.change(screen.getByLabelText("Project"), { target: { value: "" } });
+  expect(terminalButton().disabled).toBe(true);
+});
+
+test("opening a terminal sends only the scope and says how many keys the window holds", async () => {
+  mocks.launchTerminal.mockResolvedValueOnce(2);
+  await chooseScope();
+  fireEvent.click(terminalButton());
+  await screen.findByText("Opened a terminal with 2 keys. That window keeps them until you close it, even after AKM locks.");
+  expect(mocks.launchTerminal).toHaveBeenCalledExactlyOnceWith("demo", "dev");
+  expect(document.body.textContent).not.toContain("fake-");
+  expect(terminalButton().disabled).toBe(false);
+});
+
+test("a cancel in a native window says that nothing was opened", async () => {
+  mocks.launchTerminal.mockResolvedValueOnce(null);
+  await chooseScope();
+  fireEvent.click(terminalButton());
+  await screen.findByText("Nothing was opened. You cancelled in the folder window or the confirmation window.");
+  expect(screen.queryByText(/Opened a terminal/)).toBeNull();
+});
+
+test("a native error is shown and the button can be used again", async () => {
+  mocks.launchTerminal.mockRejectedValueOnce({ kind: "tooLarge", message: "This scope has more than 25 keys." });
+  await chooseScope();
+  fireEvent.click(terminalButton());
+  await screen.findByText("This scope has more than 25 keys.");
+  expect(terminalButton().disabled).toBe(false);
+});
+
+test("while the native windows are open every export control is locked and a second launch is impossible", async () => {
+  let resolve!: (value: unknown) => void;
+  mocks.launchTerminal.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+  await chooseScope();
+  fireEvent.click(terminalButton());
+  expect(terminalButton().getAttribute("aria-busy")).toBe("true");
+  for (const name of ["Save .env…", "Preview", "Copy to clipboard", TERMINAL]) {
+    expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+  }
+  expect((screen.getByLabelText("Project") as HTMLSelectElement).disabled).toBe(true);
+  expect(screen.getByText(/Choose the folder and answer the confirmation window/)).toBeTruthy();
+  fireEvent.click(terminalButton());
+  expect(mocks.launchTerminal).toHaveBeenCalledTimes(1);
+  await act(async () => resolve(1));
+  await screen.findByText(/Opened a terminal with 1 key\./);
+});
+
+for (const how of ["hide", "native view expiry", "scope change", "unmount"] as const) {
+  test(`${how} while the native windows are open ignores the late reply`, async () => {
+    let resolve!: (value: unknown) => void;
+    mocks.launchTerminal.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    mocks.keys.mockResolvedValueOnce([{ project: "demo", environment: "dev" }, { project: "demo", environment: "prod" }]);
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(<UseKeys />); });
+    fireEvent.change(screen.getByLabelText("Project"), { target: { value: "demo" } });
+    fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "dev" } });
+    fireEvent.click(terminalButton());
+    if (how === "hide") hide();
+    else if (how === "native view expiry") act(() => { window.dispatchEvent(new CustomEvent(PROTECTED_VIEW_EXPIRY_EVENT)); });
+    else if (how === "scope change") fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "prod" } });
+    else view.unmount();
+    await act(async () => resolve(3));
+    expect(document.body.textContent).not.toContain("Opened a terminal");
+    if (how !== "unmount") {
+      expect(terminalButton().getAttribute("aria-busy")).toBeNull();
+      expect(screen.queryByText(/Choose the folder and answer/)).toBeNull();
+    }
+  });
+}
+
+test("a failed launch after a hide shows no error either", async () => {
+  let reject!: (reason: unknown) => void;
+  mocks.launchTerminal.mockReturnValueOnce(new Promise((_, no) => { reject = no; }));
+  await chooseScope();
+  fireEvent.click(terminalButton());
+  hide();
+  await act(async () => reject({ kind: "launch", message: "The terminal could not be started." }));
+  expect(screen.queryByText("The terminal could not be started.")).toBeNull();
 });

@@ -5,6 +5,7 @@ mod commands;
 #[doc(hidden)]
 pub mod error;
 mod import_review;
+mod launch;
 mod policy;
 mod private_export;
 #[doc(hidden)]
@@ -44,6 +45,9 @@ pub fn run() {
             app.manage(import_review::ConfirmState(Arc::new(
                 import_review::NativeConfirm(handle.clone()),
             )));
+            app.manage(launch::TerminalState(Arc::new(launch::NativeTerminal(
+                handle.clone(),
+            ))));
             let session = Arc::new(Session::new(
                 Arc::new(MonotonicClock::default()),
                 Box::new(clipboard::NativeClipboard),

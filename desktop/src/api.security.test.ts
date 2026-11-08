@@ -188,6 +188,8 @@ const SCOPED_REQUESTS: [string, () => Promise<unknown>][] = [
   ["env_export", () => api.exportEnv("fake-scope", "fake-env")],
   ["env_copy", () => api.copyEnv("fake-scope", "fake-env")],
   ["env_save", () => api.saveEnv("fake-scope", "fake-env")],
+  ["env_launch_terminal", () => api.launchTerminal("fake-scope", "fake-env")],
+  ["key_history", () => api.history("fake-id")],
   ["backup_info", () => api.backup()],
 ];
 
@@ -207,4 +209,55 @@ test.each(SCOPED_REQUESTS)("%s sends no usable session when the page has none", 
   await request().catch(() => {});
   const call = native.invoke.mock.calls.find(([name]) => name === command);
   expect(call?.[1]).toMatchObject({ sessionId: "" });
+});
+
+// The terminal launch starts a program and cannot be taken back, so the page sends a scope and
+// nothing else, and a late reply is a completion, never a failure to retry.
+test("a terminal launch sends the session and the scope and no program, folder or argument", async () => {
+  native.invoke.mockResolvedValueOnce(2);
+  expect(await api.launchTerminal("fake-project", "fake-env")).toBe(2);
+  expect(native.invoke).toHaveBeenCalledExactlyOnceWith("env_launch_terminal", { project: "fake-project", environment: "fake-env", sessionId: nativeOwner() });
+});
+
+test("a cancelled terminal launch answers null and leaves no completion record", async () => {
+  native.invoke.mockResolvedValueOnce(null);
+  expect(await api.launchTerminal("fake-project", "fake-env")).toBeNull();
+  expect(retainedCompletions()).toEqual([]);
+});
+
+test("a terminal launch overtaken by a session change reports a completion, not a retryable failure", async () => {
+  let resolve!: (value: unknown) => void;
+  native.invoke.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+  const lost = vi.fn();
+  window.addEventListener(SESSION_LOSS_EVENT, lost);
+  try {
+    const outcome = api.launchTerminal("fake-project", "fake-env").catch((error: unknown) => error);
+    invalidateSession();
+    resolve(1);
+    expect(await outcome).toMatchObject({ kind: "completedWhileLocked", message: expect.stringContaining("Do not repeat") });
+    expect(lost).toHaveBeenCalledTimes(1);
+  } finally { window.removeEventListener(SESSION_LOSS_EVENT, lost); }
+});
+
+test("a cancelled terminal launch overtaken by a session change stays a cancellation", async () => {
+  let resolve!: (value: unknown) => void;
+  native.invoke.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+  const lost = vi.fn();
+  window.addEventListener(SESSION_LOSS_EVENT, lost);
+  try {
+    const outcome = api.launchTerminal("fake-project", "fake-env").catch((error: unknown) => error);
+    invalidateSession();
+    resolve(null);
+    expect(await outcome).toMatchObject({ kind: "locked" });
+    expect(lost).not.toHaveBeenCalled();
+  } finally { window.removeEventListener(SESSION_LOSS_EVENT, lost); }
+});
+
+test("a history reply overtaken by a session change is suppressed", async () => {
+  let resolve!: (value: unknown) => void;
+  native.invoke.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+  const outcome = api.history("fake-id").catch((error: unknown) => error);
+  invalidateSession();
+  resolve([{ index: 0, modifiedAt: null, changed: [], secretChanged: false }]);
+  expect(await outcome).toMatchObject({ kind: "locked" });
 });

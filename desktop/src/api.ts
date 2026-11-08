@@ -5,6 +5,7 @@ import { acceptNativeStatus, adoptReservation, beginNativeOpen, confirmNativeLoc
 import type {
   AuditReport,
   BackupInfo,
+  HistoryVersion,
   ImportReport,
   KeyDraft,
   KeyView,
@@ -15,9 +16,9 @@ import type {
   WarningReport,
 } from "./types";
 
-const mutations = new Set(["vault_create", "vault_upgrade", "key_add", "key_update", "key_remove", "key_rotate", "key_restore", "key_purge", "env_import", "env_save"]);
+const mutations = new Set(["vault_create", "vault_upgrade", "key_add", "key_update", "key_remove", "key_rotate", "key_restore", "key_purge", "env_import", "env_save", "env_launch_terminal"]);
 // A request that the user can still decline in a native window answers null when they do.
-const declinable = new Set(["env_import", "env_save"]);
+const declinable = new Set(["env_import", "env_save", "env_launch_terminal"]);
 const statusReplies = new Set(["vault_status", "vault_unlock", "vault_create", "vault_upgrade", "vault_reload"]);
 
 // Every command that reads or changes the open vault, or renews its idle deadline, names the
@@ -25,7 +26,7 @@ const statusReplies = new Set(["vault_status", "vault_unlock", "vault_create", "
 // the current one, so a request that arrives late cannot act on a vault that opened after it. The
 // commands that start a session, probe which one is current, or concern the whole application do
 // not name one.
-const sessionScoped = new Set(["vault_activity", "vault_upgrade", "vault_reload", "keys_list", "key_reveal", "key_copy", "key_add", "key_update", "key_remove", "key_rotate", "recycled_list", "key_restore", "key_purge", "audit_read", "env_export", "env_copy", "env_save", "backup_info"]);
+const sessionScoped = new Set(["vault_activity", "vault_upgrade", "vault_reload", "keys_list", "key_reveal", "key_copy", "key_add", "key_update", "key_remove", "key_rotate", "recycled_list", "key_restore", "key_purge", "audit_read", "env_export", "env_copy", "env_save", "env_launch_terminal", "key_history", "backup_info"]);
 
 function withSession(command: string, args?: Record<string, unknown>) {
   return sessionScoped.has(command) ? { ...args, sessionId: nativeOwner() ?? "" } : args;
@@ -153,6 +154,8 @@ export const api = {
     invoke<KeyView>("key_update", { id, draft }),
   remove: (id: string) => invoke<void>("key_remove", { id }),
   rotate: (id: string, secret: string) => invoke<RotationReceipt>("key_rotate", { id, secret }),
+  // Times and the names of changed fields. A value never comes with them.
+  history: (id: string) => invoke<HistoryVersion[]>("key_history", { id }),
   recycled: () => invoke<RecycledKey[]>("recycled_list"),
   restore: (id: string) => invoke<KeyView>("key_restore", { id }),
   purge: (id: string) => invoke<void>("key_purge", { id }),
@@ -166,6 +169,10 @@ export const api = {
     project: string | null,
     environment: string | null,
   ) => invoke<string | null>("env_save", { project, environment, all: false }),
+  // The page names a scope. Native code asks for the folder, shows the names, and starts the system command
+  // prompt. The reply is the number of keys the terminal holds, or null when the user cancelled there.
+  launchTerminal: (project: string, environment: string) =>
+    invoke<number | null>("env_launch_terminal", { project, environment }),
   // One request. A native window lists the names and the scope; null means that the user declined there.
   importEnv: (
     text: string,

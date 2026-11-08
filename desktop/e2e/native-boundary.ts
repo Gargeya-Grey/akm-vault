@@ -107,6 +107,8 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
             ] };
             case "backup_info": return { path: "C:/fake-test/vault.kdbx.bak", exists: false, bytes: 0, modified: null };
             case "env_import": return { added: 0, updated: 1 };
+            case "key_history": return [{ index: 0, modifiedAt: "2026-10-30T12:00:00Z", changed: ["Password"], secretChanged: true }];
+            case "env_launch_terminal": return keys.filter((candidate) => candidate.project === args.project && candidate.environment === args.environment).length;
             case "env_export": return "OPENAI_API_KEY=fake-browser-test-value\n";
             default: throw new Error(`Unexpected test IPC: ${command}`);
           }
