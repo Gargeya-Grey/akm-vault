@@ -54,6 +54,11 @@ jobs:
       - name: Browser UI regressions (mocked native boundary)
         working-directory: desktop
         run: npm run test:ui
+      # rust-cache restores target/, including the fake test journal folder, without AKM's private
+      # permissions, and AKM then refuses that journal (FINDINGS.md P2R2-06). The tests make it again.
+      - name: Remove the restored test journal folder
+        shell: pwsh
+        run: Remove-Item -LiteralPath target/akm-test-journal -Recurse -Force -ErrorAction SilentlyContinue
       - name: Native and executable regressions
         run: cargo test --workspace --locked
       - name: Rust lint
