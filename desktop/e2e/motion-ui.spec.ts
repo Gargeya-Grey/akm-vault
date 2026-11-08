@@ -120,6 +120,33 @@ test("the marker of the current section stays on it, at both rail widths", async
   await expect.poll(lined).toBe(true);
 });
 
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: an open select is AKM's own list, under its field and as wide as it`, async ({ page }) => {
+    await open(page, theme);
+    const field = page.locator("#filter-environment");
+    await field.click();
+    const menu = page.getByRole("listbox", { name: "Environment" });
+    await expect(menu).toBeVisible();
+    await expect.poll(() => menu.evaluate((node) => node.getAnimations().length)).toBe(0);
+    const fieldBox = (await field.boundingBox())!;
+    const menuBox = (await menu.boundingBox())!;
+    expect(Math.abs(menuBox.x - fieldBox.x)).toBeLessThan(1);
+    expect(Math.abs(menuBox.width - fieldBox.width)).toBeLessThan(1);
+    expect(menuBox.y).toBeGreaterThanOrEqual(fieldBox.y + fieldBox.height);
+    expect(await menu.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe(await page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.backgroundColor = "var(--float)";
+      document.body.append(probe);
+      const value = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return value;
+    }));
+    await menu.getByRole("option", { name: "dev" }).click();
+    await expect(field).toHaveValue("dev");
+    await expect(menu).toBeHidden();
+  });
+}
+
 test("at the minimum width, a key's renewal date stays clear of its status", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 700 });
   const due = new Date(Date.now() + 100 * 86_400_000).toISOString();
