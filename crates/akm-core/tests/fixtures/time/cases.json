@@ -1,0 +1,37 @@
+{
+  "about": "Fake dates. Rust (crates/akm-core/tests/schedule.rs) and the frontend (desktop/src/schedule.test.ts) read this one table, so they cannot drift apart. See docs/design/unit3.md section 3.",
+  "date_only_expiry": [
+    { "input": "2026-11-10", "instant": "2026-11-10T23:59:59Z" },
+    { "input": "2026-01-01", "instant": "2026-01-01T23:59:59Z" },
+    { "input": "2026-12-31", "instant": "2026-12-31T23:59:59Z" },
+    { "input": "2028-02-29", "instant": "2028-02-29T23:59:59Z" }
+  ],
+  "full_instant_expiry": [
+    { "input": "2026-11-10T12:00:00Z", "instant": "2026-11-10T12:00:00Z" },
+    { "input": "2026-11-10T23:30:00-05:00", "instant": "2026-11-11T04:30:00Z" },
+    { "input": "2026-11-10T00:00:00+14:00", "instant": "2026-11-09T10:00:00Z" }
+  ],
+  "refused_expiry": ["2026-02-30", "2026-13-01", "10/11/2026", "", "2026-11-10 23:00", "not a date"],
+  "expired_at": [
+    { "expires": "2026-11-10T23:59:59Z", "now": "2026-11-10T00:00:00Z", "expired": false },
+    { "expires": "2026-11-10T23:59:59Z", "now": "2026-11-10T23:59:58Z", "expired": false },
+    { "expires": "2026-11-10T23:59:59Z", "now": "2026-11-10T23:59:59Z", "expired": true },
+    { "expires": "2026-11-10T23:59:59Z", "now": "2026-11-11T00:00:00Z", "expired": true }
+  ],
+  "remaining": [
+    { "due": "2026-01-31T00:00:00Z", "now": "2026-01-01T00:00:00Z", "state": "in", "days": 30 },
+    { "due": "2026-01-31T00:00:00Z", "now": "2026-01-29T23:59:59.999Z", "state": "in", "days": 2 },
+    { "due": "2026-01-31T00:00:00Z", "now": "2026-01-30T00:00:00Z", "state": "in", "days": 1 },
+    { "due": "2026-01-31T00:00:00Z", "now": "2026-01-30T00:00:00.001Z", "state": "in", "days": 1 },
+    { "due": "2026-01-31T00:00:00Z", "now": "2026-01-30T12:00:00Z", "state": "in", "days": 1 },
+    { "due": "2026-01-31T00:00:00Z", "now": "2026-01-30T23:59:59.999Z", "state": "in", "days": 1 },
+    { "due": "2026-01-31T00:00:00Z", "now": "2026-01-31T00:00:00Z", "state": "now", "days": 0 },
+    { "due": "2026-01-31T00:00:00Z", "now": "2026-01-31T00:00:00.001Z", "state": "overdue", "days": 0 },
+    { "due": "2026-01-31T00:00:00Z", "now": "2026-01-31T12:00:00Z", "state": "overdue", "days": 0 },
+    { "due": "2026-01-31T00:00:00Z", "now": "2026-01-31T23:59:59.999Z", "state": "overdue", "days": 0 },
+    { "due": "2026-01-31T00:00:00Z", "now": "2026-02-01T00:00:00Z", "state": "overdue", "days": 1 },
+    { "due": "2026-01-31T00:00:00Z", "now": "2026-02-01T12:00:00Z", "state": "overdue", "days": 1 },
+    { "due": "2026-01-31T00:00:00Z", "now": "2026-02-02T00:00:00Z", "state": "overdue", "days": 2 },
+    { "due": "2028-03-01T00:00:00Z", "now": "2028-02-28T00:00:00Z", "state": "in", "days": 2 }
+  ]
+}

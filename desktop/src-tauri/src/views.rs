@@ -1,7 +1,6 @@
-use akm_core::{ApiKey, ApiKeyInput, ImportPreview, Vault};
+use akm_core::{ApiKey, ApiKeyInput, RecycledKey, Rotation, Secret, SecretChange, Vault};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
 
 use crate::error::CommandError;
 
@@ -18,11 +17,7 @@ pub struct Status {
 }
 
 pub fn status_for(vault: &Vault) -> Status {
-    let mut keys = vault.list();
-    let key_count = keys.len();
-    for key in &mut keys {
-        key.secret.zeroize();
-    }
+    let key_count = vault.list().len();
     Status {
         session_id: None, // Filled from the completed native policy ticket at the IPC boundary.
         path: vault.path().display().to_string(),
@@ -53,13 +48,17 @@ pub struct KeyView {
     rotation_days: Option<u32>,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
-    expired: bool,
-    rotation_due_in: Option<i64>,
+    /// When the rotation interval elapses. The page works out "due" and "overdue" from this
+    /// and the time of the moment, so a state never goes stale while the list stays open.
+    rotation_due_at: Option<DateTime<Utc>>,
+    /// When the secret last changed. `None` when AKM knows no such time.
+    secret_changed_at: Option<DateTime<Utc>>,
+    secret_change: SecretChange,
+    history_count: usize,
 }
 
 impl From<&ApiKey> for KeyView {
     fn from(key: &ApiKey) -> Self {
-        let now = Utc::now();
         Self {
             id: key.id.clone(),
             title: key.title.clone(),
@@ -77,8 +76,45 @@ impl From<&ApiKey> for KeyView {
             rotation_days: key.rotation_days,
             created_at: key.created_at,
             updated_at: key.updated_at,
-            expired: key.is_expired(now),
-            rotation_due_in: key.rotation_due_in(now),
+            rotation_due_at: key.rotation_due_at(),
+            secret_changed_at: key.secret_changed_at,
+            secret_change: key.secret_change,
+            history_count: key.history_count,
+        }
+    }
+}
+
+/// The receipt of a rotation. It carries no secret.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotationView {
+    key: KeyView,
+    changed_at: DateTime<Utc>,
+    previous_changed_at: Option<DateTime<Utc>>,
+}
+
+impl From<&Rotation> for RotationView {
+    fn from(rotation: &Rotation) -> Self {
+        Self {
+            key: KeyView::from(&rotation.key),
+            changed_at: rotation.changed_at,
+            previous_changed_at: rotation.previous_changed_at,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecycledView {
+    key: KeyView,
+    deleted_at: Option<DateTime<Utc>>,
+}
+
+impl From<&RecycledKey> for RecycledView {
+    fn from(item: &RecycledKey) -> Self {
+        Self {
+            key: KeyView::from(&item.key),
+            deleted_at: item.deleted_at,
         }
     }
 }
@@ -104,12 +140,16 @@ pub struct KeyDraft {
 }
 
 impl KeyDraft {
-    pub fn into_input(mut self, existing: Option<ApiKey>) -> Result<ApiKeyInput, CommandError> {
+    pub fn into_input(
+        mut self,
+        existing: Option<ApiKeyInput>,
+    ) -> Result<ApiKeyInput, CommandError> {
         let secret = self
             .secret
             .take()
             .filter(|value| !value.is_empty())
-            .or_else(|| existing.as_ref().map(|key| key.secret.clone()))
+            .map(Secret::from)
+            .or_else(|| existing.as_ref().map(|input| input.secret.clone()))
             .ok_or_else(|| CommandError::new("invalid", "The secret must not be empty."))?;
         let username = self
             .username
@@ -157,6 +197,7 @@ pub struct AuditView {
     pub key_title: Option<String>,
     pub project: Option<String>,
     pub environment: Option<String>,
+    pub key_id: Option<String>,
     pub detail: Option<String>,
 }
 
@@ -168,6 +209,9 @@ pub struct AuditReport {
     #[serde(serialize_with = "serialize_optional_sequence")]
     pub broken_at: Option<u64>,
     pub state: akm_core::audit::AuditState,
+    pub damage: Option<akm_core::audit::Damage>,
+    pub identity: akm_core::journal::Identity,
+    pub notices: Vec<akm_core::journal::Notice>,
     pub problem_line: Option<usize>,
     pub total_entries: usize,
 }
@@ -202,10 +246,14 @@ mod audit_precision_tests {
                     key_title: None,
                     project: None,
                     environment: None,
+                    key_id: None,
                     detail: None,
                 }],
                 broken_at: Some(seq),
                 state: akm_core::audit::AuditState::Corrupt,
+                damage: Some(akm_core::audit::Damage::BrokenLink),
+                identity: akm_core::journal::Identity::Confirmed,
+                notices: vec![],
                 problem_line: Some(3),
                 total_entries: 0,
             };
@@ -221,6 +269,9 @@ mod audit_precision_tests {
             entries: vec![],
             broken_at: None,
             state: akm_core::audit::AuditState::Corrupt,
+            damage: None,
+            identity: akm_core::journal::Identity::Confirmed,
+            notices: vec![],
             problem_line: Some(1),
             total_entries: 0,
         };
@@ -233,14 +284,6 @@ mod audit_precision_tests {
 pub struct ImportReport {
     pub added: usize,
     pub updated: usize,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PreviewReport {
-    #[serde(flatten)]
-    pub preview: ImportPreview,
-    pub token: String,
 }
 
 #[derive(Serialize)]
@@ -274,8 +317,14 @@ mod tests {
         let key = vault.add(existing).unwrap();
         let draft: KeyDraft =
             serde_json::from_value(serde_json::json!({ "title": "Renamed" })).unwrap();
-        let input = draft.into_input(Some(key)).unwrap();
+        let input = draft
+            .into_input(Some(vault.edit_input(&key.id).unwrap()))
+            .unwrap();
         assert_eq!(input.username.as_deref(), Some("alice"));
-        assert_eq!(input.secret, "fake-secret");
+        vault.update(&key.id, input).unwrap();
+        assert_eq!(
+            crate::test_support::secret_of(&vault, &key.id),
+            "fake-secret"
+        );
     }
 }

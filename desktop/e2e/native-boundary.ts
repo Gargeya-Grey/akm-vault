@@ -1,7 +1,13 @@
 import type { Page } from "@playwright/test";
-import type { ApplicationNotice, OperationNotice } from "../src/types";
+import type { ApplicationNotice, KeyView, OperationNotice, ReminderStatus } from "../src/types";
 
-export async function installNativeBoundaryMock(page: Page, theme = "light", retainedNotices?: OperationNotice[], retainedWarnings?: ApplicationNotice[]) {
+export interface BoundaryOptions {
+  /** Replaces the single default key. */
+  keys?: Partial<KeyView>[];
+  reminders?: ReminderStatus;
+}
+
+export async function installNativeBoundaryMock(page: Page, theme = "light", retainedNotices?: OperationNotice[], retainedWarnings?: ApplicationNotice[], options: BoundaryOptions = {}) {
   if (retainedNotices || retainedWarnings) {
     let operations = retainedNotices ?? [];
     let application = retainedWarnings ?? [];
@@ -15,7 +21,7 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
       return { application, operations };
     });
   }
-  await page.addInitScript(({ theme }) => {
+  await page.addInitScript(({ theme, options }) => {
     localStorage.setItem("akm-theme", theme);
     const callbacks = new Map<number, (event: unknown) => void>();
     const listeners = new Map<string, number>();
@@ -31,8 +37,10 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
       project: "demo", environment: "dev", scopes: ["chat"], tags: [],
       envVar: "OPENAI_API_KEY", resolvedEnvVar: "OPENAI_API_KEY", url: null,
       notes: null, expiresAt: null, rotationDays: null, createdAt: null,
-      updatedAt: null, expired: false, rotationDueIn: null,
+      updatedAt: null, rotationDueAt: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0,
     };
+    const keys = (options.keys ?? [{}]).map((overrides, index) => ({ ...key, id: `${key.id}-${index}`, ...overrides }));
+    let reminders = options.reminders ?? { enabled: false, permission: "granted", delivery: "none", blocked: false };
     const emitNotice = (sessionId: string) => {
       const listener = listeners.get("vault-locked");
       if (listener !== undefined) callbacks.get(listener)?.({ event: "vault-locked", id: listener, payload: { sessionId } });
@@ -82,25 +90,28 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
               return bridge ? bridge(command, args?.ids ?? []) : { application: [], operations: [] };
             }
             case "vault_activity": return;
+            case "view_discard": return;
             case "vault_lock": {
               if (args.sessionId !== owner) throw { kind: "locked", message: "A different test native session is current" };
               emitLock();
               return;
             }
-            case "keys_list": return [key];
-            case "audit_read": return { path: "C:/fake-test/vault.kdbx.audit.jsonl", state: "consistent", brokenAt: null, problemLine: null, totalEntries: 3, entries: [
-              { seq: "1", ts: "2026-10-31T00:00:00Z", action: "copy", keyTitle: "OpenAI", project: "demo", environment: "dev", detail: null },
-              { seq: "2", ts: "2026-10-31T00:00:00Z", action: "copy-requested", keyTitle: "OpenAI", project: "demo", environment: "dev", detail: null },
-              { seq: "3", ts: "2026-10-31T00:00:00Z", action: "add-completed", keyTitle: "OpenAI", project: "demo", environment: "dev", detail: null },
+            case "keys_list": return keys;
+            case "reminders_status": return reminders;
+            case "reminders_set": reminders = { ...reminders, enabled: args.enabled as boolean, delivery: "none", blocked: false }; return reminders;
+            case "reminders_notify": reminders = { ...reminders, delivery: "sent" }; return reminders;
+            case "audit_read": return { path: "C:/fake-test/journal/j-00000000000000000000000000000000.jsonl", state: "consistent", damage: null, identity: "confirmed", notices: [], brokenAt: null, problemLine: null, totalEntries: 3, entries: [
+              { seq: "1", ts: "2026-10-31T00:00:00Z", action: "copy", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: null },
+              { seq: "2", ts: "2026-10-31T00:00:00Z", action: "copy-requested", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: null },
+              { seq: "3", ts: "2026-10-31T00:00:00Z", action: "add-completed", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: null },
             ] };
             case "backup_info": return { path: "C:/fake-test/vault.kdbx.bak", exists: false, bytes: 0, modified: null };
-            case "env_import_preview": return { token: "preview-token", added: 0, updated: 1, unchanged: 0, changes: [{ name: "OPENAI_API_KEY", title: "OpenAI", action: "update" }] };
-            case "env_import_confirm": return { added: 0, updated: 1 };
+            case "env_import": return { added: 0, updated: 1 };
             case "env_export": return "OPENAI_API_KEY=fake-browser-test-value\n";
             default: throw new Error(`Unexpected test IPC: ${command}`);
           }
         },
       },
     });
-  }, { theme });
+  }, { theme, options });
 }

@@ -13,17 +13,35 @@ jobs:
   verify:
     runs-on: windows-latest
     steps:
+      # The default temp path holds the short name RUNNER~1, and four desktop tests compare
+      # raw temp paths with canonical ones (FINDINGS.md P2R2-06). RUNNER_TEMP has no short names.
+      - name: Use a temp folder without short names
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=$env:RUNNER_TEMP" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tools/test_check_docs.py reads two past commits
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to the toolchain of the local checks (Cargo.toml rust-version 1.90): a newer
+      # Clippy adds lints, which turned a passing branch red on 2026-11-07. Raise it on purpose.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.90.0
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
 
+      - name: Documentation check (stale test names, control characters)
+        run: |
+          python tools/check_docs.py
+          python tools/test_check_docs.py
+      - name: KeePassXC fetch tool never deletes what it does not own
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_fetch_keepassxc.ps1
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm ci
@@ -36,6 +54,11 @@ jobs:
       - name: Browser UI regressions (mocked native boundary)
         working-directory: desktop
         run: npm run test:ui
+      # rust-cache restores target/, including the fake test journal folder, without AKM's private
+      # permissions, and AKM then refuses that journal (FINDINGS.md P2R2-06). The tests make it again.
+      - name: Remove the restored test journal folder
+        shell: pwsh
+        run: Remove-Item -LiteralPath target/akm-test-journal -Recurse -Force -ErrorAction SilentlyContinue
       - name: Native and executable regressions
         run: cargo test --workspace --locked
       - name: Rust lint
@@ -60,6 +83,15 @@ jobs:
           "KPXC_CLI=$($cli.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
       - name: Independent reader and writer interoperability
         run: python tools/verify_keepassxc.py --akm target/release/akm.exe --keepassxc "$env:KPXC_CLI"
+      - name: No-network check
+        run: |
+          python tools/check_no_network.py
+          python tools/test_check_no_network.py
+      - name: Second KDBX reader (kdbxweb)
+        working-directory: tools/verify_kdbxweb
+        run: |
+          npm ci
+          node verify.mjs --akm ../../target/release/akm.exe
       - name: Collect development artifacts and checksums
         shell: pwsh
         run: |

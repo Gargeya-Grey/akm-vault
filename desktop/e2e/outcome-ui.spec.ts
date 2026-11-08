@@ -12,7 +12,7 @@ for (const theme of ["light", "dark"]) {
           const host = window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown) => Promise<unknown> }; settleOutcome: (reply: string) => void };
           const original = host.__TAURI_INTERNALS__.invoke;
           host.__TAURI_INTERNALS__.invoke = async (command, args) => {
-            if (command === (operation === "import" ? "env_import_confirm" : "env_save")) {
+            if (command === (operation === "import" ? "env_import" : "env_save")) {
               return new Promise((resolve, reject) => {
                 host.settleOutcome = (reply) => reply === "error"
                   ? reject({ kind: "io", message: "FAKE_PRIVATE_ERROR C:/private-origin-a/export.env" })
@@ -32,7 +32,6 @@ for (const theme of ["light", "dark"]) {
           await page.getByRole("button", { name: "Import .env…" }).click();
           await page.getByLabel("Paste the .env contents").fill("OPENAI_API_KEY=fake-handoff-secret");
           await page.getByRole("button", { name: "Review import" }).click();
-          await page.getByRole("button", { name: "Confirm import" }).click();
         } else await page.getByRole("button", { name: "Save .env…" }).click();
         const outcomes = page.getByRole("region", { name: "Operation outcomes" });
         await expect(outcomes).toContainText("awaiting an outcome");

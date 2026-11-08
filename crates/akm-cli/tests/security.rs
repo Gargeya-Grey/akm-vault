@@ -5,6 +5,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use akm_core::audit::AuditLog;
+use akm_core::journal::{JournalRoot, VaultEvidence};
 use akm_core::model::{META_ENVIRONMENT, META_ENV_VAR, META_PROJECT};
 use akm_core::Vault;
 use keepass::config::KdfConfig;
@@ -20,6 +21,7 @@ const PASSWORD: &str = "fake-cli-test-password";
 
 fn cli() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_akm"));
+    let journal_root = std::env::var_os("AKM_JOURNAL_ROOT");
     for (name, _) in std::env::vars_os() {
         let upper = name.to_string_lossy().to_ascii_uppercase();
         if upper.starts_with("AKM_") || upper.starts_with("CLI_TEST_") {
@@ -27,7 +29,40 @@ fn cli() -> Command {
         }
     }
     command.stdin(Stdio::null());
+    if let Some(root) = journal_root {
+        command.env("AKM_JOURNAL_ROOT", root);
+    }
     command
+}
+
+/// A journal handle for a test: the log, and the path of its journal file (bound, not yet created).
+struct Journal {
+    log: AuditLog,
+    path: PathBuf,
+}
+
+impl Journal {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl std::ops::Deref for Journal {
+    type Target = AuditLog;
+    fn deref(&self) -> &AuditLog {
+        &self.log
+    }
+}
+
+fn journal_for(root: JournalRoot, vault: &Path) -> Journal {
+    let log = AuditLog::new(root, VaultEvidence::from_file(vault));
+    let path = log.create_journal_path().unwrap();
+    Journal { log, path }
+}
+
+/// The journal of a vault in the Cargo-provided test root.
+fn default_journal(vault: &Path) -> Journal {
+    journal_for(JournalRoot::from_environment(), vault)
 }
 
 fn stderr(output: &Output) -> String {
@@ -46,6 +81,7 @@ fn temporary_directory() -> TempDir {
 struct Fixture {
     directory: TempDir,
     vault: PathBuf,
+    root: PathBuf,
 }
 
 impl Fixture {
@@ -57,12 +93,26 @@ impl Fixture {
         let directory = temporary_directory();
         let vault = directory.path().join("vault.kdbx");
         write_database(&vault, PASSWORD, keys);
-        Self { directory, vault }
+        let root = directory.path().join("journal-root");
+        Self {
+            directory,
+            vault,
+            root,
+        }
+    }
+
+    fn log(&self) -> Journal {
+        self.log_for(&self.vault)
+    }
+
+    fn log_for(&self, vault: &Path) -> Journal {
+        journal_for(JournalRoot::at(&self.root), vault)
     }
 
     fn cli(&self) -> Command {
         let mut command = cli();
         command
+            .env("AKM_JOURNAL_ROOT", &self.root)
             .env("AKM_PASSWORD", PASSWORD)
             .arg("--vault")
             .arg(&self.vault);
@@ -105,6 +155,23 @@ fn write_database(path: &Path, password: &str, keys: &[(&str, &str, &str, &str, 
         DatabaseKey::new().with_password(password),
     )
     .unwrap();
+}
+
+/// The stored secret of a key, read from the raw database so that the test adds no
+/// journal record.
+fn stored_secret(vault: &Path, title: &str) -> String {
+    let mut db = Database::open(
+        &mut fs::File::open(vault).unwrap(),
+        DatabaseKey::new().with_password(PASSWORD),
+    )
+    .unwrap();
+    let mut found = None;
+    db.foreach_entry_mut(|entry| {
+        if entry.get(fields::TITLE) == Some(title) {
+            found = entry.get(fields::PASSWORD).map(str::to_string);
+        }
+    });
+    found.expect("a key with that title")
 }
 
 fn report(path: &Path) -> Value {
@@ -263,7 +330,7 @@ fn existing_short_password_vaults_still_unlock() {
 fn run_scrubs_all_akm_variables_preserves_normal_environment_and_child_exit() {
     let fixture = Fixture::new();
     let path = fixture.report("child.json");
-    let audit = AuditLog::for_vault(&fixture.vault);
+    let audit = fixture.log();
     let output = fixture
         .probe_command(&path)
         .env("AKM_VAULT", &fixture.vault)
@@ -432,9 +499,90 @@ fn imported_reserved_control_names_cannot_be_injected_or_exported() {
 }
 
 #[test]
+fn every_reserved_class_is_refused_by_run_and_export_with_the_key_title_and_never_the_value() {
+    for name in [
+        "PYTHONSTARTUP",
+        "PERL5OPT",
+        "RUBYOPT",
+        "JAVA_TOOL_OPTIONS",
+        "_JAVA_OPTIONS",
+        "JDK_JAVA_OPTIONS",
+        "DOTNET_STARTUP_HOOKS",
+        "COR_PROFILER_PATH",
+        "CORECLR_PROFILER",
+        "GIT_SSH_COMMAND",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+        "GIT_CONFIG_COUNT",
+        "BASH_ENV",
+        "ENV",
+        "PROMPT_COMMAND",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
+        "ELECTRON_RUN_AS_NODE",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "HOME",
+        "APPDATA",
+        "LOCALAPPDATA",
+    ] {
+        let fixture = Fixture::with_keys(&[
+            (
+                "Legacy hostile key",
+                name,
+                "fake-reserved-secret",
+                "demo",
+                "dev",
+            ),
+            (
+                "Fine key",
+                "FINE_TOKEN",
+                "fake-fine-secret",
+                "demo",
+                "other",
+            ),
+        ]);
+        let path = fixture.report("must-not-exist.json");
+        for verb in ["run", "export"] {
+            let mut command = fixture.cli();
+            command
+                .env("CLI_TEST_REPORT", &path)
+                .args([verb, "--project", "demo", "--env", "dev"]);
+            if verb == "run" {
+                command
+                    .arg("--")
+                    .arg(std::env::current_exe().unwrap())
+                    .args(["--exact", "child_probe", "--ignored", "--nocapture"]);
+            }
+            let output = command.output().unwrap();
+            let text = stderr(&output);
+            assert!(!output.status.success(), "accepted {name} for {verb}");
+            assert!(text.contains("reserved"), "{name} {verb}: {text}");
+            assert!(text.contains("Legacy hostile key"), "{name} {verb}: {text}");
+            assert!(text.contains(name), "{name} {verb}: {text}");
+            assert!(
+                !text.contains("fake-reserved-secret"),
+                "{name} {verb}: {text}"
+            );
+            assert!(output.stdout.is_empty());
+            assert!(!path.exists());
+        }
+    }
+}
+
+#[test]
 fn reveals_are_audited_before_any_secret_is_printed() {
     let fixture = Fixture::new();
-    let audit = AuditLog::for_vault(&fixture.vault);
+    let audit = fixture.log();
     let output = fixture
         .cli()
         .args(["get", "Demo", "--field", "secret"])
@@ -464,7 +612,7 @@ fn reveals_are_audited_before_any_secret_is_printed() {
 #[test]
 fn missing_audit_is_not_reported_as_verified_or_proof_of_inactivity() {
     let fixture = Fixture::new();
-    let log = AuditLog::for_vault(&fixture.vault);
+    let log = fixture.log();
     assert!(!log.path().exists());
     let output = fixture.cli().args(["audit", "--verify"]).output().unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -480,9 +628,8 @@ fn missing_audit_is_not_reported_as_verified_or_proof_of_inactivity() {
 #[test]
 fn unsafe_journal_appends_refuse_disclosure_export_and_launch_without_echo_or_byte_changes() {
     let fixture = Fixture::new();
-    let log = AuditLog::for_vault(&fixture.vault);
-    log.append("add-completed", None, None, None, None, None)
-        .unwrap();
+    let log = fixture.log();
+    log.append("add-completed", None, None).unwrap();
     let mut no_newline = fs::read(log.path()).unwrap();
     assert_eq!(no_newline.pop(), Some(b'\n'));
     for bytes in [no_newline, b"{\"seq\":\"FAKE_JOURNAL_MARKER\"}\n".to_vec()] {
@@ -512,9 +659,8 @@ fn unsafe_journal_appends_refuse_disclosure_export_and_launch_without_echo_or_by
 #[test]
 fn skipped_whitespace_boundary_never_bypasses_cli_disclosure_and_launch_logging() {
     let fixture = Fixture::new();
-    let log = AuditLog::for_vault(&fixture.vault);
-    log.append("add-completed", None, None, None, None, None)
-        .unwrap();
+    let log = fixture.log();
+    log.append("add-completed", None, None).unwrap();
     let good = fs::read(log.path()).unwrap();
     for prefix in [b"".as_slice(), good.as_slice()] {
         for suffix in [b"\x0c".as_slice(), b"\x0c\n", b" \t\r", b"\x0b\n"] {
@@ -549,7 +695,7 @@ fn skipped_whitespace_boundary_never_bypasses_cli_disclosure_and_launch_logging(
 #[test]
 fn new_exports_emit_requested_events_and_corrupt_audit_displays_known_sequence() {
     let fixture = Fixture::new();
-    let log = AuditLog::for_vault(&fixture.vault);
+    let log = fixture.log();
     assert_success(&fixture.cli().args(["export", "--all"]).output().unwrap());
     assert!(log
         .read(2)
@@ -575,7 +721,7 @@ fn new_exports_emit_requested_events_and_corrupt_audit_displays_known_sequence()
 #[test]
 fn audit_shows_a_damaged_records_declared_sequence_without_its_contents() {
     let fixture = Fixture::new();
-    let log = AuditLog::for_vault(&fixture.vault);
+    let log = fixture.log();
     let bytes = b"{\"seq\":7,\"ts\":\"bad\",\"detail\":\"fake-hidden-detail\"}
 ";
     fs::write(log.path(), bytes).unwrap();
@@ -583,7 +729,9 @@ fn audit_shows_a_damaged_records_declared_sequence_without_its_contents() {
     let text = String::from_utf8_lossy(&output.stdout);
     assert_eq!(output.status.code(), Some(2));
     assert!(
-        text.contains("physical line 1, declared sequence 7 (not verified)"),
+        text.contains(
+            "physical line 1: a line is not a valid record, declared sequence 7 (not verified)"
+        ),
         "{text}"
     );
     assert!(
@@ -599,7 +747,7 @@ fn an_unconfirmed_completion_keeps_a_successful_exit_even_without_stderr() {
     let big = "f".repeat(1 << 20);
     for stderr_open in [false, true] {
         let fixture = Fixture::with_keys(&[("Big", "BIG_SECRET", &big, "demo", "dev")]);
-        let log = AuditLog::for_vault(&fixture.vault);
+        let log = fixture.log();
         let mut child = fixture
             .cli()
             .args(["export", "--all"])
@@ -654,7 +802,7 @@ fn an_unconfirmed_completion_keeps_a_successful_exit_even_without_stderr() {
 #[test]
 fn refused_appends_label_a_damaged_records_sequence_as_declared() {
     let fixture = Fixture::new();
-    let log = AuditLog::for_vault(&fixture.vault);
+    let log = fixture.log();
     let bytes = b"{\"seq\":7,\"ts\":\"bad\",\"detail\":\"fake-hidden-detail\"}\n";
     fs::write(log.path(), bytes).unwrap();
     let output = fixture.cli().args(["export", "--all"]).output().unwrap();
@@ -662,7 +810,9 @@ fn refused_appends_label_a_damaged_records_sequence_as_declared() {
     assert!(output.stdout.is_empty());
     let text = stderr(&output);
     assert!(
-        text.contains("physical line 1, declared sequence 7 (not verified)"),
+        text.contains(
+            "physical line 1 (a line is not a valid record), declared sequence 7 (not verified)"
+        ),
         "{text}"
     );
     assert!(!text.contains("fake-hidden-detail") && !text.contains("fake-intended-secret"));
@@ -673,7 +823,7 @@ fn refused_appends_label_a_damaged_records_sequence_as_declared() {
 #[test]
 fn exports_pair_requested_and_completed_records_by_operation_without_the_destination() {
     let fixture = Fixture::new();
-    let log = AuditLog::for_vault(&fixture.vault);
+    let log = fixture.log();
     let target = fixture.directory.path().join("paired-export.env");
     assert_success(&fixture.cli().args(["export", "--all"]).output().unwrap());
     assert_success(
@@ -726,7 +876,7 @@ fn exports_pair_requested_and_completed_records_by_operation_without_the_destina
 #[test]
 fn a_failed_file_export_records_only_its_request() {
     let fixture = Fixture::new();
-    let log = AuditLog::for_vault(&fixture.vault);
+    let log = fixture.log();
     let target = fixture.directory.path().join("existing.env");
     fs::write(&target, b"fake-existing-bytes").unwrap();
     let output = fixture
@@ -752,23 +902,17 @@ fn a_failed_file_export_records_only_its_request() {
 #[test]
 fn audit_displays_the_rows_from_its_consistency_snapshot() {
     let fixture = Fixture::new();
-    let log = AuditLog::for_vault(&fixture.vault);
+    let log = fixture.log();
     log.append(
         "copy-requested",
-        None,
-        Some("Fake requested key"),
-        None,
-        None,
-        None,
+        Some("fake-key-id-requested"),
+        Some("fake detail requested"),
     )
     .unwrap();
     log.append(
         "add-completed",
-        None,
-        Some("Fake completed key"),
-        None,
-        None,
-        None,
+        Some("fake-key-id-completed"),
+        Some("fake detail completed"),
     )
     .unwrap();
     for args in [vec!["audit"], vec!["audit", "--verify"]] {
@@ -776,11 +920,13 @@ fn audit_displays_the_rows_from_its_consistency_snapshot() {
         assert_success(&output);
         let text = String::from_utf8_lossy(&output.stdout);
         assert!(
-            text.contains("copy-requested") && text.contains("Fake requested key"),
+            text.contains("copy-requested")
+                && text.contains("key fake-key")
+                && text.contains("fake detail requested"),
             "{text}"
         );
         assert!(
-            text.contains("add-completed") && text.contains("Fake completed key"),
+            text.contains("add-completed") && text.contains("fake detail completed"),
             "{text}"
         );
         assert!(
@@ -793,7 +939,7 @@ fn audit_displays_the_rows_from_its_consistency_snapshot() {
 #[test]
 fn corrupt_audit_is_reported_without_repairing_or_echoing_damaged_bytes() {
     let fixture = Fixture::new();
-    let log = AuditLog::for_vault(&fixture.vault);
+    let log = fixture.log();
     let bytes = b"{\"possibly-sensitive-malformed-data\":";
     fs::write(log.path(), bytes).unwrap();
     let output = fixture.cli().args(["audit", "--verify"]).output().unwrap();
@@ -860,7 +1006,7 @@ fn committed_changes_exit_zero_with_closed_output_pipes() {
     for (stdout_closed, stderr_closed) in [(true, false), (false, true), (true, true)] {
         let case = format!("stdout_closed={stdout_closed} stderr_closed={stderr_closed}");
         let fixture = Fixture::new();
-        fs::create_dir(AuditLog::for_vault(&fixture.vault).path()).unwrap();
+        fs::create_dir(fixture.log().path()).unwrap();
 
         let mut add = fixture.cli();
         add.args([
@@ -879,8 +1025,7 @@ fn committed_changes_exit_zero_with_closed_output_pipes() {
             Some(b"fake-added-secret\n"),
         );
         assert_eq!(add.code(), Some(0), "add: {case}");
-        let saved = Vault::open(&fixture.vault, PASSWORD).unwrap();
-        assert_eq!(saved.find("Added").unwrap().secret, "fake-added-secret");
+        assert_eq!(stored_secret(&fixture.vault, "Added"), "fake-added-secret");
 
         let mut rm = fixture.cli();
         rm.args(["rm", "Added", "--yes"]);
@@ -895,7 +1040,7 @@ fn committed_changes_exit_zero_with_closed_output_pipes() {
             .is_err());
 
         let created = fixture.directory.path().join("created.kdbx");
-        fs::create_dir(AuditLog::for_vault(&created).path()).unwrap();
+        fs::create_dir(fixture.log_for(&created).path()).unwrap();
         let mut init = cli();
         init.env("AKM_PASSWORD", PASSWORD)
             .arg("--vault")
@@ -914,7 +1059,7 @@ fn committed_changes_exit_zero_with_closed_output_pipes() {
             include_bytes!("../../akm-core/tests/fixtures/kdbx40.kdbx"),
         )
         .unwrap();
-        fs::create_dir(AuditLog::for_vault(&older).path()).unwrap();
+        fs::create_dir(fixture.log_for(&older).path()).unwrap();
         let mut upgrade = cli();
         upgrade
             .env("AKM_PASSWORD", LEGACY_PASSWORD)
@@ -978,7 +1123,7 @@ fn failed_primary_output_is_an_error_not_a_panic() {
 #[test]
 fn committed_mutations_report_audit_warnings_without_false_failure() {
     let fixture = Fixture::new();
-    fs::create_dir(AuditLog::for_vault(&fixture.vault).path()).unwrap();
+    fs::create_dir(fixture.log().path()).unwrap();
     let mut child = fixture
         .cli()
         .args([
@@ -1005,14 +1150,7 @@ fn committed_mutations_report_audit_warnings_without_false_failure() {
     assert_success(&output);
     assert!(stderr(&output).contains("warning:"), "{}", stderr(&output));
     assert!(!stderr(&output).contains("error:"));
-    assert_eq!(
-        Vault::open(&fixture.vault, PASSWORD)
-            .unwrap()
-            .find("Added")
-            .unwrap()
-            .secret,
-        "fake-added-secret"
-    );
+    assert_eq!(stored_secret(&fixture.vault, "Added"), "fake-added-secret");
 
     let output = fixture
         .cli()
@@ -1053,7 +1191,7 @@ fn check_protected_original_in_actual_cli(relative: bool) {
     };
     let output = command.args(["rm", "Demo", "--yes"]).output().unwrap();
     assert_success(&output);
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Deleted"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Moved"));
     assert!(stderr(&output).contains(".bak could not be refreshed"));
     assert!(Vault::open(&fixture.vault, PASSWORD)
         .unwrap()
@@ -1168,7 +1306,7 @@ fn older_formats_remain_readable_and_only_upgrade_with_explicit_confirmation() {
         assert_eq!(fs::read(&path).unwrap(), *bytes);
 
         if index == 1 {
-            fs::create_dir(AuditLog::for_vault(&path).path()).unwrap();
+            fs::create_dir(default_journal(&path).path()).unwrap();
         }
         let output = command().args(["upgrade", "--yes"]).output().unwrap();
         assert_success(&output);
@@ -1413,6 +1551,74 @@ fn file_export_publication_failure_removes_its_plaintext_temp() {
         .unwrap_err()
         .to_string()
         .contains("injected publication failure"));
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn file_export_that_cannot_confirm_removal_of_its_plaintext_temp_says_so_and_names_the_file() {
+    struct FailedDelete;
+    impl export::ExportIo for FailedDelete {
+        fn publish(&mut self, _file: &fs::File, _destination: &Path) -> akm_core::Result<()> {
+            Err(std::io::Error::other("injected publication failure").into())
+        }
+
+        fn discard(&mut self, _file: &fs::File) -> bool {
+            false
+        }
+    }
+
+    let directory = temporary_directory();
+    let target = directory.path().join("out.env");
+    let result = export::write_new_with(
+        &target,
+        &[("EXPORT_SECRET".into(), "fake-test-value".into())],
+        &mut FailedDelete,
+    );
+    let message = result.unwrap_err().to_string();
+    assert!(
+        message.contains("injected publication failure"),
+        "{message}"
+    );
+    assert!(message.contains("could not confirm cleanup"), "{message}");
+    assert!(!message.contains("fake-test-value"), "{message}");
+    let left: Vec<_> = fs::read_dir(directory.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(
+        left.len(),
+        1,
+        "the injected failed delete leaves the temp: {left:?}"
+    );
+    // The user deletes the file by hand, so the message names it without the `\\?\` prefix.
+    // Compare the canonical long path: a temp path can hold a short name such as `RUNNER~1`.
+    assert!(!message.contains(r"\\?\"), "{message}");
+    let canonical = left[0].canonicalize().unwrap().display().to_string();
+    let shown = canonical.strip_prefix(r"\\?\").unwrap_or(&canonical);
+    assert!(
+        message.contains(shown),
+        "the message names the leftover file {shown}: {message}"
+    );
+}
+
+#[test]
+fn file_export_whose_cleanup_is_confirmed_reports_only_its_own_failure() {
+    struct ConfirmedDelete;
+    impl export::ExportIo for ConfirmedDelete {
+        fn publish(&mut self, _file: &fs::File, _destination: &Path) -> akm_core::Result<()> {
+            Err(std::io::Error::other("injected publication failure").into())
+        }
+    }
+
+    let directory = temporary_directory();
+    let message = export::write_new_with(
+        &directory.path().join("out.env"),
+        &[("EXPORT_SECRET".into(), "fake-test-value".into())],
+        &mut ConfirmedDelete,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(!message.contains("could not confirm cleanup"), "{message}");
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
 }
 
@@ -1860,7 +2066,7 @@ fn the_default_view_and_metadata_fields_print_nothing_derived_from_the_secret() 
                     .replace(&id, "<id>"),
             );
         }
-        let audit = AuditLog::for_vault(&fixture.vault);
+        let audit = fixture.log();
         assert!(
             audit
                 .read(100)
@@ -1885,7 +2091,7 @@ fn the_secret_disclosures_still_fail_closed_with_a_damaged_journal() {
         vec!["get", "Demo", "--field", " SECRET "],
     ] {
         let fixture = Fixture::new();
-        fs::create_dir_all(AuditLog::for_vault(&fixture.vault).path()).unwrap();
+        fs::create_dir_all(fixture.log().path()).unwrap();
         let output = fixture.cli().args(&args).output().unwrap();
         assert!(!output.status.success(), "{args:?}");
         assert!(
@@ -1900,7 +2106,7 @@ fn the_secret_disclosures_still_fail_closed_with_a_damaged_journal() {
 fn the_readme_names_the_recorded_audit_actions_in_their_order() {
     let fixture = Fixture::new();
     let path = fixture.report("names.json");
-    let audit = AuditLog::for_vault(&fixture.vault);
+    let audit = fixture.log();
     let run = fixture.probe_command(&path).output().unwrap();
     assert_success(&run);
     assert_success(
@@ -1940,7 +2146,15 @@ fn the_readme_names_the_recorded_audit_actions_in_their_order() {
             word.ends_with("-requested") || word.ends_with("-completed") || word.ends_with("-start")
         })
         .collect();
-    let expected: std::collections::BTreeSet<&str> = recorded.iter().copied().collect();
+    // The lifecycle actions are recorded by other commands; lifecycle.rs asserts that each is written.
+    let lifecycle = [
+        "rotate-completed",
+        "remove-completed",
+        "restore-completed",
+        "purge-completed",
+    ];
+    let expected: std::collections::BTreeSet<&str> =
+        recorded.iter().copied().chain(lifecycle).collect();
     assert_eq!(
         named, expected,
         "the README must name exactly the recorded actions"

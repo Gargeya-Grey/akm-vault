@@ -1,12 +1,12 @@
-use akm_core::audit::AuditLog;
 use akm_core::audit::AuditState;
+use akm_core::audit::{ChainFile, Damage};
 
 #[test]
 fn unknown_legacy_action_names_remain_literal_in_consistent_snapshots() {
     let directory = tempfile::tempdir().unwrap();
-    let log = AuditLog::for_vault(&directory.path().join("fake.kdbx"));
+    let log = ChainFile::at(directory.path().join("journal.jsonl"), "fake-journal");
     for action in ["__proto__", "constructor", "toString"] {
-        log.append(action, None, None, None, None, None).unwrap();
+        log.append(action, None, None).unwrap();
     }
     let snapshot = log.snapshot(10).unwrap();
     assert_eq!(snapshot.state, AuditState::Consistent);
@@ -23,9 +23,8 @@ fn unknown_legacy_action_names_remain_literal_in_consistent_snapshots() {
 #[test]
 fn blank_records_require_json_whitespace_and_terminated_boundaries_for_every_byte() {
     let directory = tempfile::tempdir().unwrap();
-    let log = AuditLog::for_vault(&directory.path().join("fake.kdbx"));
-    log.append("add-completed", None, None, None, None, None)
-        .unwrap();
+    let log = ChainFile::at(directory.path().join("journal.jsonl"), "fake-journal");
+    log.append("add-completed", None, None).unwrap();
     let good = std::fs::read(log.path()).unwrap();
     for prefix in [b"".as_slice(), good.as_slice()] {
         for byte in 0u8..=255 {
@@ -37,7 +36,7 @@ fn blank_records_require_json_whitespace_and_terminated_boundaries_for_every_byt
                 }
                 std::fs::write(log.path(), &bytes).unwrap();
                 let safe = byte == b'\n' || (terminated && matches!(byte, b' ' | b'\t' | b'\r'));
-                let result = log.append("reveal-requested", None, None, None, None, None);
+                let result = log.append("reveal-requested", None, None);
                 assert_eq!(
                     result.is_ok(),
                     safe,
@@ -58,15 +57,12 @@ fn blank_records_require_json_whitespace_and_terminated_boundaries_for_every_byt
 #[test]
 fn unterminated_json_is_not_an_appendable_or_consistent_record() {
     let directory = tempfile::tempdir().unwrap();
-    let log = AuditLog::for_vault(&directory.path().join("fake.kdbx"));
-    log.append("add-completed", None, None, None, None, None)
-        .unwrap();
+    let log = ChainFile::at(directory.path().join("journal.jsonl"), "fake-journal");
+    log.append("add-completed", None, None).unwrap();
     let mut bytes = std::fs::read(log.path()).unwrap();
     assert_eq!(bytes.pop(), Some(b'\n'));
     std::fs::write(log.path(), &bytes).unwrap();
-    assert!(log
-        .append("reveal-requested", None, None, None, None, None)
-        .is_err());
+    assert!(log.append("reveal-requested", None, None).is_err());
     assert_eq!(std::fs::read(log.path()).unwrap(), bytes);
     let report = log.snapshot(10).unwrap();
     assert_eq!(report.state, AuditState::Corrupt);
@@ -77,11 +73,11 @@ fn unterminated_json_is_not_an_appendable_or_consistent_record() {
 #[test]
 fn append_errors_never_echo_malformed_json_values() {
     let directory = tempfile::tempdir().unwrap();
-    let log = AuditLog::for_vault(&directory.path().join("fake.kdbx"));
+    let log = ChainFile::at(directory.path().join("journal.jsonl"), "fake-journal");
     let bytes = b"{\"seq\":\"FAKE_JOURNAL_MARKER\"}\n";
     std::fs::write(log.path(), bytes).unwrap();
     let error = log
-        .append("reveal-requested", None, None, None, None, None)
+        .append("reveal-requested", None, None)
         .unwrap_err()
         .to_string();
     assert!(!error.contains("FAKE_JOURNAL_MARKER"), "{error}");
@@ -92,7 +88,7 @@ fn append_errors_never_echo_malformed_json_values() {
 #[test]
 fn audit_missing_and_empty_files_cannot_claim_verification() {
     let directory = tempfile::tempdir().unwrap();
-    let log = AuditLog::for_vault(&directory.path().join("fake.kdbx"));
+    let log = ChainFile::at(directory.path().join("journal.jsonl"), "fake-journal");
     assert!(
         log.verify().is_err(),
         "a missing journal was treated as verified"
@@ -107,11 +103,11 @@ fn audit_missing_and_empty_files_cannot_claim_verification() {
 #[test]
 fn audit_snapshot_distinguishes_absent_empty_and_consistent_without_modifying_bytes() {
     let directory = tempfile::tempdir().unwrap();
-    let log = AuditLog::for_vault(&directory.path().join("fake.kdbx"));
+    let log = ChainFile::at(directory.path().join("journal.jsonl"), "fake-journal");
     assert_eq!(log.snapshot(10).unwrap().state, AuditState::Absent);
     std::fs::write(log.path(), b"\n \r\n").unwrap();
     assert_eq!(log.snapshot(10).unwrap().state, AuditState::Empty);
-    log.append("copy-requested", None, Some("Fake"), None, None, None)
+    log.append("copy-requested", Some("fake-key-id"), None)
         .unwrap();
     let bytes = std::fs::read(log.path()).unwrap();
     let snapshot = log.snapshot(10).unwrap();
@@ -126,10 +122,9 @@ fn audit_snapshot_distinguishes_absent_empty_and_consistent_without_modifying_by
 #[test]
 fn audit_damage_is_structured_and_display_limit_does_not_skip_verification() {
     let directory = tempfile::tempdir().unwrap();
-    let log = AuditLog::for_vault(&directory.path().join("fake.kdbx"));
+    let log = ChainFile::at(directory.path().join("journal.jsonl"), "fake-journal");
     for _ in 0..3 {
-        log.append("copy-requested", None, None, None, None, None)
-            .unwrap();
+        log.append("copy-requested", None, None).unwrap();
     }
     let good = std::fs::read(log.path()).unwrap();
     let limited = log.snapshot(1).unwrap();
@@ -161,15 +156,13 @@ fn audit_damage_is_structured_and_display_limit_does_not_skip_verification() {
 #[test]
 fn audit_snapshot_rows_and_verification_stay_consistent_during_concurrent_appends() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("fake.kdbx");
-    let log = AuditLog::for_vault(&path);
-    log.append("add-completed", None, None, None, None, None)
-        .unwrap();
+    let path = directory.path().join("journal.jsonl");
+    let log = ChainFile::at(&path, "fake-journal");
+    log.append("add-completed", None, None).unwrap();
     let worker = std::thread::spawn(move || {
-        let log = AuditLog::for_vault(&path);
+        let log = ChainFile::at(&path, "fake-journal");
         for _ in 0..30 {
-            log.append("copy-requested", None, None, None, None, None)
-                .unwrap();
+            log.append("copy-requested", None, None).unwrap();
         }
     });
     for _ in 0..30 {
@@ -189,7 +182,7 @@ fn audit_snapshot_rows_and_verification_stay_consistent_during_concurrent_append
 #[test]
 fn a_damaged_record_reports_only_an_unambiguous_declared_sequence() {
     let directory = tempfile::tempdir().unwrap();
-    let log = AuditLog::for_vault(&directory.path().join("fake.kdbx"));
+    let log = ChainFile::at(directory.path().join("journal.jsonl"), "fake-journal");
     let cases: [(&str, Option<u64>); 16] = [
         (
             r#"{"seq":7,"ts":"bad","detail":"fake-hidden-detail"}"#,
@@ -222,5 +215,57 @@ fn a_damaged_record_reports_only_an_unambiguous_declared_sequence() {
         assert_eq!(snapshot.problem_line, Some(1), "{line}");
         assert_eq!(snapshot.broken_at, declared, "{line}");
         assert_eq!(std::fs::read_to_string(log.path()).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn each_kind_of_damage_is_named_and_a_healthy_chain_names_none() {
+    let directory = tempfile::tempdir().unwrap();
+    let log = ChainFile::at(directory.path().join("journal.jsonl"), "fake-journal");
+    for _ in 0..3 {
+        log.append("copy-requested", None, None).unwrap();
+    }
+    let good = String::from_utf8(std::fs::read(log.path()).unwrap()).unwrap();
+    assert_eq!(log.snapshot(10).unwrap().damage, None);
+    let lines: Vec<&str> = good.split_inclusive('\n').collect();
+    let cases: [(&str, String, Damage, usize); 4] = [
+        (
+            "an unterminated last line",
+            format!("{good}{{\"seq\":4"),
+            Damage::TruncatedTail,
+            4,
+        ),
+        (
+            "a terminated line that is not a record",
+            format!("{good}not-json\n"),
+            Damage::MalformedJson,
+            4,
+        ),
+        (
+            "a record dropped from the middle",
+            format!("{}{}", lines[0], lines[2]),
+            Damage::BrokenLink,
+            2,
+        ),
+        (
+            "an edited action",
+            good.replacen("copy-requested", "copy-altered", 1),
+            Damage::HashMismatch,
+            1,
+        ),
+    ];
+    for (name, bytes, kind, line) in cases {
+        std::fs::write(log.path(), &bytes).unwrap();
+        let snapshot = log.snapshot(10).unwrap();
+        assert_eq!(snapshot.state, AuditState::Corrupt, "{name}");
+        assert_eq!(snapshot.damage, Some(kind), "{name}");
+        assert_eq!(snapshot.problem_line, Some(line), "{name}");
+        let refused = log.append("reveal-requested", None, None);
+        assert!(refused.is_err(), "{name}");
+        assert_eq!(
+            std::fs::read(log.path()).unwrap(),
+            bytes.as_bytes(),
+            "{name}"
+        );
     }
 }

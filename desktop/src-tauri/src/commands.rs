@@ -1,10 +1,11 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use akm_core::{audit::AuditLog, dotenv, Vault};
+use akm_core::{audit::AuditLog, dotenv, ApiKey, EnvDisclosure, KeyDisclosure, Secret, Vault};
 use chrono::{DateTime, Utc};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -13,20 +14,63 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::{
     clipboard::CLEAR_AFTER,
     error::CommandError,
+    import_review::{ConfirmState, ImportConfirm, ImportReview},
     private_export,
+    reminders::{ReminderState, ReminderStatus},
     session::{
         Access, OperationWarningKind, Session, Snapshot, Stamped, VaultState, WarningReport,
     },
-    settings::{current_path, settings_file, write_settings, Settings},
+    settings::{current_path, settings_file, PreferenceState, PreferenceStore},
     views::*,
 };
 
+/// The one list of commands that the app registers. The IPC dispatch test expands the
+/// same macro, so a command cannot be missing there and present in the app.
+macro_rules! production_handlers {
+    () => {
+        tauri::generate_handler![
+            vault_status,
+            vault_prepare_open,
+            vault_unlock,
+            vault_create,
+            vault_lock,
+            vault_activity,
+            vault_warnings,
+            vault_dismiss_warnings,
+            vault_upgrade,
+            vault_reload,
+            keys_list,
+            key_reveal,
+            key_copy,
+            key_add,
+            key_update,
+            key_remove,
+            key_rotate,
+            recycled_list,
+            key_restore,
+            key_purge,
+            audit_read,
+            env_export,
+            env_copy,
+            env_save,
+            env_import,
+            view_discard,
+            backup_info,
+            reminders_status,
+            reminders_set,
+            reminders_notify
+        ]
+    };
+}
+pub(crate) use production_handlers;
+
 #[tauri::command]
-pub async fn vault_status<R: tauri::Runtime>(
-    app: AppHandle<R>,
+pub async fn vault_status(
     state: State<'_, VaultState>,
+    preferences: State<'_, PreferenceState>,
 ) -> Result<Status, CommandError> {
     let session = state.0.clone();
+    let preferences = preferences.0.clone();
     let expected = session.snapshot();
     blocking(move || match expected {
         Ok(expected) => {
@@ -35,7 +79,7 @@ pub async fn vault_status<R: tauri::Runtime>(
             finish_status(&session, Access::Read, status)
         }
         Err(error) if error.kind == "locked" => {
-            let path = current_path(&app, &session)?;
+            let path = current_path(preferences.as_ref(), &session)?;
             Ok(Status {
                 session_id: None,
                 path: path.display().to_string(),
@@ -71,16 +115,16 @@ fn finish_status(
 
 #[tauri::command]
 pub async fn vault_unlock(
-    app: AppHandle,
     state: State<'_, VaultState>,
+    preferences: State<'_, PreferenceState>,
     path: String,
     password: String,
     session_id: String,
 ) -> Result<Status, CommandError> {
     let password = Zeroizing::new(password);
     open_vault(
-        app,
         state.0.clone(),
+        preferences.0.clone(),
         path.into(),
         password,
         None,
@@ -92,8 +136,8 @@ pub async fn vault_unlock(
 
 #[tauri::command]
 pub async fn vault_create(
-    app: AppHandle,
     state: State<'_, VaultState>,
+    preferences: State<'_, PreferenceState>,
     path: String,
     password: String,
     name: Option<String>,
@@ -101,8 +145,8 @@ pub async fn vault_create(
 ) -> Result<Status, CommandError> {
     let password = Zeroizing::new(password);
     open_vault(
-        app,
         state.0.clone(),
+        preferences.0.clone(),
         path.into(),
         password,
         clean(name),
@@ -113,8 +157,8 @@ pub async fn vault_create(
 }
 
 async fn open_vault(
-    app: AppHandle,
     session: Arc<Session>,
+    preferences: Arc<dyn PreferenceStore>,
     target: PathBuf,
     password: Zeroizing<String>,
     name: Option<String>,
@@ -148,13 +192,15 @@ async fn open_vault(
         return Err(completion.cancelled_after_completion());
     }
     session.check_completed(completion, ticket)?;
-    if write_settings(
-        &app,
-        &Settings {
-            vault_path: Some(opened.value.path.clone()),
-        },
-    )
-    .is_err()
+    if preferences
+        .save_vault_path(
+            ticket,
+            &|effect| {
+                let _ = session.while_current(ticket, |held| effect(held));
+            },
+            &opened.value.path,
+        )
+        .is_err()
     {
         session.warn_for(ticket, OperationWarningKind::Preference);
     }
@@ -194,8 +240,11 @@ pub fn vault_lock(
 }
 
 #[tauri::command]
-pub fn vault_activity(state: State<'_, VaultState>) -> Result<(), CommandError> {
-    state.0.activity()
+pub fn vault_activity(
+    state: State<'_, VaultState>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    state.0.activity(&session_id)
 }
 
 #[tauri::command]
@@ -212,9 +261,12 @@ pub fn vault_dismiss_warnings(
 }
 
 #[tauri::command]
-pub async fn vault_upgrade(state: State<'_, VaultState>) -> Result<Status, CommandError> {
+pub async fn vault_upgrade(
+    state: State<'_, VaultState>,
+    session_id: String,
+) -> Result<Status, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     let status = run_session(session.clone(), expected, Access::Upgrade, |vault| {
         vault.upgrade()?;
         Ok(status_for(vault))
@@ -231,9 +283,12 @@ pub async fn vault_upgrade(state: State<'_, VaultState>) -> Result<Status, Comma
 }
 
 #[tauri::command]
-pub async fn vault_reload(state: State<'_, VaultState>) -> Result<Status, CommandError> {
+pub async fn vault_reload(
+    state: State<'_, VaultState>,
+    session_id: String,
+) -> Result<Status, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     let status = run_session(session.clone(), expected, Access::Reload, |vault| {
         vault.reload()?;
         Ok(status_for(vault))
@@ -273,26 +328,28 @@ async fn blocking<T: Send + 'static>(
 }
 
 #[tauri::command]
-pub async fn keys_list(state: State<'_, VaultState>) -> Result<Vec<KeyView>, CommandError> {
+pub async fn keys_list(
+    state: State<'_, VaultState>,
+    session_id: String,
+) -> Result<Vec<KeyView>, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Read, |vault| {
-        let mut keys = vault.list();
-        let views = keys.iter().map(KeyView::from).collect();
-        for key in &mut keys {
-            key.secret.zeroize();
-        }
-        Ok(views)
+        Ok(vault.list().iter().map(KeyView::from).collect())
     })
     .await
 }
 
 #[tauri::command]
-pub async fn key_reveal(state: State<'_, VaultState>, id: String) -> Result<String, CommandError> {
+pub async fn key_reveal(
+    state: State<'_, VaultState>,
+    session_id: String,
+    id: String,
+) -> Result<String, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     blocking(move || {
-        let secret = requested_key_at(&session, expected, &id, "reveal-requested")?;
+        let secret = requested_key_at(&session, expected, &id, KeyDisclosure::Reveal)?;
         session.reveal(secret)
     })
     .await
@@ -302,7 +359,7 @@ pub async fn key_reveal(state: State<'_, VaultState>, id: String) -> Result<Stri
 fn requested_key(
     session: &Session,
     id: &str,
-    action: &str,
+    action: KeyDisclosure,
 ) -> Result<Stamped<Zeroizing<String>>, CommandError> {
     requested_key_at(session, session.snapshot()?, id, action)
 }
@@ -311,22 +368,25 @@ fn requested_key_at(
     session: &Session,
     expected: Snapshot,
     id: &str,
-    action: &str,
+    action: KeyDisclosure,
 ) -> Result<Stamped<Zeroizing<String>>, CommandError> {
     session.access(Access::Read, Some(expected), |vault| {
-        let mut key = vault.get_by_id(id)?;
-        let secret = Zeroizing::new(std::mem::take(&mut key.secret));
-        vault.log(action, Some(&key), None)?;
-        Ok(secret)
+        let key = vault.get_by_id(id)?;
+        let proof = vault.disclose_key(action, &key, None)?;
+        Ok(vault.secret(id, &proof)?)
     })
 }
 
 #[tauri::command]
-pub async fn key_copy(state: State<'_, VaultState>, id: String) -> Result<u64, CommandError> {
+pub async fn key_copy(
+    state: State<'_, VaultState>,
+    session_id: String,
+    id: String,
+) -> Result<u64, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     blocking(move || {
-        let secret = requested_key_at(&session, expected, &id, "copy-requested")?;
+        let secret = requested_key_at(&session, expected, &id, KeyDisclosure::Copy)?;
         session.copy_stamped(secret)?;
         Ok(CLEAR_AFTER.as_secs())
     })
@@ -336,15 +396,14 @@ pub async fn key_copy(state: State<'_, VaultState>, id: String) -> Result<u64, C
 #[tauri::command]
 pub async fn key_add(
     state: State<'_, VaultState>,
+    session_id: String,
     draft: KeyDraft,
 ) -> Result<KeyView, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Write, move |vault| {
-        let mut key = vault.add(draft.into_input(None)?)?;
-        let view = KeyView::from(&key);
-        key.secret.zeroize();
-        Ok(view)
+        let key = vault.add(draft.into_input(None)?)?;
+        Ok(KeyView::from(&key))
     })
     .await
 }
@@ -352,61 +411,149 @@ pub async fn key_add(
 #[tauri::command]
 pub async fn key_update(
     state: State<'_, VaultState>,
+    session_id: String,
     id: String,
     draft: KeyDraft,
 ) -> Result<KeyView, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Write, move |vault| {
-        let existing = vault.get_by_id(&id)?;
-        let mut key = vault.update(&id, draft.into_input(Some(existing))?)?;
-        let view = KeyView::from(&key);
-        key.secret.zeroize();
-        Ok(view)
+        let existing = vault.edit_input(&id)?;
+        let key = vault.update(&id, draft.into_input(Some(existing))?)?;
+        Ok(KeyView::from(&key))
     })
     .await
 }
 
 #[tauri::command]
-pub async fn key_remove(state: State<'_, VaultState>, id: String) -> Result<(), CommandError> {
+pub async fn key_remove(
+    state: State<'_, VaultState>,
+    session_id: String,
+    id: String,
+) -> Result<(), CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Write, move |vault| {
-        let mut removed = vault.remove(&id)?;
-        removed.secret.zeroize();
+        vault.remove(&id)?;
         Ok(())
     })
     .await
 }
 
+/// Replaces the secret of a key. The reply carries times and the key's metadata, never a secret.
+/// A repeat with the value already stored is refused by the core, so a lost reply cannot rotate twice.
+#[tauri::command]
+pub async fn key_rotate(
+    state: State<'_, VaultState>,
+    session_id: String,
+    id: String,
+    secret: String,
+) -> Result<RotationView, CommandError> {
+    let session = state.0.clone();
+    let expected = session.snapshot_for(&session_id)?;
+    run_session(session, expected, Access::Write, move |vault| {
+        rotate_key(vault, &id, secret)
+    })
+    .await
+}
+
+fn rotate_key(vault: &mut Vault, id: &str, secret: String) -> Result<RotationView, CommandError> {
+    let rotation = vault.rotate(id, Secret::from(secret))?;
+    Ok(RotationView::from(&rotation))
+}
+
+#[tauri::command]
+pub async fn recycled_list(
+    state: State<'_, VaultState>,
+    session_id: String,
+) -> Result<Vec<RecycledView>, CommandError> {
+    let session = state.0.clone();
+    let expected = session.snapshot_for(&session_id)?;
+    run_session(session, expected, Access::Read, |vault| {
+        Ok(vault.recycled().iter().map(RecycledView::from).collect())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn key_restore(
+    state: State<'_, VaultState>,
+    session_id: String,
+    id: String,
+) -> Result<KeyView, CommandError> {
+    let session = state.0.clone();
+    let expected = session.snapshot_for(&session_id)?;
+    run_session(session, expected, Access::Write, move |vault| {
+        let key = vault.restore(&id)?;
+        Ok(KeyView::from(&key))
+    })
+    .await
+}
+
+/// Deletes a key for good. It accepts only a key that is in the Recycle Bin, so a live key
+/// can never be purged from here.
+#[tauri::command]
+pub async fn key_purge(
+    state: State<'_, VaultState>,
+    session_id: String,
+    id: String,
+) -> Result<(), CommandError> {
+    let session = state.0.clone();
+    let expected = session.snapshot_for(&session_id)?;
+    run_session(session, expected, Access::Write, move |vault| {
+        purge_recycled(vault, &id)
+    })
+    .await
+}
+
+fn purge_recycled(vault: &mut Vault, id: &str) -> Result<(), CommandError> {
+    let recycled = vault.find_recycled(id)?;
+    vault.purge(&recycled.key.id)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn audit_read(
     state: State<'_, VaultState>,
+    session_id: String,
     limit: Option<usize>,
 ) -> Result<AuditReport, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Read, move |vault| {
-        let log = AuditLog::for_vault(vault.path());
-        let snapshot = log.snapshot(limit.unwrap_or(500))?;
+        let snapshot = vault.audit_log().snapshot(limit.unwrap_or(500))?;
+        // The journal holds key IDs only. Titles, projects and environments are read from
+        // the unlocked vault now, so a renamed key shows its current name (unit 1b, D3).
+        let keys: HashMap<String, ApiKey> = vault
+            .list()
+            .into_iter()
+            .map(|key| (key.id.clone(), key))
+            .collect();
         let entries = snapshot
             .entries
             .into_iter()
-            .map(|entry| AuditView {
-                seq: entry.seq,
-                ts: entry.ts,
-                action: entry.action,
-                key_title: entry.key_title,
-                project: entry.project,
-                environment: entry.environment,
-                detail: entry.detail,
+            .map(|entry| {
+                let key = entry.key_id.as_ref().and_then(|id| keys.get(id));
+                AuditView {
+                    seq: entry.seq,
+                    ts: entry.ts,
+                    action: entry.action,
+                    key_title: key.map(|key| key.title.clone()),
+                    project: key.and_then(|key| key.project.clone()),
+                    environment: key.and_then(|key| key.environment.clone()),
+                    key_id: entry.key_id,
+                    detail: entry.detail,
+                }
             })
             .collect();
         Ok(AuditReport {
-            path: log.path().display().to_string(),
+            path: snapshot.location.display().to_string(),
             entries,
             broken_at: snapshot.broken_at,
             state: snapshot.state,
+            damage: snapshot.damage,
+            identity: snapshot.identity,
+            notices: snapshot.notices,
             problem_line: snapshot.problem_line,
             total_entries: snapshot.total_entries,
         })
@@ -455,12 +602,20 @@ impl Drop for SecretEntries {
 fn export_body(
     vault: &Vault,
     scope: &ExportScope,
+    kind: EnvDisclosure,
+    detail: impl FnOnce(usize) -> String,
+    refuse_empty: Option<&str>,
 ) -> Result<(Zeroizing<String>, usize), CommandError> {
-    let vars = SecretEntries(vault.env_vars(
+    let plan = vault.plan_env(
         scope.project.as_deref(),
         scope.environment.as_deref(),
         scope.all,
-    )?);
+    )?;
+    if let (true, Some(message)) = (plan.is_empty(), refuse_empty) {
+        return Err(CommandError::new("invalid", message));
+    }
+    let proof = vault.disclose_env(kind, &plan, Some(&detail(plan.len())))?;
+    let vars = SecretEntries(vault.env_vars(&plan, &proof)?);
     let mut body = Zeroizing::new(String::new());
     for (name, value) in &vars.0 {
         let line = Zeroizing::new(dotenv::line(name, value));
@@ -486,11 +641,12 @@ fn extract_export_at(
     target: &str,
 ) -> Result<Stamped<Zeroizing<String>>, CommandError> {
     session.access(Access::Read, Some(expected), |vault| {
-        let (body, count) = export_body(vault, scope)?;
-        vault.log(
-            "export-requested",
+        let (body, _) = export_body(
+            vault,
+            scope,
+            EnvDisclosure::Export,
+            |count| format!("{count} keys to {target}"),
             None,
-            Some(&format!("{count} keys to {target}")),
         )?;
         Ok(body)
     })
@@ -499,13 +655,14 @@ fn extract_export_at(
 #[tauri::command]
 pub async fn env_export(
     state: State<'_, VaultState>,
+    session_id: String,
     project: Option<String>,
     environment: Option<String>,
     all: bool,
 ) -> Result<String, CommandError> {
     let scope = ExportScope::new(project, environment, all)?;
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     blocking(move || {
         let exported = extract_export_at(&session, expected, &scope, ".env preview")?;
         session.reveal(exported)
@@ -516,13 +673,14 @@ pub async fn env_export(
 #[tauri::command]
 pub async fn env_copy(
     state: State<'_, VaultState>,
+    session_id: String,
     project: Option<String>,
     environment: Option<String>,
     all: bool,
 ) -> Result<u64, CommandError> {
     let scope = ExportScope::new(project, environment, all)?;
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     blocking(move || {
         let exported = extract_export_at(&session, expected, &scope, "clipboard")?;
         if exported.value.is_empty() {
@@ -538,16 +696,17 @@ pub async fn env_copy(
 }
 
 #[tauri::command]
-pub async fn env_save(
-    app: AppHandle,
+pub async fn env_save<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, VaultState>,
+    session_id: String,
     project: Option<String>,
     environment: Option<String>,
     all: bool,
 ) -> Result<Option<String>, CommandError> {
     let scope = ExportScope::new(project, environment, all)?;
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         // FileSaveDialog keeps its default overwrite-approval prompt. No session mutex spans the dialog.
         let selected = app
@@ -568,8 +727,8 @@ pub async fn env_save(
             body,
             count,
             vault_path,
+            journal,
         } = requested_file_export_at(&session, expected, &scope)?;
-        let journal = AuditLog::for_vault(&vault_path);
         let settings = settings_file(&app)?;
         let config_dir = app
             .path()
@@ -586,14 +745,11 @@ pub async fn env_save(
                 )
             },
             |prepared| {
-                publish_and_record(&session, expected, prepared, |saved| {
+                publish_and_record(&session, expected, prepared, |_| {
                     journal.append(
                         "export-completed",
                         None,
-                        None,
-                        None,
-                        None,
-                        Some(&format!("{count} keys to {}", saved.display())),
+                        Some(&format!("file export completed; {count} keys")),
                     )
                 })
             },
@@ -608,6 +764,7 @@ struct FileExport {
     body: Zeroizing<String>,
     count: usize,
     vault_path: PathBuf,
+    journal: AuditLog,
 }
 
 fn requested_file_export_at(
@@ -617,22 +774,18 @@ fn requested_file_export_at(
 ) -> Result<FileExport, CommandError> {
     session
         .read_for_publication(expected, |vault| {
-            let (body, count) = export_body(vault, scope)?;
-            if count == 0 {
-                return Err(CommandError::new(
-                    "invalid",
-                    "No keys match that export scope.",
-                ));
-            }
-            vault.log(
-                "export-requested",
-                None,
-                Some(&format!("file export requested; {count} keys")),
+            let (body, count) = export_body(
+                vault,
+                scope,
+                EnvDisclosure::Export,
+                |count| format!("file export requested; {count} keys"),
+                Some("No keys match that export scope."),
             )?;
             Ok(FileExport {
                 body,
                 count,
                 vault_path: vault.path().to_path_buf(),
+                journal: vault.audit_log(),
             })
         })
         .map(|exported| exported.value)
@@ -651,94 +804,185 @@ fn publish_and_record(
     Ok(saved)
 }
 
+fn ensure_window_shown(confirm: &dyn ImportConfirm) -> Result<(), CommandError> {
+    if confirm.window_live() {
+        Ok(())
+    } else {
+        Err(CommandError::new(
+            "viewChanged",
+            "The AKM window is not shown, so no confirmation window was opened. Nothing was imported. Start it again.",
+        ))
+    }
+}
+
+/// The whole import in one command. The webview names the session and the data. A
+/// native window shows the names and the scope, and only the user's click there lets
+/// the import run: that dialog is the review. No review state is kept between the request
+/// and the answer, so there is nothing for the webview to cancel, edit or replay. `None`
+/// means that the user declined.
+///
+/// After the dialog returns, the approval is refused only by a lock, another session, or a
+/// change of the vault since the preview was read. A hide, a page load, a discard from the
+/// page or a hidden window do not refuse it: the user answered in the dialog, and the page
+/// learns the result from the reply or, when it discarded its form, from the outcome record.
 #[tauri::command]
-pub async fn env_import_preview(
+pub async fn env_import(
     state: State<'_, VaultState>,
+    confirm: State<'_, ConfirmState>,
+    session_id: String,
+    operation_id: String,
     text: String,
     project: Option<String>,
     environment: Option<String>,
-) -> Result<PreviewReport, CommandError> {
+) -> Result<Option<ImportReport>, CommandError> {
     let text = Zeroizing::new(text);
     let session = state.0.clone();
-    let expected = session.snapshot()?;
-    blocking(move || prepare_import_at(&session, expected, text, project, environment)).await
+    let confirm = confirm.0.clone();
+    blocking(move || {
+        run_import(
+            &session,
+            confirm.as_ref(),
+            &session_id,
+            &operation_id,
+            text,
+            project,
+            environment,
+        )
+    })
+    .await
 }
 
-#[cfg(test)]
-fn prepare_import(
+fn run_import(
     session: &Session,
+    confirm: &dyn ImportConfirm,
+    session_id: &str,
+    operation_id: &str,
     text: Zeroizing<String>,
     project: Option<String>,
     environment: Option<String>,
-) -> Result<PreviewReport, CommandError> {
-    prepare_import_at(session, session.snapshot()?, text, project, environment)
-}
-
-fn prepare_import_at(
-    session: &Session,
-    expected: Snapshot,
-    text: Zeroizing<String>,
-    project: Option<String>,
-    environment: Option<String>,
-) -> Result<PreviewReport, CommandError> {
-    let project = clean(project);
-    let environment = clean(environment);
+) -> Result<Option<ImportReport>, CommandError> {
+    let operation = uuid::Uuid::parse_str(operation_id)
+        .map_err(|_| CommandError::new("invalid", "The import request is malformed."))?
+        .to_string();
+    let expected = session.snapshot_for(session_id)?;
+    let (project, environment) = (clean(project), clean(environment));
     let entries = SecretEntries(dotenv::parse(&text)?);
-    let preview = session.access(Access::Read, Some(expected), |vault| {
+    let reviewed = session.access_reviewed(Access::Read, expected, |vault| {
         vault
             .preview_import_env(&entries.0, project.as_deref(), environment.as_deref())
             .map_err(Into::into)
     })?;
-    let token = session.store_preview(preview.snapshot, text, project, environment)?;
-    Ok(PreviewReport {
-        preview: preview.value,
-        token,
+    let review = ImportReview::new(
+        project.clone().unwrap_or_default(),
+        environment.clone().unwrap_or_default(),
+        reviewed.value,
+    )?;
+    let ticket = reviewed.snapshot.ticket;
+    if review.changes_anything() {
+        // No dialog for a window nobody sees, or for a vault that is no longer what was read.
+        // A modal dialog cannot be shown under the session gate, so the write below checks
+        // the session and the revision again, under the gate.
+        ensure_window_shown(confirm)?;
+        if !session.snapshot()?.same_vault(&reviewed.snapshot) {
+            return Err(CommandError::new(
+                "stalePreview",
+                "The vault changed before the confirmation could be shown. Start it again.",
+            ));
+        }
+        if !confirm.confirm(&review) {
+            session.record_import(ticket, &operation, OperationWarningKind::ImportDeclined);
+            return Ok(None);
+        }
+    }
+    // The write is bound to the session and the revision of the request: a lock, another
+    // session or another write since then makes it stale. The presentation is not part of the
+    // binding. The plan must also still equal what the user was shown.
+    let applied = session
+        .access_reviewed(Access::Write, reviewed.snapshot, |vault| {
+            let current =
+                vault.preview_import_env(&entries.0, project.as_deref(), environment.as_deref())?;
+            if &current != review.preview() {
+                return Err(CommandError::new(
+                    "stalePreview",
+                    "The vault changed while the import waited for confirmation. Start it again.",
+                ));
+            }
+            let (added, updated) =
+                vault.import_env(&entries.0, project.as_deref(), environment.as_deref())?;
+            Ok(ImportReport { added, updated })
+        })
+        .and_then(|stamped| session.finish(Access::Write, stamped));
+    session.record_import(
+        ticket,
+        &operation,
+        match &applied {
+            Ok(_) => OperationWarningKind::ImportApplied,
+            Err(error) if error.kind == "completedWhileLocked" => {
+                OperationWarningKind::ImportSessionEnded
+            }
+            Err(_) => OperationWarningKind::ImportFailed,
+        },
+    );
+    applied.map(Some)
+}
+
+/// The page tells native that it discarded its protected views (the document was hidden), and
+/// names the session it was in when it handled the hide. Native then does what a minimize does
+/// to that session: it expires the presentation, so a reveal, a preview or an export result of
+/// the discarded view can no longer apply. The request can arrive late. A session that is not
+/// the current one has nothing to expire, so the answer is success and nothing else happens.
+/// The discard does not decide an import: the native dialog does.
+#[tauri::command]
+pub fn view_discard<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, VaultState>,
+    session_id: String,
+) -> Result<(), CommandError> {
+    discard_view(&state.0, &session_id, |notice| {
+        tauri::Emitter::emit(&app, "vault-view-expired", notice).map_err(|_| ())
     })
 }
 
-#[tauri::command]
-pub async fn env_import_confirm(
-    state: State<'_, VaultState>,
-    token: String,
-) -> Result<ImportReport, CommandError> {
-    let session = state.0.clone();
-    let pending = session.take_preview(&token)?;
-    let snapshot = pending.snapshot;
-    let worker = session.clone();
-    let report = tauri::async_runtime::spawn_blocking(move || confirm_import(&worker, pending))
-        .await
-        .map_err(CommandError::internal)??;
-    session.finish(
-        Access::Write,
-        Stamped {
-            snapshot,
-            value: report,
-        },
-    )
-}
-
-fn confirm_import(
+fn discard_view(
     session: &Session,
-    pending: Stamped<crate::pending::PendingImport>,
-) -> Result<ImportReport, CommandError> {
-    let input = pending.value;
-    let entries = SecretEntries(dotenv::parse(&input.text)?);
-    session
-        .access(Access::Write, Some(pending.snapshot), |vault| {
-            let (added, updated) = vault.import_env(
-                &entries.0,
-                input.project.as_deref(),
-                input.environment.as_deref(),
-            )?;
-            Ok(ImportReport { added, updated })
-        })
-        .map(|s| s.value)
+    session_id: &str,
+    emit: impl FnOnce(&crate::session::NativeViewNotice) -> Result<(), ()>,
+) -> Result<(), CommandError> {
+    crate::visibility::expire_and_notify_for(session, session_id, emit).map(|_| ())
 }
 
 #[tauri::command]
-pub async fn backup_info(state: State<'_, VaultState>) -> Result<BackupInfo, CommandError> {
+pub fn reminders_status(state: State<'_, ReminderState>) -> Result<ReminderStatus, CommandError> {
+    state.0.status()
+}
+
+#[tauri::command]
+pub fn reminders_set(
+    state: State<'_, ReminderState>,
+    enabled: bool,
+) -> Result<ReminderStatus, CommandError> {
+    state.0.set_enabled(enabled)
+}
+
+/// The page sends a count and the session it counted in, and nothing else. The text of the
+/// notification is built natively, and only while that session is still the current one.
+#[tauri::command]
+pub fn reminders_notify(
+    vault: State<'_, VaultState>,
+    state: State<'_, ReminderState>,
+    session_id: String,
+    count: u32,
+) -> Result<ReminderStatus, CommandError> {
+    state.0.notify(&vault.0, &session_id, count)
+}
+
+#[tauri::command]
+pub async fn backup_info(
+    state: State<'_, VaultState>,
+    session_id: String,
+) -> Result<BackupInfo, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot()?;
+    let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Read, |vault| {
         let mut backup = vault.path().as_os_str().to_os_string();
         backup.push(".bak");
@@ -759,6 +1003,109 @@ pub async fn backup_info(state: State<'_, VaultState>) -> Result<BackupInfo, Com
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::Settings;
+    use std::sync::Mutex;
+
+    /// The commands that do not name a session, each with its reason. Every other command takes
+    /// `session_id`, so a request cannot act on a session other than the one it was made in
+    /// (fault class B of AGENTS.md). A new command lands in one list or the other, or this
+    /// test fails.
+    const NO_SESSION: &[(&str, &str)] = &[
+        ("vault_status", "asks which session is current"),
+        ("vault_prepare_open", "starts a session"),
+        ("vault_warnings", "application-wide, carries no vault data"),
+        (
+            "vault_dismiss_warnings",
+            "application-wide, takes record ids",
+        ),
+        ("reminders_status", "application-wide preference"),
+        ("reminders_set", "application-wide preference"),
+    ];
+
+    /// Commands that take `session_id` and that the page sets by hand, not through the
+    /// `sessionScoped` list of `api.ts`.
+    const SESSION_SET_BY_HAND: &[&str] = &[
+        "vault_unlock",
+        "vault_create",
+        "vault_lock",
+        "env_import",
+        "view_discard",
+        "reminders_notify",
+    ];
+
+    /// How many times the identifier `session_id` appears in the text, as a whole word.
+    fn session_id_words(text: &str) -> usize {
+        text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|word| *word == "session_id")
+            .count()
+    }
+
+    /// Each command: its name, the number of times `session_id` appears in its header, and the
+    /// number of times it appears in its body. A command that takes the id and never uses it
+    /// has a body count of zero.
+    fn command_headers() -> Vec<(String, usize, usize)> {
+        let source = include_str!("commands.rs");
+        let code = &source[..source.find("\nmod tests {").unwrap()];
+        let mut found = Vec::new();
+        for part in code.split("#[tauri::command]").skip(1) {
+            let start = part.find(" fn ").expect("a command function") + 4;
+            let name_end = part[start..]
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap();
+            let name = part[start..start + name_end].to_string();
+            let body_start = part.find('{').unwrap();
+            found.push((
+                name,
+                session_id_words(&part[start..body_start]),
+                session_id_words(&part[body_start..]),
+            ));
+        }
+        found
+    }
+
+    #[test]
+    fn p2r2_03_every_command_that_acts_on_the_vault_names_its_session() {
+        let headers = command_headers();
+        assert!(headers.len() >= 30, "the scan finds the commands");
+        for (name, in_header, in_body) in &headers {
+            let exempt = NO_SESSION.iter().any(|(exempt, _)| exempt == name);
+            assert_eq!(
+                *in_header > 0,
+                !exempt,
+                "{name}: takes session_id unless it is on NO_SESSION"
+            );
+            assert!(
+                exempt || *in_body > 0,
+                "{name}: takes session_id and uses it"
+            );
+        }
+        for (exempt, _) in NO_SESSION {
+            assert!(
+                headers.iter().any(|(name, _, _)| name == exempt),
+                "{exempt} is a command"
+            );
+        }
+
+        // The page side: api.ts adds the session to exactly the commands that Rust expects it
+        // for, apart from the ones the page sets by hand.
+        let page = include_str!("../../src/api.ts");
+        let list = &page[page.find("const sessionScoped = new Set([").unwrap()..];
+        let list = &list[..list.find("]);").unwrap()];
+        let mut scoped: Vec<&str> = list.split('"').skip(1).step_by(2).collect();
+        scoped.sort_unstable();
+        let mut expected: Vec<&str> = headers
+            .iter()
+            .filter(|(name, in_header, _)| {
+                *in_header > 0 && !SESSION_SET_BY_HAND.contains(&name.as_str())
+            })
+            .map(|(name, _, _)| name.as_str())
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(
+            scoped, expected,
+            "api.ts sessionScoped matches the commands"
+        );
+    }
 
     fn test_session() -> (Session, tempfile::TempDir) {
         use crate::{
@@ -786,6 +1133,94 @@ mod tests {
             })
             .unwrap();
         (session, directory)
+    }
+
+    #[test]
+    fn a_rotation_committed_while_the_session_locks_reports_completion_and_no_secret() {
+        let (session, directory) = test_session();
+        let key = session
+            .access(Access::Write, None, |vault| {
+                Ok(vault.add(akm_core::ApiKeyInput::new("Rotated", "fake-old-secret"))?)
+            })
+            .unwrap()
+            .value;
+        let snapshot = session.snapshot().unwrap();
+        let completed = session
+            .access(Access::Write, Some(snapshot), |vault| {
+                rotate_key(vault, &key.id, "fake-new-secret".into())
+            })
+            .unwrap();
+        let receipt = serde_json::to_string(&completed.value).unwrap();
+        assert!(!receipt.contains("fake-old-secret") && !receipt.contains("fake-new-secret"));
+        assert!(receipt.contains("\"changedAt\"") && receipt.contains("\"historyCount\":1"));
+        session.lock().unwrap();
+        let error = session.finish(Access::Write, completed).err().unwrap();
+        assert_eq!(error.kind, "completedWhileLocked");
+        let shown = serde_json::to_string(&error).unwrap();
+        assert!(!shown.contains("fake-old-secret") && !shown.contains("fake-new-secret"));
+        // The rotation is saved once: a second open shows the new secret and one history version.
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        assert_eq!(
+            crate::test_support::secret_of(&reopened, &key.id),
+            "fake-new-secret"
+        );
+        assert_eq!(reopened.get_by_id(&key.id).unwrap().history_count, 1);
+    }
+
+    #[test]
+    fn repeating_a_rotation_with_the_stored_value_is_refused_and_adds_no_history() {
+        let (session, _directory) = test_session();
+        let key = session
+            .access(Access::Write, None, |vault| {
+                Ok(vault.add(akm_core::ApiKeyInput::new("Rotated", "fake-old-secret"))?)
+            })
+            .unwrap()
+            .value;
+        let rotate = |secret: &str| {
+            session.access(Access::Write, None, |vault| {
+                rotate_key(vault, &key.id, secret.into())
+            })
+        };
+        rotate("fake-new-secret").unwrap();
+        let error = rotate("fake-new-secret").err().unwrap();
+        assert_eq!(error.kind, "invalid");
+        assert!(!error.message.contains("fake-new-secret"));
+        let history = session
+            .access(Access::Read, None, |vault| {
+                Ok(vault.get_by_id(&key.id)?.history_count)
+            })
+            .unwrap()
+            .value;
+        assert_eq!(history, 1);
+    }
+
+    #[test]
+    fn the_purge_command_deletes_only_a_key_that_is_in_the_recycle_bin() {
+        let (session, _directory) = test_session();
+        let key = session
+            .access(Access::Write, None, |vault| {
+                Ok(vault.add(akm_core::ApiKeyInput::new("Kept", "fake-kept-secret"))?)
+            })
+            .unwrap()
+            .value;
+        let purge =
+            |id: &str| session.access(Access::Write, None, |vault| purge_recycled(vault, id));
+        assert_eq!(purge(&key.id).err().unwrap().kind, "notFound");
+        session
+            .access(Access::Write, None, |vault| Ok(vault.remove(&key.id)?))
+            .unwrap();
+        purge(&key.id).unwrap();
+        let (live, recycled) = session
+            .access(Access::Read, None, |vault| {
+                Ok((vault.list().len(), vault.recycled().len()))
+            })
+            .unwrap()
+            .value;
+        assert_eq!((live, recycled), (0, 0));
     }
 
     #[test]
@@ -885,10 +1320,10 @@ mod tests {
             })
             .unwrap()
             .value;
-        let requested = requested_key(&session, &key.id, "reveal-requested").unwrap();
+        let requested = requested_key(&session, &key.id, KeyDisclosure::Reveal).unwrap();
         session.lock().unwrap();
         assert_eq!(session.reveal(requested).unwrap_err().kind, "locked");
-        let log = AuditLog::for_vault(&directory.path().join("vault.kdbx"));
+        let log = crate::test_support::journal_of(&directory.path().join("vault.kdbx"));
         assert_eq!(log.read(1).unwrap()[0].action, "reveal-requested");
 
         let ticket = session.begin_open().unwrap();
@@ -901,7 +1336,7 @@ mod tests {
                 .map_err(Into::into)
             })
             .unwrap();
-        let requested = requested_key(&session, &key.id, "copy-requested").unwrap();
+        let requested = requested_key(&session, &key.id, KeyDisclosure::Copy).unwrap();
         session.lock().unwrap();
         assert_eq!(
             session
@@ -958,7 +1393,7 @@ mod tests {
             })
             .unwrap()
             .value;
-        let requested = requested_key(&session, &key.id, "copy-requested").unwrap();
+        let requested = requested_key(&session, &key.id, KeyDisclosure::Copy).unwrap();
         assert_eq!(
             session
                 .copy(requested.snapshot.ticket, requested.value)
@@ -966,51 +1401,12 @@ mod tests {
                 .kind,
             "clipboard"
         );
-        let log = AuditLog::for_vault(&path);
+        let log = crate::test_support::journal_of(&path);
         assert_eq!(log.read(1).unwrap()[0].action, "copy-requested");
         std::fs::remove_file(log.path()).unwrap();
         std::fs::create_dir(log.path()).unwrap();
-        assert!(requested_key(&session, &key.id, "reveal-requested").is_err());
-        assert!(requested_key(&session, &key.id, "copy-requested").is_err());
-    }
-
-    #[test]
-    fn import_preview_is_secret_free_scoped_and_single_use() {
-        let (session, _directory) = test_session();
-        let preview = prepare_import(
-            &session,
-            Zeroizing::new("TOKEN=fake-dev\n".into()),
-            Some("app".into()),
-            Some("dev".into()),
-        )
-        .unwrap();
-        let json = serde_json::to_value(&preview).unwrap();
-        assert_eq!(json["added"], 1);
-        assert_eq!(json["updated"], 0);
-        assert!(!json.to_string().contains("fake-dev"));
-        let pending = session.take_preview(&preview.token).unwrap();
-        let result = confirm_import(&session, pending).unwrap();
-        assert_eq!((result.added, result.updated), (1, 0));
-        assert!(session.take_preview(&preview.token).is_err());
-
-        let prod = prepare_import(
-            &session,
-            Zeroizing::new("TOKEN=fake-prod\n".into()),
-            Some("app".into()),
-            Some("prod".into()),
-        )
-        .unwrap();
-        let result = confirm_import(&session, session.take_preview(&prod.token).unwrap()).unwrap();
-        assert_eq!((result.added, result.updated), (1, 0));
-        let dev_scope = ExportScope::new(Some("app".into()), Some("dev".into()), false).unwrap();
-        let body = extract_export(&session, &dev_scope, "test").unwrap();
-        assert_eq!(body.value.as_str(), "TOKEN=fake-dev\n");
-        assert!(extract_export(
-            &session,
-            &ExportScope::new(None, None, true).unwrap(),
-            "test"
-        )
-        .is_err());
+        assert!(requested_key(&session, &key.id, KeyDisclosure::Reveal).is_err());
+        assert!(requested_key(&session, &key.id, KeyDisclosure::Copy).is_err());
     }
 
     #[test]
@@ -1024,7 +1420,7 @@ mod tests {
             })
             .unwrap()
             .value;
-        let log = AuditLog::for_vault(&directory.path().join("vault.kdbx"));
+        let log = crate::test_support::journal_of(&directory.path().join("vault.kdbx"));
         let mut no_newline = std::fs::read(log.path()).unwrap();
         assert_eq!(no_newline.pop(), Some(b'\n'));
         for bytes in [
@@ -1035,7 +1431,7 @@ mod tests {
             b" \t\r".to_vec(),
         ] {
             std::fs::write(log.path(), &bytes).unwrap();
-            for action in ["reveal-requested", "copy-requested"] {
+            for action in [KeyDisclosure::Reveal, KeyDisclosure::Copy] {
                 let error = requested_key(&session, &key.id, action)
                     .err()
                     .expect("unsafe append disclosed a native secret");
@@ -1066,15 +1462,14 @@ mod tests {
                         input.project = Some("demo".into());
                         input.environment = Some(environment.into());
                         input.env_var = Some("TOKEN".into());
-                        let mut key = vault.add(input)?;
-                        key.secret.zeroize();
+                        vault.add(input)?;
                     }
                     Ok(())
                 })
                 .unwrap();
             let expected = session.snapshot().unwrap();
             session.expire_presentation().unwrap();
-            let journal = AuditLog::for_vault(&directory.path().join("vault.kdbx"));
+            let journal = crate::test_support::journal_of(&directory.path().join("vault.kdbx"));
             match change {
                 "lock" => session.lock().unwrap(),
                 "revision" => {
@@ -1131,15 +1526,16 @@ mod tests {
             let exported = extract_export(&session, &scope, "file export").unwrap();
             let expected = exported.snapshot;
             let path = directory.path().join("vault.kdbx");
-            let log = AuditLog::for_vault(&path);
+            let log = crate::test_support::journal_of(&path);
             let before = fs::read(log.path()).unwrap();
             // Make valid completion bytes with the real encoder, then inject failure immediately
             // after writing those bytes to the actual test journal, before syncing that handle.
-            let oracle = AuditLog::for_vault(&directory.path().join("encoder-only.kdbx"));
+            let oracle = akm_core::audit::ChainFile::at(
+                directory.path().join("encoder-only.jsonl"),
+                &log.id(),
+            );
             fs::write(oracle.path(), &before).unwrap();
-            oracle
-                .append("export-completed", None, None, None, None, None)
-                .unwrap();
+            oracle.append("export-completed", None, None).unwrap();
             let completion = fs::read(oracle.path()).unwrap()[before.len()..].to_vec();
             let target = directory.path().join("fake-export.env");
             let worker_target = target.clone();
@@ -1159,7 +1555,7 @@ mod tests {
                     },
                     |prepared| {
                         publish_and_record(&worker_session, expected, prepared, |_| {
-                            let log = AuditLog::for_vault(&path);
+                            let log = crate::test_support::journal_of(&path);
                             let mut file = fs::OpenOptions::new()
                                 .append(true)
                                 .open(log.path())
@@ -1215,74 +1611,759 @@ mod tests {
     }
 
     #[test]
-    fn invalid_imports_and_preview_confirm_after_an_intervening_write_are_rejected() {
-        let (session, _directory) = test_session();
-        for text in ["TOKEN=", "TOKEN=fake\nTOKEN=other", "PATH=fake"] {
-            assert!(prepare_import(
-                &session,
-                Zeroizing::new(text.into()),
-                Some("app".into()),
-                Some("dev".into())
-            )
-            .is_err());
+    fn export_uses_core_validation_not_only_native_or_frontend_scope_checks() {
+        use akm_core::model::{META_ENVIRONMENT, META_ENV_VAR, META_PROJECT};
+        use keepass::db::fields;
+        use std::sync::Mutex;
+        // 3-SA-01: `add` now refuses PATH, so the key is an older entry written to the file.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vault.kdbx");
+        let mut db = keepass::Database::new();
+        db.config.kdf_config = keepass::config::KdfConfig::Aes { rounds: 10 };
+        {
+            let mut root = db.root_mut();
+            let mut group = root.add_group();
+            group.name = "API Keys".into();
+            let mut entry = group.add_entry();
+            entry.set_unprotected(fields::TITLE, "Process control");
+            entry.set_protected(fields::PASSWORD, "fake");
+            entry.set_unprotected(META_ENV_VAR, "PATH");
+            entry.set_unprotected(META_PROJECT, "app");
+            entry.set_unprotected(META_ENVIRONMENT, "dev");
         }
-        assert!(prepare_import(
+        db.save(
+            &mut std::fs::File::create(&path).unwrap(),
+            keepass::DatabaseKey::new().with_password("fake-test-password-123!"),
+        )
+        .unwrap();
+        let session = Session::new(
+            Arc::new(crate::session::MonotonicClock::default()),
+            Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
+                Mutex::new(crate::clipboard::tests::FakeData::default()),
+            ))),
+            Arc::new(|_| {}),
+        );
+        session.observe(crate::policy::Signal::Available);
+        let ticket = session.begin_open().unwrap();
+        session
+            .open(ticket, || {
+                Vault::open(&path, "fake-test-password-123!").map_err(Into::into)
+            })
+            .unwrap();
+        let scope = ExportScope::new(Some("app".into()), Some("dev".into()), false).unwrap();
+        let error = extract_export(&session, &scope, "test").err().unwrap();
+        assert!(
+            error.message.contains("Process control"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("reserved"), "{}", error.message);
+        assert!(!error.message.contains("fake"), "{}", error.message);
+    }
+
+    #[test]
+    fn add_refuses_a_reserved_variable_name_for_the_desktop_too() {
+        let (session, _directory) = test_session();
+        let error = session
+            .access(Access::Write, None, |vault| {
+                vault.add(akm_core::ApiKeyInput {
+                    title: "Process control".into(),
+                    secret: "fake".into(),
+                    env_var: Some("PATH".into()),
+                    ..Default::default()
+                })?;
+                Ok(())
+            })
+            .err()
+            .unwrap();
+        assert!(error.message.contains("reserved"), "{}", error.message);
+    }
+    struct ScriptedConfirm {
+        answer: bool,
+        shown: Mutex<Vec<String>>,
+        while_open: Box<dyn Fn() + Send + Sync>,
+        window: Arc<std::sync::atomic::AtomicBool>,
+        probe: Box<dyn Fn() + Send + Sync>,
+    }
+    impl ScriptedConfirm {
+        fn new(answer: bool) -> Self {
+            Self::during(answer, || {})
+        }
+        fn during(answer: bool, while_open: impl Fn() + Send + Sync + 'static) -> Self {
+            Self {
+                answer,
+                shown: Mutex::new(Vec::new()),
+                while_open: Box::new(while_open),
+                window: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                probe: Box::new(|| {}),
+            }
+        }
+        /// The shared flag says whether the window is shown and not minimized.
+        fn on_window(mut self, window: Arc<std::sync::atomic::AtomicBool>) -> Self {
+            self.window = window;
+            self
+        }
+        /// Runs each time native asks about the window: the last moment before the dialog.
+        fn on_probe(mut self, probe: impl Fn() + Send + Sync + 'static) -> Self {
+            self.probe = Box::new(probe);
+            self
+        }
+        fn shown(&self) -> Vec<String> {
+            self.shown.lock().unwrap().clone()
+        }
+    }
+    impl ImportConfirm for ScriptedConfirm {
+        fn confirm(&self, review: &ImportReview) -> bool {
+            self.shown.lock().unwrap().push(review.message());
+            (self.while_open)();
+            self.answer
+        }
+        fn window_live(&self) -> bool {
+            (self.probe)();
+            self.window.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    fn owner(session: &Session) -> String {
+        session
+            .active_owner(session.snapshot().unwrap().ticket)
+            .unwrap()
+    }
+
+    fn new_operation() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+
+    fn import(
+        session: &Session,
+        confirm: &dyn ImportConfirm,
+        text: &str,
+        project: &str,
+        environment: &str,
+    ) -> Result<Option<ImportReport>, CommandError> {
+        run_import(
+            session,
+            confirm,
+            &owner(session),
+            &new_operation(),
+            Zeroizing::new(text.into()),
+            Some(project.into()),
+            Some(environment.into()),
+        )
+    }
+
+    fn notices(session: &Session) -> Vec<serde_json::Value> {
+        serde_json::to_value(session.warnings().unwrap()).unwrap()["operations"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    fn exported(session: &Session, project: &str, environment: &str) -> String {
+        let scope =
+            ExportScope::new(Some(project.into()), Some(environment.into()), false).unwrap();
+        extract_export(session, &scope, "test")
+            .unwrap()
+            .value
+            .as_str()
+            .to_string()
+    }
+
+    #[test]
+    fn an_import_runs_only_after_the_user_approves_the_names_and_scope_that_were_shown() {
+        let (session, _directory) = test_session();
+        let declined = ScriptedConfirm::new(false);
+        assert!(
+            import(&session, &declined, "TOKEN=fake-dev\n", "app", "dev")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(exported(&session, "app", "dev"), "");
+        let approved = ScriptedConfirm::new(true);
+        let report = import(&session, &approved, "TOKEN=fake-dev\n", "app", "dev")
+            .unwrap()
+            .unwrap();
+        assert_eq!((report.added, report.updated), (1, 0));
+        assert_eq!(
+            approved.shown(),
+            vec![
+                "Import into project \"app\", environment \"dev\"?\n\nAdd 1:\n  TOKEN\n\nSecret values are not shown."
+                    .to_string()
+            ]
+        );
+        assert!(!approved.shown()[0].contains("fake-dev"));
+        assert_eq!(exported(&session, "app", "dev"), "TOKEN=fake-dev\n");
+        let replace = ScriptedConfirm::new(true);
+        let report = import(&session, &replace, "TOKEN=fake-next\n", "app", "dev")
+            .unwrap()
+            .unwrap();
+        assert_eq!((report.added, report.updated), (0, 1));
+        assert!(replace.shown()[0].contains("Replace the secret of 1:\n  TOKEN (entry \""));
+        let prod = ScriptedConfirm::new(true);
+        import(&session, &prod, "TOKEN=fake-prod\n", "app", "prod").unwrap();
+        assert_eq!(exported(&session, "app", "dev"), "TOKEN=fake-next\n");
+        assert_eq!(exported(&session, "app", "prod"), "TOKEN=fake-prod\n");
+    }
+
+    #[test]
+    fn invalid_or_oversized_imports_are_refused_before_any_dialog() {
+        let (session, _directory) = test_session();
+        let confirm = ScriptedConfirm::new(true);
+        for text in ["TOKEN=", "TOKEN=fake\nTOKEN=other", "PATH=fake"] {
+            assert!(import(&session, &confirm, text, "app", "dev").is_err());
+        }
+        let owner = owner(&session);
+        let run = |project: Option<&str>, environment: Option<&str>, text: String| {
+            run_import(
+                &session,
+                &confirm,
+                &owner,
+                &new_operation(),
+                Zeroizing::new(text),
+                project.map(Into::into),
+                environment.map(Into::into),
+            )
+        };
+        assert!(run(None, Some("dev"), "TOKEN=fake".into()).is_err());
+        assert!(run(Some("app"), None, "TOKEN=fake".into()).is_err());
+        let many: String = (0..26).map(|n| format!("KEY_{n}=fake-{n}\n")).collect();
+        assert_eq!(
+            run(Some("app"), Some("dev"), many).err().unwrap().kind,
+            "tooLarge"
+        );
+        assert!(run_import(
             &session,
+            &confirm,
+            &owner,
+            "not-a-uuid",
             Zeroizing::new("TOKEN=fake".into()),
-            None,
+            Some("app".into()),
             Some("dev".into())
         )
         .is_err());
-        let preview = prepare_import(
+        assert!(
+            confirm.shown().is_empty(),
+            "no dialog for a refused request"
+        );
+        assert_eq!(exported(&session, "app", "dev"), "");
+        assert!(notices(&session).is_empty());
+    }
+
+    #[test]
+    fn a_hostile_or_oversized_env_text_is_refused_with_a_clear_message_before_any_dialog() {
+        let (session, _directory) = test_session();
+        let confirm = ScriptedConfirm::new(true);
+        let big_file = format!("A=1\n# {}\n", "x".repeat(akm_core::dotenv::MAX_BYTES));
+        let long_line = format!("A={}\n", "x".repeat(akm_core::dotenv::MAX_LINE_BYTES));
+        let many: String = (0..=akm_core::dotenv::MAX_ENTRIES)
+            .map(|n| format!("K{n}=fake\n"))
+            .collect();
+        for (text, fragment) in [
+            (big_file.as_str(), "larger than 256 KiB"),
+            (long_line.as_str(), "longer than 16 KiB"),
+            (many.as_str(), "more than 500 entries"),
+            ("HTTPS_PROXY=http://attacker.example\n", "reserved"),
+            ("PYTHONSTARTUP=C:\\x\\run.py\n", "reserved"),
+            ("A=\"never closed\n", "unterminated quote"),
+        ] {
+            let error = import(&session, &confirm, text, "app", "dev")
+                .err()
+                .unwrap();
+            assert_eq!(error.kind, "invalid");
+            assert!(error.message.contains(fragment), "{}", error.message);
+            assert!(
+                !error.message.contains("attacker.example"),
+                "{}",
+                error.message
+            );
+        }
+        assert!(confirm.shown().is_empty());
+        assert_eq!(exported(&session, "app", "dev"), "");
+        assert!(notices(&session).is_empty());
+    }
+
+    #[test]
+    fn every_change_while_the_dialog_is_open_leaves_the_import_unapplied_and_recorded() {
+        for change in ["lock", "session", "write", "reload"] {
+            let (session, directory) = test_session();
+            let session = Arc::new(session);
+            let confirm = {
+                let session = session.clone();
+                let other = directory.path().join("other.kdbx");
+                ScriptedConfirm::during(true, move || match change {
+                    "lock" => session.lock().unwrap(),
+                    "session" => {
+                        session.lock().unwrap();
+                        let ticket = session.begin_open().unwrap();
+                        session
+                            .open(ticket, || {
+                                Vault::create(&other, "fake-test-password-123!", None)
+                                    .map_err(Into::into)
+                            })
+                            .unwrap();
+                    }
+                    "write" => {
+                        session
+                            .access(Access::Write, None, |vault| {
+                                vault.add(akm_core::ApiKeyInput::new("Other", "fake-other"))?;
+                                Ok(())
+                            })
+                            .unwrap();
+                    }
+                    "reload" => {
+                        session
+                            .access(Access::Reload, None, |vault| {
+                                vault.reload().map_err(Into::into)
+                            })
+                            .unwrap();
+                    }
+                    _ => unreachable!(),
+                })
+            };
+            let operation = new_operation();
+            let error = run_import(
+                &session,
+                &confirm,
+                &owner(&session),
+                &operation,
+                Zeroizing::new("TOKEN=fake-late\n".into()),
+                Some("app".into()),
+                Some("dev".into()),
+            )
+            .err()
+            .unwrap_or_else(|| panic!("{change}: the import ran"));
+            assert_eq!(
+                error.kind,
+                if change == "lock" {
+                    "locked"
+                } else {
+                    "stalePreview"
+                },
+                "{change}"
+            );
+            assert_eq!(confirm.shown().len(), 1, "{change}");
+            let record = notices(&session);
+            assert_eq!(record.len(), 1, "{change}");
+            assert_eq!(record[0]["id"], operation.as_str());
+            assert_eq!(record[0]["kind"], "importFailed", "{change}");
+            for name in ["vault.kdbx", "other.kdbx"] {
+                let path = directory.path().join(name);
+                if path.exists() {
+                    let reopened = Vault::open(path, "fake-test-password-123!").unwrap();
+                    assert!(
+                        crate::test_support::env_of(&reopened, "app", "dev").is_empty(),
+                        "{change}: nothing was imported into {name}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn p2r2_02_the_click_in_the_dialog_stands_after_a_hide_a_page_load_a_discard_or_a_hidden_window(
+    ) {
+        for change in ["hide", "page-load", "discard", "window"] {
+            let (session, directory) = test_session();
+            let session = Arc::new(session);
+            let window = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let confirm = {
+                let (session, hidden) = (session.clone(), window.clone());
+                let id = owner(&session);
+                ScriptedConfirm::during(true, move || match change {
+                    "hide" => {
+                        session.expire_presentation().unwrap();
+                    }
+                    "page-load" => session.document_started(),
+                    "discard" => discard_view(&session, &id, |_| Ok(())).unwrap(),
+                    "window" => hidden.store(false, std::sync::atomic::Ordering::SeqCst),
+                    _ => unreachable!(),
+                })
+                .on_window(window)
+            };
+            let operation = new_operation();
+            let report = run_import(
+                &session,
+                &confirm,
+                &owner(&session),
+                &operation,
+                Zeroizing::new("TOKEN=fake-approved\n".into()),
+                Some("app".into()),
+                Some("dev".into()),
+            )
+            .unwrap_or_else(|error| panic!("{change}: the approval was refused: {error:?}"))
+            .unwrap();
+            assert_eq!((report.added, report.updated), (1, 0), "{change}");
+            assert_eq!(confirm.shown().len(), 1, "{change}");
+            let record = notices(&session);
+            assert_eq!(record.len(), 1, "{change}");
+            assert_eq!(record[0]["id"], operation.as_str());
+            assert_eq!(record[0]["kind"], "importApplied", "{change}");
+            assert!(session.snapshot().is_ok(), "{change}: still unlocked");
+            let reopened = Vault::open(
+                directory.path().join("vault.kdbx"),
+                "fake-test-password-123!",
+            )
+            .unwrap();
+            assert_eq!(
+                crate::test_support::env_of(&reopened, "app", "dev"),
+                [("TOKEN".into(), "fake-approved".into())],
+                "{change}"
+            );
+        }
+    }
+
+    #[test]
+    fn p2r2_02_a_discard_that_native_cannot_take_locks_the_session_and_the_lock_refuses_the_approval(
+    ) {
+        let (session, directory) = test_session();
+        let session = Arc::new(session);
+        let confirm = {
+            let session = session.clone();
+            let id = owner(&session);
+            ScriptedConfirm::during(true, move || {
+                assert!(discard_view(&session, &id, |_| Err(())).is_err());
+            })
+        };
+        let operation = new_operation();
+        let error = run_import(
             &session,
-            Zeroizing::new("TOKEN=fake".into()),
+            &confirm,
+            &owner(&session),
+            &operation,
+            Zeroizing::new("TOKEN=fake-late\n".into()),
             Some("app".into()),
             Some("dev".into()),
         )
+        .err()
+        .expect("the import ran after the session was locked");
+        assert_eq!(error.kind, "locked");
+        let record = notices(&session);
+        assert_eq!(record.len(), 1);
+        assert_eq!(record[0]["kind"], "importFailed");
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
         .unwrap();
-        let consumed = session.take_preview(&preview.token).unwrap();
+        assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
+    }
+
+    #[test]
+    fn review1_1_a_discard_whose_notice_is_lost_locks_that_owner_and_a_locked_session_ignores_it() {
+        let (session, _directory) = test_session();
+        let id = owner(&session);
+        assert!(discard_view(&session, &id, |_| Err(())).is_err());
+        assert_eq!(session.snapshot().unwrap_err().kind, "locked");
+        let mut emitted = false;
+        discard_view(&session, &id, |_| {
+            emitted = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(!emitted, "a locked session has no view to discard");
+    }
+
+    fn reopen(session: &Session, directory: &tempfile::TempDir, name: &str) -> String {
+        let owner = session.prepare_open().unwrap();
+        let ticket = session.claim_open(&owner).unwrap();
         session
-            .access(Access::Write, None, |vault| {
-                vault.add(akm_core::ApiKeyInput::new("Other", "other-fake"))?;
+            .open(ticket, || {
+                Vault::create(directory.path().join(name), "fake-test-password-123!", None)
+                    .map_err(Into::into)
+            })
+            .unwrap();
+        owner
+    }
+
+    #[test]
+    fn p2r2_03_a_discard_for_a_session_that_is_not_current_succeeds_and_changes_nothing() {
+        let (session, directory) = test_session();
+        let a = owner(&session);
+        let b = reopen(&session, &directory, "b.kdbx");
+        let before = session.snapshot().unwrap();
+        for stale in [
+            a.clone(),
+            uuid::Uuid::new_v4().to_string(),
+            "not-an-id".into(),
+        ] {
+            let mut emitted = false;
+            discard_view(&session, &stale, |_| {
+                emitted = true;
                 Ok(())
             })
             .unwrap();
-        assert!(confirm_import(&session, consumed).is_err());
-        let scoped = ExportScope::new(Some("app".into()), Some("dev".into()), false).unwrap();
-        assert_eq!(
-            extract_export(&session, &scoped, "test")
-                .unwrap()
-                .value
-                .as_str(),
-            ""
+            assert!(!emitted, "{stale}: no notice names the current session");
+            assert_eq!(session.snapshot().unwrap(), before, "{stale}");
+        }
+        discard_view(&session, &a, |_| Err(())).expect("a stale discard never reaches the emit");
+        assert!(session.snapshot().is_ok());
+        let mut named = Vec::new();
+        discard_view(&session, &b, |notice| {
+            named.push(notice.session_id.clone());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(named, [b]);
+        assert_ne!(
+            session.snapshot().unwrap().presentation,
+            before.presentation
         );
     }
 
     #[test]
-    fn committed_import_keeps_its_receipt_when_lock_arrives_during_journal_append() {
+    fn p2r2_03_a_failed_discard_of_session_a_never_locks_the_session_that_replaced_it() {
+        let (session, directory) = test_session();
+        let a = owner(&session);
+        let mut b = None;
+        let error = discard_view(&session, &a, |notice| {
+            assert_eq!(notice.session_id, a);
+            b = Some(reopen(&session, &directory, "b.kdbx"));
+            Err(())
+        })
+        .unwrap_err();
+        assert_eq!(error.kind, "internal");
+        assert_eq!(
+            owner(&session),
+            b.unwrap(),
+            "B is still the unlocked session"
+        );
+    }
+
+    #[test]
+    fn review1_1_a_window_that_is_not_shown_gets_no_dialog_and_leaves_no_record() {
+        let (session, _directory) = test_session();
+        let confirm = ScriptedConfirm::new(true)
+            .on_window(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+        let error = run_import(
+            &session,
+            &confirm,
+            &owner(&session),
+            &new_operation(),
+            Zeroizing::new("TOKEN=fake-late\n".into()),
+            Some("app".into()),
+            Some("dev".into()),
+        )
+        .err()
+        .expect("a dialog for a window nobody sees");
+        assert_eq!(error.kind, "viewChanged");
+        assert!(confirm.shown().is_empty());
+        assert!(notices(&session).is_empty());
+        assert_eq!(exported(&session, "app", "dev"), "");
+    }
+
+    #[test]
+    fn review1_1_a_change_after_the_review_was_read_and_before_the_dialog_shows_no_dialog() {
+        for change in ["lock", "write"] {
+            let (session, directory) = test_session();
+            let session = Arc::new(session);
+            let confirm = {
+                let session = session.clone();
+                ScriptedConfirm::new(true).on_probe(move || match change {
+                    "lock" => session.lock().unwrap(),
+                    _ => {
+                        session
+                            .access(Access::Write, None, |vault| {
+                                vault.add(akm_core::ApiKeyInput::new("Other", "fake-other"))?;
+                                Ok(())
+                            })
+                            .unwrap();
+                    }
+                })
+            };
+            let error = run_import(
+                &session,
+                &confirm,
+                &owner(&session),
+                &new_operation(),
+                Zeroizing::new("TOKEN=fake-late\n".into()),
+                Some("app".into()),
+                Some("dev".into()),
+            )
+            .err()
+            .unwrap_or_else(|| panic!("{change}: the import ran"));
+            assert_eq!(
+                error.kind,
+                if change == "lock" {
+                    "locked"
+                } else {
+                    "stalePreview"
+                },
+                "{change}"
+            );
+            assert!(confirm.shown().is_empty(), "{change}: a dialog was shown");
+            let reopened = Vault::open(
+                directory.path().join("vault.kdbx"),
+                "fake-test-password-123!",
+            )
+            .unwrap();
+            assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
+        }
+    }
+
+    #[test]
+    fn p2r2_02_a_hide_before_the_dialog_opens_does_not_withhold_the_dialog() {
+        let (session, _directory) = test_session();
+        let session = Arc::new(session);
+        let confirm = {
+            let session = session.clone();
+            ScriptedConfirm::new(true).on_probe(move || {
+                session.expire_presentation().unwrap();
+            })
+        };
+        let report = run_import(
+            &session,
+            &confirm,
+            &owner(&session),
+            &new_operation(),
+            Zeroizing::new("TOKEN=fake-approved\n".into()),
+            Some("app".into()),
+            Some("dev".into()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!((report.added, report.updated), (1, 0));
+        assert_eq!(confirm.shown().len(), 1);
+    }
+
+    #[test]
+    fn a_request_for_an_older_or_unknown_session_is_refused_without_a_dialog() {
+        let (session, directory) = test_session();
+        let old = owner(&session);
+        session.lock().unwrap();
+        let ticket = session.begin_open().unwrap();
+        session
+            .open(ticket, || {
+                Vault::open(
+                    directory.path().join("vault.kdbx"),
+                    "fake-test-password-123!",
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        let confirm = ScriptedConfirm::new(true);
+        for stale in [old, uuid::Uuid::new_v4().to_string(), "not-a-uuid".into()] {
+            let error = run_import(
+                &session,
+                &confirm,
+                &stale,
+                &new_operation(),
+                Zeroizing::new("TOKEN=fake\n".into()),
+                Some("app".into()),
+                Some("dev".into()),
+            )
+            .err()
+            .unwrap();
+            assert_eq!(error.kind, "locked");
+        }
+        assert!(confirm.shown().is_empty());
+        assert_eq!(exported(&session, "app", "dev"), "");
+        assert!(notices(&session).is_empty());
+        assert!(import(
+            &session,
+            &ScriptedConfirm::new(true),
+            "TOKEN=fake\n",
+            "app",
+            "dev"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn a_late_request_a_neither_consumes_nor_blocks_a_valid_request_b() {
+        let (session, _directory) = test_session();
+        let session = Arc::new(session);
+        let inner_session = session.clone();
+        let a = ScriptedConfirm::during(true, move || {
+            let b = ScriptedConfirm::new(true);
+            let report = import(&inner_session, &b, "TOKEN=fake-b\n", "app", "dev")
+                .unwrap()
+                .unwrap();
+            assert_eq!((report.added, report.updated), (1, 0));
+        });
+        let a_error = import(&session, &a, "TOKEN=fake-a\n", "app", "dev")
+            .err()
+            .unwrap();
+        assert_eq!(a_error.kind, "stalePreview");
+        assert_eq!(exported(&session, "app", "dev"), "TOKEN=fake-b\n");
+        let again = ScriptedConfirm::new(false);
+        assert!(import(&session, &again, "TOKEN=fake-a\n", "app", "dev")
+            .unwrap()
+            .is_none());
+        assert_eq!(again.shown().len(), 1);
+        assert_eq!(exported(&session, "app", "dev"), "TOKEN=fake-b\n");
+        let replay = ScriptedConfirm::new(true);
+        let report = import(&session, &replay, "TOKEN=fake-b\n", "app", "dev")
+            .unwrap()
+            .unwrap();
+        assert_eq!((report.added, report.updated), (0, 0));
+        assert!(replay.shown().is_empty());
+    }
+
+    #[test]
+    fn a_dispatched_import_leaves_a_secret_free_outcome_record_that_a_lost_reply_cannot_erase() {
+        let (session, _directory) = test_session();
+        for (answer, text, kind) in [
+            (true, "TOKEN=fake-secret-one\n", "importApplied"),
+            (false, "TOKEN=fake-secret-two\n", "importDeclined"),
+        ] {
+            let operation = new_operation();
+            let reply = run_import(
+                &session,
+                &ScriptedConfirm::new(answer),
+                &owner(&session),
+                &operation,
+                Zeroizing::new(text.into()),
+                Some("app".into()),
+                Some("dev".into()),
+            );
+            drop(reply);
+            let record = notices(&session)
+                .into_iter()
+                .find(|record| record["id"] == operation.as_str())
+                .expect("record");
+            assert_eq!(record["kind"], kind);
+            assert!(!record.to_string().contains("fake-secret"));
+            assert_eq!(record.as_object().unwrap().len(), 3);
+        }
+        session.lock().unwrap();
+        assert_eq!(notices(&session).len(), 2, "records survive a lock");
+        let ids: Vec<String> = notices(&session)
+            .iter()
+            .map(|record| record["id"].as_str().unwrap().to_string())
+            .collect();
+        session.dismiss_warnings(&ids).unwrap();
+        assert!(notices(&session).is_empty());
+    }
+
+    #[test]
+    fn a_committed_import_keeps_its_receipt_when_lock_arrives_during_the_journal_append() {
         use std::time::{Duration, Instant};
         let (session, directory) = test_session();
         let session = Arc::new(session);
         let path = directory.path().join("vault.kdbx");
-        let preview = prepare_import(
-            &session,
-            Zeroizing::new("TOKEN=fake-saved-once\n".into()),
-            Some("app".into()),
-            Some("dev".into()),
-        )
-        .unwrap();
-        let pending = session.take_preview(&preview.token).unwrap();
         let initial = fs::read(&path).unwrap();
         let journal = fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
-            .open(directory.path().join("vault.kdbx.audit.jsonl.lock"))
+            .open(crate::test_support::journal_of(&path).lock_path())
             .unwrap();
         journal.lock().unwrap();
         let worker = session.clone();
-        let writer = std::thread::spawn(move || confirm_import(&worker, pending));
+        let operation = new_operation();
+        let recorded = operation.clone();
+        let writer = std::thread::spawn(move || {
+            run_import(
+                &worker,
+                &ScriptedConfirm::new(true),
+                &owner(&worker),
+                &recorded,
+                Zeroizing::new("TOKEN=fake-saved-once\n".into()),
+                Some("app".into()),
+                Some("dev".into()),
+            )
+        });
         let deadline = Instant::now() + Duration::from_secs(20);
         let committed = loop {
             if fs::read(&path).unwrap() != initial {
@@ -1299,31 +2380,301 @@ mod tests {
         assert!(committed, "import did not reach the disk commit");
         assert_eq!(outcome.err().unwrap().kind, "completedWhileLocked");
         assert!(session.snapshot().is_err());
+        let record = notices(&session);
+        assert_eq!(record.len(), 1);
+        assert_eq!(record[0]["id"], operation.as_str());
+        assert_eq!(record[0]["kind"], "importSessionEnded");
         let reopened = Vault::open(path, "fake-test-password-123!").unwrap();
-        assert_eq!(reopened.list().len(), 1);
         assert_eq!(
-            reopened.env_vars(Some("app"), Some("dev"), false).unwrap(),
+            crate::test_support::env_of(&reopened, "app", "dev"),
             [("TOKEN".into(), "fake-saved-once".into())]
         );
     }
 
+    struct PausingPreferences {
+        inner: crate::settings::FilePreferences,
+        pause_first: std::sync::atomic::AtomicBool,
+        entered: std::sync::mpsc::Sender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+    impl PreferenceStore for PausingPreferences {
+        fn saved_vault_path(&self) -> Option<String> {
+            self.inner.saved_vault_path()
+        }
+        fn default_vault_path(&self) -> Result<PathBuf, CommandError> {
+            self.inner.default_vault_path()
+        }
+        fn save_vault_path(
+            &self,
+            ticket: crate::policy::Ticket,
+            owned: crate::settings::OwnerFence<'_>,
+            vault_path: &str,
+        ) -> Result<crate::settings::PreferenceSave, CommandError> {
+            if self
+                .pause_first
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                self.entered.send(()).unwrap();
+                self.release
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(std::time::Duration::from_secs(30))
+                    .unwrap();
+            }
+            self.inner.save_vault_path(ticket, owned, vault_path)
+        }
+    }
+
     #[test]
-    fn export_uses_core_validation_not_only_native_or_frontend_scope_checks() {
-        let (session, _directory) = test_session();
-        session
-            .access(Access::Write, None, |vault| {
-                vault.add(akm_core::ApiKeyInput {
-                    title: "Process control".into(),
-                    secret: "fake".into(),
-                    env_var: Some("PATH".into()),
-                    project: Some("app".into()),
-                    environment: Some("dev".into()),
-                    ..Default::default()
-                })?;
-                Ok(())
-            })
+    fn an_older_opening_never_overwrites_a_newer_openings_saved_path() {
+        use crate::{clipboard::tests::FakeData, policy::Signal, session::MonotonicClock};
+        use std::sync::mpsc;
+        let directory = tempfile::tempdir().unwrap();
+        let [a_path, b_path] = ["a.kdbx", "b.kdbx"].map(|name| {
+            let path = directory.path().join(name);
+            Vault::create(&path, "fake-test-password-123!", None).unwrap();
+            path
+        });
+        let settings = directory.path().join("fake-settings").join("settings.json");
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let store = Arc::new(PausingPreferences {
+            inner: crate::settings::FilePreferences::new(
+                Some(settings.clone()),
+                Some(directory.path().join("default.kdbx")),
+            ),
+            pause_first: std::sync::atomic::AtomicBool::new(true),
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        });
+        let session = Arc::new(Session::new(
+            Arc::new(MonotonicClock::default()),
+            Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
+                Mutex::new(FakeData::default()),
+            ))),
+            Arc::new(|_| {}),
+        ));
+        session.observe(Signal::Available);
+        fn open(
+            session: &Arc<Session>,
+            store: &Arc<PausingPreferences>,
+            owner: &str,
+            path: PathBuf,
+        ) -> Result<Status, CommandError> {
+            tauri::async_runtime::block_on(open_vault(
+                session.clone(),
+                store.clone(),
+                path,
+                Zeroizing::new("fake-test-password-123!".into()),
+                None,
+                false,
+                owner,
+            ))
+        }
+        let owner_a = session.prepare_open().unwrap();
+        let first = {
+            let (session, store, owner, path) =
+                (session.clone(), store.clone(), owner_a.clone(), a_path);
+            std::thread::spawn(move || open(&session, &store, &owner, path))
+        };
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(30))
             .unwrap();
-        let scope = ExportScope::new(Some("app".into()), Some("dev".into()), false).unwrap();
-        assert!(extract_export(&session, &scope, "test").is_err());
+        let owner_b = session.prepare_open().unwrap();
+        let b_status = open(&session, &store, &owner_b, b_path.clone()).unwrap();
+        assert_eq!(b_status.session_id.as_deref(), Some(owner_b.as_str()));
+        let saved =
+            || -> Settings { serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap() };
+        assert_eq!(saved().vault_path, Some(b_path.display().to_string()));
+        release_tx.send(()).unwrap();
+        let a_outcome = first.join().unwrap();
+        assert!(a_outcome.is_err(), "the retired opening A must not succeed");
+        assert_eq!(saved().vault_path, Some(b_path.display().to_string()));
+        let current = session.snapshot().unwrap();
+        assert_eq!(session.active_owner(current.ticket).unwrap(), owner_b);
+        let report = serde_json::to_value(session.warnings().unwrap()).unwrap();
+        assert_eq!(report["operations"].as_array().unwrap().len(), 0);
+    }
+
+    struct BarrierAfterCheck {
+        inner: crate::settings::FilePreferences,
+        armed: std::sync::atomic::AtomicBool,
+        entered: std::sync::mpsc::Sender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+        log: Arc<Mutex<Vec<&'static str>>>,
+    }
+    impl PreferenceStore for BarrierAfterCheck {
+        fn saved_vault_path(&self) -> Option<String> {
+            self.inner.saved_vault_path()
+        }
+        fn default_vault_path(&self) -> Result<PathBuf, CommandError> {
+            self.inner.default_vault_path()
+        }
+        fn save_vault_path(
+            &self,
+            ticket: crate::policy::Ticket,
+            owned: crate::settings::OwnerFence<'_>,
+            vault_path: &str,
+        ) -> Result<crate::settings::PreferenceSave, CommandError> {
+            if !self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return self.inner.save_vault_path(ticket, owned, vault_path);
+            }
+            let saved = self.inner.save_vault_path(
+                ticket,
+                &|effect| {
+                    owned(&mut |held| {
+                        self.entered.send(()).unwrap();
+                        self.release
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(std::time::Duration::from_secs(30))
+                            .unwrap();
+                        effect(held);
+                    });
+                },
+                vault_path,
+            );
+            self.log.lock().unwrap().push("A-saved");
+            saved
+        }
+    }
+
+    #[test]
+    fn review1_2_a_retiring_opening_cannot_interleave_between_the_ownership_check_and_the_settings_write(
+    ) {
+        use crate::{clipboard::tests::FakeData, policy::Signal, session::MonotonicClock};
+        use std::sync::mpsc;
+        let directory = tempfile::tempdir().unwrap();
+        let a_path = directory.path().join("a.kdbx");
+        Vault::create(&a_path, "fake-test-password-123!", None).unwrap();
+        let missing = directory.path().join("missing.kdbx");
+        let settings = directory.path().join("fake-settings").join("settings.json");
+        fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        fs::write(&settings, r#"{"vaultPath":"pre-existing.kdbx"}"#).unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let store = Arc::new(BarrierAfterCheck {
+            inner: crate::settings::FilePreferences::new(Some(settings.clone()), None),
+            armed: std::sync::atomic::AtomicBool::new(true),
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+            log: log.clone(),
+        });
+        let session = Arc::new(Session::new(
+            Arc::new(MonotonicClock::default()),
+            Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
+                Mutex::new(FakeData::default()),
+            ))),
+            Arc::new(|_| {}),
+        ));
+        session.observe(Signal::Available);
+        let open = |session: Arc<Session>, store: Arc<BarrierAfterCheck>, owner: String, path| {
+            tauri::async_runtime::block_on(open_vault(
+                session,
+                store,
+                path,
+                Zeroizing::new("fake-test-password-123!".into()),
+                None,
+                false,
+                &owner,
+            ))
+        };
+        let owner_a = session.prepare_open().unwrap();
+        let first = {
+            let (session, store) = (session.clone(), store.clone());
+            std::thread::spawn(move || open(session, store, owner_a, a_path))
+        };
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap();
+        let (retired_tx, retired_rx) = mpsc::channel();
+        let second = {
+            let (session, store, log) = (session.clone(), store.clone(), log.clone());
+            std::thread::spawn(move || {
+                let owner_b = session.prepare_open().unwrap();
+                log.lock().unwrap().push("B-retired-A");
+                retired_tx.send(()).unwrap();
+                open(session, store, owner_b, missing)
+            })
+        };
+        let _ = retired_rx.recv_timeout(std::time::Duration::from_millis(500));
+        release_tx.send(()).unwrap();
+        let _ = first.join().unwrap();
+        assert!(second.join().unwrap().is_err(), "B must fail to open");
+        let saved: Settings = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
+        let events = log.lock().unwrap().clone();
+        let a_wrote = saved
+            .vault_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with("a.kdbx"));
+        if a_wrote {
+            assert_eq!(
+                events,
+                ["A-saved", "B-retired-A"],
+                "A may write only while it still owns the session, never after B retired it"
+            );
+        } else {
+            assert_eq!(saved.vault_path.as_deref(), Some("pre-existing.kdbx"));
+        }
+    }
+
+    #[test]
+    fn review1_2_an_opening_retired_by_a_failed_newer_opening_leaves_the_earlier_preference() {
+        use crate::{clipboard::tests::FakeData, policy::Signal, session::MonotonicClock};
+        use std::sync::mpsc;
+        let directory = tempfile::tempdir().unwrap();
+        let a_path = directory.path().join("a.kdbx");
+        Vault::create(&a_path, "fake-test-password-123!", None).unwrap();
+        let settings = directory.path().join("fake-settings").join("settings.json");
+        fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        fs::write(&settings, r#"{"vaultPath":"pre-existing.kdbx"}"#).unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let store = Arc::new(PausingPreferences {
+            inner: crate::settings::FilePreferences::new(Some(settings.clone()), None),
+            pause_first: std::sync::atomic::AtomicBool::new(true),
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        });
+        let session = Arc::new(Session::new(
+            Arc::new(MonotonicClock::default()),
+            Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
+                Mutex::new(FakeData::default()),
+            ))),
+            Arc::new(|_| {}),
+        ));
+        session.observe(Signal::Available);
+        let open = |session: Arc<Session>, store: Arc<PausingPreferences>, owner: String, path| {
+            tauri::async_runtime::block_on(open_vault(
+                session,
+                store,
+                path,
+                Zeroizing::new("fake-test-password-123!".into()),
+                None,
+                false,
+                &owner,
+            ))
+        };
+        let owner_a = session.prepare_open().unwrap();
+        let first = {
+            let (session, store) = (session.clone(), store.clone());
+            std::thread::spawn(move || open(session, store, owner_a, a_path))
+        };
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap();
+        let owner_b = session.prepare_open().unwrap();
+        assert!(open(
+            session.clone(),
+            store.clone(),
+            owner_b,
+            directory.path().join("missing.kdbx")
+        )
+        .is_err());
+        release_tx.send(()).unwrap();
+        assert!(first.join().unwrap().is_err());
+        let saved: Settings = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
+        assert_eq!(saved.vault_path.as_deref(), Some("pre-existing.kdbx"));
     }
 }

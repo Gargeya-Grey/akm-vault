@@ -50,7 +50,6 @@ function fixture() {
     if (command === "vault_lock") { expect(args?.sessionId).toBe(owner); active = false; return; }
     if (command === "keys_list") return [{ project: "demo", environment: "dev" }];
     if (command === "backup_info") return { path: "C:/fake/current.bak", exists: false, bytes: 0, modified: null };
-    if (command === "env_import_preview") return { token: "private-old-token", added: 1, updated: 0, unchanged: 0, changes: [] };
     if (command === "env_export") return "TOKEN=fake-old-preview-value\n";
     throw new Error(command);
   });
@@ -81,11 +80,10 @@ for (const operation of ["import", "export"] as const) {
     for (const handoff of ["same-view", "navigate", "remount"] as const) {
       test(`native expiry with DOM-visible ${operation} ${reply} retains one outcome through ${handoff}`, async () => {
         const f = fixture();
-        f.hold(operation === "import" ? "env_import_confirm" : "env_save");
+        f.hold(operation === "import" ? "env_import" : "env_save");
         const root = await settings();
         if (operation === "import") {
           importInput();
-          fireEvent.click(await screen.findByRole("button", { name: "Confirm import" }));
         } else {
           scopeExport();
           fireEvent.click(screen.getByRole("button", { name: "Save .env…" }));
@@ -110,14 +108,14 @@ for (const operation of ["import", "export"] as const) {
         expect(retainedCompletions()).toMatchObject([{ id, operation, outcome: expected }]);
         expect(retainedCompletions()).toHaveLength(1);
         const outcomes = screen.getByRole("region", { name: "Operation outcomes" });
-        for (const privateText of ["private-project", "private-environment", "fake-private-input", "private-old-token", "private-error-detail", "C:/private/export.env"]) {
+        for (const privateText of ["private-project", "private-environment", "fake-private-input", "private-error-detail", "C:/private/export.env"]) {
           expect(outcomes.textContent).not.toContain(privateText);
           expect(document.body.textContent).not.toContain(privateText);
         }
         expect(f.active()).toBe(true);
         expect(nativeOwner()).toBe(f.owner);
         expect(native.invoke.mock.calls.filter(([command]) => command === "vault_lock")).toHaveLength(0);
-        expect(native.invoke.mock.calls.filter(([command]) => command === (operation === "import" ? "env_import_confirm" : "env_save"))).toHaveLength(1);
+        expect(native.invoke.mock.calls.filter(([command]) => command === (operation === "import" ? "env_import" : "env_save"))).toHaveLength(1);
       });
     }
   }
@@ -139,15 +137,15 @@ for (const pending of [true, false]) {
   });
 }
 
-test("native expiry rejects a late import review and duplicate notices do not clear new input", async () => {
+test("native expiry ignores a late import reply and duplicate notices do not clear new input", async () => {
   const f = fixture();
-  f.hold("env_import_preview");
+  f.hold("env_import");
   await settings();
   importInput();
   const hide = crypto.randomUUID();
   act(() => expire(f.owner, hide));
   expect(screen.queryByRole("dialog")).toBeNull();
-  await act(async () => f.pending.resolve({ token: "private-late-token", added: 1, updated: 0, unchanged: 0, changes: [] }));
+  await act(async () => f.pending.resolve({ added: 1, updated: 0 }));
   fireEvent.click(screen.getByRole("button", { name: "Import .env…" }));
   const input = screen.getByLabelText("Paste the .env contents") as HTMLTextAreaElement;
   fireEvent.change(input, { target: { value: "TOKEN=fake-new-input" } });
@@ -207,8 +205,8 @@ test("an unknown-owner hide is coalesced across bootstrap adoption, not replayed
 for (const phase of ["pending", "displayed", "error"] as const) {
   test(`the native expiry's direct disclosure consumer fences a ${phase} reveal result`, async () => {
     const f = fixture(); f.hold("key_reveal");
-    const item: KeyView = { id: "fake-key", title: "Fake reveal fixture", username: null, issuer: null, project: "demo", environment: "dev", scopes: [], envVar: "TOKEN", resolvedEnvVar: "TOKEN", url: null, notes: null, tags: [], expiresAt: null, rotationDays: null, createdAt: null, updatedAt: null, expired: false, rotationDueIn: null };
-    render(<><App /><KeyDetail item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} /></>);
+    const item: KeyView = { id: "fake-key", title: "Fake reveal fixture", username: null, issuer: null, project: "demo", environment: "dev", scopes: [], envVar: "TOKEN", resolvedEnvVar: "TOKEN", url: null, notes: null, tags: [], expiresAt: null, rotationDays: null, createdAt: null, updatedAt: null, rotationDueAt: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0 };
+    render(<><App /><KeyDetail item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} /></>);
     await screen.findByText("Current unlocked keys");
     fireEvent.click(screen.getByRole("button", { name: "Reveal" }));
     if (phase === "displayed") { await act(async () => f.pending.resolve("fake-reveal-value")); expect(screen.getByText("fake-reveal-value")).toBeTruthy(); }
@@ -222,17 +220,15 @@ for (const phase of ["pending", "displayed", "error"] as const) {
   });
 }
 
-test("failed native expiry subscription explicitly attempts the expected application-owner lock", async () => {
+test("a failed native expiry subscription fails closed before any status is shown and locks the expected owner", async () => {
   const f = fixture();
-  const registration = deferred<() => void>();
   const ordinary = vi.mocked(listen).getMockImplementation()!;
-  vi.mocked(listen).mockImplementationOnce(ordinary).mockImplementationOnce(() => registration.promise);
-  await settings();
-  expect(f.active()).toBe(true);
-  await act(async () => registration.reject(new Error("fake-private-listener-failure")));
+  vi.mocked(listen).mockImplementationOnce(ordinary).mockImplementationOnce(() => Promise.reject(new Error("fake-private-listener-failure")));
+  render(<App />);
+  await screen.findByText("AKM could not watch the session. Restart AKM.");
+  expect(screen.queryByText("Current unlocked keys")).toBeNull();
   expect(f.active()).toBe(false);
   expect(native.invoke.mock.calls.filter(([command]) => command === "vault_lock")[0]?.[1]).toEqual({ sessionId: f.owner });
-  expect(document.body.textContent).toContain("Could not confirm the native lock");
   expect(document.body.textContent).not.toContain("fake-private-listener-failure");
 });
 
@@ -241,7 +237,8 @@ test("a disposed root's late expiry-subscription failure cannot lock its replace
   const registration = deferred<() => void>();
   const ordinary = vi.mocked(listen).getMockImplementation()!;
   vi.mocked(listen).mockImplementationOnce(ordinary).mockImplementationOnce(() => registration.promise);
-  const first = await settings();
+  const first = render(<App />);
+  await flush();
   first.unmount();
   const b = fixture();
   await settings();

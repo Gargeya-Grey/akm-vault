@@ -1,0 +1,4 @@
+# Tests and `cargo run` never write to the real %LOCALAPPDATA%\akm journal folder.
+# A test that needs its own root passes one explicitly. See docs/design/unit1b.md.
+[env]
+AKM_JOURNAL_ROOT = { value = "target/akm-test-journal", relative = true }

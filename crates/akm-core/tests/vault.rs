@@ -1,7 +1,17 @@
 use akm_core::model::{derive_env_var, is_valid_env_var};
-use akm_core::{ApiKeyInput, Error, Vault};
+use akm_core::{ApiKeyInput, EnvDisclosure, Error, KeyDisclosure, Vault};
 
 const PASSWORD: &str = "correct horse battery staple";
+
+/// A stored secret, read through a recorded disclosure request (the journal sits in the
+/// temp folder of the test vault).
+fn secret_of(vault: &Vault, id: &str) -> String {
+    let key = vault.get_by_id(id).unwrap();
+    let proof = vault
+        .disclose_key(KeyDisclosure::Reveal, &key, Some("test"))
+        .unwrap();
+    vault.secret(id, &proof).unwrap().to_string()
+}
 
 fn sample() -> ApiKeyInput {
     let mut input = ApiKeyInput::new("OpenAI", "sk-test-123456789");
@@ -28,7 +38,7 @@ fn round_trips_through_a_real_kdbx_file() {
     let found = vault.find("openai").unwrap();
 
     assert_eq!(found.id, created.id);
-    assert_eq!(found.secret, "sk-test-123456789");
+    assert_eq!(secret_of(&vault, &found.id), "sk-test-123456789");
     assert_eq!(found.project.as_deref(), Some("demo"));
     assert_eq!(found.environment.as_deref(), Some("dev"));
     assert_eq!(found.scopes, vec!["chat", "models"]);
@@ -101,7 +111,7 @@ fn rejects_colliding_environment_variables() {
     vault.add(one).unwrap();
     vault.add(two).unwrap();
 
-    assert!(vault.env_vars(None, None, true).is_err());
+    assert!(vault.plan_env(None, None, true).is_err());
 }
 
 #[test]
@@ -116,7 +126,7 @@ fn audit_log_is_a_valid_hash_chain() {
     let log = vault.audit_log();
     assert_eq!(log.verify().unwrap(), None);
     assert_eq!(log.read(10).unwrap().len(), 2);
-    assert!(log.path().exists());
+    assert!(log.journal_path().unwrap().unwrap().exists());
 }
 
 #[test]
@@ -147,14 +157,14 @@ fn imports_dotenv_pairs_and_updates_matching_keys() {
         .iter()
         .find(|key| key.resolved_env_var() == "OPENAI_API_KEY")
         .unwrap();
-    assert_eq!(openai.secret, "rotated-secret");
+    assert_eq!(secret_of(&vault, &openai.id), "rotated-secret");
     assert_eq!(openai.title, "OpenAI");
 
     let github = keys
         .iter()
         .find(|key| key.resolved_env_var() == "GITHUB_TOKEN")
         .unwrap();
-    assert_eq!(github.secret, "ghp_from_env");
+    assert_eq!(secret_of(&vault, &github.id), "ghp_from_env");
     assert_eq!(github.project.as_deref(), Some("demo"));
 }
 
@@ -373,10 +383,7 @@ fn native_uuid_targets_clones_and_foreign_entries_in_case_insensitive_groups() {
             ApiKeyInput::new("Updated clone", "updated-secret"),
         )
         .unwrap();
-    assert_eq!(
-        vault.get_by_id(&first_id).unwrap().secret,
-        "original-secret"
-    );
+    assert_eq!(secret_of(&vault, &first_id), "original-secret");
     vault
         .update(
             &foreign_id,
@@ -391,16 +398,15 @@ fn native_uuid_targets_clones_and_foreign_entries_in_case_insensitive_groups() {
     assert_eq!(vault.list().len(), 3);
     drop(vault);
     let reopened = Vault::open(&path, PASSWORD).unwrap();
-    assert_eq!(
-        reopened.get_by_id(&foreign_id).unwrap().secret,
-        "updated-foreign-secret"
-    );
+    assert_eq!(secret_of(&reopened, &foreign_id), "updated-foreign-secret");
     let db = keepass::Database::open(
         &mut std::fs::File::open(path).unwrap(),
         keepass::DatabaseKey::new().with_password(PASSWORD),
     )
     .unwrap();
-    assert_eq!(db.root().groups().count(), 1);
+    // The removed clone sits in the Recycle Bin next to the original group.
+    assert_eq!(db.root().groups().count(), 2);
+    assert_eq!(db.recycle_bin().unwrap().entries().count(), 1);
 }
 
 #[test]
@@ -518,23 +524,28 @@ fn extraction_requires_exact_scope_or_explicit_all_and_rejects_unsafe_entries() 
         (Some(""), Some("dev"), false),
         (Some("safe"), Some("dev"), true),
     ] {
-        assert!(vault.env_vars(project, environment, all).is_err());
+        assert!(vault.plan_env(project, environment, all).is_err());
     }
+    let plan = vault.plan_env(Some("safe"), Some("dev"), false).unwrap();
+    assert_eq!(plan.names().collect::<Vec<_>>(), ["TOKEN"]);
+    let proof = vault
+        .disclose_env(EnvDisclosure::Export, &plan, Some("test"))
+        .unwrap();
     assert_eq!(
-        vault.env_vars(Some("safe"), Some("dev"), false).unwrap(),
+        vault.env_vars(&plan, &proof).unwrap(),
         vec![("TOKEN".into(), "safe-secret".into())]
     );
     assert!(vault
-        .env_vars(Some("SAFE"), Some("dev"), false)
+        .plan_env(Some("SAFE"), Some("dev"), false)
         .unwrap()
         .is_empty());
     for project in ["bad-name", "reserved", "empty", "nul"] {
         assert!(
-            vault.env_vars(Some(project), Some("dev"), false).is_err(),
+            vault.plan_env(Some(project), Some("dev"), false).is_err(),
             "accepted {project}"
         );
     }
-    assert!(vault.env_vars(None, None, true).is_err());
+    assert!(vault.plan_env(None, None, true).is_err());
 }
 
 #[test]
@@ -543,7 +554,11 @@ fn damaged_audit_log_does_not_turn_a_committed_mutation_into_a_retryable_error()
     let path = dir.path().join("vault.kdbx");
     write_database(&path, &fast_database(), PASSWORD);
     let mut vault = Vault::open(&path, PASSWORD).unwrap();
-    std::fs::write(vault.audit_log().path(), b"damaged audit JSON\n").unwrap();
+    std::fs::write(
+        vault.audit_log().create_journal_path().unwrap(),
+        b"damaged audit JSON\n",
+    )
+    .unwrap();
     let created = vault.add(sample()).unwrap();
     assert_eq!(Vault::open(&path, PASSWORD).unwrap().list().len(), 1);
     assert_eq!(vault.list(), vec![created.clone()]);
@@ -551,7 +566,9 @@ fn damaged_audit_log_does_not_turn_a_committed_mutation_into_a_retryable_error()
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("audit"));
     assert!(vault.take_warnings().is_empty());
-    vault.update(&created.id, sample()).unwrap();
+    let mut changed = sample();
+    changed.notes = Some("a real change; an identical update saves nothing".into());
+    vault.update(&created.id, changed).unwrap();
     assert_eq!(vault.take_warnings().len(), 1);
     vault
         .import_env(
@@ -686,7 +703,7 @@ fn older_formats_require_explicit_upgrade_and_preserve_the_database_and_kdf() {
 }
 
 #[test]
-fn find_prefers_native_uuid_then_exact_title_before_substring_search() {
+fn find_selects_a_native_uuid_or_an_exact_title_and_never_a_partial_word() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vault.kdbx");
     write_database(&path, &fast_database(), PASSWORD);
@@ -711,8 +728,16 @@ fn find_prefers_native_uuid_then_exact_title_before_substring_search() {
         .add(ApiKeyInput::new("EXACT", "duplicate-title-secret"))
         .unwrap();
     assert!(matches!(vault.find("Exact"), Err(Error::Ambiguous(_, 2))));
-    assert!(matches!(vault.find("exa"), Err(Error::Ambiguous(_, 3))));
-    assert_eq!(vault.find("suffix").unwrap().title, "Exact suffix");
+    assert!(matches!(vault.find("exa"), Err(Error::EntryNotFound(_))));
+    assert!(matches!(vault.find("suffix"), Err(Error::EntryNotFound(_))));
+    assert_eq!(vault.find("exact suffix").unwrap().title, "Exact suffix");
+    let titles: Vec<String> = vault
+        .candidates("exa")
+        .into_iter()
+        .map(|key| key.title)
+        .collect();
+    assert_eq!(titles.len(), 3, "{titles:?}");
+    assert!(vault.candidates("  ").is_empty());
 }
 
 #[test]
@@ -756,10 +781,7 @@ fn scope_metadata_and_explicit_variable_names_are_not_silently_trimmed() {
             .unwrap(),
         (1, 0)
     );
-    assert_eq!(
-        vault.get_by_id(&original.id).unwrap().secret,
-        "sk-test-123456789"
-    );
+    assert_eq!(secret_of(&vault, &original.id), "sk-test-123456789");
     assert_eq!(
         vault.get_by_id(&original.id).unwrap().project.as_deref(),
         Some("demo ")
@@ -844,7 +866,7 @@ fn retains_the_five_latest_encrypted_originals_and_a_legacy_backup() {
     for index in 0..7 {
         originals.push(std::fs::read(&path).unwrap());
         let mut input = sample();
-        input.secret = format!("fake-secret-version-{index}");
+        input.secret = format!("fake-secret-version-{index}").into();
         vault.update(&first.id, input).unwrap();
     }
     let mut backups: Vec<_> = std::fs::read_dir(dir.path())
@@ -923,7 +945,11 @@ fn failed_upgrade_is_transactional_and_a_postcommit_audit_error_is_a_warning() {
             .to_string_lossy()
             .contains(".tmp")));
         drop(holder);
-        std::fs::write(vault.audit_log().path(), b"damaged log\n").unwrap();
+        std::fs::write(
+            vault.audit_log().create_journal_path().unwrap(),
+            b"damaged log\n",
+        )
+        .unwrap();
         vault.upgrade().unwrap();
         assert!(!vault.needs_upgrade());
         assert_eq!(vault.take_warnings().len(), 1);

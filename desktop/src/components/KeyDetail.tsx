@@ -1,24 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 import { api, errorText } from "../api";
 import { clipboardCopyText } from "../clipboardText";
-import { formatDate, formatDateTime, keyState, rotationLabel } from "../format";
+import { formatDate, formatDateTime, isExpired, keyState, plural, rotationLabel, secretChangeLabel } from "../format";
 import type { KeyView } from "../types";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { useDialogFocus } from "./useDialogFocus";
 import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
+import { useNow } from "../useNow";
 
 interface Props {
   item: KeyView;
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onRotate: () => void;
   readOnly?: boolean;
 }
 
 const HIDE_SECONDS = 30;
 
-export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }: Props) {
+export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly = false }: Props) {
   const dialogRef = useDialogFocus<HTMLDivElement>();
   const [secret, setSecret] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(HIDE_SECONDS);
@@ -55,9 +57,10 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
   useEffect(() => {
     if (!secret) return;
     setSeconds(HIDE_SECONDS);
-    const started = Date.now();
+    // A monotonic clock: a wall clock that moves back must not keep the secret on screen.
+    const started = performance.now();
     timer.current = window.setInterval(() => {
-      const left = HIDE_SECONDS - Math.floor((Date.now() - started) / 1000);
+      const left = HIDE_SECONDS - Math.floor((performance.now() - started) / 1000);
       if (left <= 0) {
         setSecret(null);
         if (timer.current !== null) window.clearInterval(timer.current);
@@ -112,7 +115,8 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
     }
   }
 
-  const state = keyState(item);
+  const now = useNow([item]);
+  const state = keyState(item, now);
   const facts: { key: string; value: React.ReactNode }[] = [];
 
   if (item.issuer) facts.push({ key: "Issuer", value: item.issuer });
@@ -157,7 +161,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
     value: item.expiresAt ? (
       <span>
         <span className="mono">{formatDate(item.expiresAt)}</span>
-        {item.expired && <span className="danger-text"> · expired</span>}
+        {isExpired(item, now) && <span className="danger-text"> · expired</span>}
       </span>
     ) : (
       "Not set"
@@ -168,7 +172,25 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
     value:
       item.rotationDays === null
         ? "Not set"
-        : `every ${item.rotationDays} days · ${rotationLabel(item)}`,
+        : `every ${item.rotationDays} days · ${rotationLabel(item, now)}`,
+  });
+  facts.push({
+    key: "Secret changed",
+    value:
+      item.secretChange === "known" ? (
+        <span className="mono">{secretChangeLabel(item)}</span>
+      ) : item.secretChange === "changed_outside" ? (
+        <span>unknown · changed outside AKM</span>
+      ) : (
+        <span>unknown</span>
+      ),
+  });
+  facts.push({
+    key: "History",
+    value:
+      item.historyCount === 0
+        ? "No earlier versions"
+        : `${plural(item.historyCount, "earlier version")} in the vault history`,
   });
   if (item.createdAt)
     facts.push({
@@ -275,9 +297,13 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, readOnly = false }:
         <div className="dialog-actions spread">
           <button type="button" className="text-button danger-text" onClick={onDelete} disabled={readOnly}>
             <Icon name="trash" />
-            Delete key
+            Move to Recycle Bin
           </button>
           <div className="action-cluster">
+            <button type="button" className="text-button" onClick={onRotate} disabled={readOnly}>
+              <Icon name="refresh" />
+              Rotate secret
+            </button>
             <button type="button" className="text-button" onClick={onClose}>
               Close
             </button>

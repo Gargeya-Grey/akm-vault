@@ -26,6 +26,7 @@ Reuse established encrypted storage and cryptographic implementations. Do not in
 - Clipboard exclusions, memory cleanup and capture exclusion are defense in depth, not absolute confidentiality guarantees.
 - Short local locks do not provide distributed consensus or atomic cloud compare-and-swap. Other applications and sync clients can race a final local check.
 - The current plaintext journal is not authenticated evidence. Its historical truncation/tampering limitations must not be hidden by a new location or hash chain.
+- [THREAT_MODEL.md](THREAT_MODEL.md) lists each attacker and states whether AKM stops it, makes it harder or does not help.
 
 ## Established implementation
 
@@ -43,7 +44,7 @@ Reuse established encrypted storage and cryptographic implementations. Do not in
 4. A committed operation overtaken by locking returns a secret-free `completedWhileLocked` receipt. Do not turn success into a retryable unsaved error. Reads suppress obsolete plaintext.
 5. Frontend epochs and request/transition identities reject stale results. A receipt from session A must not invalidate a newer session B.
 6. Native idle/session/suspend policy is authoritative. Polling is not activity. GUI state alone is not proof that native state is locked.
-7. Import matching is exact on project, environment and variable name. Review labels and tokens share an immutable scope. Edits, cancellation, hide, reload and lock invalidate pending reviews; already-dispatched confirmation keeps its outcome acknowledgment.
+7. Import matching is exact on project, environment and variable name. The desktop import is a native confirmation that lists the exact project, environment and names; the user's click there is the approval, and no state is kept between the request and the answer. Hide, reload, page load and a discard of the page's form do not cancel it. A lock, another session, or a change of the vault since the preview refuses it, checked under the session gate at the write. A dispatched import keeps a native outcome record, so the page learns the truth even when it discarded its form.
 8. Exports validate explicit scope, permitted local persistent-ACL storage and private handle permissions before plaintext writing. Keep file-handle ownership through publication and cleanup. CLI never overwrites an existing destination; desktop overwrite requires the native dialog's approval.
 9. Bulk export I/O stays outside the security gate. Prepublication authorization is the cancellation boundary. Already-authorized filesystem publication may finish after a lock and must report truthfully.
 10. Clipboard exclusions and Unicode/ANSI/OEM/locale formats are installed before sequence capture in one open interval. Cleanup must not adopt a later sequence or erase a newer identical user copy.
@@ -64,7 +65,7 @@ These contracts do not claim that every nearby seam is complete. Open defects ar
 
 - `crates/akm-core/src/vault.rs` owns transactions, KDBX identity and persistence.
 - `crates/akm-core/src/model.rs` owns API-key fields and rotation calculations.
-- `crates/akm-core/src/audit.rs` and `dotenv.rs` own the current journal and dotenv dialect.
+- `crates/akm-core/src/audit.rs`, `journal.rs` and `private_fs.rs` own the private per-device journal: the hash chain and its damage report, the vault-to-journal mapping, and the permission checks. `dotenv.rs` owns the dotenv dialect. [Unit 1b design](design/unit1b.md).
 - `crates/akm-cli/src/` owns child isolation, CLI workflows and protected exports.
 - `desktop/src-tauri/src/` owns session policy, commands, clipboard and native exports.
 - `desktop/src/` owns frontend lifecycle, forms and reviewed workflow presentation.

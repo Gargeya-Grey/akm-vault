@@ -96,6 +96,9 @@ $cli = (Resolve-Path -LiteralPath $CliExe).Path
 $work = Join-Path $env:TEMP ('opencode\akm-app-proof-' + [Guid]::NewGuid())
 New-Item -ItemType Directory -Path $work | Out-Null
 $vault = Join-Path $work 'vault.kdbx'
+$journalRoot = Join-Path $work 'journal'
+$journalRootBefore = [Environment]::GetEnvironmentVariable('AKM_JOURNAL_ROOT', 'Process')
+[Environment]::SetEnvironmentVariable('AKM_JOURNAL_ROOT', $journalRoot, 'Process')
 $mainVault = $vault
 $cloneVault = Join-Path $work 'clones.kdbx'
 $legacyVault = Join-Path $work 'older.kdbx'
@@ -111,6 +114,7 @@ $recovery = [ordered]@{
   settingsPath = $settingsPath
   hadSettings = ($null -ne $settingsBefore)
   ownedVaults = $ownedVaults
+  journalRoot = $journalRoot
   processId = $null
   processStartUtc = $null
   remainingOnly = [bool]$RemainingOnly
@@ -177,6 +181,32 @@ function Find-Control([string]$name, $type = $null, [int]$milliseconds = 12000) 
     Start-Sleep -Milliseconds 100
   } while ([DateTime]::UtcNow -lt $until)
   throw "Missing AKM control: $name"
+}
+
+function Confirm-NativeImport([string]$expect, [string]$button = 'Import', [int]$milliseconds = 15000) {
+  # Unit 1c: the import is reviewed and confirmed in a native dialog (class #32770) that the AKM process owns.
+  $isDialog = New-Object System.Windows.Automation.PropertyCondition($AE::ClassNameProperty, '#32770')
+  $byProcess = New-Object System.Windows.Automation.AndCondition(
+    (New-Object System.Windows.Automation.PropertyCondition($AE::ProcessIdProperty, $process.Id)), $isDialog)
+  $byName = New-Object System.Windows.Automation.AndCondition(
+    (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $button)),
+    (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))
+  $until = [DateTime]::UtcNow.AddMilliseconds($milliseconds)
+  do {
+    $dialogs = @($AE::RootElement.FindAll($TS::Children, $byProcess)) + @($script:root.FindAll($TS::Descendants, $isDialog))
+    foreach ($dialog in $dialogs) {
+      $texts = @($dialog.FindAll($TS::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }) -join "`n"
+      $target = @($dialog.FindAll($TS::Descendants, $byName))
+      if ($target.Count -gt 0) {
+        Assert-Proof ($texts -match $expect) "the native import dialog names the reviewed scope ($expect)"
+        $target[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        return
+      }
+    }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $until)
+  Save-ProofDiagnostics 'native-import-dialog'
+  throw "Missing native import dialog button: $button"
 }
 
 function Set-Field([string]$name, [string]$value) {
@@ -265,9 +295,7 @@ function Select-Filter([string]$label, [string]$value) {
   throw "The $label combo box did not keep the value '$value' after 3 attempts"
 }
 
-function Select-FilterOnce([string]$label, [string]$value) {
-  $combo = Find-Control $label ([System.Windows.Automation.ControlType]::ComboBox)
-  $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+function Get-OwnedProcessIds {
   $ownedIds = New-Object 'System.Collections.Generic.HashSet[int]'
   [void]$ownedIds.Add($process.Id)
   $queue = New-Object 'System.Collections.Generic.Queue[int]'
@@ -278,29 +306,134 @@ function Select-FilterOnce([string]$label, [string]$value) {
       if ($ownedIds.Add([int]$child.ProcessId)) { $queue.Enqueue([int]$child.ProcessId) }
     }
   }
+  return ,$ownedIds
+}
+
+function Get-OwnedTopWindows($ownedIds) {
+  foreach ($window in $AE::RootElement.FindAll($TS::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+    $rootOwner = [AkmProofClipboard]::GetAncestor([IntPtr]$window.Current.NativeWindowHandle, 3)
+    if (!$ownedIds.Contains($window.Current.ProcessId) -and $rootOwner -ne $process.MainWindowHandle) { continue }
+    $window
+  }
+}
+
+# Activates the enabled, visible option named $value in a window of the test process. Returns $true when it did.
+function Invoke-FilterOption($ownedIds, $combo, [string]$value) {
   $condition = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $value)
-  $until = [DateTime]::UtcNow.AddSeconds(12)
-  do {
-    foreach ($window in $AE::RootElement.FindAll($TS::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
-      $rootOwner = [AkmProofClipboard]::GetAncestor([IntPtr]$window.Current.NativeWindowHandle, 3)
-      if (!$ownedIds.Contains($window.Current.ProcessId) -and $rootOwner -ne $process.MainWindowHandle) { continue }
-      foreach ($item in $window.FindAll($TS::Descendants, $condition)) {
-        if (!$item.Current.IsEnabled -or $item.Current.IsOffscreen) { continue }
-        $action = $null
-        if ($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$action)) {
-          $action.Invoke()
-          return
-        }
-        if ($item.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$action)) {
-          $action.Select()
-          $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Collapse()
-          return
-        }
+  foreach ($window in @(Get-OwnedTopWindows $ownedIds)) {
+    foreach ($item in $window.FindAll($TS::Descendants, $condition)) {
+      if (!$item.Current.IsEnabled -or $item.Current.IsOffscreen) { continue }
+      $action = $null
+      if ($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$action)) {
+        $action.Invoke()
+        return $true
+      }
+      if ($item.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$action)) {
+        $action.Select()
+        $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Collapse()
+        return $true
       }
     }
+  }
+  return $false
+}
+
+function Get-FilterOptionNames($ownedIds) {
+  $types = @([System.Windows.Automation.ControlType]::ListItem, [System.Windows.Automation.ControlType]::MenuItem, [System.Windows.Automation.ControlType]::DataItem)
+  $condition = New-Object System.Windows.Automation.OrCondition(@($types | ForEach-Object { New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $_) }))
+  $names = New-Object 'System.Collections.Generic.List[string]'
+  foreach ($window in @(Get-OwnedTopWindows $ownedIds)) {
+    foreach ($item in $window.FindAll($TS::Descendants, $condition)) {
+      if ($names.Count -ge 40) { break }
+      $names.Add(('{0} (enabled={1}, offscreen={2})' -f $item.Current.Name, $item.Current.IsEnabled, $item.Current.IsOffscreen))
+    }
+  }
+  return $names.ToArray()
+}
+
+# Turns the last stage of a failed filter step into a hint that separates a UI Automation race from an app failure.
+function Get-FilterFailureHint([string]$stage, [string[]]$optionNames, [string]$value) {
+  switch ($stage) {
+    'combo-not-found' { return 'The control was never visible to UI Automation: the app is not in the expected view (app or navigation failure).' }
+    'combo-unreadable' { return 'The combo box element became unavailable while it was read: the view re-rendered during the wait (a UI Automation race is likely).' }
+    'combo-disabled' { return 'The combo box stayed disabled for the whole wait: the app did not enable it (app failure likely).' }
+    'no-expand-pattern' { return 'The combo box existed but never exposed ExpandCollapse in the wait: a UI Automation race is likely.' }
+    'expand-failed' { return 'The combo box exposed ExpandCollapse but every Expand call failed: a UI Automation race is likely.' }
+    'option-missing' {
+      if ($optionNames.Count -eq 0) { return 'The expanded list exposed no options to UI Automation: a UI Automation race or a popup that never rendered.' }
+      if (@($optionNames | Where-Object { $_ -like "$value (*" }).Count -gt 0) { return 'The expected option is listed but was disabled, offscreen or not actionable.' }
+      return 'Options were listed but the expected one is absent: the app did not offer this value (app failure likely).'
+    }
+    default { return 'No stage was recorded.' }
+  }
+}
+
+function Write-FilterDiagnostic([string]$label, [string]$value, $combo, [string]$stage, [string]$detail, $ownedIds) {
+  try {
+    Write-Output "DIAG: filter step '$label' / '$value' failed at stage '$stage'. Last error: $detail"
+    if ($combo) {
+      $patterns = @($combo.GetSupportedPatterns() | ForEach-Object { $_.ProgrammaticName -replace 'PatternIdentifiers\.Pattern$', '' })
+      Write-Output ('DIAG: combo box supported patterns: ' + $(if ($patterns.Count) { $patterns -join ', ' } else { '(none)' }))
+      Write-Output ('DIAG: combo box enabled={0}, offscreen={1}, class={2}, automation id={3}' -f $combo.Current.IsEnabled, $combo.Current.IsOffscreen, $combo.Current.ClassName, $combo.Current.AutomationId)
+      $pattern = $null
+      if ($combo.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$pattern)) {
+        Write-Output "DIAG: combo box expand state: $($pattern.Current.ExpandCollapseState)"
+      }
+    } else {
+      Write-Output 'DIAG: the combo box element was never found.'
+    }
+    $optionNames = @(Get-FilterOptionNames $ownedIds)
+    Write-Output ('DIAG: option names found in windows of the test process: ' + $(if ($optionNames.Count) { $optionNames -join '; ' } else { '(none)' }))
+    Write-Output ('DIAG: ' + (Get-FilterFailureHint $stage $optionNames $value))
+  } catch {
+    Write-Output "DIAG: collecting the diagnostic failed: $($_.Exception.Message)"
+  }
+}
+
+# UI Automation can expose the combo box, its ExpandCollapse pattern and its options a little after the control appears.
+# Wait for each with a bounded deadline, retry Expand, and re-open the list when the option does not show up.
+function Select-FilterOnce([string]$label, [string]$value) {
+  $deadline = [DateTime]::UtcNow.AddSeconds(15)
+  $stage = 'combo-not-found'
+  $detail = ''
+  $combo = $null
+  $ownedIds = Get-OwnedProcessIds
+  while ([DateTime]::UtcNow -lt $deadline) {
+    try {
+      try {
+        $combo = Find-Control $label ([System.Windows.Automation.ControlType]::ComboBox) 1000
+      } catch {
+        $stage = 'combo-not-found'; $detail = $_.Exception.Message
+        continue
+      }
+      $stage = 'combo-unreadable'; $detail = 'the combo box element was not readable'
+      $expand = $null
+      if (!$combo.Current.IsEnabled) {
+        $stage = 'combo-disabled'; $detail = 'the combo box is not enabled'
+      } elseif (!$combo.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$expand)) {
+        $stage = 'no-expand-pattern'; $detail = 'ExpandCollapse is not exposed yet'
+      } else {
+        $stage = 'expand-failed'
+        $expand.Expand()
+        $stage = 'option-missing'; $detail = "no enabled option named '$value' was found"
+        $ownedIds = Get-OwnedProcessIds
+        $scanUntil = [DateTime]::UtcNow.AddSeconds(5)
+        if ($scanUntil -gt $deadline) { $scanUntil = $deadline }
+        do {
+          if (Invoke-FilterOption $ownedIds $combo $value) { return }
+          Start-Sleep -Milliseconds 100
+        } while ([DateTime]::UtcNow -lt $scanUntil)
+        try { $expand.Collapse() } catch { }
+      }
+    } catch {
+      $detail = $_.Exception.Message
+      if ($stage -eq 'option-missing') { $detail = "option scan failed: $detail" }
+    }
     Start-Sleep -Milliseconds 100
-  } while ([DateTime]::UtcNow -lt $until)
-  throw "Missing select option in the test process: $label / $value"
+  }
+  Write-FilterDiagnostic $label $value $combo $stage $detail $ownedIds
+  if ($stage -eq 'option-missing') { throw "Missing select option in the test process: $label / $value" }
+  throw "Filter combo box did not become usable in the test process ($stage): $label / $value. Last error: $detail"
 }
 
 function Wait-SaveDialog {
@@ -374,9 +507,19 @@ function Set-NativeDialogValue($control, [string]$value) {
   }
 }
 
+function Get-TestJournal {
+  # The private journal folder is the test-owned AKM_JOURNAL_ROOT. The mapping names the journal of the current fake vault.
+  $mapping = [IO.File]::ReadAllText((Join-Path $journalRoot 'mapping.json')) | ConvertFrom-Json
+  $tail = ('\' + (Split-Path -Leaf $work) + '\' + (Split-Path -Leaf $vault)).ToLowerInvariant()
+  $bound = @($mapping.journals | Where-Object { $_.state -eq 'active' -and $_.path.ToLowerInvariant().EndsWith($tail) })
+  if ($bound.Count -ne 1) { throw "Expected one active journal binding for $vault but found $($bound.Count)" }
+  return (Join-Path $journalRoot ('j-' + $bound[0].id + '.jsonl'))
+}
+
 function Hold-TestJournal {
-  # This sidecar belongs only to the temporary fake vault. Overlap fs2's byte-range lock.
-  $stream = [IO.File]::Open(($vault + '.audit.jsonl.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite)
+  # This journal belongs only to the temporary fake vault. Overlap fs2's byte-range lock. The lock file already exists,
+  # so it is opened and never created: a file made here would not carry the private permissions.
+  $stream = [IO.File]::Open(((Get-TestJournal) + '.lock'), [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite)
   try { $stream.Lock(0, [Int64]::MaxValue) }
   catch { $stream.Dispose(); throw }
   return $stream
@@ -440,7 +583,7 @@ function Assert-GoneAndStable([string]$sentinel, [scriptblock]$predicate, [strin
 }
 
 function Get-RevealCount {
-  @(Get-Content -LiteralPath ($vault + '.audit.jsonl') | Where-Object { $_ } | ForEach-Object { ($_ | ConvertFrom-Json).action } | Where-Object { $_ -eq 'reveal-requested' }).Count
+  @(Get-Content -LiteralPath (Get-TestJournal) | Where-Object { $_ } | ForEach-Object { ($_ | ConvertFrom-Json).action } | Where-Object { $_ -eq 'reveal-requested' }).Count
 }
 
 function Assert-OutcomeRegion([string]$pattern) {
@@ -543,12 +686,11 @@ function Test-OutcomeHandoff {
   Set-Field 'Paste the .env contents' 'HANDOFF_TOKEN=fake-outcome-import-value'
   Set-Field 'Target project' 'outcome-import-project'
   Set-Field 'Target environment' 'outcome-import-env'
-  Click-Control 'Review import'
-  Find-Control 'Confirm import' ([System.Windows.Automation.ControlType]::Button) | Out-Null
   $before = (Get-FileHash -LiteralPath $vault -Algorithm SHA256).Hash
   $hold = Hold-TestJournal
   try {
-    Click-Control 'Confirm import'
+    Click-Control 'Review import'
+    Confirm-NativeImport 'project "outcome-import-project", environment "outcome-import-env"'
     Assert-Proof (Wait-Owned 'Keys' { param($s) @(Get-ProofRecords $s 'Import is awaiting an outcome').Count -eq 1 }) 'dispatched import creates a pending application-owned outcome'
     $until = [DateTime]::UtcNow.AddSeconds(20)
     do {
@@ -593,7 +735,7 @@ function Test-OutcomeHandoff {
   Test-CancelledOutcome
 
   # Delay a real pre-disclosure error too; an error outcome must not claim nothing was saved.
-  $journal = $vault + '.audit.jsonl'
+  $journal = Get-TestJournal
   $journalBefore = [IO.File]::ReadAllBytes($journal)
   $hold = Hold-TestJournal
   try {
@@ -703,7 +845,7 @@ try {
         $script:root = $mainRoot
         Assert-Proof (Wait-Text ('Saved plaintext secrets to ' + [regex]::Escape($exportPath))) 'the rebuilt export published to the exact approved native destination'
         Assert-Proof ([IO.File]::ReadAllText($exportPath) -eq "OPENAI_API_KEY=fake-prod-must-stay`n") 'the journal export contains only its selected fake prod secret'
-        $journal = $vault + '.audit.jsonl'
+        $journal = Get-TestJournal
         $journalBefore = [IO.File]::ReadAllBytes($journal)
         $actions = @(Get-Content -LiteralPath $journal | ForEach-Object { ($_ | ConvertFrom-Json).action })
         Assert-Proof ($actions[-2] -eq 'export-requested' -and $actions[-1] -eq 'export-completed') 'native export records a request before its known publication completion'
@@ -716,7 +858,7 @@ try {
         Set-NativeDialogValue (Native-FilenameControl) $refusedPath
         Click-NativeDialog '1' 'Save'
         $script:root = $mainRoot
-        Assert-Proof (Wait-Text 'Access is denied|permission denied|I/O error') 'failed pre-disclosure journaling is visibly refused'
+        Assert-Proof (Wait-Text 'Access is denied|permission denied|I/O error|was denied|activity journal unavailable') 'failed pre-disclosure journaling is visibly refused'
         Assert-Proof (!(Test-Path -LiteralPath $refusedPath)) 'a native export whose request cannot be recorded publishes no plaintext file'
         Remove-Item -LiteralPath $journal
         [IO.File]::WriteAllBytes($journal, $journalBefore)
@@ -730,22 +872,22 @@ try {
       Assert-Proof (Wait-Text 'Recorded chain is consistent') 'the real GUI reads a consistent journal snapshot'
       Assert-Proof (Wait-Text 'Completeness unknown') 'the real GUI does not claim a complete activity history'
       Assert-Proof (Wait-Text 'Added') 'the real GUI presents a known completed mutation'
-      $journal = $vault + '.audit.jsonl'
+      $journal = Get-TestJournal
       $legacyBackup = $vault + '.bak'
       Remove-Item -LiteralPath $legacyBackup
       New-Item -ItemType Directory -Path $legacyBackup | Out-Null
       Click-Control 'Keys'
       Click-Control 'Open OpenAI prod proof'
-      Click-Control 'Delete key'
+      Click-Control 'Move to Recycle Bin'
       $beforeDelete = (Get-FileHash -LiteralPath $vault -Algorithm SHA256).Hash
-      Assert-Proof (Wait-Text 'recovery depends on their contents and retention') 'delete confirmation does not promise recovery regardless of maintenance outcomes'
-      Click-Control 'Delete key'
-      Assert-Proof (Wait-Text 'Check backup notices and your encrypted backups before relying on recovery') 'successful deletion does not unconditionally promise retained recovery'
+      Assert-Proof (Wait-Text 'Nothing is deleted for good until you ask') 'the confirmation says the key moves to the Recycle Bin and is not deleted for good (unit 2)'
+      Click-Control 'Move to Recycle Bin'
+      Assert-Proof (Wait-Text 'Check backup notices before you rely on encrypted backups') 'a move to the Recycle Bin does not unconditionally promise backup recovery'
       Assert-Proof (Wait-Text 'convenience backup could not be refreshed') 'the actual failed backup refresh appears separately from deletion success'
       $exactOriginal = @(Get-ChildItem -LiteralPath $work -Filter 'vault.kdbx.bak.*.kdbx' -File | Where-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash -eq $beforeDelete })
       Assert-Proof ($exactOriginal.Count -ge 1) 'the exact immediate pre-deletion encrypted original remains, not merely an arbitrary dated file'
       $deletedKeys = Invoke-TestCli @('list', '--json') | Out-String | ConvertFrom-Json
-      Assert-Proof (@($deletedKeys | Where-Object { $_.title -eq 'OpenAI prod proof' }).Count -eq 0) 'the CLI confirms the deletion despite the convenience-backup failure'
+      Assert-Proof (@($deletedKeys | Where-Object { $_.title -eq 'OpenAI prod proof' }).Count -eq 0) 'the CLI list no longer shows the key moved to the Recycle Bin, despite the convenience-backup failure'
       $activeProofVault = $vault
       try {
         $vault = $exactOriginal[0].FullName
@@ -755,15 +897,17 @@ try {
       Click-Control 'Dismiss saved-operation notices'
       Remove-Item -LiteralPath $legacyBackup
       Click-Control 'Activity'
-      # Valid unknown-action fixture using the journal's existing public hash encoding.
+      # Valid unknown-action fixture in the unit 1b chain: the first record links to sha256("akm-journal-v1`n" + journal id),
+      # and each hash covers prev, seq, ts, action, key_id and detail (crates/akm-core/src/audit.rs).
       $sha = [Security.Cryptography.SHA256]::Create()
-      $previous = ''
+      $journalId = [IO.Path]::GetFileNameWithoutExtension($journal).Substring(2)
+      $previous = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("akm-journal-v1`n" + $journalId))).Replace('-', '').ToLowerInvariant()
       $sequence = 0
       $fixtureLines = @()
       foreach ($action in @('__proto__', 'constructor', 'toString')) {
         $sequence++
         $timestamp = '2026-10-31T00:00:00+00:00'
-        $payload = @($previous, [string]$sequence, $timestamp, $action, '', '', '', '', '') -join "`n"
+        $payload = @($previous, [string]$sequence, $timestamp, $action, '', '') -join "`n"
         $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($payload))).Replace('-', '').ToLowerInvariant()
         $fixtureLines += ([ordered]@{seq=$sequence;ts=$timestamp;action=$action;prev=$previous;hash=$hash} | ConvertTo-Json -Compress)
         $previous = $hash
@@ -852,12 +996,10 @@ try {
   Set-Field 'Paste the .env contents' 'OPENAI_API_KEY=fake-dev-value'
   Set-Field 'Target project' 'demo'
   Set-Field 'Target environment' 'dev'
-  Click-Control 'Review import'
-  Find-Control 'Confirm import' ([System.Windows.Automation.ControlType]::Button) | Out-Null
-  Assert-Proof (Wait-Text '1\s*new,\s*0\s*replacements') 'dev import review does not target the prod key'
   $beforeConfirm = Invoke-TestCli @('list', '--json') | Out-String | ConvertFrom-Json
-  Assert-Proof ($beforeConfirm.Count -eq 1) 'preview did not write to disk'
-  Click-Control 'Confirm import'
+  Assert-Proof ($beforeConfirm.Count -eq 1) 'nothing was written before the native confirmation'
+  Click-Control 'Review import'
+  Confirm-NativeImport 'project "demo", environment "dev"'
   Assert-Proof (Wait-Text 'Imported: 1 added, 0 updated\.') 'confirmed scoped import saved'
   $keys = Invoke-TestCli @('list', '--json') | Out-String | ConvertFrom-Json
   $prod = $keys | Where-Object { $_.environment -eq 'prod' }
@@ -990,6 +1132,7 @@ try {
   }
   throw
 } finally {
+  [Environment]::SetEnvironmentVariable('AKM_JOURNAL_ROOT', $journalRootBefore, 'Process')
   if ($process -and !$process.HasExited) {
     try { $process.CloseMainWindow() | Out-Null; if (!$process.WaitForExit(5000)) { $process.Kill() } } catch { $process.Kill() }
   }

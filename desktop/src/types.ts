@@ -25,8 +25,27 @@ export interface KeyView {
   rotationDays: number | null;
   createdAt: string | null;
   updatedAt: string | null;
-  expired: boolean;
-  rotationDueIn: number | null;
+  /** When the rotation interval elapses. Null when AKM has no secret-change time or no interval. */
+  rotationDueAt: string | null;
+  /** When the secret last changed. Null when AKM has no such time. */
+  secretChangedAt: string | null;
+  secretChange: SecretChange;
+  /** The number of earlier versions in the vault's native history. */
+  historyCount: number;
+}
+
+export type SecretChange = "known" | "unknown" | "changed_outside";
+
+/** The receipt of a rotation. It holds times and metadata, never a secret. */
+export interface RotationReceipt {
+  key: KeyView;
+  changedAt: string;
+  previousChangedAt: string | null;
+}
+
+export interface RecycledKey {
+  key: KeyView;
+  deletedAt: string | null;
 }
 
 export interface KeyDraft {
@@ -52,7 +71,13 @@ export interface AuditEntry {
   keyTitle: string | null;
   project: string | null;
   environment: string | null;
+  keyId: string | null;
   detail: string | null;
+}
+
+export interface JournalNotice {
+  kind: "legacySidecar" | "identityUnconfirmed" | "earlierJournal" | "relatedJournal";
+  message: string;
 }
 
 export interface AuditReport {
@@ -60,6 +85,9 @@ export interface AuditReport {
   entries: AuditEntry[];
   brokenAt: string | null;
   state: "absent" | "empty" | "consistent" | "corrupt";
+  damage: "truncatedTail" | "malformedJson" | "brokenLink" | "hashMismatch" | null;
+  identity: "confirmed" | "unconfirmed";
+  notices: JournalNotice[];
   problemLine: number | null;
   totalEntries: number;
 }
@@ -67,7 +95,7 @@ export interface AuditReport {
 export interface OperationNotice {
   id: string;
   originSession: string;
-  kind: "journal" | "backupRefresh" | "backupPrune" | "backupRetention" | "exportJournal" | "preference";
+  kind: "journal" | "backupRefresh" | "backupPrune" | "backupRetention" | "exportJournal" | "preference" | "importApplied" | "importSessionEnded" | "importFailed" | "importDeclined";
 }
 
 export interface WarningReport {
@@ -85,12 +113,6 @@ export interface ImportReport {
   updated: number;
 }
 
-export interface ImportPreview extends ImportReport {
-  unchanged: number;
-  token: string;
-  changes: { name: string; title: string; action: "add" | "update" | "unchanged" }[];
-}
-
 export interface BackupInfo {
   path: string;
   exists: boolean;
@@ -103,5 +125,16 @@ export interface CommandError {
   message: string;
 }
 
-export type View = "keys" | "activity" | "settings";
+/**
+ * The opt-in notification, as the native layer reports it. `blocked` means that AKM stopped
+ * trying for this run, after a refused permission or a failed notification.
+ */
+export interface ReminderStatus {
+  enabled: boolean;
+  permission: "granted" | "denied" | "prompt";
+  delivery: "none" | "sent" | "failed";
+  blocked: boolean;
+}
+
+export type View = "keys" | "bin" | "activity" | "settings";
 export type Theme = "light" | "dark";

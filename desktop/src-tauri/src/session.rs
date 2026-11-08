@@ -1,6 +1,10 @@
 use std::{
+    ops::{Deref, DerefMut},
     path::PathBuf,
-    sync::{Arc, Mutex, MutexGuard, TryLockError},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, MutexGuard, PoisonError, TryLockError,
+    },
     time::{Duration, Instant},
 };
 
@@ -14,7 +18,6 @@ use zeroize::Zeroizing;
 use crate::{
     clipboard::{CleanupFailure, ClipboardBackend, ClipboardLease},
     error::CommandError,
-    pending::{PendingImport, PendingImports},
     policy::{Policy, Signal, Ticket},
 };
 
@@ -39,6 +42,13 @@ pub struct Snapshot {
     pub ticket: Ticket,
     pub revision: u64,
     pub presentation: u64,
+}
+
+impl Snapshot {
+    /// The same session and the same vault contents. The presentation is not part of it.
+    pub fn same_vault(&self, other: &Snapshot) -> bool {
+        self.ticket == other.ticket && self.revision == other.revision
+    }
 }
 
 pub struct Stamped<T> {
@@ -77,6 +87,10 @@ pub enum OperationWarningKind {
     BackupRetention,
     ExportJournal,
     Preference,
+    ImportApplied,
+    ImportSessionEnded,
+    ImportFailed,
+    ImportDeclined,
 }
 
 #[derive(Clone, Serialize)]
@@ -123,9 +137,9 @@ struct Gate {
     owner: Option<NativeOwner>,
     revision: u64,
     presentation: u64,
-    pending: PendingImports,
-    clipboard: ClipboardLease,
-    cleanup_episode: Option<u64>,
+    /// A lock transition was seen and its cleanup attempt is still owed. The guard that
+    /// saw the transition settles it after it released the gate (unit 1h, design D2).
+    cleanup_owed: bool,
     path: Option<PathBuf>,
     warnings: Vec<ApplicationNotice>,
     notices: Vec<OperationNotice>,
@@ -137,8 +151,60 @@ struct StoredVault {
     vault: Option<Vault>,
 }
 
+/// The clipboard lease and the bookkeeping that belongs to it. Lock order is vault, then this
+/// cell, then the gate: code that holds the gate never waits for the cell.
+struct LeaseCell {
+    clipboard: ClipboardLease,
+    /// The session that made the current lease; a lease of any other ticket is stale.
+    ticket: Option<Ticket>,
+    /// The lease generation whose cleanup failure already has a warning.
+    episode: Option<u64>,
+}
+
+/// A gate guard. A lock transition that the call saw is settled when the guard is dropped,
+/// after the gate was released, so a cleanup never runs under the gate.
+struct GateGuard<'a> {
+    session: &'a Session,
+    guard: Option<MutexGuard<'a, Gate>>,
+    flush: bool,
+}
+
+impl Deref for GateGuard<'_> {
+    type Target = Gate;
+    fn deref(&self) -> &Gate {
+        self.guard.as_ref().expect("the guard lives until drop")
+    }
+}
+
+impl DerefMut for GateGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Gate {
+        self.guard.as_mut().expect("the guard lives until drop")
+    }
+}
+
+impl Drop for GateGuard<'_> {
+    fn drop(&mut self) {
+        let Some(mut guard) = self.guard.take() else {
+            return;
+        };
+        let owed = self.flush && std::mem::take(&mut guard.cleanup_owed);
+        drop(guard);
+        if owed {
+            self.session.settle(false);
+        }
+    }
+}
+
+enum Step {
+    None,
+    Clear,
+    Tick(Duration),
+}
+
 pub struct Session {
     gate: Mutex<Gate>,
+    lease: Mutex<LeaseCell>,
+    exiting: AtomicBool,
     vault: Mutex<StoredVault>,
     open_serial: Mutex<()>,
     clock: Arc<dyn Clock>,
@@ -147,6 +213,29 @@ pub struct Session {
 
 #[derive(Clone)]
 pub struct VaultState(pub Arc<Session>);
+
+/// Proof that the session gate is held for a session that is still current. Only
+/// `Session::while_current` and `Session::while_session` make one, and it is neither `Clone`
+/// nor `Copy`, so it cannot outlive the call that made it. A function that acts for a session
+/// (the notifier, the saved-path write) takes `&Held`: a caller that checked the session
+/// earlier and acts later has nothing to pass.
+pub struct Held<'gate> {
+    gate: std::marker::PhantomData<&'gate ()>,
+}
+
+impl Held<'_> {
+    fn new() -> Self {
+        Self {
+            gate: std::marker::PhantomData,
+        }
+    }
+
+    /// For a unit test of a function that takes `&Held` and has no session to hold.
+    #[cfg(test)]
+    pub fn for_test() -> Self {
+        Self::new()
+    }
+}
 
 impl Session {
     pub fn new(
@@ -160,13 +249,17 @@ impl Session {
                 owner: None,
                 revision: 0,
                 presentation: 0,
-                pending: PendingImports::default(),
-                clipboard: ClipboardLease::new(clipboard),
-                cleanup_episode: None,
+                cleanup_owed: false,
                 path: None,
                 warnings: Vec::new(),
                 notices: Vec::new(),
             }),
+            lease: Mutex::new(LeaseCell {
+                clipboard: ClipboardLease::new(clipboard),
+                ticket: None,
+                episode: None,
+            }),
+            exiting: AtomicBool::new(false),
             vault: Mutex::new(StoredVault::default()),
             open_serial: Mutex::new(()),
             clock,
@@ -174,7 +267,19 @@ impl Session {
         }
     }
 
-    fn gate(&self) -> Result<MutexGuard<'_, Gate>, CommandError> {
+    /// The gate. A guard that saw a lock transition makes the owed cleanup attempt when it
+    /// is dropped.
+    fn gate(&self) -> Result<GateGuard<'_>, CommandError> {
+        self.gate_with(true)
+    }
+
+    /// The gate, for a caller that settles the cleanup itself (it holds the lease cell, or
+    /// it is a tick or an open, which settle exactly once).
+    fn gate_deferred(&self) -> Result<GateGuard<'_>, CommandError> {
+        self.gate_with(false)
+    }
+
+    fn gate_with(&self, flush: bool) -> Result<GateGuard<'_>, CommandError> {
         match self.gate.lock() {
             Ok(mut gate) => {
                 let was_locked = gate.policy.is_locked();
@@ -182,12 +287,21 @@ impl Session {
                 if !was_locked && gate.policy.is_locked() {
                     self.locked_gate(&mut gate);
                 }
-                Ok(gate)
+                Ok(GateGuard {
+                    session: self,
+                    guard: Some(gate),
+                    flush,
+                })
             }
             Err(poisoned) => {
                 let mut gate = poisoned.into_inner();
                 gate.policy.observe(Signal::Unobservable);
                 self.locked_gate(&mut gate);
+                drop(GateGuard {
+                    session: self,
+                    guard: Some(gate),
+                    flush,
+                });
                 Err(CommandError::internal(
                     "The native session state failed. Restart AKM.",
                 ))
@@ -195,10 +309,95 @@ impl Session {
         }
     }
 
+    /// A lock transition: the notice goes out first, under the gate. The cleanup attempt is
+    /// owed, and happens after the gate was released (design D2).
     fn locked_gate(&self, gate: &mut Gate) {
-        gate.pending.clear();
-        cleanup_clipboard(gate, None);
+        gate.cleanup_owed = true;
         self.retire_owner(gate);
+    }
+
+    fn cell(&self) -> MutexGuard<'_, LeaseCell> {
+        self.lease.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn raw_gate(&self) -> MutexGuard<'_, Gate> {
+        self.gate.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    #[cfg(test)]
+    fn cell_for_test(&self) -> MutexGuard<'_, LeaseCell> {
+        self.cell()
+    }
+
+    /// The cleanup attempt of one public call (at most one, never a loop). `tick` also
+    /// expires a due lease of the current session.
+    fn settle(&self, tick: bool) {
+        let mut cell = self.cell();
+        self.settle_held(&mut cell, tick, false);
+    }
+
+    fn settle_held(&self, cell: &mut LeaseCell, tick: bool, only_if_owed: bool) {
+        let step = {
+            let mut gate = self.raw_gate();
+            let owed = std::mem::take(&mut gate.cleanup_owed);
+            if (only_if_owed && !owed && !tick) || cell.clipboard.owned_generation().is_none() {
+                Step::None
+            } else {
+                // A tick keeps the due time of a lease that outlived its session, as unit 1a
+                // accepted. Any other settle is a lock transition: it cleans a lease that
+                // does not belong to the active session, so a late settle of an older session
+                // cannot touch a newer session's copy.
+                let stale = match cell.ticket {
+                    Some(ticket) => gate.policy.is_locked() || gate.policy.generation() != ticket.0,
+                    None => true,
+                };
+                if tick {
+                    if gate.policy.is_locked() {
+                        Step::Clear
+                    } else {
+                        Step::Tick(self.clock.now())
+                    }
+                } else if stale {
+                    Step::Clear
+                } else {
+                    Step::None
+                }
+            }
+        };
+        let lease = cell.clipboard.owned_generation();
+        let result = match step {
+            Step::Clear => cell.clipboard.clear(),
+            Step::Tick(now) => cell.clipboard.tick(now),
+            Step::None => Ok(()),
+        };
+        let failure = result
+            .err()
+            .zip(lease)
+            .map(|(error, lease_generation)| CleanupFailure {
+                lease_generation,
+                error,
+            });
+        self.account_cleanup(cell, failure);
+    }
+
+    fn account_cleanup(&self, cell: &mut LeaseCell, failure: Option<CleanupFailure>) {
+        if let Some(failure) = failure {
+            if cell.episode != Some(failure.lease_generation) {
+                cell.episode = Some(failure.lease_generation);
+                application_warning(&mut self.raw_gate(), failure.error.message);
+            }
+        }
+        for note in cell.clipboard.take_notes() {
+            application_warning(&mut self.raw_gate(), note.message().to_string());
+        }
+        // An actual relinquishment or replacement ends the old episode. A successful
+        // not-due tick retains the same owned lease, so it does not count as recovery.
+        if cell.clipboard.owned_generation() != cell.episode {
+            cell.episode = None;
+        }
+        if cell.clipboard.owned_generation().is_none() {
+            cell.ticket = None;
+        }
     }
 
     fn retire_owner(&self, gate: &mut Gate) {
@@ -266,23 +465,34 @@ impl Session {
     }
 
     pub fn tick(&self) {
-        if let Ok(mut gate) = self.gate() {
-            let due = (!gate.policy.is_locked()).then(|| self.clock.now());
-            cleanup_clipboard(&mut gate, due);
-        }
+        // Expiry seen here is settled by the one attempt below.
+        drop(self.gate_deferred());
+        self.settle(true);
         self.discard_locked_vault();
     }
 
-    pub fn activity(&self) -> Result<(), CommandError> {
+    /// Window close and application exit: lock, with one cleanup attempt, once. Later calls
+    /// do nothing until the next open. The lease's own drop does not attempt again.
+    pub fn shutdown(&self) {
+        if self.exiting.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let _ = self.lock();
+        self.cell().clipboard.exit_attempted();
+    }
+
+    /// Renews the idle deadline of the session that the request names. The page makes the request
+    /// when the user acts, but it can arrive after that session ended: a session that is not
+    /// the current one is refused, so it never keeps its replacement awake.
+    pub fn activity(&self, session_id: &str) -> Result<(), CommandError> {
+        let id = uuid::Uuid::parse_str(session_id).map_err(|_| CommandError::locked())?;
         let mut gate = self.gate()?;
-        let was_locked = gate.policy.is_locked();
-        let active = gate.policy.activity(self.clock.now());
-        if !was_locked && gate.policy.is_locked() {
-            self.locked_gate(&mut gate);
-        }
-        if !active {
-            return Err(CommandError::locked());
-        }
+        let current = self.current(&mut gate)?;
+        gate.owner
+            .as_ref()
+            .filter(|owner| owner.ticket == current.ticket && owner.id == id)
+            .ok_or_else(CommandError::locked)?;
+        gate.policy.activity(self.clock.now());
         Ok(())
     }
 
@@ -296,6 +506,41 @@ impl Session {
             return Err(CommandError::locked());
         }
         Ok(())
+    }
+
+    /// The one way to perform a session-scoped side effect (a settings write, a
+    /// notification). The effect runs while `ticket` still owns the session and under the
+    /// gate that lock and `start_open` take, so neither can retire the owner between the
+    /// check and the effect. The effect gets a `Held` and every such side effect takes one
+    /// as an argument, so code that checks and then acts after the gate is released does not
+    /// compile. The effect must be short and must not call back into the session: the gate
+    /// is not reentrant.
+    pub fn while_current<T>(
+        &self,
+        ticket: Ticket,
+        effect: impl FnOnce(&Held<'_>) -> T,
+    ) -> Result<T, CommandError> {
+        let mut gate = self.gate()?;
+        if self.current(&mut gate)?.ticket != ticket {
+            return Err(CommandError::locked());
+        }
+        Ok(effect(&Held::new()))
+    }
+
+    /// As `while_current`, for a request that names the session it was made for.
+    pub fn while_session<T>(
+        &self,
+        session_id: &str,
+        effect: impl FnOnce(&Held<'_>) -> T,
+    ) -> Result<T, CommandError> {
+        let id = uuid::Uuid::parse_str(session_id).map_err(|_| CommandError::locked())?;
+        let mut gate = self.gate()?;
+        let current = self.current(&mut gate)?;
+        gate.owner
+            .as_ref()
+            .filter(|owner| owner.ticket == current.ticket && owner.id == id)
+            .ok_or_else(CommandError::locked)?;
+        Ok(effect(&Held::new()))
     }
 
     pub fn path(&self) -> Result<Option<PathBuf>, CommandError> {
@@ -312,12 +557,11 @@ impl Session {
     }
 
     fn start_open(&self) -> Result<(Ticket, uuid::Uuid), CommandError> {
-        let reservation = {
-            let mut gate = self.gate()?;
+        self.exiting.store(false, Ordering::SeqCst);
+        let reservation = (|| {
+            let mut gate = self.gate_deferred()?;
             let ticket = gate.policy.begin_open(self.clock.now());
-            gate.pending.clear();
-            cleanup_clipboard(&mut gate, None);
-            self.retire_owner(&mut gate);
+            self.locked_gate(&mut gate);
             let ticket = ticket.ok_or_else(|| {
                 CommandError::new(
                     "sessionUnavailable",
@@ -330,10 +574,12 @@ impl Session {
                 ticket,
                 claimed: false,
             });
-            (ticket, id)
-        };
+            Ok((ticket, id))
+        })();
+        // The older owner was retired above; the one attempt for its lease is here.
+        self.settle(false);
         self.discard_locked_vault();
-        Ok(reservation)
+        reservation
     }
 
     pub fn claim_open(&self, session_id: &str) -> Result<Ticket, CommandError> {
@@ -366,7 +612,30 @@ impl Session {
             .ok_or_else(CommandError::locked)
     }
 
+    /// Expires the presentation of the current session. For a native event (a minimize), which
+    /// happens now, in the window that the user sees.
     pub fn expire_presentation(&self) -> Result<Option<NativeViewNotice>, CommandError> {
+        self.expire_presentation_matching(None)
+    }
+
+    /// Expires the presentation of the session that a request names. The request was made by a
+    /// page earlier and may arrive after that session ended: a session that is not the current
+    /// one has nothing to expire, so the answer is `None` and the session that replaced it is
+    /// not touched. The check and the expiry share one hold of the gate.
+    pub fn expire_presentation_of(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<NativeViewNotice>, CommandError> {
+        let Ok(id) = uuid::Uuid::parse_str(session_id) else {
+            return Ok(None);
+        };
+        self.expire_presentation_matching(Some(id))
+    }
+
+    fn expire_presentation_matching(
+        &self,
+        only: Option<uuid::Uuid>,
+    ) -> Result<Option<NativeViewNotice>, CommandError> {
         let mut gate = self.gate()?;
         let Ok(current) = self.current(&mut gate) else {
             return Ok(None);
@@ -375,10 +644,13 @@ impl Session {
             .owner
             .as_ref()
             .filter(|owner| owner.ticket == current.ticket)
-            .map(|owner| owner.id.to_string())
+            .map(|owner| owner.id)
             .ok_or_else(CommandError::locked)?;
+        if only.is_some_and(|id| id != session_id) {
+            return Ok(None);
+        }
+        let session_id = session_id.to_string();
         gate.presentation = gate.presentation.wrapping_add(1);
-        gate.pending.clear();
         Ok(Some(NativeViewNotice {
             session_id,
             hide_id: uuid::Uuid::new_v4().to_string(),
@@ -434,7 +706,6 @@ impl Session {
                 Err(error) => {
                     gate.policy.lock();
                     // Opening never installed protected state; its own event would hide the terminal error.
-                    gate.pending.clear();
                     gate.owner = None;
                     *stored = StoredVault::default();
                     return Err(error);
@@ -447,7 +718,6 @@ impl Session {
             gate.path = Some(vault.path().to_path_buf());
             gate.revision = 0;
             gate.presentation = 0;
-            gate.pending.clear();
             core_notices(&mut gate, ticket, vault.take_warning_records());
             *stored = StoredVault {
                 ticket: Some(ticket),
@@ -484,6 +754,19 @@ impl Session {
         self.access_checked(Access::Read, Some(expected), false, operation)
     }
 
+    /// An access bound to the session and the vault revision, not to the on-screen presentation.
+    /// An import is reviewed in a native window, so a hide, a page load or a discard does not
+    /// revoke what the user approved there. A lock, another session and another write do, and
+    /// they are checked under the gate at the moment of the access.
+    pub fn access_reviewed<T>(
+        &self,
+        access: Access,
+        expected: Snapshot,
+        operation: impl FnOnce(&mut Vault) -> Result<T, CommandError>,
+    ) -> Result<Stamped<T>, CommandError> {
+        self.access_checked(access, Some(expected), false, operation)
+    }
+
     fn access_checked<T>(
         &self,
         access: Access,
@@ -509,9 +792,6 @@ impl Session {
                             "stalePreview",
                             "The session or vault changed. Start this operation again.",
                         ));
-                    }
-                    if matches!(access, Access::Reload | Access::Upgrade) {
-                        gate.pending.clear();
                     }
                     current
                 }
@@ -547,7 +827,6 @@ impl Session {
         }
         if result.is_ok() && !matches!(access, Access::Read) {
             gate.revision = gate.revision.wrapping_add(1);
-            gate.pending.clear();
         }
         Ok(Stamped {
             snapshot: Snapshot {
@@ -603,30 +882,47 @@ impl Session {
         presentation: Option<u64>,
         text: Zeroizing<String>,
     ) -> Result<(), CommandError> {
-        // This gate serializes copy with lock/close/expiry. No Vault mutex is held here.
-        let mut gate = self.gate()?;
-        let current = self.current(&mut gate)?;
-        if current.ticket != ticket {
-            return Err(CommandError::locked());
+        // The cell serializes copy with cleanup. No Vault mutex and no gate is held while the
+        // OS clipboard is used, so a lock is never delayed by the copy (design D1).
+        let mut cell = self.cell();
+        let result = self.copy_held(&mut cell, ticket, presentation, text);
+        self.settle_held(&mut cell, false, true);
+        result
+    }
+
+    fn copy_held(
+        &self,
+        cell: &mut LeaseCell,
+        ticket: Ticket,
+        presentation: Option<u64>,
+        text: Zeroizing<String>,
+    ) -> Result<(), CommandError> {
+        let check = |this: &Self| -> Result<(), CommandError> {
+            let mut gate = this.gate_deferred()?;
+            let current = this.current(&mut gate)?;
+            if current.ticket != ticket {
+                return Err(CommandError::locked());
+            }
+            if presentation.is_some_and(|expected| expected != current.presentation) {
+                return Err(view_changed());
+            }
+            Ok(())
+        };
+        check(self)?;
+        let before = cell.clipboard.owned_generation();
+        let outcome = cell.clipboard.copy_reported(text, self.clock.now());
+        let after = cell.clipboard.owned_generation();
+        if after.is_some() && after != before {
+            cell.ticket = Some(ticket);
         }
-        if presentation.is_some_and(|expected| expected != current.presentation) {
-            return Err(view_changed());
-        }
-        match gate.clipboard.copy_reported(text, self.clock.now()) {
-            Ok(_) => account_cleanup(&mut gate, None),
+        match outcome {
+            Ok(_) => self.account_cleanup(cell, None),
             Err(failure) => {
-                account_cleanup(&mut gate, failure.cleanup);
+                self.account_cleanup(cell, failure.cleanup);
                 return Err(failure.error);
             }
         }
-        let current = self.current(&mut gate)?;
-        if current.ticket != ticket {
-            return Err(CommandError::locked());
-        }
-        if presentation.is_some_and(|expected| expected != current.presentation) {
-            return Err(view_changed());
-        }
-        Ok(())
+        check(self)
     }
 
     pub fn reveal(&self, secret: Stamped<Zeroizing<String>>) -> Result<String, CommandError> {
@@ -675,37 +971,37 @@ impl Session {
         Ok(())
     }
 
-    pub fn store_preview(
-        &self,
-        expected: Snapshot,
-        text: Zeroizing<String>,
-        project: Option<String>,
-        environment: Option<String>,
-    ) -> Result<String, CommandError> {
-        let mut gate = self.gate()?;
-        if self.current(&mut gate)? != expected {
-            return Err(CommandError::new(
-                "stalePreview",
-                "The vault changed. Preview again.",
-            ));
-        }
-        Ok(gate.pending.set(
-            expected.ticket,
-            expected.revision,
-            text,
-            project,
-            environment,
-        ))
-    }
-
-    pub fn take_preview(&self, token: &str) -> Result<Stamped<PendingImport>, CommandError> {
+    /// The snapshot of the current session, for a request that names the session it was made
+    /// for. A request of an older session, or one that arrives after a newer opening, is
+    /// refused here, so a page request never acts on a session other than its own.
+    pub fn snapshot_for(&self, session_id: &str) -> Result<Snapshot, CommandError> {
+        let id = uuid::Uuid::parse_str(session_id).map_err(|_| CommandError::locked())?;
         let mut gate = self.gate()?;
         let current = self.current(&mut gate)?;
-        let pending = gate.pending.take(token, current.ticket, current.revision)?;
-        Ok(Stamped {
-            snapshot: current,
-            value: pending,
-        })
+        gate.owner
+            .as_ref()
+            .filter(|owner| owner.ticket == current.ticket && owner.id == id)
+            .ok_or_else(CommandError::locked)?;
+        Ok(current)
+    }
+
+    /// The record belongs to the application, not to a session: it must survive a
+    /// lock and a lost reply. It holds an opaque operation id and a fixed kind only.
+    pub fn record_import(&self, ticket: Ticket, operation_id: &str, kind: OperationWarningKind) {
+        if let Ok(mut gate) = self.gate() {
+            gate.notices.push(OperationNotice {
+                id: operation_id.to_string(),
+                origin_session: ticket.0.to_string(),
+                kind,
+            });
+        }
+    }
+
+    /// A page load means the document that held any on-screen result is gone.
+    pub fn document_started(&self) {
+        if let Ok(mut gate) = self.gate() {
+            gate.presentation = gate.presentation.wrapping_add(1);
+        }
     }
 
     pub fn warnings(&self) -> Result<WarningReport, CommandError> {
@@ -779,36 +1075,6 @@ fn view_changed() -> CommandError {
     )
 }
 
-fn cleanup_clipboard(gate: &mut Gate, due: Option<Duration>) {
-    let lease = gate.clipboard.owned_generation();
-    let result = match due {
-        Some(now) => gate.clipboard.tick(now),
-        None => gate.clipboard.clear(),
-    };
-    let failure = result
-        .err()
-        .zip(lease)
-        .map(|(error, lease_generation)| CleanupFailure {
-            lease_generation,
-            error,
-        });
-    account_cleanup(gate, failure);
-}
-
-fn account_cleanup(gate: &mut Gate, failure: Option<CleanupFailure>) {
-    if let Some(failure) = failure {
-        if gate.cleanup_episode != Some(failure.lease_generation) {
-            gate.cleanup_episode = Some(failure.lease_generation);
-            application_warning(gate, failure.error.message);
-        }
-    }
-    // An actual relinquishment or replacement ends the old episode. A successful
-    // not-due tick retains the same owned lease, so it does not count as recovery.
-    if gate.clipboard.owned_generation() != gate.cleanup_episode {
-        gate.cleanup_episode = None;
-    }
-}
-
 fn application_warning(gate: &mut Gate, message: String) {
     gate.warnings.push(ApplicationNotice {
         id: uuid::Uuid::new_v4().to_string(),
@@ -844,7 +1110,6 @@ mod tests {
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc,
     };
-    use zeroize::Zeroize;
 
     #[derive(Default)]
     struct TestClock(AtomicU64);
@@ -906,19 +1171,10 @@ mod tests {
     }
 
     #[test]
-    fn native_presentation_expiry_keeps_the_owner_but_expires_old_reviews_and_read_results() {
+    fn native_presentation_expiry_keeps_the_owner_but_expires_old_read_results_and_bound_writes() {
         let f = fixture();
         let before = f.session.snapshot().unwrap();
         let owner = f.session.active_owner(before.ticket).unwrap();
-        let token = f
-            .session
-            .store_preview(
-                before,
-                Zeroizing::new("TOKEN=fake-review".into()),
-                Some("demo".into()),
-                Some("dev".into()),
-            )
-            .unwrap();
         let read = f
             .session
             .access(Access::Read, Some(before), |_| Ok("fake-old-read"))
@@ -942,16 +1198,15 @@ mod tests {
             f.native_notices.lock().unwrap().is_empty(),
             "presentation expiry is not a native lock"
         );
-        assert!(f.session.take_preview(&token).is_err());
-        assert!(f
-            .session
-            .store_preview(
-                before,
-                Zeroizing::new("TOKEN=fake-late".into()),
-                Some("demo".into()),
-                Some("dev".into())
-            )
-            .is_err());
+        assert_eq!(
+            f.session
+                .access(Access::Write, Some(before), |_| Ok(()))
+                .err()
+                .unwrap()
+                .kind,
+            "stalePreview",
+            "an operation bound to the old presentation is refused"
+        );
         assert_eq!(
             f.session.finish(Access::Read, read).unwrap_err().kind,
             "viewChanged"
@@ -989,15 +1244,14 @@ mod tests {
             read.snapshot.presentation,
             f.session.snapshot().unwrap().presentation
         );
-        assert!(f
-            .session
-            .store_preview(
-                read.snapshot,
-                Zeroizing::new("TOKEN=fake-late-review".into()),
-                Some("demo".into()),
-                Some("dev".into())
-            )
-            .is_err());
+        assert_eq!(
+            f.session
+                .access(Access::Write, Some(read.snapshot), |_| Ok(()))
+                .err()
+                .unwrap()
+                .kind,
+            "stalePreview"
+        );
     }
 
     #[test]
@@ -1021,8 +1275,7 @@ mod tests {
         );
         assert!(f
             .session
-            .gate()
-            .unwrap()
+            .cell_for_test()
             .clipboard
             .owned_generation()
             .is_none());
@@ -1044,12 +1297,11 @@ mod tests {
         let session = f.session.clone();
         let writer = std::thread::spawn(move || {
             session.access(Access::Write, Some(before), |vault| {
-                let mut key = vault.add(akm_core::ApiKeyInput::new(
+                let key = vault.add(akm_core::ApiKeyInput::new(
                     "Fake presentation commit",
                     "fake-committed-value",
                 ))?;
                 let id = key.id.clone();
-                key.secret.zeroize();
                 committed_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
                 Ok(id)
@@ -1170,11 +1422,10 @@ mod tests {
             } else {
                 f.session
                     .access(Access::Write, None, |vault| {
-                        let mut key = vault.add(akm_core::ApiKeyInput::new(
+                        vault.add(akm_core::ApiKeyInput::new(
                             "Fake intervening revision",
                             "fake-revision-value",
                         ))?;
-                        key.secret.zeroize();
                         Ok(())
                     })
                     .unwrap();
@@ -1467,6 +1718,10 @@ mod tests {
     #[test]
     fn status_and_commands_expire_without_frontend_polling_or_activity() {
         let f = fixture();
+        let owner = f
+            .session
+            .active_owner(f.session.snapshot().unwrap().ticket)
+            .unwrap();
         f.clock.set(599);
         let status = f
             .session
@@ -1480,15 +1735,59 @@ mod tests {
             .session
             .access(Access::Read, None, |vault| Ok(vault.list()))
             .is_err());
-        assert!(f.session.activity().is_err());
+        assert!(f.session.activity(&owner).is_err());
         assert_eq!(f.events.load(Ordering::SeqCst), 1);
+    }
+
+    /// P2R2-03, class B: a page request that renews the idle deadline names its session. A late
+    /// request of session A must not keep session B awake. B's own activity still does.
+    #[test]
+    fn p2r2_03_a_stale_sessions_activity_never_keeps_its_replacement_awake() {
+        let f = fixture();
+        let a = f
+            .session
+            .active_owner(f.session.snapshot().unwrap().ticket)
+            .unwrap();
+        reopen_fixture(&f);
+        let b = f
+            .session
+            .active_owner(f.session.snapshot().unwrap().ticket)
+            .unwrap();
+        assert_ne!(a, b);
+        f.clock.set(590);
+        assert_eq!(
+            f.session.activity(&a).unwrap_err().kind,
+            "locked",
+            "a request of the retired session is refused"
+        );
+        assert!(f.session.activity("not-an-id").is_err());
+        f.clock.set(600);
+        assert!(
+            f.session.snapshot().is_err(),
+            "the stale request did not renew the deadline of B, so B expires on time"
+        );
+
+        // Control: B's own activity does keep B awake.
+        let f = fixture();
+        reopen_fixture(&f);
+        let b = f
+            .session
+            .active_owner(f.session.snapshot().unwrap().ticket)
+            .unwrap();
+        f.clock.set(590);
+        f.session.activity(&b).unwrap();
+        f.clock.set(600);
+        assert!(f.session.snapshot().is_ok(), "B's own activity renewed it");
     }
 
     #[test]
     fn warning_from_a_committed_change_is_owned_after_another_vault_opens() {
         let f = fixture();
         let origin = f.session.snapshot().unwrap().ticket;
-        std::fs::create_dir(f._directory.path().join("vault.kdbx.audit.jsonl")).unwrap();
+        std::fs::create_dir(
+            crate::test_support::journal_of(&f._directory.path().join("vault.kdbx")).path(),
+        )
+        .unwrap();
         f.session
             .access(Access::Write, None, |vault| {
                 vault.add(akm_core::ApiKeyInput::new(
@@ -1529,7 +1828,10 @@ mod tests {
     fn warning_from_a_lock_overtaken_commit_keeps_a_secret_free_origin_notice() {
         let f = fixture();
         let origin = f.session.snapshot().unwrap().ticket;
-        std::fs::create_dir(f._directory.path().join("vault.kdbx.audit.jsonl")).unwrap();
+        std::fs::create_dir(
+            crate::test_support::journal_of(&f._directory.path().join("vault.kdbx")).path(),
+        )
+        .unwrap();
         let (committed_tx, committed_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         let session = f.session.clone();
@@ -1645,7 +1947,7 @@ mod tests {
         for partial in [false, true] {
             let f = fixture();
             let busy = Arc::new(AtomicBool::new(true));
-            f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(BusyCleanup {
+            f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(BusyCleanup {
                 data: f.clipboard.clone(),
                 busy: busy.clone(),
                 partial,
@@ -1680,7 +1982,7 @@ mod tests {
             let expected = if newer_copy { "fake-busy-value" } else { "" };
             assert_eq!(f.clipboard.lock().unwrap().text, expected);
             assert_eq!(f.clipboard.lock().unwrap().clears, usize::from(!newer_copy));
-            assert_eq!(f.session.gate().unwrap().clipboard.owned_generation(), None);
+            assert_eq!(f.session.cell_for_test().clipboard.owned_generation(), None);
             // The kept warning is history: it never promised a retry that has now ended.
             let kept = f.session.warnings().unwrap().application;
             assert_eq!(kept.len(), 1);
@@ -1725,7 +2027,7 @@ mod tests {
         let f = fixture();
         let roll_back = Arc::new(AtomicBool::new(false));
         let clear_calls = Arc::new(AtomicUsize::new(0));
-        f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(RollbackAfterLease {
+        f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(RollbackAfterLease {
             data: f.clipboard.clone(),
             roll_back: roll_back.clone(),
             clear_calls: clear_calls.clone(),
@@ -1743,7 +2045,7 @@ mod tests {
             error.message,
             "Fake rolled-back publication The earlier clipboard content was removed, and the new value was not copied. Copy again."
         );
-        assert_eq!(f.session.gate().unwrap().clipboard.owned_generation(), None);
+        assert_eq!(f.session.cell_for_test().clipboard.owned_generation(), None);
         f.clock.set(30);
         f.session.tick();
         f.session.lock().unwrap();
@@ -1775,7 +2077,7 @@ mod tests {
     fn cleanup_fault(f: &Fixture) -> (Arc<AtomicBool>, Arc<AtomicUsize>) {
         let fail = Arc::new(AtomicBool::new(true));
         let attempts = Arc::new(AtomicUsize::new(0));
-        f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(CleanupFault {
+        f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(CleanupFault {
             data: f.clipboard.clone(),
             fail: fail.clone(),
             attempts: attempts.clone(),
@@ -1988,7 +2290,7 @@ mod tests {
     fn partial_cleanup_fault(f: &Fixture) -> (Arc<AtomicBool>, Arc<AtomicBool>) {
         let partial = Arc::new(AtomicBool::new(true));
         let fail = Arc::new(AtomicBool::new(true));
-        f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(PartialCleanupFault {
+        f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(PartialCleanupFault {
             data: f.clipboard.clone(),
             partial: partial.clone(),
             fail_clear: fail.clone(),
@@ -2123,7 +2425,7 @@ mod tests {
                     }
                 }
                 let journal =
-                    akm_core::audit::AuditLog::for_vault(&f._directory.path().join("vault.kdbx"));
+                    crate::test_support::journal_of(&f._directory.path().join("vault.kdbx"));
                 if journal_fails {
                     std::fs::create_dir(journal.path()).unwrap();
                 }
@@ -2276,6 +2578,87 @@ mod tests {
     }
 
     #[test]
+    fn review1_a_session_effect_runs_only_for_the_current_owner() {
+        let f = fixture();
+        let old_ticket = f.session.snapshot().unwrap().ticket;
+        let old_owner = f.session.active_owner(old_ticket).unwrap();
+        let ran = AtomicUsize::new(0);
+        let effect = |_: &Held<'_>| ran.fetch_add(1, Ordering::SeqCst);
+        assert!(f.session.while_current(old_ticket, effect).is_ok());
+        assert!(f.session.while_session(&old_owner, effect).is_ok());
+        assert_eq!(ran.load(Ordering::SeqCst), 2);
+        let new_owner = f.session.prepare_open().unwrap();
+        for (name, result) in [
+            (
+                "old ticket",
+                f.session.while_current(old_ticket, effect).err(),
+            ),
+            (
+                "old owner",
+                f.session.while_session(&old_owner, effect).err(),
+            ),
+            (
+                "new owner, not opened",
+                f.session.while_session(&new_owner, effect).err(),
+            ),
+            (
+                "malformed",
+                f.session.while_session("not-a-uuid", effect).err(),
+            ),
+        ] {
+            assert_eq!(
+                result.unwrap_or_else(|| panic!("{name} ran")).kind,
+                "locked"
+            );
+        }
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            2,
+            "a retired owner runs no effect"
+        );
+    }
+
+    #[test]
+    fn review1_a_session_effect_holds_the_gate_so_lock_and_a_new_opening_wait_for_it() {
+        for newer in ["lock", "open"] {
+            let f = fixture();
+            let owner = f
+                .session
+                .active_owner(f.session.snapshot().unwrap().ticket)
+                .unwrap();
+            let (inside_tx, inside_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let effect_session = f.session.clone();
+            let effect = std::thread::spawn(move || {
+                effect_session
+                    .while_session(&owner, |_| {
+                        inside_tx.send(()).unwrap();
+                        release_rx.recv().unwrap();
+                    })
+                    .unwrap();
+            });
+            inside_rx.recv().unwrap();
+            let (done_tx, done_rx) = mpsc::channel();
+            let retiring = f.session.clone();
+            let retire = std::thread::spawn(move || {
+                match newer {
+                    "lock" => retiring.lock().unwrap(),
+                    _ => drop(retiring.prepare_open().unwrap()),
+                }
+                done_tx.send(()).unwrap();
+            });
+            assert!(
+                done_rx.recv_timeout(Duration::from_millis(300)).is_err(),
+                "{newer}: the owner was retired while its effect was running"
+            );
+            release_tx.send(()).unwrap();
+            effect.join().unwrap();
+            done_rx.recv().unwrap();
+            retire.join().unwrap();
+        }
+    }
+
+    #[test]
     fn a_secret_producing_operation_cannot_return_after_lock() {
         let f = fixture();
         let (started_tx, started_rx) = mpsc::channel();
@@ -2302,13 +2685,13 @@ mod tests {
         let session = f.session.clone();
         let writer = std::thread::spawn(move || {
             session.access(Access::Write, None, |vault| {
-                let key = vault.add(akm_core::ApiKeyInput::new(
+                vault.add(akm_core::ApiKeyInput::new(
                     "Saved once",
                     "fake-private-result",
                 ))?;
                 committed_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
-                Ok(Zeroizing::new(key.secret))
+                Ok(Zeroizing::new("fake-private-result".to_string()))
             })
         });
         committed_rx.recv_timeout(Duration::from_secs(20)).unwrap();
@@ -2328,7 +2711,7 @@ mod tests {
         .unwrap();
         assert_eq!(reopened.list().len(), 1);
         assert_eq!(
-            reopened.find("Saved once").unwrap().secret,
+            crate::test_support::secret_titled(&reopened, "Saved once"),
             "fake-private-result"
         );
     }
@@ -2522,24 +2905,14 @@ mod tests {
     }
 
     #[test]
-    fn locking_clears_only_the_sessions_clipboard_and_invalidates_imports() {
+    fn locking_clears_only_the_sessions_clipboard() {
         let f = fixture();
         let stamp = f.session.snapshot().unwrap();
         f.session
             .copy(stamp.ticket, Zeroizing::new("fake".into()))
             .unwrap();
-        let token = f
-            .session
-            .store_preview(
-                stamp,
-                Zeroizing::new("TOKEN=fake".into()),
-                Some("app".into()),
-                Some("dev".into()),
-            )
-            .unwrap();
         f.session.lock().unwrap();
         assert_eq!(f.clipboard.lock().unwrap().text, "");
-        assert!(f.session.take_preview(&token).is_err());
         assert!(f
             .session
             .copy(stamp.ticket, Zeroizing::new("late".into()))
@@ -2556,41 +2929,29 @@ mod tests {
     }
 
     #[test]
-    fn intervening_writes_and_reload_discard_previews() {
+    fn a_snapshot_from_before_an_intervening_write_or_reload_cannot_authorize_a_write() {
         let f = fixture();
         let stamp = f.session.snapshot().unwrap();
-        let token = f
-            .session
-            .store_preview(
-                stamp,
-                Zeroizing::new("TOKEN=fake".into()),
-                Some("app".into()),
-                Some("dev".into()),
-            )
-            .unwrap();
         f.session
             .access(Access::Write, None, |vault| {
                 vault.add(akm_core::ApiKeyInput::new("Other", "fake-other"))?;
                 Ok(())
             })
             .unwrap();
-        assert!(f.session.take_preview(&token).is_err());
+        let stale = |stamp| {
+            f.session
+                .access(Access::Write, Some(stamp), |_| Ok(()))
+                .err()
+                .map(|error| error.kind)
+        };
+        assert_eq!(stale(stamp).as_deref(), Some("stalePreview"));
         let stamp = f.session.snapshot().unwrap();
-        let token = f
-            .session
-            .store_preview(
-                stamp,
-                Zeroizing::new("TOKEN=fake".into()),
-                Some("app".into()),
-                Some("dev".into()),
-            )
-            .unwrap();
         f.session
             .access(Access::Reload, None, |vault| {
                 vault.reload().map_err(Into::into)
             })
             .unwrap();
-        assert!(f.session.take_preview(&token).is_err());
+        assert_eq!(stale(stamp).as_deref(), Some("stalePreview"));
     }
 
     #[test]
@@ -2644,7 +3005,7 @@ mod tests {
         let stamp = f.session.snapshot().unwrap();
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(BlockingClipboard {
+        f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(BlockingClipboard {
             data: f.clipboard.clone(),
             started: started_tx,
             release: release_rx,
@@ -2658,7 +3019,13 @@ mod tests {
         let session = f.session.clone();
         let close = std::thread::spawn(move || session.lock());
         release_tx.send(()).unwrap();
-        copy.join().unwrap().unwrap();
+        // The lock no longer waits for the gate behind a copy (1H-01). It can end the session
+        // while the copy runs, so the copy answers `locked`; either way the lock's cleanup
+        // removes what the copy published.
+        match copy.join().unwrap() {
+            Ok(()) => {}
+            Err(error) => assert_eq!(error.kind, "locked"),
+        }
         close.join().unwrap().unwrap();
         assert_eq!(f.clipboard.lock().unwrap().text, "");
         assert_eq!(f.clipboard.lock().unwrap().clears, 1);
@@ -2671,7 +3038,7 @@ mod tests {
         let stamp = f.session.snapshot().unwrap();
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        f.session.gate().unwrap().clipboard = ClipboardLease::new(Box::new(BlockingClipboard {
+        f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(BlockingClipboard {
             data: f.clipboard.clone(),
             started: started_tx,
             release: release_rx,
@@ -2699,12 +3066,372 @@ mod tests {
         assert_eq!(f.clipboard.lock().unwrap().text, "");
     }
 
+    /// Unit 1h, 1H-01 and 1H-02: the lock notice comes first, and one public call makes at
+    /// most one cleanup attempt (design D1 to D3).
+    mod lock_order {
+        use super::*;
+        use crate::clipboard::Publication;
+
+        /// Counts cleanup attempts and records how many lock notices had been delivered at
+        /// each one. A busy clipboard keeps the lease, as the production backend does.
+        struct Counting {
+            inner: FakeClipboard,
+            notices: Arc<AtomicUsize>,
+            attempts: Arc<Mutex<Vec<usize>>>,
+            busy: Arc<AtomicBool>,
+        }
+        impl ClipboardBackend for Counting {
+            fn set_private(&mut self, text: &str) -> Publication {
+                self.inner.set_private(text)
+            }
+            fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
+                self.attempts
+                    .lock()
+                    .unwrap()
+                    .push(self.notices.load(Ordering::SeqCst));
+                if self.busy.load(Ordering::SeqCst) {
+                    return Err(CommandError::new(
+                        "clipboard",
+                        "The clipboard is busy. Try copying again.",
+                    ));
+                }
+                self.inner.clear_matching(sequence, text)
+            }
+        }
+
+        struct Counted {
+            f: Fixture,
+            attempts: Arc<Mutex<Vec<usize>>>,
+            busy: Arc<AtomicBool>,
+        }
+
+        /// A session that owns a copy, with a busy clipboard.
+        fn counted() -> Counted {
+            let f = fixture();
+            let attempts = Arc::new(Mutex::new(Vec::new()));
+            let busy = Arc::new(AtomicBool::new(true));
+            f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(Counting {
+                inner: FakeClipboard(f.clipboard.clone()),
+                notices: f.events.clone(),
+                attempts: attempts.clone(),
+                busy: busy.clone(),
+            }));
+            let ticket = f.session.snapshot().unwrap().ticket;
+            f.session
+                .copy(ticket, Zeroizing::new("fake-owned-copy".into()))
+                .unwrap();
+            Counted { f, attempts, busy }
+        }
+
+        type Entry = (&'static str, bool, bool, fn(&Fixture, Ticket, &str));
+
+        // Columns: entry, the session expires before the call, a lock notice is expected,
+        // the call. Each entry is a public call of `Session` that can see a lock transition.
+        fn entries() -> Vec<Entry> {
+            vec![
+                ("lock", false, true, |f, _, _| {
+                    let _ = f.session.lock();
+                }),
+                ("lock_owned", false, true, |f, _, owner| {
+                    let _ = f.session.lock_owned(Some(owner));
+                }),
+                ("observe locked", false, true, |f, _, _| {
+                    f.session.observe(Signal::Locked)
+                }),
+                ("observe suspend", false, true, |f, _, _| {
+                    f.session.observe(Signal::Suspend)
+                }),
+                ("observe unobservable", false, true, |f, _, _| {
+                    f.session.observe(Signal::Unobservable)
+                }),
+                ("shutdown", false, true, |f, _, _| f.session.shutdown()),
+                ("prepare_open", false, true, |f, _, _| {
+                    let _ = f.session.prepare_open();
+                }),
+                ("prepare_open after expiry", true, true, |f, _, _| {
+                    let _ = f.session.prepare_open();
+                }),
+                ("tick after expiry", true, true, |f, _, _| f.session.tick()),
+                ("snapshot after expiry", true, true, |f, _, _| {
+                    let _ = f.session.snapshot();
+                }),
+                ("ensure after expiry", true, true, |f, t, _| {
+                    let _ = f.session.ensure(t);
+                }),
+                ("activity after expiry", true, true, |f, _, owner| {
+                    let _ = f.session.activity(owner);
+                }),
+                ("path after expiry", true, true, |f, _, _| {
+                    let _ = f.session.path();
+                }),
+                ("warnings after expiry", true, true, |f, _, _| {
+                    let _ = f.session.warnings();
+                }),
+                ("warn after expiry", true, true, |f, _, _| {
+                    f.session.warn("fake".into())
+                }),
+                ("document_started after expiry", true, true, |f, _, _| {
+                    f.session.document_started()
+                }),
+                ("expire_presentation after expiry", true, true, |f, _, _| {
+                    let _ = f.session.expire_presentation();
+                }),
+                ("active_owner after expiry", true, true, |f, t, _| {
+                    let _ = f.session.active_owner(t);
+                }),
+                ("access after expiry", true, true, |f, _, _| {
+                    let _ = f.session.access(Access::Read, None, |_| Ok(()));
+                }),
+                ("copy after expiry", true, true, |f, t, _| {
+                    let _ = f.session.copy(t, Zeroizing::new("fake-late".into()));
+                }),
+                ("claim_open after expiry", true, true, |f, _, _| {
+                    let _ = f.session.claim_open(&uuid::Uuid::new_v4().to_string());
+                }),
+                ("dismiss_warnings after expiry", true, true, |f, _, _| {
+                    let _ = f.session.dismiss_warnings(&[]);
+                }),
+            ]
+        }
+
+        #[test]
+        fn every_public_entry_sends_its_notice_first_and_makes_exactly_one_attempt() {
+            for (name, expire, notice, call) in entries() {
+                let c = counted();
+                let ticket = c.f.session.snapshot().unwrap().ticket;
+                let owner = c.f.session.active_owner(ticket).unwrap();
+                if expire {
+                    c.f.clock.set(601);
+                }
+                call(&c.f, ticket, &owner);
+                let attempts = c.attempts.lock().unwrap().clone();
+                assert_eq!(attempts.len(), 1, "{name}: attempts {attempts:?}");
+                assert_eq!(
+                    attempts[0],
+                    usize::from(notice),
+                    "{name}: the notice goes out before the attempt"
+                );
+                assert_eq!(c.f.events.load(Ordering::SeqCst), 1, "{name}: one notice");
+                assert!(
+                    c.f.session
+                        .cell_for_test()
+                        .clipboard
+                        .owned_generation()
+                        .is_some(),
+                    "{name}: a busy attempt keeps the lease"
+                );
+                // The next public call is a new call: at most one more attempt, never a loop.
+                call(&c.f, ticket, &owner);
+                assert!(
+                    c.attempts.lock().unwrap().len() <= 2,
+                    "{name}: a second call made {} attempts",
+                    c.attempts.lock().unwrap().len()
+                );
+            }
+        }
+
+        #[test]
+        fn a_tick_when_the_lease_is_due_makes_one_attempt_and_no_notice() {
+            let c = counted();
+            c.f.clock.set(30);
+            c.f.session.tick();
+            assert_eq!(*c.attempts.lock().unwrap(), vec![0]);
+            assert_eq!(c.f.events.load(Ordering::SeqCst), 0);
+        }
+
+        #[test]
+        fn window_and_app_exit_events_make_one_attempt_in_all() {
+            let c = counted();
+            for _ in 0..4 {
+                c.f.session.shutdown();
+            }
+            assert_eq!(*c.attempts.lock().unwrap(), vec![1]);
+            let Counted { f, attempts, .. } = c;
+            let Fixture { session, .. } = f;
+            drop(session);
+            assert_eq!(
+                attempts.lock().unwrap().len(),
+                1,
+                "the lease's own drop makes no second exit attempt"
+            );
+        }
+
+        #[test]
+        fn a_copy_after_a_cancelled_close_gets_its_own_exit_attempt() {
+            let c = counted();
+            c.f.session.shutdown();
+            c.busy.store(false, Ordering::SeqCst);
+            reopen_fixture(&c.f);
+            let ticket = c.f.session.snapshot().unwrap().ticket;
+            c.f.session
+                .copy(ticket, Zeroizing::new("fake-second-copy".into()))
+                .unwrap();
+            c.busy.store(true, Ordering::SeqCst);
+            let before = c.attempts.lock().unwrap().len();
+            c.f.session.shutdown();
+            assert_eq!(c.attempts.lock().unwrap().len(), before + 1);
+            let Counted { f, attempts, .. } = c;
+            let Fixture { session, .. } = f;
+            drop(session);
+            assert_eq!(attempts.lock().unwrap().len(), before + 1);
+        }
+
+        #[test]
+        fn the_window_and_exit_events_call_shutdown_and_never_lock() {
+            let source = include_str!("lib.rs");
+            assert_eq!(source.matches(".shutdown()").count(), 2);
+            assert!(
+                !source.contains(".lock()"),
+                "a close or exit event that calls lock can make a second attempt"
+            );
+        }
+
+        /// A backend whose first cleanup attempt waits until the test releases it.
+        struct StalledCleanup {
+            inner: FakeClipboard,
+            started: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+            stall: bool,
+        }
+        impl ClipboardBackend for StalledCleanup {
+            fn set_private(&mut self, text: &str) -> Publication {
+                self.inner.set_private(text)
+            }
+            fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
+                if std::mem::take(&mut self.stall) {
+                    self.started.send(()).unwrap();
+                    self.release.recv().unwrap();
+                }
+                self.inner.clear_matching(sequence, text)
+            }
+        }
+
+        // 1H-01: a stalled tick cleanup holds the lease cell, never the gate.
+        #[test]
+        fn a_lock_delivers_its_notice_while_a_tick_cleanup_is_stalled_and_the_gate_stays_free() {
+            let f = fixture();
+            let (started_tx, started_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(StalledCleanup {
+                inner: FakeClipboard(f.clipboard.clone()),
+                started: started_tx,
+                release: release_rx,
+                stall: true,
+            }));
+            let ticket = f.session.snapshot().unwrap().ticket;
+            f.session
+                .copy(ticket, Zeroizing::new("fake-stalled".into()))
+                .unwrap();
+            f.clock.set(30);
+            let session = f.session.clone();
+            let tick = std::thread::spawn(move || session.tick());
+            started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+            let (free_tx, free_rx) = mpsc::channel();
+            let session = f.session.clone();
+            std::thread::spawn(move || {
+                let _ = session.warnings();
+                let _ = session.snapshot();
+                free_tx.send(()).unwrap();
+            });
+            free_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("a stalled cleanup must not hold the gate");
+
+            let session = f.session.clone();
+            let lock = std::thread::spawn(move || session.lock());
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while f.events.load(Ordering::SeqCst) == 0 {
+                assert!(
+                    Instant::now() < deadline,
+                    "the notice must arrive before the stalled cleanup ends"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(
+                !lock.is_finished(),
+                "the lock's own attempt waits for the cleanup in progress (recorded limit)"
+            );
+            assert_eq!(f.clipboard.lock().unwrap().text, "fake-stalled");
+            release_tx.send(()).unwrap();
+            tick.join().unwrap();
+            lock.join().unwrap().unwrap();
+            assert_eq!(f.clipboard.lock().unwrap().text, "");
+            assert_eq!(f.clipboard.lock().unwrap().clears, 1);
+            assert_eq!(f.events.load(Ordering::SeqCst), 1);
+        }
+
+        // The fence of design D2: a settle that follows a newer session's copy leaves it.
+        #[test]
+        fn a_late_settle_of_an_older_session_cannot_clean_a_newer_sessions_copy() {
+            let c = counted();
+            c.f.session.lock().unwrap();
+            assert!(c
+                .f
+                .session
+                .cell_for_test()
+                .clipboard
+                .owned_generation()
+                .is_some());
+            reopen_fixture(&c.f);
+            c.busy.store(false, Ordering::SeqCst);
+            let ticket = c.f.session.snapshot().unwrap().ticket;
+            c.f.session
+                .copy(ticket, Zeroizing::new("fake-newer-copy".into()))
+                .unwrap();
+            let before = c.attempts.lock().unwrap().len();
+            c.f.session.settle(false);
+            c.f.session.tick();
+            assert_eq!(c.attempts.lock().unwrap().len(), before);
+            assert_eq!(c.f.clipboard.lock().unwrap().text, "fake-newer-copy");
+        }
+
+        // A copy that waits behind a stalled cleanup holds no gate while it waits.
+        #[test]
+        fn a_copy_waiting_behind_a_stalled_cleanup_leaves_the_gate_free() {
+            let f = fixture();
+            let (started_tx, started_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(StalledCleanup {
+                inner: FakeClipboard(f.clipboard.clone()),
+                started: started_tx,
+                release: release_rx,
+                stall: true,
+            }));
+            let ticket = f.session.snapshot().unwrap().ticket;
+            f.session
+                .copy(ticket, Zeroizing::new("fake-first".into()))
+                .unwrap();
+            f.clock.set(30);
+            let session = f.session.clone();
+            let tick = std::thread::spawn(move || session.tick());
+            started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            let session = f.session.clone();
+            let copy = std::thread::spawn(move || {
+                session.copy(ticket, Zeroizing::new("fake-second".into()))
+            });
+            let (free_tx, free_rx) = mpsc::channel();
+            let session = f.session.clone();
+            std::thread::spawn(move || {
+                let _ = session.snapshot();
+                free_tx.send(()).unwrap();
+            });
+            free_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("a waiting copy must not hold the gate");
+            release_tx.send(()).unwrap();
+            tick.join().unwrap();
+            copy.join().unwrap().unwrap();
+            assert_eq!(f.clipboard.lock().unwrap().text, "fake-second");
+        }
+    }
+
     /// Unit 1a, design revision 3, section 3.1: the real publisher and cleanup over the fake
     /// Win32 API, through `copy_stamped` (the function both production copy commands call).
     #[cfg(windows)]
     mod real_publisher {
         use super::*;
-        use crate::clipboard::win32_fake::{FakeApi, FakeState, Fault, TransactionBackend};
+        use crate::clipboard_fake::{FakeApi, FakeState, Fault, TransactionBackend};
 
         const A: &str = "fake-copy-A";
         const B: &str = "fake-copy-B";
@@ -2729,7 +3456,7 @@ mod tests {
 
         fn install(f: &Fixture) -> Arc<Mutex<FakeState>> {
             let state = Arc::new(Mutex::new(FakeState::default()));
-            f.session.gate().unwrap().clipboard =
+            f.session.cell_for_test().clipboard =
                 ClipboardLease::new(Box::new(TransactionBackend(FakeApi(state.clone()))));
             state
         }
@@ -2742,7 +3469,7 @@ mod tests {
         }
 
         fn generation(f: &Fixture) -> Option<u64> {
-            f.session.gate().unwrap().clipboard.owned_generation()
+            f.session.cell_for_test().clipboard.owned_generation()
         }
 
         fn uncertain() -> String {
@@ -2782,6 +3509,31 @@ mod tests {
             opens: usize,
             empties: usize,
             sets: usize,
+        }
+
+        /// 1A-A2-02: the fake clipboard's sequence change for each row, counted from the
+        /// calls the row makes (an empty, a set, a rollback empty), and the same with or
+        /// without an earlier copy. A row that changes it differently has changed behaviour.
+        fn sequence_delta(name: &str) -> u32 {
+            match name {
+                "NUL in the value"
+                | "register"
+                | "allocate"
+                | "owner"
+                | "open busy"
+                | "empty fails, sequence unchanged" => 0,
+                "empty fails, sequence changed" => 1,
+                "exclusion set" => 2,
+                "exclusion check" | "empty frame set" => 5,
+                "rollback fails after the first secret set" => 8,
+                "first secret set" => 9,
+                "later secret set"
+                | "rollback fails, sequence unchanged"
+                | "rollback fails, sequence changed" => 10,
+                "success" => 11,
+                "read-back unreadable" => 12,
+                other => panic!("no sequence for {other}"),
+            }
         }
 
         struct Case {
@@ -3002,10 +3754,16 @@ mod tests {
                 };
                 s.faults = (case.faults)(&base);
             }
+            let sequence_before = state.lock().unwrap().sequence;
             let result = copy(&f, case.text);
             assert!(
                 state.lock().unwrap().faults.is_empty(),
                 "{label}: the fault was not reached"
+            );
+            assert_eq!(
+                state.lock().unwrap().sequence - sequence_before,
+                sequence_delta(case.name),
+                "{label}: fake sequence"
             );
             let after = generation(&f);
             let lease = match (before, after) {
@@ -3066,17 +3824,33 @@ mod tests {
                     result.err().map(|e| e.message)
                 ),
             }
-            let warned = application_messages(&f).iter().any(|m| m == &uncertain());
+            let expected_warning = case.warns && (earlier || case.name.starts_with("rollback"));
+            let warnings = application_messages(&f);
             assert_eq!(
-                warned,
-                case.warns && (earlier || case.name.starts_with("rollback")),
-                "{label}: warning"
+                warnings,
+                if expected_warning {
+                    vec![uncertain()]
+                } else {
+                    vec![]
+                },
+                "{label}: the exact warnings"
+            );
+            let ids = application_ids(&f);
+            assert_eq!(
+                ids.len(),
+                usize::from(expected_warning),
+                "{label}: warning IDs"
             );
             // Later cleanup: a lease that is gone causes no further clipboard calls.
             let empties = state.lock().unwrap().empty_calls;
             f.clock.set(30);
             f.session.tick();
             f.session.lock().unwrap();
+            assert_eq!(
+                application_ids(&f),
+                ids,
+                "{label}: tick and lock add no second warning for the same episode"
+            );
             let s = state.lock().unwrap();
             match expected {
                 Lease::Gone => assert_eq!(
@@ -3086,6 +3860,64 @@ mod tests {
                 Lease::Kept | Lease::New => {
                     assert_eq!(s.text(), "", "{label}: the lease was cleaned up")
                 }
+            }
+        }
+
+        /// 1A-A2-02: a second failure episode, while the first warning is still pending (not
+        /// dismissed), is a new occurrence with its own ID. It never reuses the first.
+        #[test]
+        fn a_second_failure_episode_while_the_first_warning_is_pending_gets_its_own_id() {
+            let warning_rows = [
+                "empty fails, sequence changed",
+                "rollback fails after the first secret set",
+                "rollback fails, sequence changed",
+            ];
+            for name in warning_rows {
+                let f = fixture();
+                let state = install(&f);
+                let attempt = |case: &Case| {
+                    let mut s = state.lock().unwrap();
+                    let base = Base {
+                        registered: s.registered_names.len(),
+                        allocations: s.allocations,
+                        opens: s.open_calls,
+                        empties: s.empty_calls,
+                        sets: s.set_calls,
+                    };
+                    s.faults = (case.faults)(&base);
+                    drop(s);
+                    let before = state.lock().unwrap().sequence;
+                    copy(&f, case.text).unwrap_err();
+                    assert_eq!(
+                        state.lock().unwrap().sequence - before,
+                        sequence_delta(case.name),
+                        "{name}: fake sequence"
+                    );
+                };
+                let case = || cases().into_iter().find(|c| c.name == name).unwrap();
+                copy(&f, A).unwrap();
+                attempt(&case());
+                let first = application_ids(&f);
+                assert_eq!(first.len(), 1, "{name}: first episode");
+                // A lease again, then the same failure again; the first warning is still there.
+                copy(&f, A).unwrap();
+                attempt(&case());
+                let both = application_ids(&f);
+                assert_eq!(both.len(), 2, "{name}: second episode");
+                assert_eq!(both[0], first[0], "{name}: the first warning is untouched");
+                assert_ne!(
+                    both[1], first[0],
+                    "{name}: the second episode has its own ID"
+                );
+                assert_eq!(
+                    application_messages(&f),
+                    vec![uncertain(), uncertain()],
+                    "{name}"
+                );
+                f.clock.set(30);
+                f.session.tick();
+                f.session.lock().unwrap();
+                assert_eq!(application_ids(&f), both, "{name}: no third warning");
             }
         }
 

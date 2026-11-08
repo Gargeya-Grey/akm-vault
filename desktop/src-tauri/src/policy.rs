@@ -80,6 +80,11 @@ impl Policy {
         matches!(self.phase, Phase::Locked)
     }
 
+    /// The ticket of the latest lock or open. A lease made under any other value is stale.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn expire(&mut self, now: Duration) {
         if let Phase::Active(last) | Phase::Opening(last) = self.phase {
             if now.saturating_sub(last) >= IDLE_TIMEOUT {

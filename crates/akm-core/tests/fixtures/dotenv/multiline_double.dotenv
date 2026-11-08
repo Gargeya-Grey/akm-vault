@@ -1,0 +1,5 @@
+PEM="-----BEGIN FAKE KEY-----
+line-one
+line-two
+-----END FAKE KEY-----"
+AFTER=1

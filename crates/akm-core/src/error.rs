@@ -23,8 +23,11 @@ pub enum Error {
     #[error("no entry matches {0:?}")]
     EntryNotFound(String),
 
-    #[error("{0:?} matches {1} entries; be more specific")]
+    #[error("{0:?} is the exact title of {1} keys; select one by its id")]
     Ambiguous(String, usize),
+
+    #[error("activity journal unavailable: {0}")]
+    Journal(String),
 
     #[error("invalid input: {0}")]
     Invalid(String),

@@ -43,7 +43,55 @@ The default `get` view shows `Secret:      ********` for every secret. It shows 
 character and no length of the secret.
 
 Audit warnings after a committed vault mutation are printed without turning the
-successful mutation into an error.
+successful mutation into an error. The warning says that the change is saved and that
+you must not repeat it.
+
+The journal is a private per-device folder, `%LOCALAPPDATA%\akm\journal\`. It is never
+beside the vault. `AKM_JOURNAL_ROOT` replaces the folder with an absolute path. Only tests
+and proof scripts set it. A value that is not absolute makes the journal unavailable. The
+journal does not fall back to the default folder or to the old sidecar. `akm audit` and
+`akm audit --verify` run without a password, create nothing, and show key ids only. An old
+`<vault>.audit.jsonl` is reported and never read, moved or deleted. A damaged journal is
+reported by kind and keeps its bytes.
+
+## Rotation, history and the Recycle Bin
+
+Design: `docs/design/unit2.md`.
+
+```text
+akm rotate "OpenAI"                    # prompts for the new secret
+echo new-value | akm rotate "OpenAI" --secret-stdin
+akm history "OpenAI"                   # earlier versions: times and field names, no values
+akm rm "OpenAI" --yes                  # moves the key to the Recycle Bin
+akm bin                                # lists recycled keys
+akm restore "OpenAI"                   # same id, secret, history and group
+akm purge "OpenAI" --yes               # deletes a recycled key for good
+akm purge --older-than-days 90 --yes   # the retention sweep, only when you run it
+```
+
+- `akm get` shows `Secret changed:` with the time of the last real secret change, or
+  `unknown`. A key that an older AKM wrote has no such time and shows `unknown`; AKM never
+  invents a date. Only `rotate`, an edit that changes the secret and an import that changes
+  it set the time. An edit of notes or other metadata, an unchanged import and an edit that
+  changes nothing do not. The rotation age in `list` and `get` counts from this time and
+  shows `unknown` without it.
+- `rotate` takes the new secret from a hidden prompt or from stdin, never from an argument.
+  It refuses an empty secret and a secret equal to the current one, so repeating a rotation
+  whose reply you lost cannot rotate twice. The old secret stays in the vault history. Rotating
+  here does not change the secret at the provider.
+- `rm` never deletes for good. The vault gets a KeePassXC-style Recycle Bin when it has none.
+  A vault whose Recycle Bin is turned off refuses `rm`; turn it on in KeePassXC or use
+  `purge --live`.
+- `restore` refuses a key whose variable name a live key now uses in the same project and
+  environment.
+- `purge` is the only way to delete for good, and it needs `--yes` without a terminal. It stores the
+  KDBX deletion record. Other readers apply it, but KeePassXC 2.8.0 `merge` does not: it brings a
+  deleted key back from an older copy, also when KeePassXC made the deletion. Older copies and
+  backups can still hold the key. Nothing purges by itself.
+- The journal records `rotate-completed`, `restore-completed`, `purge-completed` and
+  `remove-completed` with the key id only.
+- A debug build of `akm` reads `AKM_TEST_CLOCK` (an RFC 3339 time) as its clock. Only tests set it.
+  A release build ignores it.
 
 ## Export files
 

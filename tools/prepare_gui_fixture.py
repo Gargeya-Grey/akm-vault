@@ -6,6 +6,7 @@ import copy
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import uuid
 import xml.etree.ElementTree as ET
 
@@ -26,6 +27,8 @@ def main():
         parser.error("Refusing to replace an existing fixture")
     env = {name: value for name, value in os.environ.items() if not name.upper().startswith("AKM_")}
     env["AKM_PASSWORD"] = PASSWORD
+    journal = tempfile.TemporaryDirectory(prefix="akm-fixture-journal-")
+    env["AKM_JOURNAL_ROOT"] = str(Path(journal.name) / "journal")
 
     def run(executable, words, text=None):
         result = subprocess.run([str(executable.resolve()), *map(str, words)], input=text,
@@ -63,6 +66,7 @@ def main():
         output.write(ET.tostring(root, encoding="utf-8", xml_declaration=True))
     run(args.keepassxc, ["import", "-p", "-t", "100", xml_path, target], PASSWORD + "\n" + PASSWORD + "\n")
     run(args.akm, ["--vault", target, "upgrade", "--yes"])
+    journal.cleanup()
     print("Prepared fake native GUI clone fixture with distinct native UUIDs and identical AKM_ID fields.")
 
 

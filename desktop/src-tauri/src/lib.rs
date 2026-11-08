@@ -1,11 +1,19 @@
 mod clipboard;
+#[cfg(test)]
+mod clipboard_fake;
 mod commands;
-mod error;
-mod pending;
+#[doc(hidden)]
+pub mod error;
+mod import_review;
 mod policy;
 mod private_export;
+#[doc(hidden)]
+pub mod publication;
+mod reminders;
 mod session;
 mod settings;
+#[cfg(test)]
+mod test_support;
 mod views;
 mod visibility;
 mod windows_session;
@@ -20,9 +28,22 @@ use session::{MonotonicClock, Session, VaultState};
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(visibility::WindowPresentation::default())
         .setup(|app| {
             let handle = app.handle().clone();
+            app.manage(settings::PreferenceState(Arc::new(
+                settings::FilePreferences::for_app(&handle),
+            )));
+            app.manage(reminders::ReminderState(Arc::new(
+                reminders::Reminders::new(
+                    Arc::new(reminders::FileReminders::for_app(&handle)),
+                    Arc::new(reminders::NativeNotifier(handle.clone())),
+                ),
+            )));
+            app.manage(import_review::ConfirmState(Arc::new(
+                import_review::NativeConfirm(handle.clone()),
+            )));
             let session = Arc::new(Session::new(
                 Arc::new(MonotonicClock::default()),
                 Box::new(clipboard::NativeClipboard),
@@ -41,6 +62,13 @@ pub fn run() {
             app.manage(VaultState(session));
             Ok(())
         })
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                if let Some(state) = webview.try_state::<VaultState>() {
+                    state.0.document_started();
+                }
+            }
+        })
         .on_window_event(|window, event| {
             visibility::on_window_event(window, event);
             if matches!(
@@ -48,35 +76,11 @@ pub fn run() {
                 tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
             ) {
                 if let Some(state) = window.try_state::<VaultState>() {
-                    let _ = state.0.lock();
+                    state.0.shutdown();
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![
-            vault_status,
-            vault_prepare_open,
-            vault_unlock,
-            vault_create,
-            vault_lock,
-            vault_activity,
-            vault_warnings,
-            vault_dismiss_warnings,
-            vault_upgrade,
-            vault_reload,
-            keys_list,
-            key_reveal,
-            key_copy,
-            key_add,
-            key_update,
-            key_remove,
-            audit_read,
-            env_export,
-            env_copy,
-            env_save,
-            env_import_preview,
-            env_import_confirm,
-            backup_info
-        ])
+        .invoke_handler(commands::production_handlers!())
         .build(tauri::generate_context!())
         .expect("error while building AKM");
     app.run(|app, event| {
@@ -85,7 +89,7 @@ pub fn run() {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
         ) {
             if let Some(state) = app.try_state::<VaultState>() {
-                let _ = state.0.lock();
+                state.0.shutdown();
             }
             if let Some(monitor) = app.try_state::<windows_session::Monitor>() {
                 monitor.stop();

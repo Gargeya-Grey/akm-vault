@@ -27,7 +27,25 @@ pub fn expire_and_notify(
     session: &Session,
     emit: impl FnOnce(&NativeViewNotice) -> Result<(), ()>,
 ) -> Result<Option<NativeViewNotice>, CommandError> {
-    let Some(notice) = session.expire_presentation()? else {
+    notify_expiry(session, session.expire_presentation(), emit)
+}
+
+/// For a page request that names its session. A session that is not the current one has
+/// nothing to expire: no notice and no lock for the session that replaced it.
+pub fn expire_and_notify_for(
+    session: &Session,
+    session_id: &str,
+    emit: impl FnOnce(&NativeViewNotice) -> Result<(), ()>,
+) -> Result<Option<NativeViewNotice>, CommandError> {
+    notify_expiry(session, session.expire_presentation_of(session_id), emit)
+}
+
+fn notify_expiry(
+    session: &Session,
+    expired: Result<Option<NativeViewNotice>, CommandError>,
+    emit: impl FnOnce(&NativeViewNotice) -> Result<(), ()>,
+) -> Result<Option<NativeViewNotice>, CommandError> {
+    let Some(notice) = expired? else {
         return Ok(None);
     };
     if emit(&notice).is_err() {

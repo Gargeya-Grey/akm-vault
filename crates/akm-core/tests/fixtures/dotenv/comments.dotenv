@@ -1,0 +1,9 @@
+# full line comment
+   # indented comment
+TOKEN=abc # note
+HASH=abc#nocomment
+QUOTED="a # b" # trailing
+SQUOTED='a # b'  # trailing
+TAB=abc	# note
+HASHFIRST=#value
+

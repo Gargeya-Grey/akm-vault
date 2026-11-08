@@ -1,0 +1,10 @@
+NONE=plain value
+SINGLE='single value'
+DOUBLE="double value"
+EMPTY_S=''
+EMPTY_D=""
+DQ_WITH_SQ="it's"
+SQ_WITH_DQ='say "hi"'
+MID=ab"cd
+APOS=it's
+PADDED="  padded  "

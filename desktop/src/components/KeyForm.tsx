@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, errorText } from "../api";
+import { dateOnlyExpiry } from "../schedule";
 import type { KeyDraft, KeyView } from "../types";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
@@ -90,7 +91,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
       url: url.trim() || null,
       notes: notes.trim() || null,
       tags: splitList(tags),
-      expiresAt: expires ? `${expires}T23:59:59Z` : null,
+      expiresAt: expires ? dateOnlyExpiry(expires) : null,
       rotationDays,
     };
 
@@ -182,7 +183,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
               />
               <p className="field-note">
                 {editing
-                  ? "Only replace this when you rotate the key. The old value stays in the .bak file until the next write."
+                  ? "Leave it blank to keep the stored value. A new value counts as a rotation, and the old value stays in the vault history. To rotate a key, use Rotate secret in its detail view."
                   : "Encrypted inside the KDBX entry. It is never written to settings or logs."}
               </p>
             </div>

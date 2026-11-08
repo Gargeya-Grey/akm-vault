@@ -1,0 +1,4 @@
+A="x
+# not a comment
+y" # real comment
+B=2

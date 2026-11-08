@@ -1,20 +1,34 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { api, errorText } from "../api";
 import {
   expiryLabel,
   keyState,
-  needsAttention,
   plural,
   rotationLabel,
+  statusDescription,
 } from "../format";
-import type { KeyView } from "../types";
+import { attentionOf } from "../reminders";
+import type { KeyView, RotationReceipt } from "../types";
+import { useNow } from "../useNow";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
+import { AttentionSummary } from "./AttentionSummary";
 import { KeyDetail } from "./KeyDetail";
 import { Icon } from "./Icon";
 import { KeyForm } from "./KeyForm";
+import { RotateDialog } from "./RotateDialog";
 import { ConfirmDialog, Notice } from "./Notice";
 
-export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
+interface SummaryControl {
+  dismissed: boolean;
+  onDismiss: () => void;
+}
+
+/**
+ * `summary` is owned by the app, so that a dismissal outlives this view until the next unlock.
+ * Without it the view keeps its own flag.
+ */
+export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; summary?: SummaryControl }) {
+  const [summaryDismissed, setSummaryDismissed] = useState(false);
   const [keys, setKeys] = useState<KeyView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -29,6 +43,9 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
   const [deleting, setDeleting] = useState<KeyView | null>(null);
   const [deletingBusy, setDeletingBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [rotating, setRotating] = useState<KeyView | null>(null);
+  const now = useNow(keys);
+  const statusId = useId();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -88,7 +105,8 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
   }, [keys, query, project, environment]);
 
   const selected = keys.find((key) => key.id === selectedId) ?? null;
-  const attention = keys.filter(needsAttention).length;
+  const attention = attentionOf(keys, now);
+  const showSummary = !loading && attention.total > 0 && !(summary?.dismissed ?? summaryDismissed);
 
   function clearFilters() {
     setQuery("");
@@ -106,6 +124,17 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
     setFlash(`Saved “${item.title}”. The vault file has been rewritten.`);
   }
 
+  function rotated(receipt: RotationReceipt) {
+    setKeys((current) =>
+      current.map((key) => (key.id === receipt.key.id ? receipt.key : key)),
+    );
+    setSelectedId(receipt.key.id);
+    setRotating(null);
+    setFlash(
+      `Rotated “${receipt.key.title}”. The old secret stays in the vault history. Rotating here does not change the secret at the provider.`,
+    );
+  }
+
   async function remove() {
     if (!deleting) return;
     setDeletingBusy(true);
@@ -114,7 +143,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
       await api.remove(deleting.id);
       setKeys((current) => current.filter((key) => key.id !== deleting.id));
       if (selectedId === deleting.id) setSelectedId(null);
-      setFlash(`Deleted “${deleting.title}”. Check backup notices and your encrypted backups before relying on recovery.`);
+      setFlash(`Moved “${deleting.title}” to the Recycle Bin. Restore it there, or delete it for good. Check backup notices before you rely on encrypted backups.`);
       setDeleting(null);
     } catch (cause) {
       setDeleteError(errorText(cause));
@@ -146,6 +175,13 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
         </button>
       </header>
 
+      {showSummary && (
+        <AttentionSummary
+          attention={attention}
+          onDismiss={summary?.onDismiss ?? (() => setSummaryDismissed(true))}
+        />
+      )}
+
       <div className="stat-row" aria-label="Vault summary">
         <div className="stat">
           <span className="stat-num mono">{keys.length}</span>
@@ -160,8 +196,8 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
           </span>
         </div>
         <div className="stat">
-          <span className={`stat-num mono${attention > 0 ? " danger-text" : ""}`}>
-            {attention}
+          <span className={`stat-num mono${attention.total > 0 ? " danger-text" : ""}`}>
+            {attention.total}
           </span>
           <span className="stat-label">need attention</span>
         </div>
@@ -185,6 +221,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search title, project, env var…"
               autoComplete="off"
+              data-focus-fallback=""
             />
           </div>
           <FilterSelect
@@ -258,7 +295,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
         ) : (
           <ul className="key-rows">
             {visible.map((item) => {
-              const state = keyState(item);
+              const state = keyState(item, now);
               return (
                 <li key={item.id}>
                   <button
@@ -266,6 +303,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
                     className="key-row"
                     onClick={() => setSelectedId(item.id)}
                     aria-label={`Open ${item.title}`}
+                    aria-describedby={`${statusId}-${item.id}`}
                   >
                     <span className="key-ident">
                       <span className="key-title">{item.title}</span>
@@ -287,7 +325,7 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
                       <span className="key-sub">
                         {item.rotationDays === null
                           ? "no rotation"
-                          : `rotate ${rotationLabel(item)}`}
+                          : `rotate ${rotationLabel(item, now)}`}
                       </span>
                     </span>
                     <span className={`state state-${state.tone}`}>
@@ -298,6 +336,9 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
                       <Icon name="arrowRight" />
                     </span>
                   </button>
+                  <span className="sr-only" id={`${statusId}-${item.id}`}>
+                    {statusDescription(item, now)}
+                  </span>
                 </li>
               );
             })}
@@ -313,6 +354,10 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
           onEdit={() => {
             setSelectedId(null);
             setFormItem(selected);
+          }}
+          onRotate={() => {
+            setSelectedId(null);
+            setRotating(selected);
           }}
           onDelete={() => {
             setDeleteError(null);
@@ -330,19 +375,27 @@ export function KeysView({ readOnly = false }: { readOnly?: boolean }) {
         />
       )}
 
+      {rotating && (
+        <RotateDialog
+          item={rotating}
+          onRotated={rotated}
+          onClose={() => { setSelectedId(rotating.id); setRotating(null); }}
+        />
+      )}
+
       {deleting && (
         <ConfirmDialog
-          title="Delete this key?"
-          confirmLabel="Delete key"
+          title="Move this key to the Recycle Bin?"
+          confirmLabel="Move to Recycle Bin"
           busy={deletingBusy}
+          destructive={false}
           onConfirm={remove}
           onCancel={() => { setSelectedId(deleting.id); setDeleting(null); }}
         >
           <p>
-            <strong>{deleting.title}</strong> will be removed from the vault.
-            This cannot be undone from inside the app. Encrypted backups may contain
-            previous data, but recovery depends on their contents and retention.
-            Check backup notices after deletion and keep an independent backup.
+            <strong>{deleting.title}</strong> leaves the key list and moves to the Recycle Bin
+            inside the vault. Its secret, history and group are kept. Open the Recycle Bin to
+            restore it, or to delete it for good. Nothing is deleted for good until you ask.
           </p>
           {deleteError && <Notice tone="error">{deleteError}</Notice>}
         </ConfirmDialog>
