@@ -16,7 +16,7 @@ A quiet instrument on a dark desk. Soft light and glass for the surfaces. Hairli
 - **A key is a fine line.** `KeyCut` draws a 28 px line key. Its teeth come from the entry's ID, never from its secret. It stays quiet: it does not carry status colour. Status has its own column.
 - **The lock is twelve fine pins.** A new password needs 12 characters. Each character sets one pin on the line. At 12, the line lights.
 - **A key wears out.** `LifeRule` shows how much of a key's rotation interval is used, as a row of ticks.
-- **A list is ours too.** `FilterSelect` keeps the real select as the field, so its name, value and automation stay the same. A press or a key opens AKM's own list. Focus stays on the field.
+- **A list is ours too.** `FilterSelect` keeps the real select as the field, so its name, value and automation stay the same. A real press or a key opens AKM's own list. Focus stays on the field. A screen reader or UI Automation gets the system's list, which those tools can drive.
 
 ## Tokens
 

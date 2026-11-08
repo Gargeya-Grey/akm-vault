@@ -45,7 +45,7 @@ function placeBelow(trigger: DOMRect): Placement {
 }
 
 /// A labelled select. The real select stays as the field, so its name, value and
-/// automation stay the same. A press or a key opens this list in place of the
+/// automation stay the same. A real press or a key opens this list in place of the
 /// system's list. Focus stays on the field. The list closes when the field loses focus.
 export function FilterSelect({
   id,
@@ -155,6 +155,8 @@ export function FilterSelect({
         aria-activedescendant={showing ? optionId(active) : undefined}
         onChange={(event) => onChange(event.target.value)}
         onMouseDown={(event) => {
+          // A press from a screen reader or UI Automation has no click count. It gets the system's list, which those tools can drive.
+          if (event.detail === 0) return;
           event.preventDefault();
           if (disabled) return;
           field.current?.focus();

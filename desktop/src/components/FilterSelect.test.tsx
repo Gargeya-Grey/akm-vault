@@ -14,7 +14,7 @@ function setup(value = "", disabled = false) {
 
 test("a press opens AKM's list and keeps the system list closed", () => {
   const { field } = setup();
-  const allowedSystemList = fireEvent.mouseDown(field);
+  const allowedSystemList = fireEvent.mouseDown(field, { detail: 1 });
   expect(allowedSystemList).toBe(false);
   expect(screen.getByRole("listbox").getAttribute("aria-label")).toBe("Project");
   expect(screen.getAllByRole("option", { hidden: false }).map((item) => item.textContent)).toContain("Choose a project");
@@ -23,7 +23,7 @@ test("a press opens AKM's list and keeps the system list closed", () => {
 
 test("choosing an item reports it once and closes the list", () => {
   const { field, onChange } = setup();
-  fireEvent.mouseDown(field);
+  fireEvent.mouseDown(field, { detail: 1 });
   fireEvent.click(screen.getByRole("listbox").querySelectorAll("li")[2]);
   expect(onChange).toHaveBeenCalledTimes(1);
   expect(onChange).toHaveBeenCalledWith("beta");
@@ -32,7 +32,7 @@ test("choosing an item reports it once and closes the list", () => {
 
 test("the current item is marked, and choosing it again reports nothing", () => {
   const { field, onChange } = setup("alpha");
-  fireEvent.mouseDown(field);
+  fireEvent.mouseDown(field, { detail: 1 });
   const alpha = screen.getByRole("listbox").querySelectorAll("li")[1];
   expect(alpha.getAttribute("aria-selected")).toBe("true");
   fireEvent.click(alpha);
@@ -72,7 +72,7 @@ test("Escape closes only the list, and a dialog behind it does not hear the key"
   const { field, onChange } = setup("alpha");
   const heard = vi.fn();
   document.addEventListener("keydown", heard);
-  fireEvent.mouseDown(field);
+  fireEvent.mouseDown(field, { detail: 1 });
   fireEvent.keyDown(field, { key: "Escape" });
   document.removeEventListener("keydown", heard);
   expect(screen.queryByRole("listbox")).toBeNull();
@@ -82,7 +82,7 @@ test("Escape closes only the list, and a dialog behind it does not hear the key"
 
 test("losing focus closes the list without a change", () => {
   const { field, onChange } = setup();
-  fireEvent.mouseDown(field);
+  fireEvent.mouseDown(field, { detail: 1 });
   fireEvent.blur(field);
   expect(screen.queryByRole("listbox")).toBeNull();
   expect(onChange).not.toHaveBeenCalled();
@@ -90,7 +90,7 @@ test("losing focus closes the list without a change", () => {
 
 test("a disabled field opens no list", () => {
   const { field } = setup("", true);
-  fireEvent.mouseDown(field);
+  fireEvent.mouseDown(field, { detail: 1 });
   expect(screen.queryByRole("listbox")).toBeNull();
 });
 
@@ -98,4 +98,11 @@ test("a value set the system's way still reaches the app", () => {
   const { field, onChange } = setup();
   fireEvent.change(field, { target: { value: "beta" } });
   expect(onChange).toHaveBeenCalledWith("beta");
+});
+
+test("a press with no click count leaves the system's list to assistive tools", () => {
+  const { field } = setup();
+  const allowedSystemList = fireEvent.mouseDown(field, { detail: 0 });
+  expect(allowedSystemList).toBe(true);
+  expect(screen.queryByRole("listbox")).toBeNull();
 });
