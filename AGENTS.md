@@ -39,7 +39,7 @@ You can do these without asking: branches, commits, pushes and pull requests on 
 - A code defect closes only when two things are true: a permanent regression test fails on the affected version and passes after the fix, and the work unit passes its review. A design, coverage or premise finding closes when its decision or evidence is verified and reviewed. Write down any limit that remains.
 - Each work unit gets one fresh review (REVIEWING.md). A review passes when it establishes no P0, P1 or P2 finding and its P3 findings have moved to a named later unit ([pass rule](docs/REVIEWING.md#pass-rule)). If one work unit fails review twice, stop patching. Write the design question in STATE.md and ask the owner.
 - Prove a change on the real surface with the verification skill in [.agents/skills/verify-akm/](.agents/skills/verify-akm/SKILL.md). It keeps to the fake-data and clipboard rules in Safety.
-- The only measured score is 40.5/100, from the baseline review of 30 Oct 2026. Never add projected points to it. A new score needs a new full review.
+- The latest measured score is 66.25/100, from the full rescore of 9 Nov 2026 on `c0a7d3b` (docs/reviews/2026-11-09-full-rescore.md). The baseline of 30 Oct 2026 was 40.5/100. Never add projected points to a score. A new score needs a new full review.
 - A defect in work that was called done names a fault class. Find every instance of the class in the tree before you fix one, and add its guard from the table below. A new class gets a new row.
 - Before you stop, update STATE.md: what changed, the checks you ran, the open findings, and one next action.
 

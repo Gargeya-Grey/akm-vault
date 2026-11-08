@@ -211,6 +211,52 @@ From [phase two review 2 of 2](reviews/2026-11-07-phase2-review2.md), on `3391b9
 | P2R2-06 | P3 | Open | 5 | E: a test that depends on its machine | Found by the first CI runs on PR #7. Five tests compared a canonical long path with a raw temp path. They failed on the GitHub runner, whose temp path holds the short name `RUNNER~1`; they pass where the temp path has no short names. `d628130` fixed the CLI test and its message. The four desktop tests (`complete_export_record_with_failed_sync_keeps_publication_and_late_lock_receipt`, `overwriting_an_existing_file_keeps_the_export_private`, `publication_moves_the_owned_file_after_its_temp_name_is_replaced`, `native_presentation_expiry_preserves_approved_publication_and_its_truthful_completion`) still compare raw paths; CI now sets `TEMP` to the runner's temp folder, which has no short names. The fifth CI run found a second machine dependency: the CLI tests share the persistent default root `target/akm-test-journal`, and the CI cache restored it without its private permissions, so AKM (correctly) refused it; CI now removes the restored folder before the tests. Fix: each test compares canonical paths and uses its own journal root. |
 | P2R2-07 | P3 | Open | Release | B | Found in the P2R2-04 sweep. The vault write lock `.lock` is named after the path as spelled, so two spellings of one file (a junction, a `subst` drive) get two lock files and two writers are not excluded. Path aliasing, not copying (design/unit1b.md D12). |
 
+## New look review 2 (2026-11-09)
+
+From [new look review 2](reviews/2026-11-09-look-review2.md), on `c0a7d3b`. This is the second failed review of the work unit, so patching stopped (AGENTS.md). The design question is in STATE.md, "Next action".
+
+| ID | Severity | Status | Unit | Class | Problem |
+|---|---|---|---|---|---|
+| LOOK-R2-01 | P2 | Open | New look | Stale value | `FilterSelect` stores the active option as an index. A refresh of the options while the list is open can move the highlight, so Enter selects a different option, or nothing. |
+| LOOK-R2-02 | P2 | Open | New look | Stale value | Wheel scrolling in the open list is pulled back to the active option, so a long list cannot be scrolled with the mouse. |
+| LOOK-R2-03 | P3 | Open | New look | H | A 1,000-character project name moves Add key below the window. It stays reachable by scrolling. |
+| LOOK-R2-04 | P3 | Open | New look | J | In forced colours, set and unset lock pins have one fill. The count still shows progress. |
+
+## Full rescore (2026-11-09)
+
+From the [full rescore](reviews/2026-11-09-full-rescore.md), on `c0a7d3b`: 66.25/100. The severity words are the reviewers'. No unit owns these yet. The owner orders the work.
+
+| ID | Severity | Status | Area | Class | Problem |
+|---|---|---|---|---|---|
+| FR-01 | High, reproduced | Open | E | F | `vault.rs` backup pruning recognizes files by name only. One save deleted three files beside the vault that AKM did not create. |
+| FR-02 | High, injection reproduced | Open | D | Incomplete deny list | The reserved-variable list misses Cargo execution controls such as `RUSTC_WRAPPER`, so an imported `.env` can name a program that a later `akm run cargo` executes with the scope's secrets. |
+| FR-03 | High, inspection | Open | D | Missing authority | A compromised page can read the session ID and request a bulk `env_export` or `env_copy` with no native approval. |
+| FR-04 | Medium, inspection | Open | C | C | A failed desktop export ignores the result of its delete request, so a plaintext temporary file can remain with no warning. |
+| FR-05 | Medium, inspection | Open | C | Inherited permissions | A vault and its backups inherit the folder's permissions. |
+| FR-06 | Low, reproduced | Open | C | Disclosed limit | A purged key stays in the encrypted backups, and AKM has no operation to retire them. |
+| FR-07 | Low, inspection | Open | C | Disclosed limit | The journal has no independent integrity anchor. |
+| FR-08 | Medium, inspection | Open | D | Memory hygiene | Some secret strings are not zeroized, for example on the `--secret-stdin` path. |
+| FR-09 | Low, inspection | Open | D | Disclosed limit | `AKM_PASSWORD` stays in the parent process environment. |
+| FR-10 | Medium, inspection | Open | A | D | FIRST_USE.md says a clipboard copy "is cleared"; cleanup is best effort. |
+| FR-11 | Low, inspection | Open | A | D | The unlock screen states KDBX 4.1 with AES-256 and Argon2id for every vault, including older vaults that it opens. |
+| FR-12 | Medium, reproduced | Open | B | B | An unseen clone that replaces a bound vault joins the original's journal through the shared root ID. Same premise as P2R2-04. |
+| FR-13 | Medium, inspection | Open (PR 10 is unreviewed) | G | Missing workflow | The app cannot launch a program with scoped keys. Deducted once, in G. |
+| FR-14 | Medium, reproduced in the CLI | Open | B | Missing workflow | After journal damage, a GUI user has no way to keep the old bytes and resume. |
+| FR-15 | Medium, reproduced | Open | F | Unchecked arithmetic | A rotation interval of `4294967295` days is accepted, and `list` and `get` then panic. |
+| FR-16 | Medium, reproduced | Open | F | Validation at use only | Add and rotate accept a secret with a NUL, which AKM cannot inject or export. |
+| FR-17 | Low, reproduced | Open | F | Unicode | Title matching folds ASCII case only. |
+| FR-18 | Low, reproduced | Open | F | Lost precision | Fractional seconds of an expiry are dropped. |
+| FR-19 | Medium, reproduced in the accessibility tree | Open | G | H | Same-title keys have identical accessible names and descriptions. |
+| FR-20 | Medium, inspection | Open (PR 10 is unreviewed) | G | Missing workflow | Detailed key history exists only in the CLI. |
+| FR-21 | Low, reproduced | Open | G | Failure shown as empty | A failed first read shows an error and also "No keys yet". |
+| FR-22 | Medium, inspection | Open | H | Weak test | The import-isolation and failed-rename tests compare metadata, which excludes secrets. The `akm run` test has one scope. |
+| FR-23 | Medium, inspection | Open | H | Missing check | CI does not run `check_dependencies.ps1`. |
+| FR-24 | Low | Open | H | D | `verify.mjs` says "byte for byte" and compares selected fields. `check_docs.py` misses vertical tab and form feed, and accepts a non-test function name. |
+| FR-25 | Medium, inspection | Open | I | Missing artifact | No licence text, third-party notices or SECURITY.md. |
+| FR-26 | Medium, inspection | Open | I | Private data in history | Machine paths and old evidence are in the tracked tree and in Git history. Review them before any public push. |
+| FR-27 | High, inspection, not scored | Open | Tools | F | `akm-verify.ps1` treats a matching temporary folder with a readable `session.json` as its own and removes it. |
+| FR-28 | Inspection, not scored | Open | E | Resource bound | Opening a vault applies its KDF parameters with no AKM limit, so a malicious vault may exhaust memory. |
+
 ## New look review 1 (2026-11-08)
 
 From [new look review 1](reviews/2026-11-08-look-review1.md), on `f2f66d0`. The tests are in `desktop/e2e/look-guards.spec.ts`. Each failed before its fix, and each fix has a mutant that the test catches.

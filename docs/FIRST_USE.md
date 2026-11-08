@@ -1,6 +1,6 @@
 # First use with real keys
 
-This page is for the owner, who decided on 2026-11-07 to use AKM for their own keys before the release gate. That gate is an independent full review above 90/100. The only measured score is 40.5/100 ([baseline review](reviews/2026-10-30-baseline.md)). This page does not change that, and the decision and its risk are the owner's.
+This page is for the owner, who decided on 2026-11-07 to use AKM for their own keys before the release gate. That gate is an independent full review above 90/100. The latest measured score is 66.25/100 ([full rescore](reviews/2026-11-09-full-rescore.md)). This page does not change that, and the decision and its risk are the owner's.
 
 ## Before the first real key
 
