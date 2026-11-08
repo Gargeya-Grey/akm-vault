@@ -2,7 +2,7 @@
 
 AKM keeps your API keys in one encrypted file on your own computer. You need no account and no command line.
 
-**This is an early build.** It has not passed an independent security review. Try it with fake keys, or with keys that you can cancel and create again at the provider.
+**This is an early build. Use fake keys only.** It has not passed the independent security review and the testing that must come before real keys. The [README](../README.md) gives the current status.
 
 ## What you need
 
@@ -31,7 +31,7 @@ The first time you open AKM, it shows **Start a vault**.
 ## Add a key
 
 1. Select **Add key**.
-2. Type a **Title**, and paste the secret value into the secret field. A title such as "OpenAI personal" is enough.
+2. Type a **Title**, and paste the secret value into the secret field. A title such as "Test key" is enough.
 3. To use the key in a project later, fill in **Project**, **Environment** and **Environment variable**. For example: `my-app`, `dev` and `OPENAI_API_KEY`.
 4. To get reminders, fill in **Expires** or **Rotate every**.
 5. Select **Add key** at the bottom of the form.

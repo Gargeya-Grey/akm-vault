@@ -211,6 +211,21 @@ From [phase two review 2 of 2](reviews/2026-11-07-phase2-review2.md), on `3391b9
 | P2R2-06 | P3 | Open | 5 | E: a test that depends on its machine | Found by the first CI runs on PR #7. Five tests compared a canonical long path with a raw temp path. They failed on the GitHub runner, whose temp path holds the short name `RUNNER~1`; they pass where the temp path has no short names. `d628130` fixed the CLI test and its message. The four desktop tests (`complete_export_record_with_failed_sync_keeps_publication_and_late_lock_receipt`, `overwriting_an_existing_file_keeps_the_export_private`, `publication_moves_the_owned_file_after_its_temp_name_is_replaced`, `native_presentation_expiry_preserves_approved_publication_and_its_truthful_completion`) still compare raw paths; CI now sets `TEMP` to the runner's temp folder, which has no short names. The fifth CI run found a second machine dependency: the CLI tests share the persistent default root `target/akm-test-journal`, and the CI cache restored it without its private permissions, so AKM (correctly) refused it; CI now removes the restored folder before the tests. Fix: each test compares canonical paths and uses its own journal root. |
 | P2R2-07 | P3 | Open | Release | B | Found in the P2R2-04 sweep. The vault write lock `.lock` is named after the path as spelled, so two spellings of one file (a junction, a `subst` drive) get two lock files and two writers are not excluded. Path aliasing, not copying (design/unit1b.md D12). |
 
+## New look review 1 (2026-11-08)
+
+From [new look review 1](reviews/2026-11-08-look-review1.md), on `f2f66d0`. The tests are in `desktop/e2e/look-guards.spec.ts`. Each failed before its fix, and each fix has a mutant that the test catches.
+
+| ID | Severity | Status | Unit | Class | Problem |
+|---|---|---|---|---|---|
+| LOOK-R1-01 | P2 | Fixed, not accepted | New look | I | The rail sat above the stage, and every dialog lives inside the stage, so the rail stayed clickable through an open dialog. The stage now sits above the rail. Test: each drawer and the delete confirmation cover every rail control, in both themes. |
+| LOOK-R1-02 | P2 | Fixed, not accepted | New look | J | In forced colours, shadows and fills disappear, so buttons, panels, the reminder switch, the keyboard focus on a field, the current-section marker, status marks and the open list lost their boundary or state. One forced-colours block returns them, and the switch becomes the system's checkbox. Tests: the `forced colours` group. Not proved on real Windows high-contrast themes. |
+| LOOK-R1-03 | P2 | Fixed, not accepted | New look | H | A long project name pushed Add key out of view. The heading now wraps and the button keeps its place. Sibling: a long tag or scope in the key drawer. Tests at 900, 1040, 1180 and 1440 px. |
+| LOOK-R1-04 | P2 | Fixed, not accepted | New look | D | GETTING_STARTED.md invited real keys before the release gate. It now says fake keys only, and its example title is no longer a real provider key. |
+| LOOK-R1-05 | P3 | Fixed, not accepted | New look | Stale value | The current-section marker measured itself only on a view change or a window resize. It now observes each item. Test: the marker follows its item when text metrics change without a resize. |
+| LOOK-R1-06 | P3 | Fixed, not accepted | New look | H | Many projects pushed the search and the first key down the page. The strip now scrolls inside four rows. Test with 120 projects. |
+| LOOK-R1-07 | P3 | Fixed, not accepted | New look | Cascade order | `.text-button` overrode `.danger-text`, so a destructive button lost its danger colour. Test in both themes, at rest and on hover. |
+| LOOK-R1-08 | P3 | Fixed, not accepted | New look | Weak test | The opacity test passed with a translucent surface. The guard now reads the computed surface colour in both themes. |
+
 ## UI rebuild review 2 (2026-11-08)
 
 From [UI rebuild review 2](reviews/2026-11-08-ui-rebuild-review2.md), on `d63c2a1`. This is the second failed review of the work unit, so patching stopped (AGENTS.md). The owner's decision is in STATE.md, "Next action".

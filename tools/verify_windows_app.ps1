@@ -325,11 +325,9 @@ function Invoke-FilterOption($ownedIds, $combo, [string]$value) {
       if (!$item.Current.IsEnabled -or $item.Current.IsOffscreen) { continue }
       $action = $null
       if ($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$action)) {
-        # AKM's list closes when an option is chosen, so the element can go away during the call.
-        try { $action.Invoke() } catch {
-          Start-Sleep -Milliseconds 300
-          if ((Get-ComboValue $combo) -ne $value) { throw }
-        }
+        # The element can go away during the call when the list closes or the view reloads.
+        # Select-Filter reads the field after this, and tries again if the value did not stick.
+        try { $action.Invoke() } catch { Write-Output "RETRY: the option '$value' went away during Invoke: $($_.Exception.Message)" | Out-Host }
         return $true
       }
       if ($item.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$action)) {

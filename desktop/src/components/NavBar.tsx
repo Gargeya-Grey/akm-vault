@@ -27,18 +27,26 @@ interface Props {
 
 export function NavBar({ view, onView, unlocked, theme, onToggleTheme, onLock, onReload }: Props) {
   const navRef = useRef<HTMLElement>(null);
-  const [pillTop, setPillTop] = useState<number | null>(null);
+  const [pill, setPill] = useState<{ top: number; height: number } | null>(null);
 
   useLayoutEffect(() => {
     if (!unlocked) return;
+    const nav = navRef.current;
     const place = () => {
-      const nav = navRef.current;
       const current = nav?.querySelector('[aria-current="page"]');
-      setPillTop(nav && current ? current.getBoundingClientRect().top - nav.getBoundingClientRect().top : null);
+      if (!nav || !current) return setPill(null);
+      const box = current.getBoundingClientRect();
+      setPill({ top: box.top - nav.getBoundingClientRect().top, height: box.height });
     };
     place();
     window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
+    // A font that loads late or a text-size change moves the items without a window resize.
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    nav?.querySelectorAll("button").forEach((item) => observer?.observe(item));
+    return () => {
+      window.removeEventListener("resize", place);
+      observer?.disconnect();
+    };
   }, [view, unlocked]);
 
   const next = theme === "dark" ? "light" : "dark";
@@ -67,7 +75,7 @@ export function NavBar({ view, onView, unlocked, theme, onToggleTheme, onLock, o
         <p className="bar-name">AKM</p>
       </div>
       <nav ref={navRef} aria-label="Sections">
-        {pillTop !== null && <span className="nav-pill" aria-hidden="true" style={{ transform: `translateY(${pillTop}px)` }} />}
+        {pill && <span className="nav-pill" aria-hidden="true" style={{ height: pill.height, transform: `translateY(${pill.top}px)` }} />}
         <ul>{primary.map(link)}</ul>
         <ul className="rail-lower">{secondary.map(link)}</ul>
       </nav>
