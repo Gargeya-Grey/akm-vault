@@ -997,6 +997,46 @@ mod tests {
         );
     }
 
+    /// A real child process, with no window. The command is the one a launch prepares, plus
+    /// the arguments that make it print what it received.
+    #[cfg(windows)]
+    #[test]
+    fn a_real_child_gets_the_folder_and_the_selected_variables_and_no_akm_variable() {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        assert!(
+            std::env::var_os("AKM_JOURNAL_ROOT").is_some(),
+            "the test needs one real AKM_ variable to inherit (.cargo/config.toml)"
+        );
+        let folder = tempfile::tempdir().unwrap();
+        let shell = system_command_prompt().unwrap();
+        assert_eq!(shell.file_name().unwrap(), "cmd.exe");
+        let mut command = prepare_command(
+            &shell,
+            folder.path(),
+            std::env::vars_os().map(|(name, _)| name),
+            &[("OPENAI_API_KEY".into(), "fake-openai-value".into())],
+        );
+        command.args(["/d", "/c", "cd&&set"]);
+        command.creation_flags(CREATE_NO_WINDOW);
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut lines = text.lines();
+        assert_eq!(
+            lines.next().unwrap().to_lowercase(),
+            folder.path().display().to_string().to_lowercase()
+        );
+        let variables: Vec<&str> = lines.collect();
+        assert!(variables.contains(&"OPENAI_API_KEY=fake-openai-value"));
+        let akm: Vec<&&str> = variables
+            .iter()
+            .filter(|line| line.to_ascii_uppercase().starts_with("AKM_"))
+            .collect();
+        assert!(akm.is_empty(), "{akm:?}");
+    }
+
     #[test]
     fn a_selected_name_with_the_akm_prefix_never_reaches_the_child() {
         let command = prepare_command(
