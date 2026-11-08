@@ -59,7 +59,7 @@ function fixture() {
 async function settings() {
   const root = render(<App />);
   await screen.findByText("Current unlocked keys");
-  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "Use keys" }));
   await screen.findByRole("option", { name: "demo" });
   return root;
 }
@@ -156,7 +156,7 @@ test("native expiry ignores a late import reply and duplicate notices do not cle
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
-test("old A or disposed-root expiry never clears active B's newer Settings input", async () => {
+test("old A or disposed-root expiry never clears active B's newer Use keys input", async () => {
   const a = fixture();
   const first = await settings();
   const disposed = native.listeners.get("vault-view-expired");
@@ -191,7 +191,7 @@ test("an unknown-owner hide is coalesced across bootstrap adoption, not replayed
   const hide = crypto.randomUUID();
   act(() => expire(f.owner, hide));
   await act(async () => response.resolve(f.status()));
-  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "Use keys" }));
   await screen.findByRole("option", { name: "demo" });
   fireEvent.click(screen.getByRole("button", { name: "Import .env…" }));
   fireEvent.change(screen.getByLabelText("Paste the .env contents"), { target: { value: "TOKEN=fake-after-bootstrap" } });

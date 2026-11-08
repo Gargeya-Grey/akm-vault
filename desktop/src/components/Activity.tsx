@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, errorText } from "../api";
 import { formatDateTime } from "../format";
 import type { AuditReport } from "../types";
+import { EmptyPage } from "./glyphs";
 import { Notice } from "./Notice";
 
 const ACTIONS: Record<string, string> = {
@@ -64,7 +65,7 @@ export function Activity() {
   const entries = report ? [...report.entries].reverse() : [];
 
   return (
-    <main className="wrap view">
+    <main className="view">
       <header className="view-head">
         <div>
           <h1>
@@ -87,13 +88,18 @@ export function Activity() {
         </button>
       </header>
 
-      <section className="raised ledger" aria-label="Activity journal">
-        <div className="ledger-tools audit-tools">
+      <section aria-label="Activity journal">
+        <div className="audit-tools">
           <div>
             <p className="label">Journal file</p>
             <p className="mono path-text">{report?.path ?? "Reading…"}</p>
           </div>
-          {report && <p className={`state ${report.state === "corrupt" ? "state-warn" : ""}`}>{STATES[report.state]}</p>}
+          {report && (
+            <div className="audit-status">
+              <p className={`state ${report.state === "corrupt" ? "state-warn" : ""}`}>{STATES[report.state]}</p>
+              <p className="label">Completeness unknown</p>
+            </div>
+          )}
         </div>
 
         {error && (
@@ -101,8 +107,6 @@ export function Activity() {
             <Notice tone="error">{error}</Notice>
           </div>
         )}
-
-        {report && <div className="ledger-message"><p>Completeness unknown</p></div>}
 
         {report?.notices.map((notice) => (
           <div className="ledger-message" key={notice.kind}>
@@ -136,6 +140,7 @@ export function Activity() {
           </div>
         ) : entries.length === 0 ? (
           <div className="empty-state">
+            <EmptyPage />
             <h2>No records displayed.</h2>
             <p>This is not proof of inactivity. Records may be absent, unavailable or incomplete.</p>
           </div>
@@ -147,7 +152,7 @@ export function Activity() {
                   {String(entry.seq).padStart(3, "0")}
                 </span>
                 <span className="audit-time mono">{formatDateTime(entry.ts)}</span>
-                <span className="audit-action">
+                <span className="audit-action" data-kind={entry.action === "reveal-requested" || entry.action === "copy-requested" || entry.action.startsWith("export") ? "disclosure" : undefined}>
                   {Object.hasOwn(ACTIONS, entry.action) ? ACTIONS[entry.action] : `Legacy ${entry.action} (outcome unknown)`}
                 </span>
                 <span className="audit-key">

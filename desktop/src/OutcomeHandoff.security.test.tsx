@@ -43,7 +43,7 @@ async function dispatch(operation: Operation) {
   });
   const root = render(<App />);
   await screen.findByText("Unlocked keys region");
-  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "Use keys" }));
   if (operation === "import") {
     fireEvent.click(screen.getByRole("button", { name: "Import .env…" }));
     for (const [label, value] of [["Paste the .env contents", "PRIVATE_TOKEN=fake-private-import-value"], ["Target project", "private-scope-a"], ["Target environment", "private-env-a"]]) {
@@ -83,7 +83,7 @@ for (const operation of ["import", "export"] as const) {
         } else if (handoff !== "normal" && handoff !== "hide") {
           fireEvent.click(screen.getByRole("button", { name: "Keys" }));
           await screen.findByText("Unlocked keys region");
-          if (handoff === "return") fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+          if (handoff === "return") fireEvent.click(screen.getByRole("button", { name: "Use keys" }));
         }
         await act(async () => settle(reply));
         if (handoff === "between-roots") { render(<App />); await screen.findByText("Unlocked keys region"); }

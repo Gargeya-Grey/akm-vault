@@ -112,6 +112,14 @@ export function statusDescription(key: KeyView, now: number): string {
   return `${expirySentence(key, now)}. ${rotationSentence(key, now)}.`;
 }
 
+/** How much of the rotation interval has passed, from 0 to 1. Null when AKM cannot say. */
+export function rotationUsed(key: KeyView, now: number): number | null {
+  if (key.rotationDays === null || key.rotationDueAt === null) return null;
+  const due = Date.parse(key.rotationDueAt);
+  if (Number.isNaN(due)) return null;
+  return Math.min(1, Math.max(0, 1 - (due - now) / (key.rotationDays * 86_400_000)));
+}
+
 export function expiryLabel(key: KeyView): string {
   if (!key.expiresAt) return "—";
   return formatDate(key.expiresAt);

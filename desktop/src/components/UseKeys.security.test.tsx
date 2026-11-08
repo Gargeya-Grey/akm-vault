@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { Settings } from "./Settings";
+import { UseKeys } from "./UseKeys";
 import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
 
 const mocks = vi.hoisted(() => ({
@@ -18,7 +18,6 @@ vi.mock("../api", () => ({
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-const status = { sessionId: crypto.randomUUID(), path: "C:/test/vault.kdbx", exists: true, unlocked: true, keyCount: 0, vaultName: "Test", needsUpgrade: false };
 
 function fillImport(text = "TOKEN=fake", project = "demo", environment = "dev") {
   fireEvent.click(screen.getByRole("button", { name: "Import .env…" }));
@@ -33,14 +32,14 @@ function hide() {
 }
 
 test("export controls stay locked until a specific project and environment are selected", () => {
-  render(<Settings status={status} onLocked={() => {}} />);
+  render(<UseKeys />);
   for (const name of ["Save .env…", "Preview", "Copy to clipboard"]) {
     expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
   }
 });
 
 test("import sends one request with the chosen scope and has no in-page confirm step", async () => {
-  render(<Settings status={status} onLocked={() => {}} />);
+  render(<UseKeys />);
   fillImport("OPENAI_API_KEY=dev-secret\nSTRIPE_KEY=second-secret");
   fireEvent.click(screen.getByRole("button", { name: "Review import" }));
   await screen.findByText("Imported: 1 added, 1 updated.");
@@ -51,7 +50,7 @@ test("import sends one request with the chosen scope and has no in-page confirm 
 });
 
 test("import refuses a missing target scope before asking the backend", async () => {
-  render(<Settings status={status} onLocked={() => {}} />);
+  render(<UseKeys />);
   fireEvent.click(screen.getByRole("button", { name: "Import .env…" }));
   fireEvent.change(screen.getByLabelText("Paste the .env contents"), { target: { value: "KEY=secret" } });
   fireEvent.click(screen.getByRole("button", { name: "Review import" }));
@@ -62,7 +61,7 @@ test("import refuses a missing target scope before asking the backend", async ()
 test("while the native confirmation is open the form cannot be edited, cancelled or closed from the page", async () => {
   let resolve!: (value: unknown) => void;
   mocks.importEnv.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
-  render(<Settings status={status} onLocked={() => {}} />);
+  render(<UseKeys />);
   fillImport();
   fireEvent.click(screen.getByRole("button", { name: "Review import" }));
   expect(screen.getByText(/Waiting for your answer in the AKM confirmation window/)).toBeTruthy();
@@ -82,7 +81,7 @@ test("while the native confirmation is open the form cannot be edited, cancelled
 
 test("declining in the native window keeps the form for editing and reports that nothing was imported", async () => {
   mocks.importEnv.mockResolvedValueOnce(null);
-  render(<Settings status={status} onLocked={() => {}} />);
+  render(<UseKeys />);
   fillImport("TOKEN=fake-kept");
   fireEvent.click(screen.getByRole("button", { name: "Review import" }));
   await screen.findByText("Nothing was imported. You declined it in the confirmation window.");
@@ -95,7 +94,7 @@ test("declining in the native window keeps the form for editing and reports that
 
 test("a native error is shown and the form can be used again", async () => {
   mocks.importEnv.mockRejectedValueOnce({ kind: "stalePreview", message: "The vault changed while the import waited for confirmation. Start it again." });
-  render(<Settings status={status} onLocked={() => {}} />);
+  render(<UseKeys />);
   fillImport();
   fireEvent.click(screen.getByRole("button", { name: "Review import" }));
   await screen.findAllByText("The vault changed while the import waited for confirmation. Start it again.");
@@ -106,7 +105,7 @@ for (const how of ["hide", "native view expiry"] as const) {
   test(`${how} while the native confirmation is open closes the form and ignores the late reply`, async () => {
     let resolve!: (value: unknown) => void;
     mocks.importEnv.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
-    render(<Settings status={status} onLocked={() => {}} />);
+    render(<UseKeys />);
     fillImport("TOKEN=fake-private-text");
     fireEvent.click(screen.getByRole("button", { name: "Review import" }));
     if (how === "hide") hide();
@@ -125,7 +124,7 @@ for (const how of ["hide", "native view expiry"] as const) {
 test("unmounting while the native confirmation is open leaves nothing to update", async () => {
   let resolve!: (value: unknown) => void;
   mocks.importEnv.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
-  const view = render(<Settings status={status} onLocked={() => {}} />);
+  const view = render(<UseKeys />);
   fillImport();
   fireEvent.click(screen.getByRole("button", { name: "Review import" }));
   view.unmount();
@@ -137,7 +136,7 @@ test("changing export scope rejects an old plaintext preview response", async ()
   mocks.keys.mockResolvedValueOnce([{ project: "demo", environment: "prod" }, { project: "demo", environment: "dev" }]);
   let resolve!: (value: string) => void;
   mocks.exportEnv.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
-  await act(async () => { render(<Settings status={status} onLocked={() => {}} />); });
+  await act(async () => { render(<UseKeys />); });
   fireEvent.change(screen.getByLabelText("Project"), { target: { value: "demo" } });
   fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "prod" } });
   fireEvent.click(screen.getByRole("button", { name: "Preview" }));
@@ -151,7 +150,7 @@ test("hiding the window invalidates a plaintext preview that has not arrived yet
   mocks.keys.mockResolvedValueOnce([{ project: "demo", environment: "prod" }]);
   let resolve!: (value: string) => void;
   mocks.exportEnv.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
-  await act(async () => { render(<Settings status={status} onLocked={() => {}} />); });
+  await act(async () => { render(<UseKeys />); });
   fireEvent.change(screen.getByLabelText("Project"), { target: { value: "demo" } });
   fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "prod" } });
   fireEvent.click(screen.getByRole("button", { name: "Preview" }));

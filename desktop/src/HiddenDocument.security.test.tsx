@@ -71,7 +71,7 @@ function show() {
 async function settingsWithPendingImport() {
   render(<App />);
   await screen.findByText("Current unlocked keys");
-  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "Use keys" }));
   await screen.findByRole("option", { name: "demo" });
   fireEvent.click(screen.getByRole("button", { name: "Import .env…" }));
   for (const [name, value] of [["Paste the .env contents", "TOKEN=fake-private-input"], ["Target project", "demo"], ["Target environment", "dev"]]) {
@@ -160,7 +160,7 @@ test("a discard that never returns does not hide the outcome of the import", asy
   expect(f.active()).toBe(true);
 });
 
-test("hiding the document reaches native from every view, not only from Settings", async () => {
+test("hiding the document reaches native from every view, not only from Use keys", async () => {
   const f = fixture();
   render(<App />);
   await screen.findByText("Current unlocked keys");

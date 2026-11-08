@@ -136,5 +136,5 @@ export interface ReminderStatus {
   blocked: boolean;
 }
 
-export type View = "keys" | "bin" | "activity" | "settings";
+export type View = "keys" | "use" | "bin" | "activity" | "settings";
 export type Theme = "light" | "dark";

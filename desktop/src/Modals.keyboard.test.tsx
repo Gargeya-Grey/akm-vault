@@ -10,7 +10,7 @@ import type { KeyView } from "./types";
 // and takes Enter, using the keyboard only. The inventory below is from
 //   grep -rn "role=\"dialog\"" desktop/src --include=*.tsx
 // KeyDetail, KeyForm (add and edit), RotateDialog, ConfirmDialog (move to the Recycle Bin,
-// delete for good, format upgrade) and the Settings import dialog.
+// delete for good, format upgrade) and the Use keys import dialog.
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
@@ -217,7 +217,7 @@ test("the import dialog contains focus, Escape returns to Import, and Enter subm
   boot({ env_import: () => ({ added: 1, updated: 0 }) }, () => []);
   const user = userEvent.setup({ delay: null });
   await act(async () => { render(<App />); });
-  await user.click(await screen.findByRole("button", { name: "Settings" }));
+  await user.click(await screen.findByRole("button", { name: "Use keys" }));
   const open = await screen.findByRole("button", { name: "Import .env…" });
   open.focus();
   await user.keyboard("{Enter}");

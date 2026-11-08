@@ -12,7 +12,7 @@ In the desktop app, a user imports a `.env` file into one project and environmen
 
 ## How to get to it (user POV)
 
-- Desktop: Settings, `Import .env…`, then `Review import` and the native dialog.
+- Desktop: Use keys, `Import .env…`, then `Review import` and the native dialog.
 - Desktop: a key's detail view, its copy button.
 
 ## Driving it with verify_windows_app

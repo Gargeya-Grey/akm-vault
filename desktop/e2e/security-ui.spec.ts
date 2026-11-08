@@ -38,7 +38,7 @@ for (const theme of ["light", "dark"]) {
 test("hiding the document with an import confirmation pending reaches native without a minimize event", async ({ page }) => {
   await installNativeBoundaryMock(page, "light");
   await page.goto("/");
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Use keys", exact: true }).click();
   await page.getByRole("button", { name: "Import .env…" }).click();
   await page.getByLabel("Paste the .env contents").fill("OPENAI_API_KEY=fake-browser-value");
   await page.getByLabel("Target project").fill("demo");
@@ -71,7 +71,7 @@ for (const width of [390, 1440]) {
       await expect(page.locator("html")).toHaveAttribute("data-theme", nextTheme);
       await page.getByRole("button", { name: `Switch to ${theme} mode` }).click();
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-      await page.getByRole("button", { name: "Settings", exact: true }).click();
+      await page.getByRole("button", { name: "Use keys", exact: true }).click();
       for (const name of ["Save .env…", "Preview", "Copy to clipboard"]) {
         await expect(page.getByRole("button", { name, exact: true })).toBeDisabled();
       }

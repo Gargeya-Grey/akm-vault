@@ -25,7 +25,7 @@ for (const theme of ["light", "dark"]) {
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
         await page.goto("/");
-        await page.getByRole("button", { name: "Settings", exact: true }).click();
+        await page.getByRole("button", { name: "Use keys", exact: true }).click();
         await page.getByLabel("Project", { exact: true }).selectOption("demo");
         await page.getByLabel("Environment", { exact: true }).selectOption("dev");
         if (operation === "import") {

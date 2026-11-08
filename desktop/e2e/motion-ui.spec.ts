@@ -23,7 +23,7 @@ function token(page: Page, name: string) {
 for (const theme of ["light", "dark"]) {
   test(`${theme}: a dialog and its notice are fully opaque from the first frame`, async ({ page }) => {
     await open(page, theme);
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Use keys", exact: true }).click();
     await page.getByRole("button", { name: "Import .env…" }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
@@ -81,7 +81,7 @@ for (const theme of ["light", "dark"]) {
 
   test(`${theme}: a selected filter shows the ink border on hover, and filled buttons keep their token fill`, async ({ page }) => {
     await open(page, theme);
-    const filter = page.locator("#filter-project");
+    const filter = page.locator("#filter-environment");
     await filter.selectOption({ index: 1 });
     await page.mouse.move(0, 0);
     const leaf = await token(page, "--leaf-ink");

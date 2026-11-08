@@ -10,6 +10,7 @@ Updated 2026-11-08. Replace this file's sections when they change. History lives
 - **GitHub Actions is on** (owner, 2026-11-07). **CI is green on the PR #7 merge `ee7b353`** ([run 42453604620](https://github.com/Gargeya-Grey/akm-vault/actions/runs/42453604620)). **CI is green on `4f88b3a`** ([run 42402999565](https://github.com/Gargeya-Grey/akm-vault/actions/runs/42402999565), all 27 steps). A later docs-only run failed because the CI cache restored the fake test journal folder without its private permissions (P2R2-06); CI now removes that folder first, and the run on `0ac81a7` is green. The four earlier runs failed for four separate reasons, each fixed: tests that compared raw temp paths on the runner's `RUNNER~1` path (P2R2-06; `d628130`, and CI now uses a temp path without short names); the fetch tool missed the root of the current folder's drive (`7ec9166`); and a lint that only a newer Clippy has (`4f88b3a` pins CI to Rust 1.90.0, the local toolchain).
 - **The owner will use AKM for their own keys before the release gate.** [FIRST_USE.md](FIRST_USE.md) gives the precautions and the six tests that need the owner present.
 - **Unit 1a: source accepted; work unit complete: NO.** R4-04 (open P1) is still deferred.
+- **UI rebuild in progress on branch `ui/key-cabinet`** (owner, 2026-11-08). Every screen is new; the design is in [desktop/DESIGN.md](../desktop/DESIGN.md). A new Use keys view holds .env export and import, which left Settings. The session logic and every accessible name that the proofs use are unchanged. One per-user NSIS setup program replaces the MSI and NSIS pair. Next on that branch: one Codex review, then the app view for launching a program with keys, so that a user needs no command line.
 - **No new score exists.** The only measured score is 40.5/100 ([baseline review](reviews/2026-10-30-baseline.md)). The full rescore of unit 5 needs several reviewers and waits for the owner.
 
 ## Last full check run
@@ -49,6 +50,7 @@ Each CI run uploads its own build with a `SHA256SUMS.txt`, and keeps it for 90 d
 
 ## Next action
 
+0. Finish the UI rebuild branch (Status). It needs the owner's yes to merge, and the owner's own step to install.
 1. The owner runs the six tests in [FIRST_USE.md](FIRST_USE.md), and chooses option A or B for R4-04. `tools/verify_windows_app.ps1` still follows the import design from before P2R2-02; update its import steps before the full GUI proof.
 2. Release decisions for the owner: SEC-02 to SEC-05, 2-W-01 and P2R2-07 in [FINDINGS.md](FINDINGS.md).
 3. Later units: P2R2-06 (tests that compare raw temp paths) and the unit 5 full rescore, which the release gate needs.

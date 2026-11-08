@@ -653,7 +653,7 @@ function Test-KeyDetailExpiry([switch]$Rehearse) {
 
 function Test-CancelledOutcome([int]$Count = 1) {
   $pattern = 'File export was cancelled\. No file was saved by this request\.'
-  Click-Control 'Settings'
+  Click-Control 'Use keys'
   Select-Filter 'Project' 'demo'
   Select-Filter 'Environment' 'prod'
   for ($i = 1; $i -le $Count; $i++) {
@@ -681,7 +681,7 @@ function Assert-NoOutcomeResurrection {
 
 function Test-OutcomeHandoff {
   Test-KeyDetailExpiry
-  Click-Control 'Settings'
+  Click-Control 'Use keys'
   Click-Control ('Import .env' + [char]0x2026)
   Set-Field 'Paste the .env contents' 'HANDOFF_TOKEN=fake-outcome-import-value'
   Set-Field 'Target project' 'outcome-import-project'
@@ -700,16 +700,16 @@ function Test-OutcomeHandoff {
     Assert-Proof $changed 'the fake encrypted import commits while its reply waits on the test-owned journal lock'
     Minimize-RestoreOwnedWindow
     Assert-GoneAndStable 'Keys' { param($s) !(Test-ProofText $s '^Import keys$') } 'actual minimize/restore expired the local import dialog'
-    Assert-Proof (Find-Control ('Import .env' + [char]0x2026) ([System.Windows.Automation.ControlType]::Button)).Current.IsEnabled 'the hidden confirmation does not leave Settings busy'
+    Assert-Proof (Find-Control ('Import .env' + [char]0x2026) ([System.Windows.Automation.ControlType]::Button)).Current.IsEnabled 'the hidden confirmation does not leave Use keys busy'
     Click-Control 'Keys'
   } finally { $hold.Unlock(0, [Int64]::MaxValue); $hold.Dispose() }
   Assert-OutcomeRegion 'Import completed\.'
-  Assert-OwnedStable 'Keys' { param($s) !(Test-ProofText $s 'Imported: 1 added') } 2000 'obsolete Settings details do not reappear on Keys'
+  Assert-OwnedStable 'Keys' { param($s) !(Test-ProofText $s 'Imported: 1 added') } 2000 'obsolete Use keys details do not reappear on Keys'
   $keys = Invoke-TestCli @('list', '--json') | Out-String | ConvertFrom-Json
   Assert-Proof (@($keys | Where-Object { $_.env_var -eq 'HANDOFF_TOKEN' -and $_.project -eq 'outcome-import-project' -and $_.environment -eq 'outcome-import-env' }).Count -eq 1) 'the actual CLI confirms the dispatched import saved once in its reviewed scope'
   Dismiss-Outcome 'Import completed\.'
 
-  Click-Control 'Settings'
+  Click-Control 'Use keys'
   Select-Filter 'Project' 'demo'
   Select-Filter 'Environment' 'prod'
   $hold = Hold-TestJournal
@@ -833,7 +833,7 @@ try {
       }
       if ($JournalExportOnly) {
         $encryptedBefore = [Convert]::ToBase64String([IO.File]::ReadAllBytes($vault))
-        Click-Control 'Settings'
+        Click-Control 'Use keys'
         Select-Filter 'Project' 'demo'
         Select-Filter 'Environment' 'prod'
         Click-Control ('Save .env' + [char]0x2026)
@@ -980,7 +980,7 @@ try {
   Click-Control 'Reload vault'
   Find-Control 'Open OpenAI prod proof' ([System.Windows.Automation.ControlType]::Button) | Out-Null
 
-  Click-Control 'Settings'
+  Click-Control 'Use keys'
   $beforeInvalid = [Convert]::ToBase64String([IO.File]::ReadAllBytes($vault))
   foreach ($inputText in @('TOKEN=', 'bad-name=fake', "TOKEN=fake`nTOKEN=other")) {
     Click-Control ('Import .env' + [char]0x2026)
@@ -1058,7 +1058,7 @@ try {
   Find-Control 'Unlock vault' ([System.Windows.Automation.ControlType]::Button) | Out-Null
   Unlock-FakeVault
   }
-  Click-Control 'Settings'
+  Click-Control 'Use keys'
   Select-Filter 'Project' 'demo'
   Select-Filter 'Environment' 'prod'
   Click-Control ('Save .env' + [char]0x2026)

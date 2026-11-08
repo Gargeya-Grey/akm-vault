@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, errorText } from "../api";
 import { formatDateTime, plural } from "../format";
 import type { RecycledKey } from "../types";
+import { EmptyBin, KeyCut } from "./glyphs";
 import { Icon } from "./Icon";
 import { ConfirmDialog, Notice } from "./Notice";
 
@@ -67,7 +68,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
   }
 
   return (
-    <main className="wrap view">
+    <main className="view">
       <header className="view-head">
         <div>
           <h1 tabIndex={-1} data-focus-fallback="">
@@ -80,7 +81,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
         </div>
       </header>
 
-      <section className="raised ledger" aria-label="Recycled keys">
+      <section aria-label="Recycled keys">
         {error && (
           <div className="ledger-message">
             <Notice tone="error">{error}</Notice>
@@ -99,6 +100,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
           </div>
         ) : items.length === 0 ? (
           <div className="empty-state">
+            <EmptyBin />
             <h2>The Recycle Bin is empty.</h2>
             <p>A key you remove from the key list waits here until you restore it or delete it for good.</p>
           </div>
@@ -106,6 +108,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
           <ul className="key-rows">
             {items.map((item) => (
               <li className="bin-row" key={item.key.id}>
+                <KeyCut id={item.key.id} />
                 <span className="key-ident">
                   <span className="key-title">{item.key.title}</span>
                   <span className="key-sub">

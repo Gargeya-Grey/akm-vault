@@ -110,7 +110,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
 
   return (
     <div
-      className="overlay"
+      className="overlay overlay-drawer"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onClose();
@@ -119,16 +119,14 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="modal form-modal raised"
+        className="drawer raised"
         role="dialog"
         aria-modal="true"
         aria-labelledby="form-title"
       >
         <header className="modal-head">
           <div>
-            <p className="label">
-              {editing ? "Edit metadata" : "New entry"}
-            </p>
+            <p className="label">{editing ? "Edit metadata" : "New entry"}</p>
             <h2 id="form-title">{editing ? "Edit key" : "Add a key"}</h2>
           </div>
           <button
@@ -143,166 +141,186 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
         </header>
 
         <form onSubmit={submit}>
-          <div className="form-grid">
-            <div className="field">
-              <label htmlFor="key-title">Title</label>
-              <input
-                id="key-title"
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder="OpenAI — staging"
-                autoComplete="off"
-                autoFocus
-                required
-              />
-            </div>
+          <div className="drawer-body">
+            <section className="form-group" aria-labelledby="form-group-key">
+              <h3 id="form-group-key">The key</h3>
+              <div className="form-grid">
+                <div className="field">
+                  <label htmlFor="key-title">Title</label>
+                  <input
+                    id="key-title"
+                    value={title}
+                    onChange={(event) => setTitle(event.target.value)}
+                    placeholder="OpenAI — staging"
+                    autoComplete="off"
+                    autoFocus
+                    required
+                  />
+                </div>
 
-            <div className="field">
-              <label htmlFor="key-issuer">Issuer</label>
-              <input
-                id="key-issuer"
-                value={issuer}
-                onChange={(event) => setIssuer(event.target.value)}
-                placeholder="OpenAI"
-                autoComplete="off"
-              />
-            </div>
+                <div className="field">
+                  <label htmlFor="key-issuer">Issuer</label>
+                  <input
+                    id="key-issuer"
+                    value={issuer}
+                    onChange={(event) => setIssuer(event.target.value)}
+                    placeholder="OpenAI"
+                    autoComplete="off"
+                  />
+                </div>
 
-            <div className="field full">
-              <label htmlFor="key-secret">
-                Secret {editing && <span className="label">(optional)</span>}
-              </label>
-              <input
-                id="key-secret"
-                type="password"
-                value={secret}
-                onChange={(event) => setSecret(event.target.value)}
-                placeholder={editing ? "Leave blank to keep it" : "sk-…"}
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <p className="field-note">
-                {editing
-                  ? "Leave it blank to keep the stored value. A new value counts as a rotation, and the old value stays in the vault history. To rotate a key, use Rotate secret in its detail view."
-                  : "Encrypted inside the KDBX entry. It is never written to settings or logs."}
-              </p>
-            </div>
+                <div className="field full">
+                  <label htmlFor="key-secret">
+                    Secret {editing && <span className="label">(optional)</span>}
+                  </label>
+                  <input
+                    id="key-secret"
+                    type="password"
+                    value={secret}
+                    onChange={(event) => setSecret(event.target.value)}
+                    placeholder={editing ? "Leave blank to keep it" : "sk-…"}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <p className="field-note">
+                    {editing
+                      ? "Leave it blank to keep the stored value. A new value counts as a rotation, and the old value stays in the vault history. To rotate a key, use Rotate secret in its detail view."
+                      : "Encrypted inside the KDBX entry. It is never written to settings or logs."}
+                  </p>
+                </div>
+              </div>
+            </section>
 
-            <div className="field">
-              <label htmlFor="key-project">Project</label>
-              <input
-                id="key-project"
-                value={project}
-                onChange={(event) => setProject(event.target.value)}
-                placeholder="my-app"
-                autoComplete="off"
-              />
-            </div>
+            <section className="form-group" aria-labelledby="form-group-where">
+              <h3 id="form-group-where">Where it is used</h3>
+              <div className="form-grid">
+                <div className="field">
+                  <label htmlFor="key-project">Project</label>
+                  <input
+                    id="key-project"
+                    value={project}
+                    onChange={(event) => setProject(event.target.value)}
+                    placeholder="my-app"
+                    autoComplete="off"
+                  />
+                </div>
 
-            <div className="field">
-              <label htmlFor="key-environment">Environment</label>
-              <input
-                id="key-environment"
-                value={environment}
-                onChange={(event) => setEnvironment(event.target.value)}
-                placeholder="dev"
-                autoComplete="off"
-              />
-            </div>
+                <div className="field">
+                  <label htmlFor="key-environment">Environment</label>
+                  <input
+                    id="key-environment"
+                    value={environment}
+                    onChange={(event) => setEnvironment(event.target.value)}
+                    placeholder="dev"
+                    autoComplete="off"
+                  />
+                </div>
 
-            <div className="field">
-              <label htmlFor="key-env-var">Environment variable</label>
-              <input
-                id="key-env-var"
-                className="mono"
-                value={envVar}
-                onChange={(event) => setEnvVar(event.target.value)}
-                placeholder="Derived from the title"
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <p className="field-note">Used by akm run and .env export.</p>
-            </div>
+                <div className="field full">
+                  <label htmlFor="key-env-var">Environment variable</label>
+                  <input
+                    id="key-env-var"
+                    className="mono"
+                    value={envVar}
+                    onChange={(event) => setEnvVar(event.target.value)}
+                    placeholder="Derived from the title"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <p className="field-note">The name this key gets in a .env file.</p>
+                </div>
+              </div>
+            </section>
 
-            <div className="field">
-              <label htmlFor="key-expires">Expires</label>
-              <input
-                id="key-expires"
-                type="date"
-                value={expires}
-                onChange={(event) => setExpires(event.target.value)}
-              />
-              <p className="field-note">Optional. The native KDBX expiry.</p>
-            </div>
+            <section className="form-group" aria-labelledby="form-group-life">
+              <h3 id="form-group-life">When it wears out</h3>
+              <div className="form-grid">
+                <div className="field">
+                  <label htmlFor="key-expires">Expires</label>
+                  <input
+                    id="key-expires"
+                    type="date"
+                    value={expires}
+                    onChange={(event) => setExpires(event.target.value)}
+                  />
+                  <p className="field-note">Optional.</p>
+                </div>
 
-            <div className="field">
-              <label htmlFor="key-rotation">Rotate every</label>
-              <input
-                id="key-rotation"
-                type="number"
-                inputMode="numeric"
-                min={1}
-                max={3650}
-                step={1}
-                value={rotation}
-                onChange={(event) => setRotation(event.target.value)}
-                placeholder="90"
-              />
-              <p className="field-note">Days. Leave blank for no reminder.</p>
-            </div>
+                <div className="field">
+                  <label htmlFor="key-rotation">Rotate every</label>
+                  <input
+                    id="key-rotation"
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={3650}
+                    step={1}
+                    value={rotation}
+                    onChange={(event) => setRotation(event.target.value)}
+                    placeholder="90"
+                  />
+                  <p className="field-note">Days. Leave blank for no reminder.</p>
+                </div>
+              </div>
+            </section>
 
-            <div className="field">
-              <label htmlFor="key-url">URL</label>
-              <input
-                id="key-url"
-                value={url}
-                onChange={(event) => setUrl(event.target.value)}
-                placeholder="https://platform.openai.com/api-keys"
-                autoComplete="off"
-              />
-            </div>
+            <section className="form-group" aria-labelledby="form-group-details">
+              <h3 id="form-group-details">Details</h3>
+              <div className="form-grid">
+                <div className="field full">
+                  <label htmlFor="key-url">URL</label>
+                  <input
+                    id="key-url"
+                    value={url}
+                    onChange={(event) => setUrl(event.target.value)}
+                    placeholder="https://platform.openai.com/api-keys"
+                    autoComplete="off"
+                  />
+                </div>
 
-            <div className="field full">
-              <label htmlFor="key-scopes">Scopes</label>
-              <input
-                id="key-scopes"
-                className="mono"
-                value={scopes}
-                onChange={(event) => setScopes(event.target.value)}
-                placeholder="chat, models"
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <p className="field-note">Comma separated. Stored as a JSON array.</p>
-            </div>
+                <div className="field">
+                  <label htmlFor="key-scopes">Scopes</label>
+                  <input
+                    id="key-scopes"
+                    className="mono"
+                    value={scopes}
+                    onChange={(event) => setScopes(event.target.value)}
+                    placeholder="chat, models"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <p className="field-note">Comma separated.</p>
+                </div>
 
-            <div className="field full">
-              <label htmlFor="key-tags">Tags</label>
-              <input
-                id="key-tags"
-                value={tags}
-                onChange={(event) => setTags(event.target.value)}
-                placeholder="production, billing"
-                autoComplete="off"
-              />
-              <p className="field-note">Native KDBX tags, comma separated.</p>
-            </div>
+                <div className="field">
+                  <label htmlFor="key-tags">Tags</label>
+                  <input
+                    id="key-tags"
+                    value={tags}
+                    onChange={(event) => setTags(event.target.value)}
+                    placeholder="production, billing"
+                    autoComplete="off"
+                  />
+                  <p className="field-note">Comma separated.</p>
+                </div>
 
-            <div className="field full">
-              <label htmlFor="key-notes">Notes</label>
-              <textarea
-                id="key-notes"
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                rows={3}
-                placeholder="What this key can do, and what to do before rotating it."
-              />
-            </div>
+                <div className="field full">
+                  <label htmlFor="key-notes">Notes</label>
+                  <textarea
+                    id="key-notes"
+                    value={notes}
+                    onChange={(event) => setNotes(event.target.value)}
+                    rows={3}
+                    placeholder="What this key can do, and what to do before rotating it."
+                  />
+                </div>
+              </div>
+            </section>
+
+            {error && <Notice tone="error">{error}</Notice>}
           </div>
 
-          {error && <Notice tone="error">{error}</Notice>}
-
-          <div className="dialog-actions">
+          <div className="drawer-foot end">
             <button
               type="button"
               className="text-button"

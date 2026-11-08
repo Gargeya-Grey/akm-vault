@@ -9,6 +9,7 @@ import { RecycleBin } from "./components/RecycleBin";
 import { ConfirmDialog, Notice } from "./components/Notice";
 import { Settings } from "./components/Settings";
 import { Unlock } from "./components/Unlock";
+import { UseKeys } from "./components/UseKeys";
 import { useTheme } from "./theme";
 import type { OperationNotice, Status, View, WarningReport } from "./types";
 import { acknowledgeCompletions, COMPLETION_EVENT, COMPLETION_MESSAGE, invalidateSession, retainedCompletions, sessionGeneration, SESSION_LOSS_EVENT, WARNING_EVENT } from "./sessionBoundary";
@@ -310,53 +311,55 @@ export function App() {
   }
 
   const bootError = error ?? (bootInterrupted ? "The session changed while AKM was starting. Try again." : null);
+  const unlocked = status?.unlocked ?? false;
 
   return (
-    <>
+    <div className={`app ${unlocked ? "app-open" : "app-closed"}`}>
       <NavBar
         view={view}
         onView={setView}
-        unlocked={status?.unlocked ?? false}
+        unlocked={unlocked}
         theme={theme}
         onToggleTheme={toggle}
         onLock={() => void lock()}
         onReload={() => void reload()}
       />
 
-      {completions.length > 0 && <section className="wrap session-notices" aria-label="Operation outcomes">
+      <div className="stage">
+      {completions.length > 0 && <section className="session-notices" aria-label="Operation outcomes">
         {completions.map((record) => <Notice key={record.id} tone={record.outcome === "reportedError" || record.outcome === "unconfirmed" ? "error" : "info"}>{outcomeMessage(record)}</Notice>)}
         <button type="button" className="text-button" disabled={completions.every(({ outcome }) => outcome === "pending")} onClick={() => acknowledgeCompletions(completions.filter(({ outcome }) => outcome !== "pending").map(({ id }) => id))}>Dismiss operation outcomes</button>
       </section>}
 
-      {status && error && <div className="wrap session-notices"><Notice tone="error">{error}</Notice></div>}
+      {status && error && <div className="session-notices"><Notice tone="error">{error}</Notice></div>}
       {operationNotices.length > 0 && (
-        <section className="wrap session-notices" aria-label="Saved-operation notices">
+        <section className="session-notices" aria-label="Saved-operation notices">
           {operationNotices.map((notice) => <Notice key={notice.id}>{OPERATION_MESSAGES[notice.kind]}</Notice>)}
           {dismissError && <Notice tone="error">Could not dismiss these notices. They remain available; try dismissing again.</Notice>}
           <button type="button" className="text-button" disabled={dismissBusy} onClick={() => void dismissNotices()}>Dismiss saved-operation notices</button>
         </section>
       )}
       {warnings.length > 0 && (
-        <div className="wrap session-notices">
+        <div className="session-notices">
           {warnings.map((warning) => <Notice tone="error" key={warning.id}>{warning.message}</Notice>)}
           {warningDismissError && <Notice tone="error">Could not dismiss these warnings. They remain available; try dismissing again.</Notice>}
           <button type="button" className="text-button" disabled={warningDismissBusy} onClick={() => void dismissApplicationWarnings()}>Dismiss warnings</button>
         </div>
       )}
       {status?.unlocked && status.needsUpgrade && (
-        <section className="wrap session-notices" aria-label="Vault format upgrade">
+        <section className="session-notices" aria-label="Vault format upgrade">
           <Notice>This older vault is read-only in AKM until you upgrade it to KDBX 4.1. The password and encryption settings stay unchanged.</Notice>
           <button type="button" className="btn-secondary" onClick={() => setConfirmUpgrade(true)}>Review format upgrade</button>
         </section>
       )}
 
       {watch === "failed" ? (
-        <main className="wrap view boot">
+        <main className="view boot">
           <Notice tone="error">{WATCH_FAILED_MESSAGE}</Notice>
           {lockUnconfirmed && <Notice tone="error">{LOCK_UNCONFIRMED_MESSAGE}</Notice>}
         </main>
       ) : status === null ? (
-        <main className="wrap view boot">
+        <main className="view boot">
           {bootError ? (
             <Notice tone="error">{bootError}</Notice>
           ) : (
@@ -394,6 +397,8 @@ export function App() {
             onDismiss: () => setSummaryDismissedFor(status.sessionId),
           }}
         />
+      ) : view === "use" ? (
+        <UseKeys key={revision} readOnly={status.needsUpgrade} />
       ) : view === "bin" ? (
         <RecycleBin key={revision} readOnly={status.needsUpgrade} />
       ) : view === "activity" ? (
@@ -402,6 +407,8 @@ export function App() {
         <Settings key={revision} status={status} onLocked={() => void lock()} />
       )}
 
+      </div>
+
       {status?.unlocked && <AttentionNotifier key={status.sessionId ?? "none"} />}
 
       {confirmUpgrade && status?.unlocked && (
@@ -409,6 +416,6 @@ export function App() {
           <p>AKM will retain the original encrypted file as a backup, write KDBX 4.1, and decrypt it again to verify the contents before replacement. The password and KDF settings do not change. Older KeePass clients may no longer open the upgraded file.</p>
         </ConfirmDialog>
       )}
-    </>
+    </div>
   );
 }

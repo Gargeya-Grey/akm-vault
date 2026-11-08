@@ -3,6 +3,7 @@ import { api, errorText } from "../api";
 import { clipboardCopyText } from "../clipboardText";
 import { formatDate, formatDateTime, isExpired, keyState, plural, rotationLabel, secretChangeLabel } from "../format";
 import type { KeyView } from "../types";
+import { KeyCut } from "./glyphs";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { useDialogFocus } from "./useDialogFocus";
@@ -205,7 +206,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
 
   return (
     <div
-      className="overlay"
+      className="overlay overlay-drawer"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
@@ -214,13 +215,14 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="modal detail-modal raised"
+        className="drawer raised"
         role="dialog"
         aria-modal="true"
         aria-labelledby="detail-title"
       >
         <header className="modal-head">
           <div>
+            <KeyCut id={item.id} tone={state.tone} width={132} />
             <p className="label">{item.issuer ?? "API key"}</p>
             <h2 id="detail-title">{item.title}</h2>
             <p className={`state state-${state.tone}`}>
@@ -238,13 +240,12 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
           </button>
         </header>
 
-        <section className="secret-box" aria-label="Secret value">
-          <div className="secret-copy">
-            <span className="label">Secret</span>
-            <code className={`mono secret-value${secret ? "" : " masked"}`}>
-              {secret ?? "••••••••••••••••••••••••"}
-            </code>
-          </div>
+        <div className="drawer-body">
+        <section className="secret-stage" aria-label="Secret value">
+          <span className="label">Secret</span>
+          <code className={`mono secret-value${secret ? "" : " masked"}`}>
+            {secret ?? "••••••••••••••••••••••••"}
+          </code>
           <div className="secret-actions">
             {secret ? (
               <button type="button" className="text-button" onClick={hide}>
@@ -268,15 +269,19 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
               Copy
             </button>
           </div>
+          {secret && (
+            <p className="secret-note">
+              Hides in <span className="mono">{seconds}</span> seconds. Revealing
+              is written to the activity log.
+            </p>
+          )}
         </section>
-        {secret && (
-          <p className="field-note">
-            Hides in <span className="mono">{seconds}</span> seconds. Revealing
-            is written to the activity log.
-          </p>
+        {(copied || error) && (
+          <div className="drawer-notes">
+            {copied && <Notice tone="ok">{copied}</Notice>}
+            {error && <Notice tone="error">{error}</Notice>}
+          </div>
         )}
-        {copied && <Notice tone="ok">{copied}</Notice>}
-        {error && <Notice tone="error">{error}</Notice>}
 
         <div className="fact-list">
           {facts.map((fact) => (
@@ -294,7 +299,9 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
           </section>
         )}
 
-        <div className="dialog-actions spread">
+        </div>
+
+        <div className="drawer-foot">
           <button type="button" className="text-button danger-text" onClick={onDelete} disabled={readOnly}>
             <Icon name="trash" />
             Move to Recycle Bin
