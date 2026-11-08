@@ -36,6 +36,12 @@ async function open() {
 const toggle = () => screen.getByRole("checkbox", { name: "Show a Windows notification when keys need attention" }) as HTMLInputElement;
 const state = () => document.querySelector(".reminder-state")?.textContent;
 
+test("the key count comes from the current key list, not from the last status poll", async () => {
+  mocks.keys.mockResolvedValue([{}, {}, {}]);
+  await open();
+  expect(screen.getByText("in this vault").textContent).toBe("3 in this vault");
+});
+
 test("the setting is off by default, says what it does, and sends nothing by itself", async () => {
   await open();
   expect(toggle().checked).toBe(false);

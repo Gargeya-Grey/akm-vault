@@ -13,6 +13,7 @@ interface Props {
 
 export function Settings({ status, onLocked }: Props) {
   const [backup, setBackup] = useState<BackupInfo | null>(null);
+  const [keyCount, setKeyCount] = useState<number | null>(null);
   const mounted = useRef(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -40,6 +41,14 @@ export function Settings({ status, onLocked }: Props) {
   useEffect(() => {
     void loadBackup();
   }, [loadBackup]);
+
+  // The status poll can lag a change that just finished. On a failed read the polled count stays.
+  useEffect(() => {
+    void api.keys().then(
+      (keys) => { if (mounted.current) setKeyCount(keys.length); },
+      () => {},
+    );
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -96,7 +105,7 @@ export function Settings({ status, onLocked }: Props) {
           <div className="fact-row">
             <span className="fact-key">Keys</span>
             <span className="fact-value">
-              <span><span className="mono">{status.keyCount}</span> in this vault</span>
+              <span><span className="mono">{keyCount ?? status.keyCount}</span> in this vault</span>
             </span>
           </div>
           <div className="fact-row">

@@ -103,7 +103,7 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
             case "audit_read": return { path: "C:/fake-test/journal/j-00000000000000000000000000000000.jsonl", state: "consistent", damage: null, identity: "confirmed", notices: [], brokenAt: null, problemLine: null, totalEntries: 3, entries: [
               { seq: "1", ts: "2026-10-31T00:00:00Z", action: "copy", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: null },
               { seq: "2", ts: "2026-10-31T00:00:00Z", action: "copy-requested", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: null },
-              { seq: "3", ts: "2026-10-31T00:00:00Z", action: "add-completed", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: null },
+              { seq: "3", ts: "2026-10-31T00:00:00Z", action: "add-completed", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: "fake detail: 2 keys added, 1 updated" },
             ] };
             case "backup_info": return { path: "C:/fake-test/vault.kdbx.bak", exists: false, bytes: 0, modified: null };
             case "env_import": return { added: 0, updated: 1 };

@@ -22,6 +22,17 @@ for (const width of [390, 1440]) {
   }
 }
 
+for (const width of [900, 1040, 1280]) {
+  test(`${width}px: an activity record keeps its detail at every window width the app allows`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await installNativeBoundaryMock(page, "light");
+    await page.goto("/");
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
+    await expect(page.getByText("fake detail: 2 keys added, 1 updated", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  });
+}
+
 for (const theme of ["light", "dark"]) {
   test(`${theme}: native-retained notices survive a fresh document and only explicit dismissal clears them`, async ({ page }) => {
     await installNativeBoundaryMock(page, theme, [{ id: "reload-notice", originSession: "A", kind: "journal" }], [{ id: "reload-app-warning", message: "Fake Windows monitor warning" }]);

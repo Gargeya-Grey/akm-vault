@@ -19,6 +19,8 @@ export function Unlock({ status, onUnlocked }: Props) {
   const [mode, setMode] = useState<Mode>(status.exists ? "unlock" : "create");
   const [path, setPath] = useState(status.path);
   const [password, setPassword] = useState("");
+  // Unicode characters, as the native rule counts them. String length counts UTF-16 units.
+  const passwordLength = [...password].length;
   const [confirm, setConfirm] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -66,7 +68,7 @@ export function Unlock({ status, onUnlocked }: Props) {
     }
 
     if (mode === "create") {
-      if (password.length < SHORTEST_PASSWORD) {
+      if (passwordLength < SHORTEST_PASSWORD) {
         setError("Use at least 12 characters for the master password.");
         return;
       }
@@ -105,7 +107,7 @@ export function Unlock({ status, onUnlocked }: Props) {
     setConfirm("");
   }
 
-  const pinsSet = Math.min(password.length, SHORTEST_PASSWORD);
+  const pinsSet = Math.min(passwordLength, SHORTEST_PASSWORD);
 
   return (
     <main className="unlock">
@@ -115,7 +117,7 @@ export function Unlock({ status, onUnlocked }: Props) {
           <p className="bar-name">AKM</p>
         </div>
         <div className="lock-art">
-          <LockCylinder filled={password.length} busy={busy} rule={mode === "create"} />
+          <LockCylinder filled={passwordLength} busy={busy} rule={mode === "create"} />
         </div>
         <ul className="lock-promises">
           <li>

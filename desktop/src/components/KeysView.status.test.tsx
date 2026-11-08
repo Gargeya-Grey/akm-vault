@@ -1,5 +1,5 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, test, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { KeysView } from "./KeysView";
 import type { KeyView } from "../types";
 
@@ -39,6 +39,18 @@ afterEach(() => {
 });
 
 const row = (name: string, description: string) => screen.getByRole("button", { name, description });
+
+test("a search that leaves one project still names that project", async () => {
+  await show([key({ id: "a", title: "Alpha", project: "alpha-project" }), key({ id: "b", title: "Beta", project: "beta-project" })]);
+  await act(async () => { fireEvent.change(screen.getByRole("searchbox"), { target: { value: "Alpha" } }); });
+  screen.getByRole("heading", { name: "alpha-project" });
+  expect(screen.queryByRole("heading", { name: "beta-project" })).toBeNull();
+});
+
+test("a vault with no projects shows no project heading", async () => {
+  await show([key({ title: "Loose", project: null })]);
+  expect(screen.queryByRole("heading", { name: "No project" })).toBeNull();
+});
 
 test("an expired key says how long ago it expired", async () => {
   await show([key({ title: "Expired key", expiresAt: "2026-05-30T09:00:00Z" })]);

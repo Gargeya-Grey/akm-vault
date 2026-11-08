@@ -46,6 +46,27 @@ for (const operation of ["unlock", "create"] as const) {
   });
 }
 
+test("the pins and the length rule count Unicode characters, as the native rule does", async () => {
+  native.status.mockResolvedValue({ sessionId: null, path: "C:/fake/vault.kdbx", exists: false, unlocked: false, keyCount: 0, vaultName: null, needsUpgrade: false });
+  render(<App />);
+  const create = await screen.findByRole("button", { name: "Create vault" });
+  const enter = (password: string) => {
+    fireEvent.change(screen.getByLabelText("Master password"), { target: { value: password } });
+    fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: password } });
+  };
+  const pins = () => document.querySelector(".pins-state")?.textContent;
+
+  enter("\u{1F511}".repeat(6));
+  expect(pins()).toBe("6 of 12 pins set");
+  fireEvent.click(create);
+  await act(async () => {});
+  expect(native.create).not.toHaveBeenCalled();
+  await screen.findByText("Use at least 12 characters for the master password.");
+
+  enter("\u{1F511}".repeat(12));
+  expect(pins()).toBe("12 of 12 pins set");
+});
+
 test("a terminal authentication error remains visible on the locked form", async () => {
   native.status.mockResolvedValue({ sessionId: null, path: "C:/fake/vault.kdbx", exists: true, unlocked: false, keyCount: 0, vaultName: null, needsUpgrade: false });
   native.unlock.mockRejectedValueOnce("That password does not open this vault.");

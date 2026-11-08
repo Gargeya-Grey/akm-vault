@@ -470,5 +470,8 @@ button:disabled { cursor: default; opacity: 0.55; }
   .use-grid { grid-template-columns: minmax(0, 1fr); }
   .settings-section { grid-template-columns: 150px minmax(0, 1fr); }
   .audit-head, .audit-row { grid-template-columns: 40px 130px minmax(0, 1fr) minmax(0, 1fr); }
-  .audit-detail, .audit-head span:last-child { display: none; }
+  .audit-head span:last-child { display: none; }
+  .audit-row { row-gap: 2px; }
+  .audit-detail { grid-column: 3 / -1; }
+  .audit-detail[data-empty] { display: none; }
 }

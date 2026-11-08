@@ -163,7 +163,7 @@ export function Activity() {
                       .join(" · ") || "—"}
                   </span>
                 </span>
-                <span className="audit-detail">{entry.detail ?? "—"}</span>
+                <span className="audit-detail" data-empty={entry.detail ? undefined : true}>{entry.detail ?? "—"}</span>
               </li>
             ))}
           </ol>

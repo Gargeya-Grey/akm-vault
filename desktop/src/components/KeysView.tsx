@@ -137,7 +137,8 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     }
     return [...byProject].sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : a.localeCompare(b)));
   }, [visible]);
-  const showGroupNames = shelf.kind !== "project" && groups.length > 1;
+  // Rows carry no project column, so the heading is the only place that names the project.
+  const showGroupNames = shelf.kind !== "project" && groups.some(([name]) => name !== null);
 
   const selected = keys.find((key) => key.id === selectedId) ?? null;
   const showSummary = !loading && attention.total > 0 && !(summary?.dismissed ?? summaryDismissed);

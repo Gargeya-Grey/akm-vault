@@ -13,7 +13,7 @@ A user exports the keys of one project and environment as a dotenv file, or star
 ## How to get to it (user POV)
 
 - CLI: `akm export --project <p> --env <e> [--output <file>]`, `akm run --project <p> --env <e> -- <command>`.
-- Desktop: Settings, Export (native save dialog). Covered by `-JournalExportOnly`.
+- Desktop: Use keys, Save .env… (native save dialog). Covered by `-JournalExportOnly`.
 
 ## Driving it with akm-verify
 
