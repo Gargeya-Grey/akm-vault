@@ -1,12 +1,12 @@
 # Current state
 
-Updated 2026-11-07. Replace this file's sections when they change. History lives in Git.
+Updated 2026-11-08. Replace this file's sections when they change. History lives in Git.
 
 ## Status
 
-- **Phase two is built, and its two reviews are done.** Units 1c, 1h, 1b, 2, 3 and 4, security proposals A1 to A3, and the tools are on branch `phase2/units-1c-to-4`, in [PR #7](https://github.com/Gargeya-Grey/akm-vault/pull/7). The owner authorized all of them on 2026-11-07 and let the implementer decide the design questions; each decision is under "Decisions for the owner's veto" in `docs/design/unit*.md`.
+- **Phase two is on `main`.** Units 1c, 1h, 1b, 2, 3 and 4, security proposals A1 to A3, and the tools landed through [PR #7](https://github.com/Gargeya-Grey/akm-vault/pull/7), merged on 2026-11-08 with the owner's yes, after green CI. The branch is deleted. The owner authorized all of them on 2026-11-07 and let the implementer decide the design questions; each decision is under "Decisions for the owner's veto" in `docs/design/unit*.md`.
 - **Reviews: two at most for phase two** (owner, 2026-11-07), by Codex GPT-6.1 Terra at max effort. Both failed. [Review 1](reviews/2026-11-07-phase2-review1.md): 8 P2 and 1 P3, fixed by fault class (P2R1 rows). [Review 2](reviews/2026-11-07-phase2-review2.md): 4 P2 and 1 P3 (P2R2 rows). Units 1c, 1b and the tools failed twice, so patching stopped and the owner chose one redesign per finding, with no third review: the fetch tool never deletes; the native dialog is the review; every vault command names its session; a seen fingerprint wins. Each redesign has tests that failed first and caught mutants. No reviewer has read the redesigns, so every phase two fix stays "fixed, not accepted".
-- **GitHub Actions is on** (owner, 2026-11-07). **CI is green on `4f88b3a`** ([run 42402999565](https://github.com/Gargeya-Grey/akm-vault/actions/runs/42402999565), all 27 steps). The four earlier runs failed for four separate reasons, each fixed: tests that compared raw temp paths on the runner's `RUNNER~1` path (P2R2-06; `d628130`, and CI now uses a temp path without short names); the fetch tool missed the root of the current folder's drive (`7ec9166`); and a lint that only a newer Clippy has (`4f88b3a` pins CI to Rust 1.90.0, the local toolchain).
+- **GitHub Actions is on** (owner, 2026-11-07). **CI is green on `4f88b3a`** ([run 42402999565](https://github.com/Gargeya-Grey/akm-vault/actions/runs/42402999565), all 27 steps). A later docs-only run failed because the CI cache restored the fake test journal folder without its private permissions (P2R2-06); CI now removes that folder first, and the run on `0ac81a7` is green. The four earlier runs failed for four separate reasons, each fixed: tests that compared raw temp paths on the runner's `RUNNER~1` path (P2R2-06; `d628130`, and CI now uses a temp path without short names); the fetch tool missed the root of the current folder's drive (`7ec9166`); and a lint that only a newer Clippy has (`4f88b3a` pins CI to Rust 1.90.0, the local toolchain).
 - **The owner will use AKM for their own keys before the release gate.** [FIRST_USE.md](FIRST_USE.md) gives the precautions and the six tests that need the owner present.
 - **Unit 1a: source accepted; work unit complete: NO.** R4-04 (open P1) is still deferred.
 - **No new score exists.** The only measured score is 40.5/100 ([baseline review](reviews/2026-10-30-baseline.md)). The full rescore of unit 5 needs several reviewers and waits for the owner.
@@ -48,10 +48,9 @@ The CI run of PR #7 uploads its own build with a `SHA256SUMS.txt`. Build from th
 
 ## Next action
 
-1. The owner merges PR #7 after CI is green (owner gate).
-2. The owner runs the six tests in [FIRST_USE.md](FIRST_USE.md), and chooses option A or B for R4-04. `tools/verify_windows_app.ps1` still follows the import design from before P2R2-02; update its import steps before the full GUI proof.
-3. Release decisions for the owner: SEC-02 to SEC-05, 2-W-01 and P2R2-07 in [FINDINGS.md](FINDINGS.md).
-4. Later units: P2R2-06 (tests that compare raw temp paths) and the unit 5 full rescore, which the release gate needs.
+1. The owner runs the six tests in [FIRST_USE.md](FIRST_USE.md), and chooses option A or B for R4-04. `tools/verify_windows_app.ps1` still follows the import design from before P2R2-02; update its import steps before the full GUI proof.
+2. Release decisions for the owner: SEC-02 to SEC-05, 2-W-01 and P2R2-07 in [FINDINGS.md](FINDINGS.md).
+3. Later units: P2R2-06 (tests that compare raw temp paths) and the unit 5 full rescore, which the release gate needs.
 
 ## Local state outside the repository
 
