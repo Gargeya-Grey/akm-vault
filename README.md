@@ -8,6 +8,9 @@ independent re-review above 90, followed by real-use testing before wider
 distribution. Current status: [docs/STATE.md](docs/STATE.md). The owner's own use
 before that gate follows [docs/FIRST_USE.md](docs/FIRST_USE.md).
 
+**New here?** [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) shows how to install
+AKM and add your first key, with no command line.
+
 AKM is for a Windows developer who wants a local, account-free KeePass file plus
 API-key fields and process-environment injection. KeePassXC, 1Password CLI and
 Bitwarden Secrets Manager already cover much of this use case. AKM is a narrower
