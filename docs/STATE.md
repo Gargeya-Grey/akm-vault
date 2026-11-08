@@ -52,7 +52,7 @@ Each CI run uploads its own build with a `SHA256SUMS.txt`, and keeps it for 90 d
 
 ## Next action
 
-0. Finish the UI rebuild branch (Status). It needs the owner's yes to merge, and the owner's own step to install.
+0. **Stop rule, UI rebuild.** The branch failed two reviews ([review 1](reviews/2026-11-08-ui-rebuild-review1.md), [review 2](reviews/2026-11-08-ui-rebuild-review2.md)), so patching stopped (AGENTS.md). The design question for the owner: both reviews found that the new compact rows drop or clip facts that the old screens showed (class H). Should every row (a) show each fact in full, on more lines, and then get one more review; (b) get one more round of single fixes and a review; or (c) stay as it is, with the owner accepting the open findings UI-R2-01 to UI-R2-05? Merging and installing wait for that answer.
 1. The owner runs the six tests in [FIRST_USE.md](FIRST_USE.md), and chooses option A or B for R4-04. `tools/verify_windows_app.ps1` now confirms the native import window (P2R2-02), but that path has not run on the real GUI.
 2. Release decisions for the owner: SEC-02 to SEC-05, 2-W-01 and P2R2-07 in [FINDINGS.md](FINDINGS.md).
 3. Later units: P2R2-06 (tests that compare raw temp paths) and the unit 5 full rescore, which the release gate needs.

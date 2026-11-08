@@ -211,6 +211,18 @@ From [phase two review 2 of 2](reviews/2026-11-07-phase2-review2.md), on `3391b9
 | P2R2-06 | P3 | Open | 5 | E: a test that depends on its machine | Found by the first CI runs on PR #7. Five tests compared a canonical long path with a raw temp path. They failed on the GitHub runner, whose temp path holds the short name `RUNNER~1`; they pass where the temp path has no short names. `d628130` fixed the CLI test and its message. The four desktop tests (`complete_export_record_with_failed_sync_keeps_publication_and_late_lock_receipt`, `overwriting_an_existing_file_keeps_the_export_private`, `publication_moves_the_owned_file_after_its_temp_name_is_replaced`, `native_presentation_expiry_preserves_approved_publication_and_its_truthful_completion`) still compare raw paths; CI now sets `TEMP` to the runner's temp folder, which has no short names. The fifth CI run found a second machine dependency: the CLI tests share the persistent default root `target/akm-test-journal`, and the CI cache restored it without its private permissions, so AKM (correctly) refused it; CI now removes the restored folder before the tests. Fix: each test compares canonical paths and uses its own journal root. |
 | P2R2-07 | P3 | Open | Release | B | Found in the P2R2-04 sweep. The vault write lock `.lock` is named after the path as spelled, so two spellings of one file (a junction, a `subst` drive) get two lock files and two writers are not excluded. Path aliasing, not copying (design/unit1b.md D12). |
 
+## UI rebuild review 2 (2026-11-08)
+
+From [UI rebuild review 2](reviews/2026-11-08-ui-rebuild-review2.md), on `d63c2a1`. This is the second failed review of the work unit, so patching stopped (AGENTS.md). The owner's decision is in STATE.md, "Next action".
+
+| ID | Severity | Status | Unit | Class | Problem |
+|---|---|---|---|---|---|
+| UI-R2-01 | P2 | Open | UI rebuild | H | The Recycle Bin clips project, environment and history to one line, and its delete confirmation names only the title. Two entries with one title cannot be told apart before a permanent delete. |
+| UI-R2-02 | P3 | Open | UI rebuild | Stale value | Settings keeps the first list count and prefers it over every later status. The count can stay old. |
+| UI-R2-03 | P3 | Open | UI rebuild | H | A result that holds only keys with no project shows no "No project" heading, so its rows name no project. |
+| UI-R2-04 | P3 | Open | UI rebuild | H | The key list clips a long variable name. |
+| UI-R2-05 | P3 | Open | UI rebuild | H | The key list dropped the project total and the dash for a key with no expiry date. |
+
 ## UI rebuild review 1 (2026-11-08)
 
 From [UI rebuild review 1](reviews/2026-11-08-ui-rebuild-review1.md), on `49a54e8`.
