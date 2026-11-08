@@ -55,3 +55,4 @@ From phase two review 1 ([FINDINGS.md](docs/FINDINGS.md), P2R1 rows) and the col
 | D. A doc that names a stale test or behaviour | `python tools/check_docs.py`. |
 | E. Control characters in a doc | `python tools/check_docs.py`. Write a doc-editing script as a file, never as a shell here-document. |
 | F. A tool that deletes or writes what it does not own | It touches only what it created or marked, and only after its checks pass. Test: sentinel files survive. Tests never write the real journal folder (`JournalRoot::from_environment`). |
+| G. An invisible encoding mark stored as data | Where text enters from a stream or a file (`secret_value`, `dotenv::parse`), drop one leading byte order mark. Test: feed the mark and read the stored value. |

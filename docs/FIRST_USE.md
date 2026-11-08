@@ -4,9 +4,9 @@ This page is for the owner, who decided on 2026-11-07 to use AKM for their own k
 
 ## Before the first real key
 
-1. **Build from the reviewed head.** Use the commit that [STATE.md](STATE.md) names as checked, and compare the build hashes with the list there. The installers are unsigned. To install one is the owner's own step.
+1. **Get a build of `main`.** Download the build of the newest CI run on `main` (artifact `akm-windows-x64-untrusted-development`: `akm.exe`, the two installers and `SHA256SUMS.txt`), and compare the files with `SHA256SUMS.txt`. Or build it yourself with the commands in the [README](../README.md#build-and-verify-on-windows). A hash identifies one build, so a build made on another machine can have a different hash. The installers are unsigned. To install one is the owner's own step.
 2. **Keep every key recoverable at its provider.** Store in AKM only keys that you can revoke and create again at the provider. Then a bug in AKM costs a rotation, not an outage.
-3. **Choose the vault folder.** The CLI default is `%APPDATA%\akm\vault.kdbx`. That is the Roaming profile, and a domain profile can sync it to a server (SEC-02 in [FINDINGS.md](FINDINGS.md)). A folder under `%LOCALAPPDATA%` or a folder that you choose avoids that. AKM sets no file ACL on the vault (SEC-03).
+3. **Choose the vault folder.** The CLI default is `%APPDATA%\akm\vault.kdbx`. That is the Roaming profile, and a domain profile can sync it to a server (SEC-02 in [FINDINGS.md](FINDINGS.md)). A folder under `%LOCALAPPDATA%` or a folder that you choose avoids that. Choose it with `--vault` or `AKM_VAULT`. AKM sets no file ACL on the vault (SEC-03).
 4. **Use a long, unique passphrase.** AKM has no reset or recovery.
 5. **Prove the escape route.** Create the vault and add one low-value key. Then open the same file in KeePassXC 2.8 or later and find the key. If AKM fails later, KeePassXC still reads your vault.
 6. **Keep a copy outside AKM.** AKM keeps five dated backups next to the vault. Also copy the vault file to a second place by hand after you add keys.

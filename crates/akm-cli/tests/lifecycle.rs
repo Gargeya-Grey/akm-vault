@@ -250,6 +250,24 @@ fn rotate_refuses_an_unchanged_value_and_does_not_touch_the_vault() {
     assert_eq!(fs::read(&f.vault).unwrap(), before);
 }
 
+// Windows PowerShell 5.1 with a UTF-8 `$OutputEncoding` starts a piped string with this mark.
+#[test]
+fn a_byte_order_mark_from_a_windows_pipe_does_not_become_part_of_the_secret() {
+    let f = Fixture::new();
+    let before = fs::read(&f.vault).unwrap();
+    let only_the_mark = f.run_with_input(T0, &["rotate", "Alpha", "--secret-stdin"], "\u{feff}\n");
+    assert_failure(&only_the_mark);
+    assert_eq!(fs::read(&f.vault).unwrap(), before);
+
+    let output = f.run_with_input(
+        T0,
+        &["rotate", "Alpha", "--secret-stdin"],
+        &format!("\u{feff}{NEW_SECRET}\r\n"),
+    );
+    assert_success(&output);
+    assert_eq!(f.secret("Alpha"), NEW_SECRET);
+}
+
 #[test]
 fn rotate_takes_no_secret_as_an_argument() {
     let f = Fixture::new();
