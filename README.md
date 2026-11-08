@@ -67,8 +67,7 @@ inspect the saved result. A lock does not retroactively cancel a committed write
 
 Same-folder backups are not a separate backup strategy. Sync deletion, disk
 failure or ransomware can affect them all. Maintain an independent encrypted
-backup. The current development build also does not provide a complete secret
-version-history, Recycle Bin or rotation workflow.
+backup.
 
 ## Desktop
 
