@@ -25,7 +25,7 @@ cargo build --release -p akm-cli --offline --locked
 cd desktop; npm ci; npm run tauri -- build -- --locked --offline; cd ..
 ```
 
-Ready: `& "$env:CARGO_TARGET_DIR\release\akm.exe" --version` prints `akm 0.1.0`. The desktop build is ready when `$env:CARGO_TARGET_DIR\release\akm-desktop.exe` exists. Do not install the MSI or NSIS bundles (owner gate). There is nothing to tear down after a build.
+Ready: `& "$env:CARGO_TARGET_DIR\release\akm.exe" --version` prints `akm 0.1.0`. The desktop build is ready when `$env:CARGO_TARGET_DIR\release\akm-desktop.exe` exists. Do not install the setup program (owner gate). There is nothing to tear down after a build.
 
 The desktop app is launched only by `tools/verify_windows_app.ps1`, which starts its own process with a fake vault, a test journal root and a saved copy of the settings, and closes it at the end.
 

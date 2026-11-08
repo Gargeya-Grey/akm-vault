@@ -30,7 +30,7 @@ npm run tauri -- build -- --locked --offline
 
 Leave out `--offline` the first time, when dependencies are not yet fetched. While you edit, run only the tests for the files you changed. Run the full set once before you push a change that is ready for review.
 
-The installers go to `target\release\bundle\msi` and `target\release\bundle\nsis`. They are unsigned development builds. Do not install them.
+The setup program goes to `target\release\bundle\nsis`. It is an unsigned development build. Do not install it.
 
 ## Security checks
 

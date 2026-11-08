@@ -30,13 +30,21 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "targets": ["nsis"],
     "category": "DeveloperTool",
     "shortDescription": "Personal API key manager on a KeePass vault",
-    "longDescription": "Windows development build for API-key storage, metadata, expiry tracking and scoped environment injection using a KDBX vault. Not approved for real secrets or public distribution.",
+    "longDescription": "Windows development build for API-key storage, metadata, expiry tracking and scoped environment injection using a KDBX vault. Not independently audited. Not approved for real secrets or public distribution.",
     "windows": {
       "webviewInstallMode": {
-        "type": "downloadBootstrapper"
+        "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
+        "languages": ["English"],
+        "displayLanguageSelector": false
       }
     },
     "icon": [

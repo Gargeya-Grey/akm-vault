@@ -195,7 +195,7 @@ npm run tauri -- build -- --locked
 ```
 
 The CLI is `target\release\akm.exe`. The unsigned development installers go to
-`target\release\bundle\msi` and `target\release\bundle\nsis`. Do not distribute
+`target\release\bundle\nsis`. Do not distribute
 them as trusted software. A checksum identifies a build; it is not a publisher
 signature. The full test commands, the KeePassXC interchange test and the native
 GUI proof are in [docs/TESTING.md](docs/TESTING.md). Actual OS lock/suspend
