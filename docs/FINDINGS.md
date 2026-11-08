@@ -254,6 +254,20 @@ From [terminal launch review 1](reviews/2026-11-08-terminal-review1.md), on `483
 | T-R1-11 | P3 | Fixed, not accepted | Terminal | D | The design said that no value is read before the record. It now says that no value leaves the vault before it, and the test name says so too. |
 | T-R1-12 | P3 | Open | Release | Memory | `std::process::Command` keeps a copy of each value that is not zeroed. The CLI has the same limit. Named for the release review. |
 
+## Terminal launch review 2 (2026-11-08)
+
+From [terminal launch review 2](reviews/2026-11-08-terminal-review2.md), on `34c21af`. This is the second failed review of the work unit, so patching stopped (AGENTS.md). The owner's decision is in STATE.md, "Next action". The T-R1 rows above stay unaccepted.
+
+| ID | Severity | Status | Unit | Class | Problem |
+|---|---|---|---|---|---|
+| T-R2-01 | P2 | Open | Terminal | A | The session gate is held during the journal write. A stalled journal can delay a lock. The fix of T-R1-06 caused this. |
+| T-R2-02 | P2 | Open | Terminal | A | The review window is drawn by a thread that runs after the gate is released, so a review of the old names can still appear after a lock. Its answer is then refused. |
+| T-R2-03 | P2 | Open | Terminal | I | Names are cut after 80 characters, so two long names can read the same. A literal `\u{202e}` reads the same as an escaped mark. |
+| T-R2-04 | P2 | Open | Terminal | C | A launch overtaken by a session change gets the generic notice, which does not say that a terminal holds keys. |
+| T-R2-05 | P2 | Open | Terminal | C | A lock just before the import review returns with no native outcome record (contract 7). |
+| T-R2-06 | P2 | Open | Terminal | Failure reporting | A failed native dialog is recorded as the user declining. |
+| T-R2-07 | P3 | Open | Terminal | D | The verification guide still says that the record comes before any value is read. |
+
 ## Found in use (2026-11-08)
 
 From a run of the first-use commands on the CI build of `ee7b353`, with a fake vault. No review read the fix, because the owner limited phase two to two reviews.
