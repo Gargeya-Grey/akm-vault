@@ -221,14 +221,16 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
         aria-labelledby="detail-title"
       >
         <header className="modal-head">
-          <div>
-            <KeyCut id={item.id} tone={state.tone} width={132} />
-            <p className="label">{item.issuer ?? "API key"}</p>
-            <h2 id="detail-title">{item.title}</h2>
-            <p className={`state state-${state.tone}`}>
-              <span className="state-dot" aria-hidden="true" />
-              {state.label}
-            </p>
+          <div className="drawer-ident">
+            <span className="key-tile"><KeyCut id={item.id} /></span>
+            <div>
+              <p className="label">{item.issuer ?? "API key"}</p>
+              <h2 id="detail-title">{item.title}</h2>
+              <p className={`state state-${state.tone}`}>
+                <span className="state-dot" aria-hidden="true" />
+                {state.label}
+              </p>
+            </div>
           </div>
           <button
             type="button"

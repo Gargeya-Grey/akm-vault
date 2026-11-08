@@ -199,7 +199,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           aria-label={`Open ${item.title}`}
           aria-describedby={`${statusId}-${item.id}`}
         >
-          <KeyCut id={item.id} tone={state.tone} />
+          <KeyCut id={item.id} />
           <span className="key-ident">
             <span className="key-title">{item.title}</span>
             <span className="key-sub">
@@ -248,27 +248,6 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
 
   return (
     <main className="keys-view">
-      <nav className="shelf" aria-label="Projects">
-        {shelfButton(ALL_KEYS, "All keys", keys.length)}
-        <button
-          type="button"
-          className={`shelf-item shelf-attention${attention.total > 0 ? " warn" : ""}`}
-          aria-pressed={isShelf({ kind: "attention" })}
-          disabled={attention.total === 0}
-          onClick={() => setChosenShelf({ kind: "attention" })}
-        >
-          <span className="num">{attention.total}</span>
-          <span>need attention</span>
-        </button>
-        {(projects.length > 0 || unfiled > 0) && <p className="shelf-label">Projects</p>}
-        {projects.map((option) => (
-          <Fragment key={option.value}>
-            {shelfButton({ kind: "project", name: option.value }, option.label, keys.filter((key) => key.project === option.value).length)}
-          </Fragment>
-        ))}
-        {unfiled > 0 && shelfButton({ kind: "project", name: null }, "No project", unfiled)}
-      </nav>
-
       <div className="ledger-pane">
         <header className="list-head">
           <h1>
@@ -284,6 +263,27 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
             Add key
           </button>
         </header>
+
+        <nav className="shelf" aria-label="Projects">
+          {shelfButton(ALL_KEYS, "All keys", keys.length)}
+          <button
+            type="button"
+            className={`shelf-item shelf-attention${attention.total > 0 ? " warn" : ""}`}
+            aria-pressed={isShelf({ kind: "attention" })}
+            disabled={attention.total === 0}
+            onClick={() => setChosenShelf({ kind: "attention" })}
+          >
+            <span className="num">{attention.total}</span>
+            <span>need attention</span>
+          </button>
+          {(projects.length > 0 || unfiled > 0) && <p className="shelf-label">Projects</p>}
+          {projects.map((option) => (
+            <Fragment key={option.value}>
+              {shelfButton({ kind: "project", name: option.value }, option.label, keys.filter((key) => key.project === option.value).length)}
+            </Fragment>
+          ))}
+          {unfiled > 0 && shelfButton({ kind: "project", name: null }, "No project", unfiled)}
+        </nav>
 
         {showSummary && (
           <AttentionSummary

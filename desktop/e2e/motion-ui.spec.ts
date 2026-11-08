@@ -79,21 +79,21 @@ for (const theme of ["light", "dark"]) {
     expect(await pressed()).toBe("none");
   });
 
-  test(`${theme}: a selected filter shows the ink border on hover, and filled buttons keep their token fill`, async ({ page }) => {
+  test(`${theme}: a selected filter shows the text border on hover, and filled buttons keep their token fill`, async ({ page }) => {
     await open(page, theme);
     const filter = page.locator("#filter-environment");
     await filter.selectOption({ index: 1 });
     await page.mouse.move(0, 0);
-    const leaf = await token(page, "--leaf-ink");
-    await expect.poll(() => filter.evaluate((node) => getComputedStyle(node).borderTopColor)).toBe(leaf);
+    const accent = await token(page, "--accent");
+    await expect.poll(() => filter.evaluate((node) => getComputedStyle(node).borderTopColor)).toBe(accent);
     await filter.hover();
-    const ink = await token(page, "--ink");
-    await expect.poll(() => filter.evaluate((node) => getComputedStyle(node).borderTopColor)).toBe(ink);
+    const text = await token(page, "--text");
+    await expect.poll(() => filter.evaluate((node) => getComputedStyle(node).borderTopColor)).toBe(text);
 
     const add = page.getByRole("button", { name: "Add key", exact: true });
-    const forest = await page.evaluate(() => {
+    const action = await page.evaluate(() => {
       const probe = document.createElement("span");
-      probe.style.backgroundColor = "var(--forest)";
+      probe.style.backgroundColor = "var(--action)";
       document.body.append(probe);
       const value = getComputedStyle(probe).backgroundColor;
       probe.remove();
@@ -101,7 +101,35 @@ for (const theme of ["light", "dark"]) {
     });
     await add.hover();
     await page.waitForTimeout(250);
-    expect(await add.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe(forest);
-    expect(await add.evaluate((node) => getComputedStyle(node).textDecorationLine)).toContain("underline");
+    expect(await add.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe(action);
+    expect(await add.evaluate((node) => getComputedStyle(node).filter)).toBe("brightness(1.08)");
   });
 }
+
+test("the marker of the current section stays on it, at both rail widths", async ({ page }) => {
+  await open(page, "dark");
+  const lined = () => page.evaluate(() => {
+    const pill = document.querySelector(".nav-pill")!.getBoundingClientRect();
+    const current = document.querySelector('.nav-link[aria-current="page"]')!.getBoundingClientRect();
+    return Math.abs(pill.top - current.top) < 1 && Math.abs(pill.height - current.height) < 1;
+  });
+  await expect.poll(lined).toBe(true);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect.poll(lined).toBe(true);
+  await page.setViewportSize({ width: 900, height: 700 });
+  await expect.poll(lined).toBe(true);
+});
+
+test("at the minimum width, a key's renewal date stays clear of its status", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 700 });
+  const due = new Date(Date.now() + 100 * 86_400_000).toISOString();
+  await installNativeBoundaryMock(page, "dark", undefined, undefined, {
+    keys: [{ rotationDays: 180, rotationDueAt: due, secretChangedAt: due, secretChange: "known", expiresAt: due }],
+  });
+  await page.goto("/");
+  const date = page.locator(".key-when-line .mono");
+  await expect(date).toBeVisible();
+  const dateBox = (await date.boundingBox())!;
+  const columnBox = (await page.locator(".key-row .key-expiry").boundingBox())!;
+  expect(dateBox.x + dateBox.width).toBeLessThanOrEqual(columnBox.x + columnBox.width);
+});

@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from "react";
 import type { Theme, View } from "../types";
 import { BrandMark } from "./glyphs";
 import { Icon } from "./Icon";
@@ -25,6 +26,21 @@ interface Props {
 }
 
 export function NavBar({ view, onView, unlocked, theme, onToggleTheme, onLock, onReload }: Props) {
+  const navRef = useRef<HTMLElement>(null);
+  const [pillTop, setPillTop] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (!unlocked) return;
+    const place = () => {
+      const nav = navRef.current;
+      const current = nav?.querySelector('[aria-current="page"]');
+      setPillTop(nav && current ? current.getBoundingClientRect().top - nav.getBoundingClientRect().top : null);
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [view, unlocked]);
+
   const next = theme === "dark" ? "light" : "dark";
   const themeSwitch = (
     <button type="button" className="theme" aria-label={`Switch to ${next} mode`} onClick={onToggleTheme}>
@@ -38,7 +54,7 @@ export function NavBar({ view, onView, unlocked, theme, onToggleTheme, onLock, o
   const link = (section: { id: View; label: string; icon: IconName }) => (
     <li key={section.id}>
       <button type="button" className="nav-link" aria-current={view === section.id ? "page" : undefined} onClick={() => onView(section.id)}>
-        <Icon name={section.icon} size={20} />
+        <Icon name={section.icon} size={18} />
         <span>{section.label}</span>
       </button>
     </li>
@@ -50,7 +66,8 @@ export function NavBar({ view, onView, unlocked, theme, onToggleTheme, onLock, o
         <BrandMark />
         <p className="bar-name">AKM</p>
       </div>
-      <nav aria-label="Sections">
+      <nav ref={navRef} aria-label="Sections">
+        {pillTop !== null && <span className="nav-pill" aria-hidden="true" style={{ transform: `translateY(${pillTop}px)` }} />}
         <ul>{primary.map(link)}</ul>
         <ul className="rail-lower">{secondary.map(link)}</ul>
       </nav>

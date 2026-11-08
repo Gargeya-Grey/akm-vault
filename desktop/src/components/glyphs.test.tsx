@@ -2,7 +2,7 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { rotationUsed } from "../format";
 import type { KeyView } from "../types";
-import { cutsOf, LockCylinder } from "./glyphs";
+import { cutsOf, KeyCut, LockCylinder } from "./glyphs";
 
 afterEach(cleanup);
 
@@ -10,6 +10,14 @@ test("a key's cut depends only on its id, and stays the same", () => {
   expect(cutsOf("entry-a")).toEqual(cutsOf("entry-a"));
   expect(cutsOf("entry-a")).not.toEqual(cutsOf("entry-b"));
   expect(cutsOf("entry-a").every((depth) => depth >= 0 && depth <= 4)).toBe(true);
+});
+
+test("a key is a fine line drawing, small, with a cut that belongs to its id", () => {
+  const draw = (id: string) => render(<KeyCut id={id} />).container.querySelector("svg")!;
+  const first = draw("entry-a");
+  expect(first.getAttribute("width")).toBe("28");
+  expect(first.getAttribute("fill")).toBe("none");
+  expect(first.querySelector("path")!.getAttribute("d")).not.toBe(draw("entry-b").querySelector("path")!.getAttribute("d"));
 });
 
 const openLock = (element: React.ReactElement) => render(element).container.querySelector(".lock-open");
