@@ -1027,7 +1027,11 @@ fn secret_value(given: Option<String>, from_stdin: bool) -> Result<String> {
     if from_stdin {
         let mut secret = String::new();
         std::io::stdin().read_to_string(&mut secret)?;
-        let secret = secret.trim_end_matches(['\r', '\n']).to_string();
+        let secret = secret
+            .strip_prefix('\u{feff}')
+            .unwrap_or(&secret)
+            .trim_end_matches(['\r', '\n'])
+            .to_string();
         if secret.is_empty() {
             return Err(Error::Invalid("secret read from stdin was empty".into()));
         }

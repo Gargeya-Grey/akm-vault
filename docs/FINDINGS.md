@@ -211,6 +211,14 @@ From [phase two review 2 of 2](reviews/2026-11-07-phase2-review2.md), on `3391b9
 | P2R2-06 | P3 | Open | 5 | E: a test that depends on its machine | Found by the first CI runs on PR #7. Five tests compared a canonical long path with a raw temp path. They failed on the GitHub runner, whose temp path holds the short name `RUNNER~1`; they pass where the temp path has no short names. `d628130` fixed the CLI test and its message. The four desktop tests (`complete_export_record_with_failed_sync_keeps_publication_and_late_lock_receipt`, `overwriting_an_existing_file_keeps_the_export_private`, `publication_moves_the_owned_file_after_its_temp_name_is_replaced`, `native_presentation_expiry_preserves_approved_publication_and_its_truthful_completion`) still compare raw paths; CI now sets `TEMP` to the runner's temp folder, which has no short names. The fifth CI run found a second machine dependency: the CLI tests share the persistent default root `target/akm-test-journal`, and the CI cache restored it without its private permissions, so AKM (correctly) refused it; CI now removes the restored folder before the tests. Fix: each test compares canonical paths and uses its own journal root. |
 | P2R2-07 | P3 | Open | Release | B | Found in the P2R2-04 sweep. The vault write lock `.lock` is named after the path as spelled, so two spellings of one file (a junction, a `subst` drive) get two lock files and two writers are not excluded. Path aliasing, not copying (design/unit1b.md D12). |
 
+## Found in use (2026-11-08)
+
+From a run of the first-use commands on the CI build of `ee7b353`, with a fake vault. No review read the fix, because the owner limited phase two to two reviews.
+
+| ID | Severity | Status | Unit | Class | Problem |
+|---|---|---|---|---|---|
+| P2F-01 | P2 | Fixed, not accepted | CLI | G | `crates/akm-cli/src/main.rs`, `secret_value`. `--secret-stdin` kept a leading byte order mark as part of the secret, so a key piped from Windows PowerShell 5.1 with a UTF-8 `$OutputEncoding` failed at the provider with no visible cause. The mark is now dropped, as the dotenv parser already did. Test: `a_byte_order_mark_from_a_windows_pipe_does_not_become_part_of_the_secret`, which failed before the fix. A key stored through that path before the fix keeps its mark; rotate it to replace it. |
+
 ## Security checks (2026-11-07)
 
 Found by `tools/check_dependencies.ps1`, `tools/check_no_network.py` and the threat-model read ([THREAT_MODEL.md](THREAT_MODEL.md)) on the security branch, before unit 4. The collect run repeats the checks on the final tree.
