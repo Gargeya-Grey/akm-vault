@@ -36,7 +36,8 @@ const ALL_KEYS: Shelf = { kind: "all" };
 function identityDescription(key: KeyView): string {
   const project = key.project === null ? "No project" : `Project ${key.project}`;
   const environment = key.environment === null ? "no environment" : `environment ${key.environment}`;
-  return `${project}, ${environment}, variable ${key.resolvedEnvVar}.`;
+  const issuer = key.issuer === null ? "no issuer" : `issuer ${key.issuer}`;
+  return `${project}, ${environment}, variable ${key.resolvedEnvVar}, ${issuer}, ID ${key.id}.`;
 }
 
 function shelfTitle(shelf: Shelf): string {
@@ -147,8 +148,18 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     return [...byProject].sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : a.localeCompare(b)));
   }, [visible]);
   // Rows carry no project column, so the heading is the only place that names the project.
-  // On a project shelf the page title names it. In a vault with no projects, no row has one.
-  const showGroupNames = shelf.kind !== "project" && projects.length > 0;
+  // On a project shelf the page title names it.
+  const showGroupNames = shelf.kind !== "project";
+
+  // Two rows that match in every shown fact need the one fact that is unique.
+  const lookalikes = useMemo(() => {
+    const seen = new Map<string, string[]>();
+    for (const key of keys) {
+      const shown = JSON.stringify([key.title, key.issuer, key.project, key.environment, key.resolvedEnvVar]);
+      seen.set(shown, [...(seen.get(shown) ?? []), key.id]);
+    }
+    return new Set([...seen.values()].filter((ids) => ids.length > 1).flat());
+  }, [keys]);
 
   const selected = keys.find((key) => key.id === selectedId) ?? null;
   const showSummary = !loading && attention.total > 0 && !(summary?.dismissed ?? summaryDismissed);
@@ -216,6 +227,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
               {item.issuer ?? "No issuer"}
               {item.scopes.length > 0 && ` · ${plural(item.scopes.length, "scope")}`}
             </span>
+            {lookalikes.has(item.id) && <span className="key-sub mono">ID {item.id}</span>}
           </span>
           <span className="key-ident">
             <span className="key-var mono">{item.resolvedEnvVar}</span>
@@ -286,7 +298,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
             <span className="num">{attention.total}</span>
             <span>need attention</span>
           </button>
-          {(projects.length > 0 || unfiled > 0) && <p className="shelf-label">Projects <span className="num">{projects.length}</span></p>}
+          <p className="shelf-label">Projects <span className="num">{projects.length}</span></p>
           {projects.map((option) => (
             <Fragment key={option.value}>
               {shelfButton({ kind: "project", name: option.value }, option.label, keys.filter((key) => key.project === option.value).length)}

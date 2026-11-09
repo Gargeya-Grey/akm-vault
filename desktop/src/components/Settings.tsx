@@ -44,9 +44,11 @@ export function Settings({ status, onLocked }: Props) {
   }, [loadBackup]);
 
   // The status poll can lag a change that just finished, so the list gives the count. A new
-  // polled count starts a new read, the latest read wins, and a failed read uses the polled count.
+  // polled count starts a new read and shows until that read ends. The latest read wins, and
+  // a failed read leaves the polled count.
   useEffect(() => {
     const read = ++listRead.current;
+    setKeyCount(null);
     const current = () => mounted.current && read === listRead.current;
     void api.keys().then(
       (keys) => { if (current()) setKeyCount(keys.length); },

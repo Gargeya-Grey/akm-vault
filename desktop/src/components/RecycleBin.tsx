@@ -128,6 +128,8 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
                   <span className="key-sub">{item.key.project ?? "No project"}</span>
                   <span className="key-sub">{item.key.environment ?? "No environment"}</span>
                   <span className="key-sub mono">{item.key.resolvedEnvVar}</span>
+                  <span className="key-sub">{item.key.issuer ?? "No issuer"}</span>
+                  <span className="key-sub mono">ID {item.key.id}</span>
                   <span className="key-sub">
                     Removed <span className="mono">{item.deletedAt ? formatDateTime(item.deletedAt) : "at an unknown time"}</span>
                     {item.key.historyCount > 0 && ` · ${plural(item.key.historyCount, "earlier version")}`}
@@ -181,6 +183,8 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
             <div className="fact-row"><span className="fact-key">Project</span><span className="fact-value">{purging.key.project ?? "No project"}</span></div>
             <div className="fact-row"><span className="fact-key">Environment</span><span className="fact-value">{purging.key.environment ?? "No environment"}</span></div>
             <div className="fact-row"><span className="fact-key">Variable</span><span className="fact-value mono">{purging.key.resolvedEnvVar}</span></div>
+            <div className="fact-row"><span className="fact-key">Issuer</span><span className="fact-value">{purging.key.issuer ?? "No issuer"}</span></div>
+            <div className="fact-row"><span className="fact-key">ID</span><span className="fact-value mono">{purging.key.id}</span></div>
             <div className="fact-row"><span className="fact-key">Removed</span><span className="fact-value">{purging.deletedAt ? formatDateTime(purging.deletedAt) : "At an unknown time"}</span></div>
           </div>
           {purgeError && <Notice tone="error">{purgeError}</Notice>}

@@ -92,7 +92,9 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
   const refreshKeys = useCallback(async () => {
     try {
       const next = await api.keys();
-      if (mounted.current) setKeys(next);
+      if (!mounted.current) return;
+      setKeys(next);
+      setLoadError(null);
     } catch (cause) {
       if (mounted.current) setLoadError(errorText(cause));
     }
@@ -267,7 +269,16 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
         </div>
       </header>
 
-      {loadError && <Notice tone="error">{loadError}</Notice>}
+      {loadError && (
+        <div className="ledger-message">
+          <Notice tone="error">{loadError}</Notice>
+          <div className="empty-actions">
+            <button type="button" className="text-button" onClick={() => void refreshKeys()}>
+              Try again
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="use-grid">
         <section className="use-steps" aria-labelledby="use-out-title">

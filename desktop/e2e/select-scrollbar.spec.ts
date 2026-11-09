@@ -7,6 +7,7 @@ test.use({ launchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] } });
 test("dragging the scrollbar scrolls an open list and leaves it open", async ({ page }) => {
   const keys = Array.from({ length: 45 }, (_, index) => ({ environment: `env-${String(index).padStart(3, "0")}` }));
   await installNativeBoundaryMock(page, "dark", undefined, undefined, { keys });
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   await page.locator("#filter-environment").click();
   const menu = page.locator(".select-menu");

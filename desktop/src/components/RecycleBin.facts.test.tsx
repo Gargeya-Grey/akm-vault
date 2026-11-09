@@ -58,6 +58,31 @@ test("the delete confirmation names the project, environment and variable of the
   expect(facts?.textContent).not.toContain("TWIN_A");
 });
 
+test("two recycled keys that differ only by issuer and ID can be told apart, and the confirmation deletes the chosen one", async () => {
+  const items = [recycled("first-unique-id", { issuer: "Acme" }), recycled("second-unique-id", { issuer: "Globex" })];
+  const purged: unknown[] = [];
+  native.invoke.mockImplementation(async (command: string, args?: { id?: string }) => {
+    if (command === "recycled_list") return items;
+    if (command === "vault_status") return { sessionId: "fake", path: "C:/fake/a.kdbx", exists: true, unlocked: true, keyCount: 2, vaultName: "A", needsUpgrade: false };
+    if (command === "key_purge") { purged.push(args?.id); return; }
+    throw new Error(`unexpected command ${command}`);
+  });
+  await act(async () => { render(<RecycleBin />); });
+  await act(async () => {});
+  const buttons = screen.getAllByRole("button", { name: "Delete Twin for good" });
+  expect(document.getElementById(buttons[0].getAttribute("aria-describedby") ?? "")?.textContent).toMatch(/Acme.*first-unique-id/);
+  expect(document.getElementById(buttons[1].getAttribute("aria-describedby") ?? "")?.textContent).toMatch(/Globex.*second-unique-id/);
+  expect(document.querySelectorAll(".bin-row")[1].textContent).toContain("second-unique-id");
+  fireEvent.click(buttons[1]);
+  const facts = document.querySelector(".confirm .fact-list")?.textContent ?? "";
+  expect(facts).toContain("Globex");
+  expect(facts).toContain("second-unique-id");
+  expect(facts).not.toContain("first-unique-id");
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Delete for good" })); });
+  await act(async () => {});
+  expect(purged).toEqual(["second-unique-id"]);
+});
+
 test("a failed read does not say that the Recycle Bin is empty, and it can be tried again", async () => {
   let fail = true;
   native.invoke.mockImplementation(async (command: string) => {

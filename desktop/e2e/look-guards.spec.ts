@@ -46,6 +46,14 @@ const openers: { name: string; open: (page: Page) => Promise<void> }[] = [
     },
   },
   {
+    name: "the permanent-delete confirmation",
+    open: async (page) => {
+      await page.getByRole("button", { name: "Recycle Bin", exact: true }).click();
+      await page.getByRole("button", { name: "Delete Twin for good" }).first().click();
+      await expect(page.getByRole("heading", { name: "Delete this key for good?" })).toBeVisible();
+    },
+  },
+  {
     name: "the import drawer",
     open: async (page) => {
       await page.getByRole("button", { name: "Use keys", exact: true }).click();
@@ -57,7 +65,7 @@ const openers: { name: string; open: (page: Page) => Promise<void> }[] = [
 for (const theme of ["light", "dark"]) {
   for (const { name, open: openDialog } of openers) {
     test(`${theme}: ${name} covers the rail and has an opaque surface`, async ({ page }) => {
-      await open(page, theme);
+      await open(page, theme, { recycled: [{ key: { title: "Twin" }, deletedAt: null }] });
       await openDialog(page);
       const surface = page.locator(".overlay").last().locator(".raised");
       await expect(surface).toBeVisible();
@@ -272,4 +280,41 @@ test("at 900 px, two project names that differ at the end can be told apart on t
     await expect(label).toBeVisible();
     expect(await label.evaluate((node) => node.scrollWidth <= node.clientWidth && getComputedStyle(node).textOverflow !== "ellipsis"), name).toBe(true);
   }
+});
+
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: a 1,000-character project name stays inside the shelf and leaves its neighbours in view`, async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 800 });
+    await open(page, theme, { keys: [{ project: "Z".repeat(1000) }, { project: "aaa-neighbour" }, { project: "bbb-neighbour" }] });
+    const shelf = (await page.locator(".shelf").boundingBox())!;
+    for (const name of ["aaa-neighbour", "bbb-neighbour"]) {
+      const box = (await page.locator(".shelf-item", { hasText: name }).boundingBox())!;
+      expect(box.y, name).toBeGreaterThanOrEqual(shelf.y);
+      expect(box.y + box.height, name).toBeLessThanOrEqual(shelf.y + shelf.height);
+    }
+    const long = (await page.locator(".shelf-item", { hasText: "ZZZ" }).boundingBox())!;
+    expect(long.height).toBeLessThanOrEqual(shelf.height);
+  });
+
+  test(`${theme}: a long unbroken title stays inside the permanent-delete confirmation`, async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 800 });
+    await open(page, theme, { recycled: [{ key: { title: "T".repeat(600), resolvedEnvVar: "V".repeat(300) }, deletedAt: null }] });
+    await page.getByRole("button", { name: "Recycle Bin", exact: true }).click();
+    await page.locator(".bin-row .danger-text").click();
+    const confirm = page.locator(".confirm");
+    await expect(confirm).toBeVisible();
+    expect(await confirm.evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(0);
+  });
+}
+
+test("the journal detail of an import and an export is visible at 900 px", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 800 });
+  await installNativeBoundaryMock(page, "dark", undefined, undefined, { auditEntries: [
+    { seq: "1", ts: "2026-10-31T00:00:00Z", action: "import-completed", keyTitle: null, project: "demo", environment: "dev", keyId: null, detail: "fake import detail: 2 added" },
+    { seq: "2", ts: "2026-10-31T00:00:00Z", action: "export-completed", keyTitle: null, project: "demo", environment: "dev", keyId: null, detail: "fake export detail: 3 keys" },
+  ] });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  await expect(page.getByText("fake import detail: 2 added", { exact: true })).toBeVisible();
+  await expect(page.getByText("fake export detail: 3 keys", { exact: true })).toBeVisible();
 });
