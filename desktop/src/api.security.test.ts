@@ -185,6 +185,7 @@ const SCOPED_REQUESTS: [string, () => Promise<unknown>][] = [
   ["key_restore", () => api.restore("fake-id")],
   ["key_purge", () => api.purge("fake-id")],
   ["audit_read", () => api.audit()],
+  ["audit_recover", () => api.recoverJournal()],
   ["env_export", () => api.exportEnv("fake-scope", "fake-env")],
   ["env_copy", () => api.copyEnv("fake-scope", "fake-env")],
   ["env_save", () => api.saveEnv("fake-scope", "fake-env")],
@@ -312,4 +313,13 @@ test("an approved single reveal and copy still answer the value and the clear ti
   expect(await api.reveal("fake-id")).toBe("fake-approved-value");
   native.invoke.mockResolvedValueOnce(30);
   expect(await api.copy("fake-id")).toBe(30);
+});
+
+test("a recovery the user declined answers null and leaves no completion record", async () => {
+  native.invoke.mockResolvedValueOnce(null);
+  expect(await api.recoverJournal()).toBeNull();
+  expect(retainedCompletions()).toHaveLength(0);
+  native.invoke.mockResolvedValueOnce({ keptName: "j-0.jsonl.damaged-20261109T101500Z", sha256: "ab".repeat(32), bytes: 213 });
+  expect(await api.recoverJournal()).toMatchObject({ keptName: "j-0.jsonl.damaged-20261109T101500Z", bytes: 213 });
+  expect(native.invoke).toHaveBeenLastCalledWith("audit_recover", { sessionId: nativeOwner() });
 });

@@ -207,6 +207,7 @@ const SESSION_SCOPED: &[&str] = &[
     "key_restore",
     "key_purge",
     "audit_read",
+    "audit_recover",
     "env_export",
     "env_copy",
     "env_save",
@@ -701,6 +702,7 @@ fn main() {
         &clipboard,
         directory.path(),
     );
+    a_damaged_journal_is_replaced_only_after_the_user_approves(webview, &dialog, directory.path());
     a_stale_request_never_acts_on_the_session_that_replaced_its_own(
         webview,
         &session,
@@ -847,6 +849,128 @@ fn a_page_that_holds_the_session_id_cannot_disclose_without_the_user(
     println!("PASS: env_export, env_copy, key_reveal and key_copy called by a page with only the session ID disclose nothing and write no clipboard without the native approval; a decline answers null; the single-key budget stops a loop at the free count.");
 }
 
+/// FR-14, the reviewer's probe through the production handlers: damage the journal, a reveal is
+/// refused, the user declines and nothing changes, the user approves, a reveal works again, and
+/// the damaged bytes are kept as they were. The journal folder is the Cargo test root.
+fn a_damaged_journal_is_replaced_only_after_the_user_approves(
+    webview: &tauri::Webview<MockRuntime>,
+    dialog: &Arc<Dialog>,
+    directory: &std::path::Path,
+) {
+    use sha2::{Digest, Sha256};
+    let (_session_id, vault) = open_new(webview, directory, "recovery.kdbx");
+    dialog.approve.store(true, Ordering::SeqCst);
+    let added = call(
+        webview,
+        "key_add",
+        serde_json::json!({"draft": {"title": "Fake probe key", "secret": "fake-probe-secret", "project": "demo", "environment": "dev", "envVar": "PROBE_KEY"}}),
+    )
+    .unwrap();
+    let id = added["id"].as_str().unwrap().to_string();
+    let reveal = |expect_ok: bool| {
+        let answer = call(webview, "key_reveal", serde_json::json!({"id": id}));
+        assert_eq!(answer.is_ok(), expect_ok, "{answer:?}");
+        answer
+    };
+    assert_eq!(reveal(true).unwrap(), "fake-probe-secret");
+
+    // Not damaged: a recovery is refused and no window opens.
+    let opened = dialog.opened.load(Ordering::SeqCst);
+    let refused = call(webview, "audit_recover", serde_json::json!({})).unwrap_err();
+    assert_eq!(refused["kind"], "journal");
+    assert_eq!(
+        dialog.opened.load(Ordering::SeqCst),
+        opened,
+        "no window for an intact journal"
+    );
+
+    // Damage: a line that is no record, appended to the journal of this vault.
+    let journal = akm_core::audit::AuditLog::for_vault(&vault)
+        .journal_path()
+        .unwrap()
+        .expect("the add made a journal");
+    {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&journal)
+            .unwrap();
+        file.write_all(b"{this is not a record}\n").unwrap();
+    }
+    let damaged = std::fs::read(&journal).unwrap();
+    let report = call(webview, "audit_read", serde_json::json!({"limit": 10})).unwrap();
+    assert_eq!(report["state"], "corrupt");
+    for command in ["key_reveal", "key_copy"] {
+        let error = call(webview, command, serde_json::json!({"id": id})).unwrap_err();
+        assert_eq!(error["kind"], "journal", "{command}: disclosure is blocked");
+    }
+    assert_eq!(
+        std::fs::read(&journal).unwrap(),
+        damaged,
+        "a refusal changes nothing"
+    );
+
+    // The user declines: null, the bytes and the block stay.
+    dialog.approve.store(false, Ordering::SeqCst);
+    let opened = dialog.opened.load(Ordering::SeqCst);
+    assert_eq!(
+        call(webview, "audit_recover", serde_json::json!({})).unwrap(),
+        serde_json::Value::Null
+    );
+    assert_eq!(dialog.opened.load(Ordering::SeqCst), opened + 1);
+    let window = dialog.last.lock().unwrap().clone();
+    assert!(
+        window.contains(journal.file_name().unwrap().to_str().unwrap()),
+        "{window}"
+    );
+    assert!(window.contains("cannot be proved complete"), "{window}");
+    assert!(!window.contains("fake-probe-secret"));
+    assert_eq!(
+        std::fs::read(&journal).unwrap(),
+        damaged,
+        "a decline changes nothing"
+    );
+    reveal(false).unwrap_err();
+
+    // The user approves: the damaged file is kept byte for byte and disclosure works again.
+    dialog.approve.store(true, Ordering::SeqCst);
+    let kept = call(webview, "audit_recover", serde_json::json!({})).unwrap();
+    let kept_name = kept["keptName"].as_str().unwrap();
+    assert!(kept_name.contains(".damaged-"), "{kept_name}");
+    let kept_path = journal.with_file_name(kept_name);
+    assert_eq!(
+        std::fs::read(&kept_path).unwrap(),
+        damaged,
+        "the old bytes are kept"
+    );
+    let digest: String = Sha256::digest(&damaged)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(kept["sha256"], digest.as_str());
+    assert_eq!(kept["bytes"], damaged.len());
+    assert_eq!(reveal(true).unwrap(), "fake-probe-secret");
+    let report = call(webview, "audit_read", serde_json::json!({"limit": 10})).unwrap();
+    assert_eq!(report["state"], "consistent");
+    let entries = report["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["action"], "journal-recovered");
+    assert!(entries[0]["detail"].as_str().unwrap().contains(&digest));
+    assert_eq!(
+        std::fs::read(&kept_path).unwrap(),
+        damaged,
+        "the disclosure left the kept file alone"
+    );
+
+    // Recovered: a second recovery is refused, with no window.
+    let opened = dialog.opened.load(Ordering::SeqCst);
+    assert_eq!(
+        call(webview, "audit_recover", serde_json::json!({})).unwrap_err()["kind"],
+        "journal"
+    );
+    assert_eq!(dialog.opened.load(Ordering::SeqCst), opened);
+    println!("PASS: audit_recover refuses an intact journal, a decline changes nothing, an approval keeps the damaged bytes and their SHA-256 and lets a reveal work again, and the first record of the new journal states the gap.");
+}
+
 /// Class B (P2R2-03). Every command that acts on the open vault names the session of the page
 /// that made the request. A request that names session A, however late, does nothing to B.
 fn a_stale_request_never_acts_on_the_session_that_replaced_its_own(
@@ -891,6 +1015,7 @@ fn a_stale_request_never_acts_on_the_session_that_replaced_its_own(
         ("key_restore", serde_json::json!({"id": id})),
         ("key_purge", serde_json::json!({"id": id})),
         ("audit_read", serde_json::json!({"limit": 5})),
+        ("audit_recover", serde_json::json!({})),
         ("env_export", scope.clone()),
         ("env_copy", scope.clone()),
         ("env_save", scope.clone()),
@@ -941,7 +1066,7 @@ fn a_stale_request_never_acts_on_the_session_that_replaced_its_own(
         .unwrap(),
         "fake-b-secret"
     );
-    println!("PASS: all 20 session-scoped handlers refuse a request that names a retired session, leave B and the clipboard untouched, and still serve B's own requests.");
+    println!("PASS: all 21 session-scoped handlers refuse a request that names a retired session, leave B and the clipboard untouched, and still serve B's own requests.");
 }
 
 const PASSWORD: &str = "fake-dispatch-password-123!";

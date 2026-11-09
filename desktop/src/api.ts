@@ -7,6 +7,7 @@ import type {
   BackupInfo,
   HistoryVersion,
   ImportReport,
+  JournalRecovery,
   KeyDraft,
   KeyView,
   RecycledKey,
@@ -16,12 +17,12 @@ import type {
   WarningReport,
 } from "./types";
 
-const mutations = new Set(["vault_create", "vault_upgrade", "key_add", "key_update", "key_remove", "key_rotate", "key_restore", "key_purge", "env_import", "env_save", "env_launch_terminal"]);
+const mutations = new Set(["vault_create", "vault_upgrade", "key_add", "key_update", "key_remove", "key_rotate", "key_restore", "key_purge", "env_import", "env_save", "env_launch_terminal", "audit_recover"]);
 // A request that the user can still decline in a native window answers null when they do.
 // The disclosing commands are on the list too: a page can read its session ID, so native asks the
 // user before it shows or copies a value (the bulk commands always, the single-key commands once a
 // session is over its budget). A decline gives no value and writes nothing to the clipboard.
-const declinable = new Set(["env_import", "env_save", "env_launch_terminal", "key_reveal", "key_copy", "env_export", "env_copy"]);
+const declinable = new Set(["env_import", "env_save", "env_launch_terminal", "key_reveal", "key_copy", "env_export", "env_copy", "audit_recover"]);
 
 function declined(what: string) {
   return { kind: "declined", message: `Cancelled. ${what}` };
@@ -33,7 +34,7 @@ const statusReplies = new Set(["vault_status", "vault_unlock", "vault_create", "
 // the current one, so a request that arrives late cannot act on a vault that opened after it. The
 // commands that start a session, probe which one is current, or concern the whole application do
 // not name one.
-const sessionScoped = new Set(["vault_activity", "vault_upgrade", "vault_reload", "keys_list", "key_reveal", "key_copy", "key_add", "key_update", "key_remove", "key_rotate", "recycled_list", "key_restore", "key_purge", "audit_read", "env_export", "env_copy", "env_save", "env_launch_terminal", "key_history", "backup_info"]);
+const sessionScoped = new Set(["vault_activity", "vault_upgrade", "vault_reload", "keys_list", "key_reveal", "key_copy", "key_add", "key_update", "key_remove", "key_rotate", "recycled_list", "key_restore", "key_purge", "audit_read", "audit_recover", "env_export", "env_copy", "env_save", "env_launch_terminal", "key_history", "backup_info"]);
 
 function withSession(command: string, args?: Record<string, unknown>) {
   return sessionScoped.has(command) ? { ...args, sessionId: nativeOwner() ?? "" } : args;
@@ -181,6 +182,8 @@ export const api = {
   purge: (id: string) => invoke<void>("key_purge", { id }),
 
   audit: (limit = 300) => invoke<AuditReport>("audit_read", { limit }),
+  // Starts a new journal after damage. Native asks the user in its own window and keeps the damaged file. null means that the user declined there.
+  recoverJournal: () => invoke<JournalRecovery | null>("audit_recover"),
   // Native shows the scope and the names and asks first. null means that the user declined there.
   exportEnv: (project: string | null, environment: string | null) =>
     invoke<string | null>("env_export", { project, environment, all: false }),

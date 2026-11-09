@@ -102,6 +102,15 @@ export interface AuditReport {
   totalEntries: number;
 }
 
+/** The result of starting a new journal after damage (FR-14). The damaged file is kept beside it. */
+export interface JournalRecovery {
+  /** File name only. The folder is the one shown as the journal path. */
+  keptName: string;
+  /** SHA-256 of the kept bytes, as 64 lowercase hex digits. */
+  sha256: string;
+  bytes: number;
+}
+
 export interface OperationNotice {
   id: string;
   originSession: string;

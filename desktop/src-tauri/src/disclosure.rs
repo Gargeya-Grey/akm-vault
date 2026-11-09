@@ -125,6 +125,18 @@ impl DisclosureReview {
         })
     }
 
+    /// Starting a new journal after the old one was found damaged (finding FR-14). `file` is
+    /// the name of the damaged journal file, shown as the one name of the list.
+    pub fn recovery(file: &str) -> Result<Self, CommandError> {
+        check_shown_in_full([file])?;
+        Ok(Self {
+            title: "Start a new activity journal?",
+            body: "The activity journal of this vault is damaged. Key reveal, copy and export stay blocked until a new journal starts.\n\nIf you continue, AKM keeps the damaged file unchanged beside it, under a new name with the date. Then it starts a new journal. The first record of the new journal states the gap and the SHA-256 of the kept file.\n\nHistory before the damage cannot be proved complete. Only a click in this window can approve it.\n\nThe damaged journal:".to_string(),
+            names: vec![file.to_string()],
+            confirm: "Start new journal",
+        })
+    }
+
     #[cfg(test)]
     pub fn body(&self) -> &str {
         &self.body
@@ -207,6 +219,24 @@ mod tests {
             .body()
             .starts_with("Copy the values of 1 variable of ALL keys of the vault?"));
         assert!(all.body().contains("cannot promise"));
+    }
+
+    #[test]
+    fn a_recovery_review_states_the_block_the_kept_file_and_the_gap_and_shows_no_value() {
+        let review = DisclosureReview::recovery("j-0123.jsonl").unwrap();
+        for part in [
+            "stay blocked",
+            "keeps the damaged file unchanged",
+            "SHA-256 of the kept file",
+            "cannot be proved complete",
+            "Only a click in this window can approve it",
+        ] {
+            assert!(review.body().contains(part), "{part}: {}", review.body());
+        }
+        assert_eq!(review.names(), ["j-0123.jsonl"]);
+        assert_eq!(review.confirm, "Start new journal");
+        let long = "x".repeat(400);
+        assert!(DisclosureReview::recovery(&long).is_err());
     }
 
     #[test]

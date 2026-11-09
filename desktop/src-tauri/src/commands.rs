@@ -57,6 +57,7 @@ macro_rules! production_handlers {
             key_restore,
             key_purge,
             audit_read,
+            audit_recover,
             env_export,
             env_copy,
             env_save,
@@ -643,6 +644,79 @@ fn purge_recycled(vault: &mut Vault, id: &str) -> Result<(), CommandError> {
     let recycled = vault.find_recycled(id)?;
     vault.purge(&recycled.key.id)?;
     Ok(())
+}
+
+/// What a recovery kept, for the page. The folder is the one that the page already shows as the
+/// journal path, so only the file name goes with it.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalRecoveryView {
+    kept_name: String,
+    sha256: String,
+    bytes: u64,
+}
+
+/// Starts a new journal after the old one was found damaged (finding FR-14). `None` means that
+/// the user declined in the native window. The page only asks: it cannot approve for the user.
+#[tauri::command]
+pub async fn audit_recover(
+    state: State<'_, VaultState>,
+    confirm: State<'_, ConfirmState>,
+    session_id: String,
+) -> Result<Option<JournalRecoveryView>, CommandError> {
+    let session = state.0.clone();
+    let confirm = confirm.0.clone();
+    blocking(move || run_recovery(&session, confirm.as_ref(), &session_id)).await
+}
+
+/// The recovery, in the order that keeps the old journal usable as evidence after every
+/// failure: a journal that is not damaged is refused before any window; the user approves in a
+/// native window that holds no gate; the recovery runs bound to the session, the revision and
+/// the presentation of the request, so a lock, a change or a hide during the window refuses it
+/// with nothing moved. The core call writes the new journal first, keeps the old bytes under a
+/// dated name and puts the old journal back if a step fails (`AuditLog::recover_damaged`).
+fn run_recovery(
+    session: &Session,
+    host: &dyn ImportConfirm,
+    session_id: &str,
+) -> Result<Option<JournalRecoveryView>, CommandError> {
+    let expected = session.snapshot_for(session_id)?;
+    let file = session
+        .access_reviewed(Access::Read, expected, |vault| {
+            let log = vault.audit_log();
+            if log.snapshot(0)?.state != akm_core::audit::AuditState::Corrupt {
+                return Err(CommandError::new(
+                    "journal",
+                    "The journal is not damaged, so nothing was changed.",
+                ));
+            }
+            let path = log.journal_path()?.ok_or_else(|| {
+                CommandError::new("journal", "There is no journal to start over.")
+            })?;
+            Ok(path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default())
+        })?
+        .value;
+    let review = DisclosureReview::recovery(&file)?;
+    if disclosure::ask(session, host, expected.ticket, &review)? == Approval::Declined {
+        return Ok(None);
+    }
+    let recovery = session
+        .access_reviewed(Access::Read, expected, |vault| {
+            Ok(vault.audit_log().recover_damaged()?)
+        })?
+        .value;
+    Ok(Some(JournalRecoveryView {
+        kept_name: recovery
+            .kept
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        sha256: recovery.sha256,
+        bytes: recovery.bytes,
+    }))
 }
 
 #[tauri::command]
@@ -3464,6 +3538,48 @@ mod tests {
     }
 
     #[test]
+    fn fr03_a_hide_while_the_window_is_open_refuses_the_disclosure() {
+        let f = disclosing();
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            reveal_one(&f, &ScriptedConfirm::new(true), KeyDisclosure::Copy)
+                .unwrap()
+                .unwrap();
+        }
+        let session = f.session.clone();
+        let hiding = ScriptedConfirm::during(true, move || {
+            session.expire_presentation().unwrap();
+        });
+        let single = reveal_one(&f, &hiding, KeyDisclosure::Reveal);
+        assert!(
+            single.is_err(),
+            "a single key is not shown to a view that was hidden"
+        );
+
+        let session = f.session.clone();
+        let hiding = ScriptedConfirm::during(true, move || {
+            session.expire_presentation().unwrap();
+        });
+        let before = f.clipboard.lock().unwrap().sequence;
+        assert!(bulk_copy(&f, &hiding, &everything()).is_err());
+        assert!(bulk_preview(
+            &f,
+            &ScriptedConfirm::during(true, {
+                let session = f.session.clone();
+                move || {
+                    session.expire_presentation().unwrap();
+                }
+            }),
+            &everything()
+        )
+        .is_err());
+        assert_eq!(
+            f.clipboard.lock().unwrap().sequence,
+            before,
+            "nothing was copied"
+        );
+    }
+
+    #[test]
     fn fr03_a_hidden_window_shows_no_dialog_and_discloses_nothing() {
         let f = disclosing();
         let hidden = ScriptedConfirm::new(true);
@@ -3730,5 +3846,229 @@ mod tests {
         assert!(reveal_one(&f, &no, KeyDisclosure::Reveal)
             .unwrap()
             .is_none());
+    }
+
+    // ---- FR-14: a new journal after damage, with the user's approval ----
+
+    /// Appends a line that is no record to the journal of the fixture. Returns its path and bytes.
+    fn damage_journal(f: &Disclosing) -> (PathBuf, Vec<u8>) {
+        let path = f
+            .session
+            .access(Access::Read, None, |vault| {
+                Ok(vault.audit_log().journal_path()?)
+            })
+            .unwrap()
+            .value
+            .expect("the added keys made a journal");
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut file, b"{this is not a record}\n").unwrap();
+        drop(file);
+        let bytes = fs::read(&path).unwrap();
+        (path, bytes)
+    }
+
+    fn recover(
+        f: &Disclosing,
+        host: &ScriptedConfirm,
+    ) -> Result<Option<JournalRecoveryView>, CommandError> {
+        run_recovery(&f.session, host, &owner(&f.session))
+    }
+
+    /// The files of this journal only: the journal, its lock, and any kept or pending file with its
+    /// name. The journal folder is shared by every test, so other journals are not listed.
+    fn folder_files(path: &std::path::Path) -> Vec<String> {
+        let own = path.file_name().unwrap().to_string_lossy().into_owned();
+        let mut names: Vec<String> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(&own))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn fr14_the_reviewers_probe_through_the_handler_damage_refuse_recover_reveal_old_bytes_kept() {
+        let f = disclosing();
+        let yes = ScriptedConfirm::new(true);
+        assert!(reveal_one(&f, &yes, KeyDisclosure::Reveal)
+            .unwrap()
+            .is_some());
+        let (journal, damaged) = damage_journal(&f);
+
+        let refused = reveal_one(&f, &yes, KeyDisclosure::Reveal).err().unwrap();
+        assert_eq!(
+            refused.kind, "journal",
+            "disclosure is blocked while the journal is damaged"
+        );
+        assert_eq!(fs::read(&journal).unwrap(), damaged);
+
+        let kept = recover(&f, &yes).unwrap().expect("approved");
+
+        let kept_path = journal.with_file_name(&kept.kept_name);
+        assert_eq!(
+            fs::read(&kept_path).unwrap(),
+            damaged,
+            "the old bytes are kept as they were"
+        );
+        assert_eq!(kept.bytes, damaged.len() as u64);
+        assert_eq!(kept.sha256.len(), 64);
+        let window = yes.shown().last().unwrap().clone();
+        assert!(
+            window.contains(journal.file_name().unwrap().to_str().unwrap()),
+            "{window}"
+        );
+        assert!(window.contains("cannot be proved complete"), "{window}");
+        assert!(window.contains("stay blocked"), "{window}");
+        assert!(
+            reveal_one(&f, &yes, KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some(),
+            "disclosure works after the recovery"
+        );
+        let log = f
+            .session
+            .access(Access::Read, None, |vault| {
+                Ok(vault.audit_log().read(50)?)
+            })
+            .unwrap()
+            .value;
+        assert_eq!(log[0].action, "journal-recovered");
+        assert!(log[0].detail.as_deref().unwrap().contains(&kept.sha256));
+    }
+
+    #[test]
+    fn fr14_a_decline_moves_nothing_and_disclosure_stays_blocked() {
+        let f = disclosing();
+        let (journal, damaged) = damage_journal(&f);
+        let before = folder_files(&journal);
+
+        let answer = recover(&f, &ScriptedConfirm::new(false)).unwrap();
+
+        assert!(answer.is_none());
+        assert_eq!(fs::read(&journal).unwrap(), damaged);
+        assert_eq!(folder_files(&journal), before, "no kept file, no new file");
+        let blocked = reveal_one(&f, &ScriptedConfirm::new(true), KeyDisclosure::Reveal)
+            .err()
+            .unwrap();
+        assert_eq!(blocked.kind, "journal");
+    }
+
+    #[test]
+    fn fr14_a_journal_that_is_not_damaged_is_refused_before_any_window() {
+        let f = disclosing();
+        let host = ScriptedConfirm::new(true);
+        let journal = f
+            .session
+            .access(Access::Read, None, |vault| {
+                Ok(vault.audit_log().journal_path()?)
+            })
+            .unwrap()
+            .value
+            .unwrap();
+        let before = fs::read(&journal).unwrap();
+
+        let error = recover(&f, &host).unwrap_err();
+
+        assert_eq!(error.kind, "journal");
+        assert!(host.shown().is_empty(), "no window for an intact journal");
+        assert_eq!(fs::read(&journal).unwrap(), before);
+    }
+
+    #[test]
+    fn fr14_a_window_that_fails_is_an_error_and_moves_nothing() {
+        let f = disclosing();
+        let (journal, damaged) = damage_journal(&f);
+        let before = folder_files(&journal);
+        let broken = ScriptedConfirm::new(true).failing(crate::review_window::ReviewFailure::new(
+            "the window code stopped",
+        ));
+
+        let error = recover(&f, &broken).unwrap_err();
+
+        assert_eq!(error.kind, "reviewFailed");
+        assert_eq!(fs::read(&journal).unwrap(), damaged);
+        assert_eq!(folder_files(&journal), before);
+    }
+
+    #[test]
+    fn fr14_a_lock_while_the_window_is_open_moves_nothing() {
+        let f = disclosing();
+        let (journal, damaged) = damage_journal(&f);
+        let before = folder_files(&journal);
+        let session = f.session.clone();
+        let locking = ScriptedConfirm::during(true, move || session.lock().unwrap());
+
+        let error = recover(&f, &locking).unwrap_err();
+
+        assert_eq!(error.kind, "locked");
+        assert_eq!(fs::read(&journal).unwrap(), damaged);
+        assert_eq!(
+            folder_files(&journal),
+            before,
+            "nothing was kept, nothing was started"
+        );
+    }
+
+    #[test]
+    fn fr14_a_hide_while_the_window_is_open_does_not_revoke_what_the_user_approved() {
+        // As for an import (`Session::access_reviewed`): the user clicked in a native window,
+        // and the recovery discloses nothing to the page. A lock and a change do revoke it.
+        let f = disclosing();
+        let (journal, damaged) = damage_journal(&f);
+        let session = f.session.clone();
+        let hiding = ScriptedConfirm::during(true, move || {
+            session.expire_presentation().unwrap();
+        });
+
+        let kept = recover(&f, &hiding).unwrap().expect("approved");
+
+        assert_eq!(
+            fs::read(journal.with_file_name(kept.kept_name)).unwrap(),
+            damaged
+        );
+        assert!(
+            reveal_one(&f, &ScriptedConfirm::new(true), KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn fr14_a_hidden_window_shows_no_dialog_and_moves_nothing() {
+        let f = disclosing();
+        let (journal, damaged) = damage_journal(&f);
+        let hidden = ScriptedConfirm::new(true);
+        hidden
+            .window
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let error = recover(&f, &hidden).unwrap_err();
+
+        assert_eq!(error.kind, "viewChanged");
+        assert!(hidden.shown().is_empty());
+        assert_eq!(fs::read(&journal).unwrap(), damaged);
+    }
+
+    #[test]
+    fn fr14_the_command_is_registered_and_takes_the_session_and_the_native_window() {
+        let source = include_str!("commands.rs");
+        let code = &source[..source.find("\nmod tests {").unwrap()];
+        let start = code.find("pub async fn audit_recover(").expect("a command");
+        let body = &code[start..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        assert!(body.contains("confirm: State<'_, ConfirmState>"));
+        assert!(body.contains("session_id: String"));
+        assert!(body.contains("run_recovery("));
+        assert!(
+            !body.contains("recover_damaged"),
+            "the command asks first, in run_recovery"
+        );
+        let run = &code[code.find("fn run_recovery(").unwrap()..];
+        let run = &run[..run.find("\n}\n").unwrap()];
+        assert!(
+            run.find("disclosure::ask(").unwrap() < run.find("recover_damaged()").unwrap(),
+            "the user is asked before anything moves"
+        );
     }
 }

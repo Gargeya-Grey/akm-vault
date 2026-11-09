@@ -7,6 +7,10 @@ export interface BoundaryOptions {
   recycled?: { key: Partial<KeyView>; deletedAt: string | null }[];
   auditEntries?: { seq: string; ts: string; action: string; keyTitle: string | null; project: string | null; environment: string | null; keyId: string | null; detail: string | null }[];
   reminders?: ReminderStatus;
+  /** The journal starts damaged, as after a bad line. `audit_recover` starts a new one. */
+  damagedJournal?: boolean;
+  /** What the user answers in the native window of `audit_recover`. Default: approve. */
+  recovery?: "approve" | "decline";
 }
 
 export async function installNativeBoundaryMock(page: Page, theme = "light", retainedNotices?: OperationNotice[], retainedWarnings?: ApplicationNotice[], options: BoundaryOptions = {}) {
@@ -43,6 +47,10 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
     };
     const keys = (options.keys ?? [{}]).map((overrides, index) => ({ ...key, id: `${key.id}-${index}`, ...overrides }));
     let reminders = options.reminders ?? { enabled: false, permission: "granted", delivery: "none", blocked: false };
+    let damaged = options.damagedJournal ?? false;
+    let recovered = false;
+    const journalPath = "C:/fake-test/journal/j-00000000000000000000000000000000.jsonl";
+    const recoveredEntry = { seq: "1", ts: "2026-11-09T10:15:00Z", action: "journal-recovered", keyTitle: null, project: null, environment: null, keyId: null, detail: "A new journal started after damage. History before the damage cannot be proved complete." };
     const emitNotice = (sessionId: string) => {
       const listener = listeners.get("vault-locked");
       if (listener !== undefined) callbacks.get(listener)?.({ event: "vault-locked", id: listener, payload: { sessionId } });
@@ -103,7 +111,16 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
             case "reminders_status": return reminders;
             case "reminders_set": reminders = { ...reminders, enabled: args.enabled as boolean, delivery: "none", blocked: false }; return reminders;
             case "reminders_notify": reminders = { ...reminders, delivery: "sent" }; return reminders;
-            case "audit_read": return { path: "C:/fake-test/journal/j-00000000000000000000000000000000.jsonl", state: "consistent", damage: null, identity: "confirmed", notices: [], brokenAt: null, problemLine: null, totalEntries: options.auditEntries?.length ?? 3, entries: options.auditEntries ?? [
+            case "audit_recover": {
+              if (!damaged) throw { kind: "journal", message: "The journal is not damaged, so nothing was changed." };
+              if (options.recovery === "decline") return null;
+              damaged = false;
+              recovered = true;
+              return { keptName: "j-00000000000000000000000000000000.jsonl.damaged-20261109T101500Z", sha256: "ab".repeat(32), bytes: 213 };
+            }
+            case "audit_read": if (damaged) return { path: journalPath, state: "corrupt", damage: "malformedJson", identity: "confirmed", notices: [], brokenAt: null, problemLine: 4, totalEntries: 0, entries: [] };
+              else if (recovered) return { path: journalPath, state: "consistent", damage: null, identity: "confirmed", notices: [], brokenAt: null, problemLine: null, totalEntries: 1, entries: [recoveredEntry] };
+              else return { path: journalPath, state: "consistent", damage: null, identity: "confirmed", notices: [], brokenAt: null, problemLine: null, totalEntries: options.auditEntries?.length ?? 3, entries: options.auditEntries ?? [
               { seq: "1", ts: "2026-10-31T00:00:00Z", action: "copy", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: null },
               { seq: "2", ts: "2026-10-31T00:00:00Z", action: "copy-requested", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: null },
               { seq: "3", ts: "2026-10-31T00:00:00Z", action: "add-completed", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: "fake detail: 2 keys added, 1 updated" },

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, errorText } from "../api";
 import { formatDateTime } from "../format";
-import type { AuditReport } from "../types";
+import type { AuditReport, JournalRecovery } from "../types";
 import { EmptyPage } from "./glyphs";
 import { Notice } from "./Notice";
 
@@ -19,6 +19,7 @@ const ACTIONS: Record<string, string> = {
   "copy-requested": "Copy requested",
   "export-requested": "Export requested",
   "run-requested": "Launch requested",
+  "journal-recovered": "New journal started after damage",
 };
 
 const STATES: Record<AuditReport["state"], string> = {
@@ -44,6 +45,8 @@ export function Activity() {
   const [report, setReport] = useState<AuditReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [recovering, setRecovering] = useState(false);
+  const [recovery, setRecovery] = useState<{ kind: "done"; result: JournalRecovery } | { kind: "declined" } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -61,6 +64,22 @@ export function Activity() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Native asks first, in its own window. The page only asks; it cannot approve for the user.
+  async function recover() {
+    setRecovering(true);
+    setRecovery(null);
+    setError(null);
+    try {
+      const result = await api.recoverJournal();
+      setRecovery(result === null ? { kind: "declined" } : { kind: "done", result });
+      await load();
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setRecovering(false);
+    }
+  }
 
   const entries = report ? [...report.entries].reverse() : [];
 
@@ -120,6 +139,33 @@ export function Activity() {
               Damage was found{report.damage === null ? "" : ` (${DAMAGE[report.damage]})`} at physical line <span className="mono">{report.problemLine}</span>{report.brokenAt === null ? "." : <>, declared sequence <span className="mono">{report.brokenAt}</span> (not verified).</>}
               Original bytes were preserved. The displayed prefix is not authenticated; missing records and the cause of damage are unknown.
             </Notice>
+          </div>
+        )}
+
+        {report?.state === "corrupt" && (
+          <div className="ledger-message">
+            <Notice tone="info">
+              Key reveal, copy and export stay blocked while the journal is damaged, so that no disclosure goes unrecorded.
+              You can start a new journal. A window will ask you first. The damaged file is kept unchanged beside it, and the new journal records the gap.
+              History before the damage cannot be proved complete.
+            </Notice>
+            <button type="button" className="btn-secondary" onClick={() => void recover()} disabled={recovering} aria-busy={recovering || undefined}>
+              {recovering ? "Waiting for your answer…" : "Start a new journal…"}
+            </button>
+          </div>
+        )}
+
+        {recovery?.kind === "done" && (
+          <div className="ledger-message">
+            <Notice tone="ok">
+              A new journal started. The damaged file was kept as <span className="mono path-text">{recovery.result.keptName}</span> ({recovery.result.bytes} bytes, SHA-256 <span className="mono path-text">{recovery.result.sha256}</span>). History before the damage cannot be proved complete.
+            </Notice>
+          </div>
+        )}
+
+        {recovery?.kind === "declined" && (
+          <div className="ledger-message">
+            <Notice tone="info">Cancelled. The journal is unchanged and still blocks disclosure.</Notice>
           </div>
         )}
 
