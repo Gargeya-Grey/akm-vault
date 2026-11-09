@@ -4,7 +4,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     error::CommandError,
-    review_window::{native_review, review_name, ReviewWindow},
+    review_window::{review_name, review_names, NativeReviewDialog, ReviewAnswer, ReviewDialog},
 };
 
 /// One dialog lists every change. A bigger import is refused instead of cut short,
@@ -54,6 +54,19 @@ impl ImportReview {
         "Confirm import into the vault"
     }
 
+    /// Shows the review and waits for the click. No gate is held. The write that follows
+    /// checks the session and the revision again.
+    pub fn ask(&self, dialog: &dyn ReviewDialog) -> ReviewAnswer {
+        review_names(
+            dialog,
+            self.title(),
+            &self.message(),
+            &[],
+            "Import",
+            self.replaces_secrets(),
+        )
+    }
+
     /// Names, entry titles and counts only. A secret value never reaches this text.
     pub fn message(&self) -> String {
         let mut text = format!(
@@ -100,7 +113,7 @@ impl ImportReview {
 /// The only authority to apply an import. It answers on the user's own click in a
 /// window that the webview cannot script.
 pub trait ImportConfirm: Send + Sync {
-    fn prepare_review<'a>(&'a self, review: &ImportReview) -> ReviewWindow<'a>;
+    fn review_dialog(&self) -> Box<dyn ReviewDialog + '_>;
     /// Whether the main window is shown and not minimized right now. Native asks it only
     /// before the dialog opens, so that no dialog appears over a window nobody can see. It
     /// does not gate the answer: the user's click in the dialog stands.
@@ -112,14 +125,8 @@ pub struct ConfirmState(pub Arc<dyn ImportConfirm>);
 pub struct NativeConfirm<R: tauri::Runtime>(pub AppHandle<R>);
 
 impl<R: tauri::Runtime> ImportConfirm for NativeConfirm<R> {
-    fn prepare_review<'a>(&'a self, review: &ImportReview) -> ReviewWindow<'a> {
-        native_review(
-            &self.0,
-            review.title(),
-            review.message(),
-            review.replaces_secrets(),
-            "Import",
-        )
+    fn review_dialog(&self) -> Box<dyn ReviewDialog + '_> {
+        Box::new(NativeReviewDialog(self.0.clone()))
     }
 
     fn window_live(&self) -> bool {

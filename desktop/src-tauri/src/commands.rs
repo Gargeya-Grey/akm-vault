@@ -20,6 +20,7 @@ use crate::{
     launch::{self, TerminalState},
     private_export,
     reminders::{ReminderState, ReminderStatus},
+    review_window::ReviewAnswer,
     session::{
         Access, OperationWarningKind, Session, Snapshot, Stamped, VaultState, WarningReport,
     },
@@ -987,11 +988,15 @@ fn run_import(
                 "The vault changed before the confirmation could be shown. Start it again.",
             ));
         }
-        let window = confirm.prepare_review(&review);
-        let answer = session.while_current(ticket, |held| window(held))?;
-        if !answer() {
-            session.record_import(ticket, &operation, OperationWarningKind::ImportDeclined);
-            return Ok(None);
+        let dialog = confirm.review_dialog();
+        session.ensure(ticket)?;
+        match review.ask(dialog.as_ref()) {
+            ReviewAnswer::Approved => {}
+            ReviewAnswer::Declined => {
+                session.record_import(ticket, &operation, OperationWarningKind::ImportDeclined);
+                return Ok(None);
+            }
+            ReviewAnswer::Failed(failure) => return Err(failure.into()),
         }
     }
     // The write is bound to the session and the revision of the request: a lock, another
@@ -1883,6 +1888,8 @@ mod tests {
         window: Arc<std::sync::atomic::AtomicBool>,
         probe: Box<dyn Fn() + Send + Sync>,
         preparing: Box<dyn Fn() + Send + Sync>,
+        before_window: Box<dyn Fn() + Send + Sync>,
+        failure: Mutex<Option<crate::review_window::ReviewFailure>>,
     }
     impl ScriptedConfirm {
         fn new(answer: bool) -> Self {
@@ -1896,11 +1903,23 @@ mod tests {
                 window: Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 probe: Box::new(|| {}),
                 preparing: Box::new(|| {}),
+                before_window: Box::new(|| {}),
+                failure: Mutex::new(None),
             }
         }
-        /// Runs after the last check and before the review appears.
+        /// Runs after the last check of the revision and before the last check of the session.
         fn on_prepare(mut self, preparing: impl Fn() + Send + Sync + 'static) -> Self {
             self.preparing = Box::new(preparing);
+            self
+        }
+        /// Runs after every check, just before the review appears.
+        fn on_present(mut self, before: impl Fn() + Send + Sync + 'static) -> Self {
+            self.before_window = Box::new(before);
+            self
+        }
+        /// The window fails instead of answering.
+        fn failing(self, failure: crate::review_window::ReviewFailure) -> Self {
+            *self.failure.lock().unwrap() = Some(failure);
             self
         }
         /// The shared flag says whether the window is shown and not minimized.
@@ -1918,23 +1937,32 @@ mod tests {
         }
     }
     impl ImportConfirm for ScriptedConfirm {
-        fn prepare_review<'a>(
-            &'a self,
-            review: &ImportReview,
-        ) -> crate::review_window::ReviewWindow<'a> {
+        fn review_dialog(&self) -> Box<dyn crate::review_window::ReviewDialog + '_> {
             (self.preparing)();
-            let message = review.message();
-            Box::new(move |_held| {
-                self.shown.lock().unwrap().push(message);
-                Box::new(move || {
-                    (self.while_open)();
-                    self.answer
-                })
-            })
+            Box::new(self)
         }
         fn window_live(&self) -> bool {
             (self.probe)();
             self.window.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl crate::review_window::ReviewDialog for &ScriptedConfirm {
+        fn show(
+            &self,
+            review: &crate::review_window::ReviewText,
+        ) -> Result<i32, crate::review_window::ReviewFailure> {
+            (self.before_window)();
+            self.shown.lock().unwrap().push(review.text.clone());
+            (self.while_open)();
+            if let Some(failure) = self.failure.lock().unwrap().take() {
+                return Err(failure);
+            }
+            Ok(if self.answer {
+                crate::review_window::CONFIRM_BUTTON
+            } else {
+                crate::review_window::CANCEL_BUTTON
+            })
         }
     }
 

@@ -111,25 +111,27 @@ impl Dialog {
     }
 }
 impl import_review::ImportConfirm for Dialog {
-    fn prepare_review<'a>(
-        &'a self,
-        _: &import_review::ImportReview,
-    ) -> review_window::ReviewWindow<'a> {
-        Box::new(move |_held| {
-            Box::new(move || {
-                let held = self.hold.lock().unwrap().take();
-                if let Some((entered, release)) = held {
-                    entered.send(()).unwrap();
-                    release
-                        .recv_timeout(Duration::from_secs(60))
-                        .expect("the test answers the dialog");
-                }
-                self.approve.load(Ordering::SeqCst)
-            })
-        })
+    fn review_dialog(&self) -> Box<dyn review_window::ReviewDialog + '_> {
+        Box::new(self)
     }
     fn window_live(&self) -> bool {
         self.window_live.load(Ordering::SeqCst)
+    }
+}
+impl review_window::ReviewDialog for &Dialog {
+    fn show(&self, _: &review_window::ReviewText) -> Result<i32, review_window::ReviewFailure> {
+        let held = self.hold.lock().unwrap().take();
+        if let Some((entered, release)) = held {
+            entered.send(()).unwrap();
+            release
+                .recv_timeout(Duration::from_secs(60))
+                .expect("the test answers the dialog");
+        }
+        Ok(if self.approve.load(Ordering::SeqCst) {
+            review_window::CONFIRM_BUTTON
+        } else {
+            review_window::CANCEL_BUTTON
+        })
     }
 }
 
@@ -148,8 +150,8 @@ impl launch::TerminalHost for Terminal {
     fn choose_folder(&self) -> Result<Option<std::path::PathBuf>, error::CommandError> {
         Ok(Some(self.folder.clone()))
     }
-    fn prepare_review<'a>(&'a self, _: &launch::LaunchReview) -> review_window::ReviewWindow<'a> {
-        Box::new(move |_held| Box::new(move || self.approve.load(Ordering::SeqCst)))
+    fn review_dialog(&self) -> Box<dyn review_window::ReviewDialog + '_> {
+        Box::new(self)
     }
     fn open_terminal(
         &self,
@@ -161,6 +163,16 @@ impl launch::TerminalHost for Terminal {
             .unwrap()
             .push((request.folder.clone(), request.secrets.to_vec()));
         Ok(())
+    }
+}
+
+impl review_window::ReviewDialog for &Terminal {
+    fn show(&self, _: &review_window::ReviewText) -> Result<i32, review_window::ReviewFailure> {
+        Ok(if self.approve.load(Ordering::SeqCst) {
+            review_window::CONFIRM_BUTTON
+        } else {
+            review_window::CANCEL_BUTTON
+        })
     }
 }
 

@@ -14,7 +14,9 @@ use zeroize::Zeroize;
 use crate::{
     error::CommandError,
     import_review::MAX_REVIEWED_CHANGES,
-    review_window::{native_review, review_name, review_path, ReviewWindow},
+    review_window::{
+        review_name, review_names, review_path, NativeReviewDialog, ReviewAnswer, ReviewDialog,
+    },
     session::{Access, Held, Session},
     views::clean,
 };
@@ -67,23 +69,34 @@ impl LaunchReview {
         "Open a terminal with these keys"
     }
 
-    /// Names and counts only. A secret value never reaches this text.
-    pub fn message(&self) -> String {
+    /// Scope, folder and warnings, with the count of names. A secret value never reaches this
+    /// text. The names come after it, so a long list cannot push the warnings off the screen.
+    pub fn body(&self) -> String {
         let count = self.names.len();
-        let mut text = format!(
-            "Open a terminal with the keys of project \"{}\", environment \"{}\"?\n\nFolder: {}\n\nThe terminal will hold {count} variable{}:\n",
+        format!(
+            "Open a terminal with the keys of project \"{}\", environment \"{}\"?\n\nFolder: {}\n\nThese keys stay in that terminal window, and in every program that you start from it, until you close the window. Locking AKM does not remove them.\nThe terminal also gets the environment that AKM was started with, without AKM's own settings.\nA program in that folder can run when you type its name, so choose a folder that you trust.\nSecret values are not shown.\n\nThe terminal will hold {count} variable{}:",
             review_name(&self.project),
             review_name(&self.environment),
             review_path(&self.folder),
             if count == 1 { "" } else { "s" },
-        );
-        for name in &self.names {
-            text.push_str(&format!("  {}\n", review_name(name)));
-        }
-        text.push_str(
-            "\nThese keys stay in that terminal window, and in every program that you start from it, until you close the window. Locking AKM does not remove them.\nThe terminal also gets the environment that AKM was started with, without AKM's own settings.\nA program in that folder can run when you type its name, so choose a folder that you trust.\nSecret values are not shown.",
-        );
-        text
+        )
+    }
+
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+
+    /// Shows the review and waits for the click. No gate is held. The caller checks the session
+    /// again before anything that the answer allows.
+    pub fn ask(&self, dialog: &dyn ReviewDialog) -> ReviewAnswer {
+        review_names(
+            dialog,
+            self.title(),
+            &self.body(),
+            &self.names,
+            "Open terminal",
+            true,
+        )
     }
 }
 
@@ -95,12 +108,39 @@ pub trait TerminalHost: Send + Sync {
     fn window_live(&self) -> bool;
     /// The user's choice of folder, or `None` when they cancel.
     fn choose_folder(&self) -> Result<Option<PathBuf>, CommandError>;
-    /// The only authority to start the terminal: the review window, built and not yet shown.
-    /// It answers on the user's own click, in a window that the webview cannot script.
-    fn prepare_review<'a>(&'a self, review: &LaunchReview) -> ReviewWindow<'a>;
+    /// The window in which the user approves the launch: a click that the webview cannot
+    /// script.
+    fn review_dialog(&self) -> Box<dyn ReviewDialog + '_>;
+    /// Runs at each step of the state table in `docs/design/launch-with-keys.md`. Production
+    /// does nothing here. A test places a barrier, so that a lock lands exactly at that step.
+    fn reached(&self, _step: LaunchStep) {}
     /// Starts the terminal. It runs while the session gate is held for the session that was
     /// reviewed, so a lock cannot slip in between the last check and the start.
     fn open_terminal(&self, held: &Held<'_>, request: &LaunchRequest) -> Result<(), CommandError>;
+}
+
+/// The steps of a launch, in order: the rows of the state table. Each one is a point at which a
+/// lock can land.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchStep {
+    /// The names are planned. Next: the window check and the picker.
+    Planned,
+    /// The picked folder passed its check. Next: the last check before the review.
+    FolderChecked,
+    /// The last check before the review passed. Next: the window.
+    LastCheckPassed,
+    /// The user approved. Next: the access that re-checks the session and the revision.
+    Approved,
+    /// The check before the journal record passed. Next: the record.
+    RecordNext,
+    /// The record is written. Next: the session check and the copy of the values.
+    Recorded,
+    /// The values are copied. Next: the end of the vault access.
+    ValuesCopied,
+    /// The vault is released. Next: the session check and the start, under the gate.
+    BeforeStart,
+    /// The terminal has started.
+    Started,
 }
 
 pub struct TerminalState(pub Arc<dyn TerminalHost>);
@@ -133,14 +173,8 @@ impl<R: tauri::Runtime> TerminalHost for NativeTerminal<R> {
             .transpose()
     }
 
-    fn prepare_review<'a>(&'a self, review: &LaunchReview) -> ReviewWindow<'a> {
-        native_review(
-            &self.0,
-            review.title(),
-            review.message(),
-            true,
-            "Open terminal",
-        )
+    fn review_dialog(&self) -> Box<dyn ReviewDialog + '_> {
+        Box::new(NativeReviewDialog(self.0.clone()))
     }
 
     fn open_terminal(&self, _held: &Held<'_>, request: &LaunchRequest) -> Result<(), CommandError> {
@@ -313,10 +347,10 @@ fn checked_folder(folder: PathBuf) -> Result<PathBuf, CommandError> {
 /// The whole launch in one call. The webview names the session and the scope. A native
 /// folder picker and a native window decide the rest. `None` means that the user cancelled.
 ///
-/// The order is fixed. The scope is checked, then the folder is picked, then the user
-/// reviews the names. The review appears under the session gate. After the answer, the launch
-/// is journaled before any value leaves the vault, and a journal failure ends it there. Both
-/// run under the gate, and so does the start, which comes after the vault is released.
+/// The steps and what a lock does at each one are the state table in
+/// `docs/design/launch-with-keys.md`, section 1.1. The gate is taken only to check the session
+/// and copy what is needed. Blocking work runs outside it. The gate is taken again, and the
+/// session is checked, before any effect that discloses or starts.
 pub fn run_launch(
     session: &Session,
     host: &dyn TerminalHost,
@@ -335,38 +369,51 @@ pub fn run_launch(
         planned_names(vault, &project, &environment)
     })?;
     let (names, reviewed) = (planned.value, planned.snapshot);
+    let ticket = reviewed.ticket;
 
+    host.reached(LaunchStep::Planned);
     if !host.window_live() {
         return Err(CommandError::new(
             "viewChanged",
             "The AKM window is not shown, so no window was opened. Nothing was started. Start it again.",
         ));
     }
+    session.ensure(ticket)?;
     let picked = host.choose_folder()?;
-    session.ensure(reviewed.ticket)?;
+    session.ensure(ticket)?;
     let Some(folder) = picked else {
         return Ok(None);
     };
     let folder = checked_folder(folder)?;
+    host.reached(LaunchStep::FolderChecked);
 
     let review = LaunchReview::new(project.clone(), environment.clone(), folder.clone(), names);
-    let window = host.prepare_review(&review);
-    let answer = session.while_current(reviewed.ticket, |held| window(held))?;
-    if !answer() {
-        return Ok(None);
+    let dialog = host.review_dialog();
+    // The last check before the window. It is not atomic with the window, and it cannot be: a
+    // modal window cannot wait under the gate. A names-only review can appear just after a lock,
+    // and it starts nothing, because the access below refuses (owner's option (a)).
+    session.ensure(ticket)?;
+    host.reached(LaunchStep::LastCheckPassed);
+    match review.ask(dialog.as_ref()) {
+        ReviewAnswer::Approved => {}
+        ReviewAnswer::Declined => return Ok(None),
+        ReviewAnswer::Failed(failure) => return Err(failure.into()),
     }
+    host.reached(LaunchStep::Approved);
 
-    // The window is modal, so it cannot stay under the session gate. The access below binds the
-    // request to the session and the revision again. A lock, another session or any write since
-    // the plan was read refuses it, so the plan here is the one the user was shown.
+    // The access binds the request to the session and the revision again. A lock, another
+    // session or any write since the plan was read refuses it, so the plan here is the one the
+    // user was shown.
     let secrets = session
         .access_reviewed(Access::Read, reviewed, |vault| {
-            disclose_for_launch(session, reviewed.ticket, vault, &project, &environment)
+            disclose_for_launch(session, host, ticket, vault, &project, &environment)
         })?
         .value;
     let count = secrets.len();
     let request = LaunchRequest { folder, secrets };
-    session.while_current(reviewed.ticket, |held| host.open_terminal(held, &request))??;
+    host.reached(LaunchStep::BeforeStart);
+    session.while_current(ticket, |held| host.open_terminal(held, &request))??;
+    host.reached(LaunchStep::Started);
     Ok(Some(count))
 }
 
@@ -375,20 +422,26 @@ pub fn run_launch(
 /// that every access takes.
 fn disclose_for_launch(
     session: &Session,
+    host: &dyn TerminalHost,
     ticket: crate::policy::Ticket,
     vault: &mut Vault,
     project: &str,
     environment: &str,
 ) -> Result<LaunchSecrets, CommandError> {
-    session.while_current(ticket, |_held| {
+    let values = session.while_current(ticket, |_held| {
+        host.reached(LaunchStep::RecordNext);
         let plan = vault.plan_env(Some(project), Some(environment), false)?;
         let proof = vault.disclose_env(
             EnvDisclosure::Run,
             &plan,
             Some(&format!("launch requested; {} keys selected", plan.len())),
         )?;
-        Ok(LaunchSecrets(vault.env_vars(&plan, &proof)?))
-    })?
+        host.reached(LaunchStep::Recorded);
+        let values: Result<_, CommandError> = vault.env_vars(&plan, &proof).map_err(Into::into);
+        values
+    })??;
+    host.reached(LaunchStep::ValuesCopied);
+    Ok(LaunchSecrets(values))
 }
 
 #[cfg(test)]
@@ -397,6 +450,7 @@ mod tests {
     use crate::{
         clipboard::tests::{FakeClipboard, FakeData},
         policy::Signal,
+        review_window::{review_text, ReviewFailure, ReviewText, CANCEL_BUTTON, CONFIRM_BUTTON},
         session::MonotonicClock,
     };
     use akm_core::{
@@ -507,7 +561,11 @@ mod tests {
         launched: Mutex<Vec<Launched>>,
         while_choosing: Box<dyn Fn() + Send + Sync>,
         while_preparing: Box<dyn Fn() + Send + Sync>,
+        before_window: Box<dyn Fn() + Send + Sync>,
         while_confirming: Box<dyn Fn() + Send + Sync>,
+        window_result: Mutex<Option<ReviewFailure>>,
+        at_step: Box<dyn Fn(LaunchStep) + Send + Sync>,
+        steps: Mutex<Vec<LaunchStep>>,
         while_launching: Box<dyn Fn() + Send + Sync>,
     }
 
@@ -522,7 +580,11 @@ mod tests {
                 launched: Mutex::new(Vec::new()),
                 while_choosing: Box::new(|| {}),
                 while_preparing: Box::new(|| {}),
+                before_window: Box::new(|| {}),
                 while_confirming: Box::new(|| {}),
+                window_result: Mutex::new(None),
+                at_step: Box::new(|_| {}),
+                steps: Mutex::new(Vec::new()),
                 while_launching: Box::new(|| {}),
             }
         }
@@ -548,17 +610,14 @@ mod tests {
             Ok(self.folder.lock().unwrap().clone())
         }
 
-        fn prepare_review<'a>(&'a self, review: &LaunchReview) -> ReviewWindow<'a> {
+        fn review_dialog(&self) -> Box<dyn ReviewDialog + '_> {
             (self.while_preparing)();
-            let message = review.message();
-            Box::new(move |_held| {
-                self.events.lock().unwrap().push("confirm");
-                self.reviews.lock().unwrap().push(message);
-                Box::new(move || {
-                    (self.while_confirming)();
-                    self.approve.load(Ordering::SeqCst)
-                })
-            })
+            Box::new(self)
+        }
+
+        fn reached(&self, step: LaunchStep) {
+            self.steps.lock().unwrap().push(step);
+            (self.at_step)(step);
         }
 
         fn open_terminal(
@@ -573,6 +632,23 @@ mod tests {
                 envs: request.secrets.to_vec(),
             });
             Ok(())
+        }
+    }
+
+    impl ReviewDialog for &FakeHost {
+        fn show(&self, review: &ReviewText) -> Result<i32, ReviewFailure> {
+            (self.before_window)();
+            self.events.lock().unwrap().push("confirm");
+            self.reviews.lock().unwrap().push(review.text.clone());
+            (self.while_confirming)();
+            if let Some(failure) = self.window_result.lock().unwrap().take() {
+                return Err(failure);
+            }
+            Ok(if self.approve.load(Ordering::SeqCst) {
+                CONFIRM_BUTTON
+            } else {
+                CANCEL_BUTTON
+            })
         }
     }
 
@@ -779,7 +855,8 @@ mod tests {
         let reviewed = session.snapshot().unwrap();
         let result = session.access_reviewed(Access::Read, reviewed, |vault| {
             session.lock().unwrap();
-            disclose_for_launch(&session, reviewed.ticket, vault, "app", "dev")
+            let host = FakeHost::choosing(Path::new("C:/unused"));
+            disclose_for_launch(&session, &host, reviewed.ticket, vault, "app", "dev")
         });
         assert_eq!(result.err().unwrap().kind, "locked");
         assert!(
@@ -824,7 +901,7 @@ mod tests {
             PathBuf::from("C:/real"),
             vec!["ONLY".into()],
         );
-        let message = review.message();
+        let message = review_text(&review.body(), review.names());
         assert_eq!(message.matches("\nFolder: ").count(), 1, "{message}");
         assert!(message.contains("\nFolder: C:/real\n"), "{message}");
         assert!(!message.contains('\u{202e}'), "{message}");
@@ -998,12 +1075,12 @@ mod tests {
                  \n\
                  Folder: {folder}\n\
                  \n\
-                 The terminal will hold 2 variables:\n  OPENAI_API_KEY\n  TOKEN\n\
-                 \n\
                  These keys stay in that terminal window, and in every program that you start from it, until you close the window. Locking AKM does not remove them.\n\
                  The terminal also gets the environment that AKM was started with, without AKM's own settings.\n\
                  A program in that folder can run when you type its name, so choose a folder that you trust.\n\
-                 Secret values are not shown."
+                 Secret values are not shown.\n\
+                 \n\
+                 The terminal will hold 2 variables:\n  OPENAI_API_KEY\n  TOKEN"
             )
         );
         assert!(!shown[0].contains("fake-"));
@@ -1017,7 +1094,7 @@ mod tests {
             PathBuf::from("C:/work"),
             vec!["ONLY".into()],
         );
-        assert!(review.message().contains("hold 1 variable:\n  ONLY\n"));
+        assert!(review_text(&review.body(), review.names()).contains("hold 1 variable:\n  ONLY"));
     }
 
     fn names<'a>(command: &'a Command, wanted: &'a str) -> Vec<(String, Option<String>)> {

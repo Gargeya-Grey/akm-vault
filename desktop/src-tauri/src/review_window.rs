@@ -1,25 +1,111 @@
 //! The native window in which a person approves an operation that the page cannot script.
 
-use std::{path::Path, sync::mpsc};
+use std::path::Path;
 
 use tauri::{AppHandle, Manager};
 
-use crate::session::Held;
+use crate::error::CommandError;
 
-/// Waits for the person's answer. The session gate is not held while it waits.
-pub type ReviewAnswer<'a> = Box<dyn FnOnce() -> bool + Send + 'a>;
-
-/// A review that is built but not yet on screen. It appears only under the session gate, so a
-/// lock that came first means that no review of the old session appears.
-pub type ReviewWindow<'a> = Box<dyn FnOnce(&Held<'_>) -> ReviewAnswer<'a> + Send + 'a>;
-
-const CONFIRM_BUTTON: i32 = 1000;
-const CANCEL_BUTTON: i32 = 1001;
+pub const CONFIRM_BUTTON: i32 = 1000;
+pub const CANCEL_BUTTON: i32 = 1001;
 /// Enter at the moment the window appears must not approve anything.
+#[cfg(windows)]
 const DEFAULT_BUTTON: i32 = CANCEL_BUTTON;
+/// Windows answers Escape and the close button with this id, because the window is created with
+/// `TDF_ALLOW_DIALOG_CANCELLATION`.
+const ESCAPE_OR_CLOSE: i32 = 2;
+
+/// Why a review window has no answer. It holds no name and no value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviewFailure(String);
+
+impl ReviewFailure {
+    pub fn new(detail: impl Into<String>) -> Self {
+        Self(detail.into())
+    }
+}
+
+impl From<ReviewFailure> for CommandError {
+    fn from(failure: ReviewFailure) -> Self {
+        CommandError::new(
+            "reviewFailed",
+            format!(
+                "The confirmation window could not be shown, so nothing was done. Try again. ({})",
+                failure.0
+            ),
+        )
+    }
+}
+
+/// The answer of one review.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReviewAnswer {
+    Approved,
+    Declined,
+    Failed(ReviewFailure),
+}
+
+/// The text of one review, ready to show.
+#[derive(Clone, Debug)]
+pub struct ReviewText {
+    pub title: String,
+    pub text: String,
+    pub warning: bool,
+    pub confirm_label: String,
+}
+
+/// The edge of the operating system. Production is `NativeReviewDialog`, and a test scripts it.
+/// `show` runs with no session gate and no vault lock held: the window is modal and can stay
+/// open for as long as the person likes.
+pub trait ReviewDialog: Send + Sync {
+    /// Shows the window and answers with the button that closed it, or why there is no button.
+    fn show(&self, review: &ReviewText) -> Result<i32, ReviewFailure>;
+}
+
+/// Asks a person to approve something, in a window that the page cannot script.
+///
+/// `title` and `body` are text that AKM wrote. A name that came from the vault or the page must
+/// already be escaped with `review_name` if it is in `body`. `names` come raw: each one is
+/// escaped here and listed on its own line after `body`. The window answers `Approved` only on
+/// a click on the `confirm_label` button. Its default button is Cancel.
+///
+/// This function does not know about the session. A caller that acts on the answer must check
+/// the session again first (AGENTS.md, class A).
+pub fn review_names(
+    dialog: &dyn ReviewDialog,
+    title: &str,
+    body: &str,
+    names: &[String],
+    confirm_label: &str,
+    warning: bool,
+) -> ReviewAnswer {
+    let review = ReviewText {
+        title: title.to_string(),
+        text: review_text(body, names),
+        warning,
+        confirm_label: confirm_label.to_string(),
+    };
+    answer_for(dialog.show(&review))
+}
+
+/// The whole text of a review: the body, then one line per name.
+pub fn review_text(body: &str, names: &[String]) -> String {
+    let mut text = body.to_string();
+    for name in names {
+        text.push_str(&format!("\n  {}", review_name(name)));
+    }
+    text
+}
 
 fn approved(button: i32) -> bool {
     button == CONFIRM_BUTTON
+}
+
+fn answer_for(shown: Result<i32, ReviewFailure>) -> ReviewAnswer {
+    match shown {
+        Ok(button) if approved(button) => ReviewAnswer::Approved,
+        _ => ReviewAnswer::Declined,
+    }
 }
 
 const LONGEST_NAME: usize = 80;
@@ -75,77 +161,97 @@ pub fn review_path(path: &Path) -> String {
     out
 }
 
-/// The native review, ready to show. Everything that needs the main thread happens here,
-/// before the session gate is taken, because the main thread can be waiting for that gate.
-pub fn native_review<'a, R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    title: &'static str,
-    message: String,
+/// The real window, with the main window of the app as its owner.
+pub struct NativeReviewDialog<R: tauri::Runtime>(pub AppHandle<R>);
+
+impl<R: tauri::Runtime> ReviewDialog for NativeReviewDialog<R> {
+    fn show(&self, review: &ReviewText) -> Result<i32, ReviewFailure> {
+        #[cfg(windows)]
+        let parent = self
+            .0
+            .get_webview_window("main")
+            .and_then(|window| window.hwnd().ok())
+            .map_or(0, |handle| handle.0 as isize);
+        #[cfg(not(windows))]
+        let parent = {
+            let _ = self.0.get_webview_window("main");
+            0
+        };
+        task_dialog(parent, review)
+    }
+}
+
+/// The buffers that a `TASKDIALOGCONFIG` points into. It must outlive the config.
+#[cfg(windows)]
+struct DialogText {
+    title: Vec<u16>,
+    text: Vec<u16>,
+    _confirm: Vec<u16>,
+    _cancel: Vec<u16>,
+    buttons: [windows_sys::Win32::UI::Controls::TASKDIALOG_BUTTON; 2],
     warning: bool,
-    confirm_label: &'static str,
-) -> ReviewWindow<'a> {
-    #[cfg(windows)]
-    let parent = app
-        .get_webview_window("main")
-        .and_then(|window| window.hwnd().ok())
-        .map_or(0, |handle| handle.0 as isize);
-    #[cfg(not(windows))]
-    let parent = {
-        let _ = app.get_webview_window("main");
-        0
-    };
-    Box::new(move |_held| {
-        let (answer, answered) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = answer.send(show(parent, title, &message, warning, confirm_label));
-        });
-        Box::new(move || answered.recv().unwrap_or(false))
-    })
 }
 
 #[cfg(windows)]
-fn show(parent: isize, title: &str, message: &str, warning: bool, confirm_label: &str) -> bool {
-    use windows_sys::Win32::{
-        Foundation::{HWND, S_OK},
-        UI::Controls::{
-            TaskDialogIndirect, TASKDIALOGCONFIG, TASKDIALOG_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION,
-            TDF_SIZE_TO_CONTENT, TD_INFORMATION_ICON, TD_WARNING_ICON,
-        },
-    };
+impl DialogText {
+    fn new(review: &ReviewText) -> Self {
+        use windows_sys::Win32::UI::Controls::TASKDIALOG_BUTTON;
+        let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(Some(0)).collect() };
+        let confirm = wide(&review.confirm_label);
+        let cancel = wide("Cancel");
+        let buttons = [
+            TASKDIALOG_BUTTON {
+                nButtonID: CONFIRM_BUTTON,
+                pszButtonText: confirm.as_ptr(),
+            },
+            TASKDIALOG_BUTTON {
+                nButtonID: CANCEL_BUTTON,
+                pszButtonText: cancel.as_ptr(),
+            },
+        ];
+        Self {
+            title: wide(&review.title),
+            text: wide(&review.text),
+            _confirm: confirm,
+            _cancel: cancel,
+            buttons,
+            warning: review.warning,
+        }
+    }
 
-    let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(Some(0)).collect() };
-    let (title, message, confirm_label, cancel_label) = (
-        wide(title),
-        wide(message),
-        wide(confirm_label),
-        wide("Cancel"),
-    );
-    let buttons = [
-        TASKDIALOG_BUTTON {
-            nButtonID: CONFIRM_BUTTON,
-            pszButtonText: confirm_label.as_ptr(),
-        },
-        TASKDIALOG_BUTTON {
-            nButtonID: CANCEL_BUTTON,
-            pszButtonText: cancel_label.as_ptr(),
-        },
-    ];
-    // SAFETY: all-zero is a valid empty TASKDIALOGCONFIG: null pointers and zero counts.
-    let mut config: TASKDIALOGCONFIG = unsafe { std::mem::zeroed() };
-    config.cbSize = std::mem::size_of::<TASKDIALOGCONFIG>() as u32;
-    config.hwndParent = parent as HWND;
-    config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
-    config.pszWindowTitle = title.as_ptr();
-    config.pszContent = message.as_ptr();
-    config.Anonymous1.pszMainIcon = if warning {
-        TD_WARNING_ICON
-    } else {
-        TD_INFORMATION_ICON
-    };
-    config.pButtons = buttons.as_ptr();
-    config.cButtons = buttons.len() as u32;
-    config.nDefaultButton = DEFAULT_BUTTON;
+    fn config(&self, parent: isize) -> windows_sys::Win32::UI::Controls::TASKDIALOGCONFIG {
+        use windows_sys::Win32::{
+            Foundation::HWND,
+            UI::Controls::{
+                TASKDIALOGCONFIG, TDF_ALLOW_DIALOG_CANCELLATION, TDF_SIZE_TO_CONTENT,
+                TD_INFORMATION_ICON, TD_WARNING_ICON,
+            },
+        };
+        // SAFETY: all-zero is a valid empty TASKDIALOGCONFIG: null pointers and zero counts.
+        let mut config: TASKDIALOGCONFIG = unsafe { std::mem::zeroed() };
+        config.cbSize = std::mem::size_of::<TASKDIALOGCONFIG>() as u32;
+        config.hwndParent = parent as HWND;
+        config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
+        config.pszWindowTitle = self.title.as_ptr();
+        config.pszContent = self.text.as_ptr();
+        config.Anonymous1.pszMainIcon = if self.warning {
+            TD_WARNING_ICON
+        } else {
+            TD_INFORMATION_ICON
+        };
+        config.pButtons = self.buttons.as_ptr();
+        config.cButtons = self.buttons.len() as u32;
+        config.nDefaultButton = DEFAULT_BUTTON;
+        config
+    }
+}
 
+#[cfg(windows)]
+fn task_dialog(parent: isize, review: &ReviewText) -> Result<i32, ReviewFailure> {
+    use windows_sys::Win32::UI::Controls::TaskDialogIndirect;
+
+    let text = DialogText::new(review);
+    let config = text.config(parent);
     let mut pressed = 0;
     // SAFETY: the config and the buffers it points to outlive this call, and `pressed` is
     // writable. The other two out-pointers are optional.
@@ -157,12 +263,26 @@ fn show(parent: isize, title: &str, message: &str, warning: bool, confirm_label:
             std::ptr::null_mut(),
         )
     };
-    result == S_OK && approved(pressed)
+    button_from(result, pressed)
 }
 
 #[cfg(not(windows))]
-fn show(_: isize, _: &str, _: &str, _: bool, _: &str) -> bool {
-    false
+fn task_dialog(_: isize, _: &ReviewText) -> Result<i32, ReviewFailure> {
+    Err(ReviewFailure::new(
+        "A review window exists on Windows only.",
+    ))
+}
+
+/// The result of the system call, as a button or as the reason that there is none.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn button_from(result: i32, pressed: i32) -> Result<i32, ReviewFailure> {
+    if result == 0 {
+        Ok(pressed)
+    } else {
+        Err(ReviewFailure::new(format!(
+            "TaskDialogIndirect returned {result:#010x}"
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -171,12 +291,10 @@ mod tests {
 
     #[test]
     fn only_the_confirm_button_approves_and_it_is_not_the_default() {
-        const ESCAPE_OR_CLOSE: i32 = 2;
         assert!(approved(CONFIRM_BUTTON));
         for button in [CANCEL_BUTTON, ESCAPE_OR_CLOSE, 0, 1] {
             assert!(!approved(button), "{button}");
         }
-        assert!(!approved(DEFAULT_BUTTON));
     }
 
     #[test]
@@ -202,5 +320,14 @@ mod tests {
             review_path(Path::new("C:\\work\u{202e}txt")),
             "C:\\work\\u{202e}txt"
         );
+    }
+
+    #[test]
+    fn the_names_come_after_the_body_one_per_line_and_escaped() {
+        assert_eq!(
+            review_text("Hold these:", &["A".into(), "B\nC".into()]),
+            "Hold these:\n  A\n  B\\u{a}C"
+        );
+        assert_eq!(review_text("Only text", &[]), "Only text");
     }
 }
