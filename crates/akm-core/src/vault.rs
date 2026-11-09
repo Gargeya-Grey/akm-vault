@@ -776,7 +776,14 @@ impl Vault {
                 .find_entry_id(&key.id)
                 .ok_or_else(|| Error::EntryNotFound(key.id.clone()))?;
             validate_process_var(&name, &self.stored_secret(id)).map_err(|error| {
-                Error::Invalid(format!("key {:?} cannot be used: {error}", key.title))
+                // A key stored before its name became reserved stays viewable and can be
+                // renamed. Say how, when the name is the problem (FR-02).
+                let hint = if reserved_class(&name).is_some() || !is_valid_env_var(&name) {
+                    ". The key is not lost: edit it and set a different env var name to use it"
+                } else {
+                    ""
+                };
+                Error::Invalid(format!("key {:?} cannot be used: {error}{hint}", key.title))
             })?;
             if !seen.insert(name.clone()) {
                 return Err(Error::Invalid(format!(

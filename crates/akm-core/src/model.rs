@@ -254,8 +254,21 @@ impl ReservedClass {
 
 struct Rule {
     class: ReservedClass,
+    /// Whole names. An exact match beats a prefix match, so a name can sit in a narrower
+    /// class than the prefix family around it (`CARGO_HOME` against `CARGO_`).
     exact: &'static [&'static str],
     prefixes: &'static [&'static str],
+}
+
+/// Names that look like part of a reserved family and carry a secret that a person stores
+/// on purpose: a registry token. They are not reserved (FR-02).
+fn is_credential_name(upper: &str) -> bool {
+    const REGISTRIES: &str = "CARGO_REGISTRIES_";
+    const TOKEN: &str = "_TOKEN";
+    upper == "CARGO_REGISTRY_TOKEN"
+        || (upper.len() > REGISTRIES.len() + TOKEN.len()
+            && upper.starts_with(REGISTRIES)
+            && upper.ends_with(TOKEN))
 }
 
 const RESERVED: &[Rule] = &[
@@ -273,8 +286,16 @@ const RESERVED: &[Rule] = &[
             "SYSTEMROOT",
             "WINDIR",
             "PSMODULEPATH",
+            // Which toolchain, interpreter or runtime a tool picks.
+            "GOROOT",
+            "GOTOOLCHAIN",
+            "JAVA_HOME",
+            "GEM_HOME",
+            "GEM_PATH",
+            "UV_PYTHON",
         ],
-        prefixes: &["LD_", "DYLD_"],
+        // Every `RUSTUP_` variable but the few below: rustup picks the toolchain it runs.
+        prefixes: &["LD_", "DYLD_", "RUSTUP_"],
     },
     Rule {
         class: ReservedClass::StartupHook,
@@ -287,18 +308,37 @@ const RESERVED: &[Rule] = &[
             "PYTHONINSPECT",
             "PYTHONBREAKPOINT",
             "PYTHONUSERBASE",
+            "PYTHONEXECUTABLE",
+            "PYTHONPLATLIBDIR",
+            "PYTHONPYCACHEPREFIX",
             "PERL5OPT",
             "PERL5LIB",
             "PERLLIB",
+            "PERL5DB",
             "RUBYOPT",
             "RUBYLIB",
             "JAVA_TOOL_OPTIONS",
             "_JAVA_OPTIONS",
             "JDK_JAVA_OPTIONS",
+            "JAVA_OPTS",
+            "MAVEN_OPTS",
+            "GRADLE_OPTS",
+            "ANT_OPTS",
+            "SBT_OPTS",
+            "CATALINA_OPTS",
             "CLASSPATH",
             "DOTNET_STARTUP_HOOKS",
             "DOTNET_ADDITIONAL_DEPS",
             "ELECTRON_RUN_AS_NODE",
+            "PHPRC",
+            "PHP_INI_SCAN_DIR",
+            "LUA_INIT",
+            "LUA_PATH",
+            "LUA_CPATH",
+            "R_PROFILE",
+            "R_PROFILE_USER",
+            "R_ENVIRON",
+            "R_ENVIRON_USER",
         ],
         prefixes: &["COR_PROFILER", "COR_ENABLE_PROFILING", "CORECLR_"],
     },
@@ -309,16 +349,87 @@ const RESERVED: &[Rule] = &[
             "GIT_SSH",
             "GIT_ASKPASS",
             "SSH_ASKPASS",
+            "SUDO_ASKPASS",
             "GIT_EXEC_PATH",
             "GIT_PROXY_COMMAND",
             "GIT_EXTERNAL_DIFF",
             "GIT_TEMPLATE_DIR",
+            // Rust: the compiler, its wrappers and flags.
+            "RUSTC",
+            "RUSTDOC",
+            "RUSTFLAGS",
+            "RUSTDOCFLAGS",
+            // Compilers and build tools.
+            "CC",
+            "CXX",
+            "CPP",
+            "AS",
+            "LD",
+            "AR",
+            "NM",
+            "RANLIB",
+            "STRIP",
+            "OBJCOPY",
+            "OBJDUMP",
+            "MAKE",
+            "MAKEFLAGS",
+            "MFLAGS",
+            "CFLAGS",
+            "CXXFLAGS",
+            "CPPFLAGS",
+            "LDFLAGS",
+            "GOFLAGS",
+            "GOAUTH",
+            "MAVEN_ARGS",
+            // Editors, pagers and shells that tools run.
+            "EDITOR",
+            "VISUAL",
+            "PAGER",
+            "MANPAGER",
+            "LESSOPEN",
+            "LESSCLOSE",
+            "GIT_PAGER",
+            "GIT_EDITOR",
+            "GIT_SEQUENCE_EDITOR",
+            "BROWSER",
+            "SHELL",
+            // Other tools that run a configured program.
+            "AWS_CONFIG_FILE",
+            "DOCKER_CONFIG",
+            "TF_CLI_ARGS",
+            "TF_CLI_CONFIG_FILE",
+            "YARN_YARN_PATH",
         ],
-        prefixes: &["GIT_CONFIG_"],
+        // `RUSTC_`: RUSTC_WRAPPER, RUSTC_WORKSPACE_WRAPPER, RUSTC_BOOTSTRAP and the rest.
+        // `CARGO_`: Cargo reads every such variable as a configuration key. Together they
+        // cover CARGO_BUILD_RUSTC*, CARGO_ENCODED_RUSTFLAGS and every
+        // CARGO_TARGET_<triple>_RUNNER, _LINKER and _RUSTFLAGS. `is_credential_name` takes
+        // the registry tokens out again.
+        prefixes: &[
+            "GIT_CONFIG_",
+            "RUSTC_",
+            "CARGO_",
+            "CMAKE_",
+            "CGO_",
+            "TF_CLI_ARGS_",
+        ],
     },
     Rule {
         class: ReservedClass::ShellStartup,
-        exact: &["BASH_ENV", "ENV", "PROMPT_COMMAND", "PS4", "SHELLOPTS"],
+        exact: &[
+            "BASH_ENV",
+            "ENV",
+            "PROMPT_COMMAND",
+            "PS1",
+            "PS4",
+            "SHELLOPTS",
+            // PowerShell and cmd.
+            "PSEXECUTIONPOLICYPREFERENCE",
+            "__PSLOCKDOWNPOLICY",
+            "PROMPT",
+            "DIRCMD",
+            "COPYCMD",
+        ],
         prefixes: &[],
     },
     Rule {
@@ -331,15 +442,49 @@ const RESERVED: &[Rule] = &[
             "FTP_PROXY",
             "SSL_CERT_FILE",
             "SSL_CERT_DIR",
+            "SSLKEYLOGFILE",
             "REQUESTS_CA_BUNDLE",
             "CURL_CA_BUNDLE",
+            "AWS_CA_BUNDLE",
+            "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH",
             "NODE_EXTRA_CA_CERTS",
             "NODE_TLS_REJECT_UNAUTHORIZED",
             "GIT_SSL_NO_VERIFY",
             "GIT_SSL_CAINFO",
             "GIT_SSL_CAPATH",
+            "AWS_ENDPOINT_URL",
+            "DOCKER_HOST",
+            // Package registries and indexes.
+            "GOPROXY",
+            "GONOPROXY",
+            "GOSUMDB",
+            "GONOSUMDB",
+            "GOINSECURE",
+            "UV_INDEX_URL",
+            "UV_DEFAULT_INDEX",
+            "UV_EXTRA_INDEX_URL",
+            "UV_INDEX",
+            "UV_FIND_LINKS",
+            "UV_PUBLISH_URL",
+            "UV_PYTHON_INSTALL_MIRROR",
+            "UV_INSECURE_HOST",
+            "YARN_NPM_REGISTRY_SERVER",
+            "YARN_HTTP_PROXY",
+            "YARN_HTTPS_PROXY",
+            "BUN_CONFIG_REGISTRY",
+            "COREPACK_NPM_REGISTRY",
+            "RUSTUP_DIST_SERVER",
+            "RUSTUP_UPDATE_ROOT",
         ],
-        prefixes: &["NPM_CONFIG_", "PIP_"],
+        prefixes: &[
+            "NPM_CONFIG_",
+            "PIP_",
+            "OPENSSL_",
+            "AWS_ENDPOINT_URL_",
+            "CARGO_HTTP_",
+            "CARGO_NET_",
+            "CARGO_SOURCE_",
+        ],
     },
     Rule {
         class: ReservedClass::UserLocation,
@@ -353,22 +498,47 @@ const RESERVED: &[Rule] = &[
             "HOMEPATH",
             "APPDATA",
             "LOCALAPPDATA",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+            // Where toolchains and package managers keep their settings and files.
+            "CARGO_HOME",
+            "CARGO_TARGET_DIR",
+            "RUSTUP_HOME",
+            "GOPATH",
+            "GOBIN",
+            "GOENV",
+            "GOMODCACHE",
+            "GOCACHE",
+            "BUN_INSTALL",
+            "DENO_DIR",
+            "PNPM_HOME",
+            "GRADLE_USER_HOME",
         ],
         prefixes: &[],
     },
 ];
 
 /// The reserved class of a name, or `None`. Windows compares variable names without regard
-/// to case, so this does too.
+/// to case, so this does too. A whole-name match decides first. Then the longest matching
+/// prefix decides (`CARGO_HTTP_` before `CARGO_`), unless the name is a registry token.
 pub fn reserved_class(name: &str) -> Option<ReservedClass> {
     let upper = name.to_ascii_uppercase();
+    if let Some(rule) = RESERVED
+        .iter()
+        .find(|rule| rule.exact.contains(&upper.as_str()))
+    {
+        return Some(rule.class);
+    }
+    if is_credential_name(&upper) {
+        return None;
+    }
     RESERVED
         .iter()
-        .find(|rule| {
-            rule.exact.contains(&upper.as_str())
-                || rule.prefixes.iter().any(|prefix| upper.starts_with(prefix))
-        })
-        .map(|rule| rule.class)
+        .flat_map(|rule| rule.prefixes.iter().map(move |prefix| (rule.class, prefix)))
+        .filter(|(_, prefix)| upper.starts_with(*prefix))
+        .max_by_key(|(_, prefix)| prefix.len())
+        .map(|(class, _)| class)
 }
 
 pub(crate) fn validate_process_var(name: &str, value: &str) -> crate::Result<()> {

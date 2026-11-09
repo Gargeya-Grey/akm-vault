@@ -553,6 +553,66 @@ fn imported_reserved_control_names_cannot_be_injected_or_exported() {
     }
 }
 
+/// FR-02: `RUSTC_WRAPPER` and the other Cargo and Rust execution controls. A key that is
+/// already stored under such a name must be refused by `run` and `export` with a clear
+/// message, but it must stay viewable. The same holds in lower and mixed case.
+#[test]
+fn a_stored_key_named_like_a_cargo_execution_control_is_refused_for_use_and_still_viewable() {
+    for name in [
+        "RUSTC_WRAPPER",
+        "rustc_wrapper",
+        "RustC_Wrapper",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "RUSTFLAGS",
+    ] {
+        let fixture = Fixture::with_keys(&[
+            ("Wrapper", name, "fake-wrapper-secret", "demo", "dev"),
+            ("Plain", "PLAIN_KEY", "fake-plain-secret", "demo", "dev"),
+        ]);
+        let path = fixture.report("must-not-exist.json");
+        for verb in ["run", "export"] {
+            // `probe_command` starts only the probe test, never the whole test binary.
+            let mut command = if verb == "run" {
+                fixture.probe_command(&path)
+            } else {
+                let mut command = fixture.cli();
+                command.args(["export", "--project", "demo", "--env", "dev"]);
+                command
+            };
+            let output = command.output().unwrap();
+            let text = stderr(&output);
+            assert!(!output.status.success(), "{verb} accepted {name}");
+            assert!(text.contains("Wrapper"), "{name} {verb}: {text}");
+            assert!(
+                text.contains("reserved") || text.contains("not a valid"),
+                "{name} {verb}: {text}"
+            );
+            assert!(
+                !text.contains("fake-wrapper-secret") && !text.contains("fake-plain-secret"),
+                "{name} {verb}: {text}"
+            );
+            assert!(output.stdout.is_empty(), "{name} {verb}");
+            assert!(!path.exists(), "{name}: the child must not start");
+        }
+        // The key can still be listed and read, so its owner can find it and rename it.
+        let listing = fixture.cli().arg("list").output().unwrap();
+        assert_success(&listing);
+        assert!(String::from_utf8_lossy(&listing.stdout).contains("Wrapper"));
+        let shown = fixture
+            .cli()
+            .args(["get", "Wrapper", "--field", "secret"])
+            .output()
+            .unwrap();
+        assert_success(&shown);
+        assert_eq!(
+            String::from_utf8_lossy(&shown.stdout).trim(),
+            "fake-wrapper-secret"
+        );
+    }
+}
+
 #[test]
 fn every_reserved_class_is_refused_by_run_and_export_with_the_key_title_and_never_the_value() {
     for name in [
