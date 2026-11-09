@@ -268,17 +268,20 @@ impl Vault {
             .ok_or_else(|| Error::EntryNotFound(id.to_string()))
     }
 
-    /// Select one key by its native UUID or by its exact case-insensitive title. A partial word
-    /// never selects a key, so a word found in a note or a URL cannot reveal, rotate or delete one
-    /// (L2). Two keys with the same title are refused. Use [`Vault::candidates`] to list near matches.
+    /// Select one key by its native UUID or by its exact title, in any letter case. Case is
+    /// folded with `str::to_lowercase` on both sides, so `Éclair` and `éclair` are one title
+    /// (FR-17). A partial word never selects a key, so a word found in a note or a URL cannot
+    /// reveal, rotate or delete one (L2). Two keys with the same title are refused. Use
+    /// [`Vault::candidates`] to list near matches.
     pub fn find(&self, query: &str) -> Result<ApiKey> {
         if let Ok(key) = self.get_by_id(query) {
             return Ok(key);
         }
+        let wanted = query.to_lowercase();
         let mut exact: Vec<ApiKey> = self
             .list()
             .into_iter()
-            .filter(|key| key.title.eq_ignore_ascii_case(query))
+            .filter(|key| key.title.to_lowercase() == wanted)
             .collect();
         match exact.len() {
             0 => Err(Error::EntryNotFound(query.to_string())),
@@ -477,15 +480,17 @@ impl Vault {
         keys
     }
 
-    /// A recycled key by native UUID, then by exact case-insensitive title.
+    /// A recycled key by native UUID, then by exact title in any letter case (the same rule as
+    /// [`Vault::find`]).
     pub fn find_recycled(&self, query: &str) -> Result<RecycledKey> {
         let all = self.recycled();
         if let Some(found) = all.iter().find(|item| item.key.id == query) {
             return Ok(found.clone());
         }
+        let wanted = query.to_lowercase();
         let exact: Vec<_> = all
             .into_iter()
-            .filter(|item| item.key.title.eq_ignore_ascii_case(query))
+            .filter(|item| item.key.title.to_lowercase() == wanted)
             .collect();
         match exact.len() {
             0 => Err(Error::EntryNotFound(query.to_string())),

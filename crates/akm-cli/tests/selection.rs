@@ -386,3 +386,87 @@ fn the_help_of_every_selector_command_states_the_exact_rule() {
         );
     }
 }
+
+// ---------------------------------------------------------------------- FR-17: letter case
+
+const UNICODE_KEYS: [Key; 4] = [
+    Key {
+        title: "Éclair2",
+        var: "ECLAIR_KEY",
+        secret: "fake-secret-eclair",
+        notes: None,
+        url: None,
+    },
+    Key {
+        title: "Straße",
+        var: "STRASSE_KEY",
+        secret: "fake-secret-strasse",
+        notes: None,
+        url: None,
+    },
+    Key {
+        title: "Ünï",
+        var: "UNI_ONE_KEY",
+        secret: "fake-secret-uni-one",
+        notes: None,
+        url: None,
+    },
+    Key {
+        title: "ÜNÏ",
+        var: "UNI_TWO_KEY",
+        secret: "fake-secret-uni-two",
+        notes: None,
+        url: None,
+    },
+];
+
+/// FR-17: a title that has a letter outside ASCII is selected in any letter case, on live and
+/// on recycled keys. Two titles that differ only by case are still ambiguous.
+#[test]
+fn a_title_with_non_ascii_letters_is_selected_in_any_case_and_case_twins_are_ambiguous() {
+    let fixture = Fixture::new(&UNICODE_KEYS);
+    for selector in ["Éclair2", "éclair2", "ÉCLAIR2", "éCLAIR2"] {
+        let output = fixture.run(&["get", selector, "--field", "secret"]);
+        assert!(output.status.success(), "{selector}: {}", err(&output));
+        assert_eq!(out(&output), "fake-secret-eclair\n", "{selector}");
+    }
+    let output = fixture.run(&["get", "straße", "--field", "secret"]);
+    assert_eq!(out(&output), "fake-secret-strasse\n");
+    // A different word is not a match: `ss` is not `ß`.
+    let output = fixture.run(&["get", "STRASSE", "--field", "secret"]);
+    assert!(!output.status.success());
+
+    let before = fixture.bytes();
+    for selector in ["ünï", "Ünï", "ÜNÏ"] {
+        let output = fixture.run(&["get", selector, "--field", "secret"]);
+        assert!(!output.status.success(), "{selector}");
+        assert!(
+            err(&output).contains("exact title of 2 keys"),
+            "{selector}: {}",
+            err(&output)
+        );
+    }
+    assert_eq!(fixture.bytes(), before);
+
+    // Recycled keys use the same rule.
+    assert!(fixture.run(&["rm", "éclair2", "--yes"]).status.success());
+    let history = fixture.run(&["history", "ÉCLAIR2"]);
+    assert!(history.status.success(), "{}", err(&history));
+    let restored = fixture.run(&["restore", "éCLAIR2"]);
+    assert!(restored.status.success(), "{}", err(&restored));
+    let get = fixture.run(&["get", "Éclair2", "--field", "secret"]);
+    assert_eq!(out(&get), "fake-secret-eclair\n");
+    for title in ["Ünï", "ÜNÏ"] {
+        let id = fixture.id_of(title);
+        assert!(fixture.run(&["rm", &id, "--yes"]).status.success());
+    }
+    let before = fixture.bytes();
+    let twins = fixture.run(&["restore", "ünï"]);
+    assert!(!twins.status.success());
+    assert!(
+        err(&twins).contains("exact title of 2 keys"),
+        "{}",
+        err(&twins)
+    );
+    assert_eq!(fixture.bytes(), before);
+}
