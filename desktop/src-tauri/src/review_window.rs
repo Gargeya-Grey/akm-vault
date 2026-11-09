@@ -1,6 +1,9 @@
 //! The native window in which a person approves an operation that the page cannot script.
 
-use std::path::Path;
+use std::{
+    panic::{catch_unwind, AssertUnwindSafe},
+    path::Path,
+};
 
 use tauri::{AppHandle, Manager};
 
@@ -87,7 +90,9 @@ pub fn review_names(
         warning,
         confirm_label: confirm_label.to_string(),
     };
-    answer_for(dialog.show(&review))
+    let shown = catch_unwind(AssertUnwindSafe(|| dialog.show(&review)))
+        .unwrap_or_else(|_| Err(ReviewFailure::new("the window code stopped unexpectedly")));
+    answer_for(shown)
 }
 
 /// The whole text of a review: the body, then one line per name.
@@ -103,10 +108,14 @@ fn approved(button: i32) -> bool {
     button == CONFIRM_BUTTON
 }
 
+/// Only a click on the confirm button approves. Cancel, Escape and close decline. A window that
+/// could not answer is a failure and never a decline: the person did not say no.
 fn answer_for(shown: Result<i32, ReviewFailure>) -> ReviewAnswer {
     match shown {
         Ok(button) if approved(button) => ReviewAnswer::Approved,
-        _ => ReviewAnswer::Declined,
+        Ok(CANCEL_BUTTON | ESCAPE_OR_CLOSE) => ReviewAnswer::Declined,
+        Ok(other) => ReviewAnswer::Failed(ReviewFailure::new(format!("unexpected button {other}"))),
+        Err(failure) => ReviewAnswer::Failed(failure),
     }
 }
 
@@ -332,6 +341,50 @@ mod tests {
         assert!(!approved(DEFAULT_BUTTON));
     }
 
+    #[test]
+    fn only_the_confirm_button_approves_and_escape_cancel_and_close_decline() {
+        assert_eq!(answer_for(Ok(CONFIRM_BUTTON)), ReviewAnswer::Approved);
+        for button in [CANCEL_BUTTON, ESCAPE_OR_CLOSE] {
+            assert_eq!(answer_for(Ok(button)), ReviewAnswer::Declined, "{button}");
+        }
+        for button in [0, 1, 6, 7] {
+            assert!(
+                matches!(answer_for(Ok(button)), ReviewAnswer::Failed(_)),
+                "{button}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_system_call_is_a_failure_and_never_a_decline() {
+        const E_FAIL: i32 = 0x8000_4005_u32 as i32;
+        assert!(matches!(
+            answer_for(button_from(E_FAIL, 0)),
+            ReviewAnswer::Failed(_)
+        ));
+        assert_eq!(
+            answer_for(button_from(0, CANCEL_BUTTON)),
+            ReviewAnswer::Declined
+        );
+        assert_eq!(
+            answer_for(button_from(0, CONFIRM_BUTTON)),
+            ReviewAnswer::Approved
+        );
+    }
+
+    struct Panics;
+    impl ReviewDialog for Panics {
+        fn show(&self, _: &ReviewText) -> Result<i32, ReviewFailure> {
+            panic!("the window worker failed")
+        }
+    }
+
+    #[test]
+    fn a_worker_failure_in_the_review_window_is_a_failure_and_never_a_decline() {
+        let answer = review_names(&Panics, "Title", "Body", &[], "Go", false);
+        assert!(matches!(answer, ReviewAnswer::Failed(_)), "{answer:?}");
+    }
+
     struct Recording(std::sync::Mutex<Vec<ReviewText>>);
     impl ReviewDialog for Recording {
         fn show(&self, review: &ReviewText) -> Result<i32, ReviewFailure> {
@@ -358,6 +411,33 @@ mod tests {
         assert_eq!(shown[0].text, "Body:\n  ONE\n  TWO");
         assert_eq!(shown[0].confirm_label, "Approve");
         assert!(shown[0].warning);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_real_window_config_has_cancel_as_its_default_button() {
+        use windows_sys::Win32::UI::Controls::TDF_ALLOW_DIALOG_CANCELLATION;
+        let text = DialogText::new(&ReviewText {
+            title: "Title".into(),
+            text: "Body".into(),
+            warning: true,
+            confirm_label: "Go".into(),
+        });
+        let config = text.config(0);
+        let (default_button, count, flags) = ({ config.nDefaultButton }, { config.cButtons }, {
+            config.dwFlags
+        });
+        assert_eq!(default_button, CANCEL_BUTTON);
+        assert_eq!(count, 2);
+        assert_ne!(
+            flags & TDF_ALLOW_DIALOG_CANCELLATION,
+            0,
+            "Escape and close stay available"
+        );
+        // SAFETY: the config points into `text`, which is alive, and holds two buttons.
+        let buttons = unsafe { std::slice::from_raw_parts({ config.pButtons }, 2) };
+        let ids: Vec<i32> = buttons.iter().map(|button| button.nButtonID).collect();
+        assert_eq!(ids, [CONFIRM_BUTTON, CANCEL_BUTTON]);
     }
 
     /// Reads a review's text back. If this is a true inverse, two different names can never

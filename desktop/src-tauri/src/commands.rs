@@ -996,7 +996,10 @@ fn run_import(
                 session.record_import(ticket, &operation, OperationWarningKind::ImportDeclined);
                 return Ok(None);
             }
-            ReviewAnswer::Failed(failure) => return Err(failure.into()),
+            ReviewAnswer::Failed(failure) => {
+                session.record_import(ticket, &operation, OperationWarningKind::ImportFailed);
+                return Err(failure.into());
+            }
         }
     }
     // The write is bound to the session and the revision of the request: a lock, another
@@ -1386,6 +1389,48 @@ mod tests {
             .unwrap();
         assert_eq!(error.kind, "locked");
         assert!(confirm.shown().is_empty());
+    }
+
+    fn import_notice_for(session: &Session, operation: &str) -> Option<serde_json::Value> {
+        notices(session)
+            .into_iter()
+            .find(|record| record["id"] == operation)
+    }
+
+    /// Runs one import whose reply is dropped, as a page that lost the reply would.
+    fn import_with_lost_reply(
+        session: &Session,
+        confirm: &ScriptedConfirm,
+    ) -> (String, Result<Option<ImportReport>, CommandError>) {
+        let operation = new_operation();
+        let reply = run_import(
+            session,
+            confirm,
+            &owner(session),
+            &operation,
+            Zeroizing::new("TOKEN=fake-unapplied\n".into()),
+            Some("app".into()),
+            Some("dev".into()),
+        );
+        (operation, reply)
+    }
+
+    #[test]
+    fn a_failed_import_window_is_an_error_and_never_a_decline() {
+        let (session, directory) = test_session();
+        let confirm = ScriptedConfirm::new(true).failing(crate::review_window::ReviewFailure::new(
+            "TaskDialogIndirect failed",
+        ));
+        let (operation, reply) = import_with_lost_reply(&session, &confirm);
+        assert_eq!(reply.err().unwrap().kind, "reviewFailed");
+        let record = import_notice_for(&session, &operation).expect("no native outcome record");
+        assert_eq!(record["kind"], "importFailed");
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
     }
 
     #[test]

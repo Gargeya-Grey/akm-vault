@@ -1130,6 +1130,20 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_review_window_is_an_error_and_starts_nothing() {
+        let fixture = fake_vault(&DEV);
+        let host = FakeHost::choosing(fixture.directory.path());
+        *host.window_result.lock().unwrap() = Some(ReviewFailure::new("TaskDialogIndirect failed"));
+        let error = launch(&fixture, &host).err().unwrap();
+        assert_eq!(error.kind, "reviewFailed");
+        assert!(host.launched().is_empty());
+        assert!(!fixture
+            .journal_actions()
+            .iter()
+            .any(|action| action == "run-requested"));
+    }
+
+    #[test]
     fn case_3_declining_in_the_review_records_nothing_and_starts_nothing() {
         let fixture = fake_vault(&DEV);
         let host = FakeHost::choosing(fixture.directory.path());
