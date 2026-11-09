@@ -48,6 +48,34 @@ Each CI run uploads its own build with a `SHA256SUMS.txt`, and keeps it for 90 d
 | P2R2-03 delayed discard reaches session B (B) | A discard without an identity reaches only the current session. | `view_discard` carries its session ID; a failed discard locks only that session. |
 | P2R2-04 clone replacement mixes journals (B) | The root UUID names one vault. | A fingerprint that this device has seen belongs to the journal that saw it; only an unseen one falls back to the root UUID. |
 
+## Paused run (owner, 2026-11-09)
+
+The owner stopped the "fix every finding" run at this safe step, to continue later with stronger models. Each branch below is committed and local. Nothing since `e1e2c94` is pushed or merged. The score stays 66.25/100: no new full review ran.
+
+| Branch | Head | Holds | Review state | Checks |
+|---|---|---|---|---|
+| `ui/key-cabinet` (PR 9) | this commit | Select list, full rows, issuer and unique ID | [Review 4](reviews/2026-11-09-look-review4.md) failed: 2 P2, 2 P3. Patching stopped. | At `daf160d`: `tsc`, `npm test` 396, build, `test:ui` 96, `check_docs` passed. |
+| `fix/terminal-rework` (rework of PR 10) | `4c3ebf7` | T-R2 fixes, amended contract 11, merge of `f76bd5a` | Review 3 failed: 6 P2, 1 P3 (`docs/reviews/2026-11-09-terminal-review3.md` and the T-R3 rows on that branch). Patching stopped. | At `f558a03`, reported by its worker: Rust 535 passed, `npm test` 405, `test:ui` 81. |
+| `fix/core-findings` | `2c0a79a` | FR-01, 02, 05, 08, 12, 15, 16, 17, 18, 22, 28, P2R2-07 | No review. | Reported by its worker: fmt and Clippy clean, Rust 509 passed, 0 failed, 2 ignored, `check_docs` passed. |
+| `fix/tools-docs` | `edbc317` | FR-06, 07, 09, 10, 23, 24, 25, 27, SEC-02, 04, 05, 2-W-01 wording | No review. | Reported by its worker. |
+| `fix/score-findings` | `2d8e013` | FR-03, FR-04, FR-14, on top of the terminal rework at `20e3621` | No review. | Not known. The worker was cancelled during its mutant checks and gave no report. Run the full checks first. |
+
+Not done: the merge of these branches, the full check run on the merged tree, the combined review, real-window proofs, a new setup program and a new score. GitHub billing still blocks CI.
+
+**Owner's decisions that come first:**
+
+1. Rows (item 0 below): option (a), (b) or (c).
+2. Terminal launch, stop rule. Windows cannot cancel a process start that has begun, so AKM cannot promise both a prompt lock and no terminal start after a lock. Should AKM (a) accept the named limit that a stalled process start can delay a lock, and fix the other five P2 findings; (b) remove the terminal launch and keep the key history; or (c) keep the pull request unmerged until a redesign?
+
+**When the run continues:**
+
+- Treat every fix above as fixed, not accepted, until the combined review passes.
+- Merge `fix/core-findings` and `fix/tools-docs` into `fix/score-findings`. The first merge closes `GIT_EDITOR` at the source (T-R3-02); that finding still needs a test through the launch path.
+- `desktop/src-tauri/src/session.rs` maps the two new warnings `FilePermissions` and `JournalLineageUnconfirmed` to older notices, whose text is partly wrong. Give each one its own notice in `session.rs`, `types.ts` and `App.tsx`.
+- `fix/tools-docs` moved the evidence and KeePassXC defaults. Update `.agents/skills/verify-akm/SKILL.md` and `docs/TESTING.md` to match.
+- `THIRD_PARTY_NOTICES.md` still lacks the licence texts, and T-R1-08 lacks its foreign-KDBX-to-IPC regression test.
+- Then run the full checks in [TESTING.md](TESTING.md), one review of the combined unit, and a new full review for a score.
+
 ## Next action
 
 0. **Stop rule, rows (2026-11-09).** The owner chose the select-list rework, rows that show each fact in full, and after [review 3](reviews/2026-11-09-look-review3.md) the issuer and unique ID on each Recycle Bin row, with one last review and a report if it failed. [Review 4](reviews/2026-11-09-look-review4.md) found no defect in the select list or the Recycle Bin, and failed on 2 P2 and 2 P3 (LOOK-R4 rows). Patching stopped. The design question for the owner: should AKM (a) make one small fix for LOOK-R4-01 and LOOK-R4-02, with no further review; (b) get another review after that fix; or (c) keep this state and accept the four findings? Merging pull request 9 waits for that answer.
