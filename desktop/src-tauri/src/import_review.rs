@@ -4,7 +4,10 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     error::CommandError,
-    review_window::{review_name, review_names, NativeReviewDialog, ReviewAnswer, ReviewDialog},
+    review_window::{
+        check_shown_in_full, review_name, review_names, NativeReviewDialog, ReviewAnswer,
+        ReviewDialog,
+    },
 };
 
 /// One dialog lists every change. A bigger import is refused instead of cut short,
@@ -31,6 +34,14 @@ impl ImportReview {
                 ),
             ));
         }
+        check_shown_in_full(
+            [project.as_str(), environment.as_str()].into_iter().chain(
+                preview
+                    .changes
+                    .iter()
+                    .flat_map(|change| [change.name.as_str(), change.title.as_str()]),
+            ),
+        )?;
         Ok(Self {
             project,
             environment,
@@ -200,6 +211,33 @@ mod tests {
         assert!(!message.contains("\nKeep unchanged"), "{message}");
         assert!(!message.contains("\nAdd 9:"), "{message}");
         assert!(!message.contains('\u{202e}'), "{message}");
+    }
+
+    #[test]
+    fn a_name_too_long_to_show_in_full_is_refused_before_the_import_review() {
+        let long = "x".repeat(400);
+        let preview = |name: &str, title: &str| ImportPreview {
+            added: 1,
+            updated: 0,
+            unchanged: 0,
+            changes: vec![change(name, title, "add")],
+        };
+        for (project, environment, name, title) in [
+            (long.as_str(), "dev", "OK", "OK"),
+            ("app", long.as_str(), "OK", "OK"),
+            ("app", "dev", long.as_str(), "OK"),
+            ("app", "dev", "OK", long.as_str()),
+        ] {
+            let error = ImportReview::new(
+                project.to_string(),
+                environment.to_string(),
+                preview(name, title),
+            )
+            .err()
+            .unwrap();
+            assert_eq!(error.kind, "tooLarge");
+            assert!(!error.message.contains(&long));
+        }
     }
 
     #[test]

@@ -9,7 +9,6 @@ use crate::error::CommandError;
 pub const CONFIRM_BUTTON: i32 = 1000;
 pub const CANCEL_BUTTON: i32 = 1001;
 /// Enter at the moment the window appears must not approve anything.
-#[cfg(windows)]
 const DEFAULT_BUTTON: i32 = CANCEL_BUTTON;
 /// Windows answers Escape and the close button with this id, because the window is created with
 /// `TDF_ALLOW_DIALOG_CANCELLATION`.
@@ -79,6 +78,9 @@ pub fn review_names(
     confirm_label: &str,
     warning: bool,
 ) -> ReviewAnswer {
+    if check_shown_in_full(names.iter().map(String::as_str)).is_err() {
+        return ReviewAnswer::Failed(ReviewFailure::new("a name is too long to show in full"));
+    }
     let review = ReviewText {
         title: title.to_string(),
         text: review_text(body, names),
@@ -108,57 +110,89 @@ fn answer_for(shown: Result<i32, ReviewFailure>) -> ReviewAnswer {
     }
 }
 
-const LONGEST_NAME: usize = 80;
+/// The longest name, as shown, that a review can hold. A longer one is refused before any window
+/// opens, because a review never cuts a name short.
+pub const LONGEST_SHOWN_NAME: usize = 256;
 
-fn hidden_from_the_reader(c: char) -> bool {
-    c.is_control()
-        || matches!(
-            c,
-            '\u{ad}'
-                | '\u{61c}'
-                | '\u{180e}'
-                | '\u{200b}'..='\u{200f}'
-                | '\u{2028}'..='\u{202e}'
-                | '\u{2060}'..='\u{206f}'
-                | '\u{feff}'
-                | '\u{fff9}'..='\u{fffb}'
-                | '\u{e0000}'..='\u{e007f}'
-        )
-}
-
-fn push_visible(out: &mut String, c: char) {
-    if hidden_from_the_reader(c) {
-        out.push_str(&format!("\\u{{{:x}}}", c as u32));
-    } else {
-        out.push(c);
+/// A character is shown as itself only if it is on this list. Anything else, known or not, is
+/// shown as an escape, so a character that a list of invisible ones forgot cannot hide.
+fn shown_as_itself(c: char) -> bool {
+    match c {
+        ' '..='~' => true,
+        _ if c.is_ascii() => false,
+        // Letters by their Unicode class, but they draw nothing.
+        '\u{115f}' | '\u{1160}' | '\u{3164}' | '\u{ffa0}' => false,
+        _ => c.is_alphanumeric(),
     }
 }
 
-/// A name from the vault or the page, for the text of a review. It stays on its line and inside
-/// its quotation marks, so that it cannot pass for another line of the review.
+fn push_escaped(out: &mut String, c: char) {
+    out.push_str(&format!("\\u{{{:x}}}", c as u32));
+}
+
+fn space_could_hide(chars: &[char], index: usize) -> bool {
+    index == 0 || index + 1 == chars.len() || chars[index - 1] == ' '
+}
+
+fn push_visible(out: &mut String, chars: &[char], index: usize) {
+    let c = chars[index];
+    if shown_as_itself(c) && !(c == ' ' && space_could_hide(chars, index)) {
+        out.push(c);
+    } else {
+        push_escaped(out, c);
+    }
+}
+
+/// A name from the vault or the page, for the text of a review. It is shown whole. It stays on
+/// its line and inside its quotation marks. The escapes can be read back without doubt, so two
+/// different names never read the same.
 pub fn review_name(raw: &str) -> String {
+    let chars: Vec<char> = raw.chars().collect();
     let mut out = String::new();
-    for (index, c) in raw.chars().enumerate() {
-        if index == LONGEST_NAME {
-            out.push_str(&format!("… ({} characters)", raw.chars().count()));
-            break;
-        }
-        if c == '"' {
-            out.push_str("\\\"");
-        } else {
-            push_visible(&mut out, c);
+    for (index, c) in chars.iter().enumerate() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => push_visible(&mut out, &chars, index),
         }
     }
     out
+}
+
+/// Refuses a name that a review could not show in full.
+pub fn check_shown_in_full<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+) -> Result<(), CommandError> {
+    if names
+        .into_iter()
+        .any(|name| review_name(name).chars().count() > LONGEST_SHOWN_NAME)
+    {
+        return Err(CommandError::new(
+            "tooLarge",
+            format!(
+                "A name in this request is longer than the {LONGEST_SHOWN_NAME} characters that a confirmation window can show in full, so nothing was done."
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// A path for the text of a review. It is shown whole, because the person approves that folder.
+/// Its backslashes stay as they are. `show_exactly` refuses a path that this text could not
+/// tell apart from another one.
 pub fn review_path(path: &Path) -> String {
+    let chars: Vec<char> = path.display().to_string().chars().collect();
     let mut out = String::new();
-    for c in path.display().to_string().chars() {
-        push_visible(&mut out, c);
+    for index in 0..chars.len() {
+        push_visible(&mut out, &chars, index);
     }
     out
+}
+
+/// Whether `review_path` can show this path exactly. A path that is not valid Unicode has no
+/// exact text, and the literal text of an escape would read the same as a real hidden character.
+pub fn show_exactly(path: &Path) -> bool {
+    path.to_str().is_some_and(|text| !text.contains("\\u{"))
 }
 
 /// The real window, with the main window of the app as its owner.
@@ -295,21 +329,182 @@ mod tests {
         for button in [CANCEL_BUTTON, ESCAPE_OR_CLOSE, 0, 1] {
             assert!(!approved(button), "{button}");
         }
+        assert!(!approved(DEFAULT_BUTTON));
+    }
+
+    struct Recording(std::sync::Mutex<Vec<ReviewText>>);
+    impl ReviewDialog for Recording {
+        fn show(&self, review: &ReviewText) -> Result<i32, ReviewFailure> {
+            self.0.lock().unwrap().push(review.clone());
+            Ok(CONFIRM_BUTTON)
+        }
+    }
+
+    #[test]
+    fn review_names_lists_each_name_in_the_window_and_returns_the_answer() {
+        let dialog = Recording(std::sync::Mutex::new(Vec::new()));
+        let answer = review_names(
+            &dialog,
+            "Title",
+            "Body:",
+            &["ONE".into(), "TWO".into()],
+            "Approve",
+            true,
+        );
+        assert_eq!(answer, ReviewAnswer::Approved);
+        let shown = dialog.0.lock().unwrap().clone();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].title, "Title");
+        assert_eq!(shown[0].text, "Body:\n  ONE\n  TWO");
+        assert_eq!(shown[0].confirm_label, "Approve");
+        assert!(shown[0].warning);
+    }
+
+    /// Reads a review's text back. If this is a true inverse, two different names can never
+    /// read the same.
+    fn decoded(shown: &str) -> Option<String> {
+        let mut out = String::new();
+        let mut chars = shown.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            match chars.next()? {
+                '\\' => out.push('\\'),
+                '"' => out.push('"'),
+                'u' => {
+                    if chars.next()? != '{' {
+                        return None;
+                    }
+                    let hex: String = chars.by_ref().take_while(|c| *c != '}').collect();
+                    out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
+                }
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+
+    const AWKWARD: [char; 18] = [
+        '\\',
+        '"',
+        'u',
+        '{',
+        '}',
+        '2',
+        'e',
+        'a',
+        ' ',
+        '\n',
+        '\u{202e}',
+        '\u{200b}',
+        '\u{feff}',
+        '\u{a0}',
+        '\u{3164}',
+        '\u{fe0f}',
+        '\u{e0001}',
+        '\u{1f511}',
+    ];
+
+    fn every_awkward_string(longest: usize) -> Vec<String> {
+        let mut all = vec![String::new()];
+        let mut last = vec![String::new()];
+        for _ in 0..longest {
+            let mut next = Vec::new();
+            for prefix in &last {
+                for c in AWKWARD {
+                    next.push(format!("{prefix}{c}"));
+                }
+            }
+            all.extend(next.iter().cloned());
+            last = next;
+        }
+        all
+    }
+
+    #[test]
+    fn two_different_names_never_give_the_same_review_text() {
+        let mut seen = std::collections::HashMap::new();
+        for name in every_awkward_string(3) {
+            let shown = review_name(&name);
+            assert_eq!(decoded(&shown).as_deref(), Some(name.as_str()), "{shown}");
+            if let Some(other) = seen.insert(shown.clone(), name.clone()) {
+                panic!("{name:?} and {other:?} both read {shown:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn invisible_and_format_characters_are_never_shown_as_themselves() {
+        for hidden in [
+            '\u{ad}',
+            '\u{34f}',
+            '\u{61c}',
+            '\u{115f}',
+            '\u{1160}',
+            '\u{17b4}',
+            '\u{17b5}',
+            '\u{180e}',
+            '\u{200b}',
+            '\u{200c}',
+            '\u{200d}',
+            '\u{200e}',
+            '\u{200f}',
+            '\u{2028}',
+            '\u{2029}',
+            '\u{202a}',
+            '\u{202e}',
+            '\u{202f}',
+            '\u{205f}',
+            '\u{2060}',
+            '\u{2066}',
+            '\u{206f}',
+            '\u{2800}',
+            '\u{3000}',
+            '\u{3164}',
+            '\u{fe00}',
+            '\u{fe0f}',
+            '\u{feff}',
+            '\u{ffa0}',
+            '\u{fff9}',
+            '\u{1d173}',
+            '\u{e0001}',
+            '\u{e0100}',
+            '\u{e000}',
+            '\u{f0000}',
+            '\u{10ffff}',
+        ] {
+            let name = format!("a{hidden}b");
+            let shown = review_name(&name);
+            assert!(!shown.contains(hidden), "{:x}: {shown}", hidden as u32);
+            assert!(
+                shown.contains(&format!("\\u{{{:x}}}", hidden as u32)),
+                "{shown}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_space_that_could_hide_is_shown_as_an_escape() {
+        assert_eq!(review_name(" a"), "\\u{20}a");
+        assert_eq!(review_name("a "), "a\\u{20}");
+        assert_eq!(review_name("a  b"), "a \\u{20}b");
+        assert_eq!(review_name("a b"), "a b");
     }
 
     #[test]
     fn a_name_stays_on_its_line_and_inside_its_quotes() {
         let shown = review_name("demo\"\nFolder: C:\\trusted\u{202e}");
-        assert_eq!(shown, "demo\\\"\\u{a}Folder: C:\\trusted\\u{202e}");
+        assert_eq!(shown, "demo\\\"\\u{a}Folder: C:\\\\trusted\\u{202e}");
     }
 
     #[test]
-    fn ordinary_names_are_unchanged_and_a_long_one_says_how_long_it_is() {
+    fn ordinary_names_are_unchanged_and_a_long_one_is_shown_whole() {
         assert_eq!(review_name("my-app (staging)"), "my-app (staging)");
         assert_eq!(review_name("Müller 東京"), "Müller 東京");
-        let shown = review_name(&"x".repeat(500));
-        assert!(shown.starts_with(&"x".repeat(80)), "{shown}");
-        assert!(shown.ends_with("… (500 characters)"), "{shown}");
+        let long = "x".repeat(500);
+        assert_eq!(review_name(&long), long);
     }
 
     #[test]

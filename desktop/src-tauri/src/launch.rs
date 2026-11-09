@@ -15,7 +15,8 @@ use crate::{
     error::CommandError,
     import_review::MAX_REVIEWED_CHANGES,
     review_window::{
-        review_name, review_names, review_path, NativeReviewDialog, ReviewAnswer, ReviewDialog,
+        check_shown_in_full, review_name, review_names, review_path, show_exactly,
+        NativeReviewDialog, ReviewAnswer, ReviewDialog,
     },
     session::{Access, Held, Session},
     views::clean,
@@ -320,6 +321,12 @@ fn planned_names(
     let plan = vault.plan_env(Some(project), Some(environment), false)?;
     let names: Vec<String> = plan.names().map(str::to_owned).collect();
     check_names(&names)?;
+    check_shown_in_full(
+        names
+            .iter()
+            .map(String::as_str)
+            .chain([project, environment]),
+    )?;
     Ok(names)
 }
 
@@ -333,6 +340,12 @@ fn checked_folder(folder: PathBuf) -> Result<PathBuf, CommandError> {
         return Err(CommandError::new(
             "invalidPath",
             "A terminal cannot start in a network folder (\\\\server\\share). Choose a folder on a local drive.",
+        ));
+    }
+    if !show_exactly(&folder) {
+        return Err(CommandError::new(
+            "invalidPath",
+            "The path of that folder cannot be shown exactly in the confirmation window. Choose another folder.",
         ));
     }
     if !folder.is_dir() {
@@ -1008,6 +1021,112 @@ mod tests {
         assert!(message.contains("\nFolder: C:/real\n"), "{message}");
         assert!(!message.contains('\u{202e}'), "{message}");
         assert!(message.contains("\\u{202e}"), "{message}");
+    }
+
+    /// The text of both reviews for one name, as the windows would show it.
+    fn both_reviews(name: &str) -> [String; 2] {
+        let launch = LaunchReview::new(
+            "app".into(),
+            "dev".into(),
+            PathBuf::from("C:/work"),
+            vec![name.to_string()],
+        );
+        let import = crate::import_review::ImportReview::new(
+            "app".into(),
+            "dev".into(),
+            akm_core::ImportPreview {
+                added: 1,
+                updated: 0,
+                unchanged: 0,
+                changes: vec![akm_core::model::ImportChange {
+                    name: name.into(),
+                    title: name.into(),
+                    action: "add".into(),
+                }],
+            },
+        )
+        .unwrap();
+        [
+            review_text(&launch.body(), launch.names()),
+            import.message(),
+        ]
+    }
+
+    #[test]
+    fn names_that_differ_only_after_80_characters_read_differently_in_both_reviews() {
+        let prefix = "A".repeat(80);
+        let (first, second) = (format!("{prefix}_ONE"), format!("{prefix}_TWO"));
+        let (one, two) = (both_reviews(&first), both_reviews(&second));
+        for review in 0..2 {
+            assert_ne!(one[review], two[review], "review {review}");
+            assert!(one[review].contains(&first), "review {review}: not in full");
+        }
+    }
+
+    #[test]
+    fn a_real_control_character_and_its_literal_text_read_differently_in_both_reviews() {
+        for (real, literal) in [
+            ("dev\u{202e}", "dev\\u{202e}"),
+            ("a\u{200b}b", "a\\u{200b}b"),
+            ("\u{feff}x", "\\u{feff}x"),
+        ] {
+            let (real, literal) = (both_reviews(real), both_reviews(literal));
+            for review in 0..2 {
+                assert_ne!(real[review], literal[review], "{}", real[review]);
+                for hidden in ['\u{202e}', '\u{200b}', '\u{feff}'] {
+                    assert!(!real[review].contains(hidden), "{}", real[review]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_name_too_long_to_show_in_full_is_refused_before_any_dialog() {
+        let long: &'static str = Box::leak("x".repeat(400).into_boxed_str());
+        let fixture = fake_vault(&[("Long", "TOKEN", long, "dev", "fake-long")]);
+        let host = FakeHost::choosing(fixture.directory.path());
+        let error = run_launch(
+            &fixture.session,
+            &host,
+            &fixture.session_id(),
+            Some(long.into()),
+            Some("dev".into()),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.kind, "tooLarge");
+        assert!(!error.message.contains(long), "{}", error.message);
+        assert_nothing_happened(&fixture, &host, &[]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_that_a_review_could_not_show_exactly_is_refused_before_the_review() {
+        use std::os::windows::ffi::OsStringExt;
+        let fixture = fake_vault(&DEV);
+        let literal = fixture.directory.path().join("u{202e}");
+        std::fs::create_dir(&literal).unwrap();
+        assert!(literal.is_dir());
+        let host = FakeHost::choosing(&literal);
+        let error = launch(&fixture, &host).err().unwrap();
+        assert_eq!(error.kind, "invalidPath");
+        assert!(
+            error.message.contains("cannot be shown exactly"),
+            "{}",
+            error.message
+        );
+        assert_nothing_happened(&fixture, &host, &["window", "folder"]);
+
+        let surrogate = PathBuf::from(OsString::from_wide(&[0x43, 0x3a, 0x5c, 0xd800]));
+        let host = FakeHost::choosing(&surrogate);
+        let error = launch(&fixture, &host).err().unwrap();
+        assert_eq!(error.kind, "invalidPath");
+        assert!(
+            error.message.contains("cannot be shown exactly"),
+            "{}",
+            error.message
+        );
+        assert_nothing_happened(&fixture, &host, &["window", "folder"]);
     }
 
     #[test]
