@@ -1,12 +1,16 @@
 # AKM: a Windows API-key manager
 
-**Untrusted development build. Use fake keys only.** The initial adversarial
-review scored the implementation 40.5/100, rounded to 41. See the
-[baseline review](docs/reviews/2026-10-30-baseline.md). Fixing the reported bugs
+**Untrusted development build. Use fake keys only.** The latest full review
+scored the implementation 66.25/100 on 9 November 2026. See the
+[full rescore](docs/reviews/2026-11-09-full-rescore.md). The
+[baseline review](docs/reviews/2026-10-30-baseline.md) scored 40.5/100. Fixing the reported bugs
 does not itself establish a new score or certify security. The release gate is an
 independent re-review above 90, followed by real-use testing before wider
 distribution. Current status: [docs/STATE.md](docs/STATE.md). The owner's own use
 before that gate follows [docs/FIRST_USE.md](docs/FIRST_USE.md).
+
+**New here?** [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) shows how to install
+AKM and add your first key, with no command line.
 
 AKM is for a Windows developer who wants a local, account-free KeePass file plus
 API-key fields and process-environment injection. KeePassXC, 1Password CLI and

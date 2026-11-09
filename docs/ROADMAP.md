@@ -90,6 +90,7 @@ Acceptance: expired, overdue, unknown-date and no-key states; locked and hidden 
 - Keep KeePassXC coverage. Add a pinned kdbxweb reader and writer suite where the format allows.
 - Run the cross-reader fixtures for history, delete, attachments, the journal and scoped env on the exact rebuilt build.
 - Run a new full review over all nine areas of the baseline rubric, with independent security, architecture and premise, and correctness reviewers. Count each root cause once. State how many reviewers ran.
+- Done on 2026-11-09: five independent reviewers scored `c0a7d3b` at 66.25/100 ([record](reviews/2026-11-09-full-rescore.md)). The kdbxweb and KeePassXC suites passed on that build. The open work is the FR rows in [FINDINGS.md](FINDINGS.md). A later score needs a new full review.
 
 ## Security proposals (not authorized)
 

@@ -2,7 +2,7 @@
 
 This document states which attackers AKM stops, which it makes harder, and which it does not help. It describes the code as it is on 2026-11-07. It extends the trust boundaries in [PROJECT.md](PROJECT.md#non-goals-and-trust-boundaries). It adds no promise that the code does not already keep.
 
-AKM has had no professional audit, and the only measured score is 40.5/100 ([baseline review](reviews/2026-10-30-baseline.md)). Open defects are in [FINDINGS.md](FINDINGS.md). Do not use real secrets before the release gate in [AGENTS.md](../AGENTS.md).
+AKM has had no professional audit, and the latest measured score is 66.25/100 ([full rescore](reviews/2026-11-09-full-rescore.md)). Open defects are in [FINDINGS.md](FINDINGS.md). Do not use real secrets before the release gate in [AGENTS.md](../AGENTS.md).
 
 ## How to read this document
 

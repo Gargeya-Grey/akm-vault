@@ -325,7 +325,9 @@ function Invoke-FilterOption($ownedIds, $combo, [string]$value) {
       if (!$item.Current.IsEnabled -or $item.Current.IsOffscreen) { continue }
       $action = $null
       if ($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$action)) {
-        $action.Invoke()
+        # The element can go away during the call when the list closes or the view reloads.
+        # Select-Filter reads the field after this, and tries again if the value did not stick.
+        try { $action.Invoke() } catch { Write-Output "RETRY: the option '$value' went away during Invoke: $($_.Exception.Message)" | Out-Host }
         return $true
       }
       if ($item.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$action)) {
@@ -414,7 +416,8 @@ function Select-FilterOnce([string]$label, [string]$value) {
         $stage = 'no-expand-pattern'; $detail = 'ExpandCollapse is not exposed yet'
       } else {
         $stage = 'expand-failed'
-        $expand.Expand()
+        # The field toggles AKM's list, so a second Expand would close a list that is open.
+        if ($expand.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) { $expand.Expand() }
         $stage = 'option-missing'; $detail = "no enabled option named '$value' was found"
         $ownedIds = Get-OwnedProcessIds
         $scanUntil = [DateTime]::UtcNow.AddSeconds(5)
@@ -423,7 +426,9 @@ function Select-FilterOnce([string]$label, [string]$value) {
           if (Invoke-FilterOption $ownedIds $combo $value) { return }
           Start-Sleep -Milliseconds 100
         } while ([DateTime]::UtcNow -lt $scanUntil)
-        try { $expand.Collapse() } catch { }
+        try {
+          if ($expand.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Expanded) { $expand.Collapse() }
+        } catch { }
       }
     } catch {
       $detail = $_.Exception.Message

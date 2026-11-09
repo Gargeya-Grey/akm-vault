@@ -1,6 +1,6 @@
 # Current state
 
-Updated 2026-11-08. Replace this file's sections when they change. History lives in Git.
+Updated 2026-11-09. Replace this file's sections when they change. History lives in Git.
 
 ## Status
 
@@ -10,34 +10,34 @@ Updated 2026-11-08. Replace this file's sections when they change. History lives
 - **GitHub Actions is on** (owner, 2026-11-07). **CI is green on the PR #7 merge `ee7b353`** ([run 42453604620](https://github.com/Gargeya-Grey/akm-vault/actions/runs/42453604620)). **CI is green on `4f88b3a`** ([run 42402999565](https://github.com/Gargeya-Grey/akm-vault/actions/runs/42402999565), all 27 steps). A later docs-only run failed because the CI cache restored the fake test journal folder without its private permissions (P2R2-06); CI now removes that folder first, and the run on `0ac81a7` is green. The four earlier runs failed for four separate reasons, each fixed: tests that compared raw temp paths on the runner's `RUNNER~1` path (P2R2-06; `d628130`, and CI now uses a temp path without short names); the fetch tool missed the root of the current folder's drive (`7ec9166`); and a lint that only a newer Clippy has (`4f88b3a` pins CI to Rust 1.90.0, the local toolchain).
 - **The owner will use AKM for their own keys before the release gate.** [FIRST_USE.md](FIRST_USE.md) gives the precautions and the six tests that need the owner present.
 - **Unit 1a: source accepted; work unit complete: NO.** R4-04 (open P1) is still deferred.
-- **UI rebuild in progress on branch `ui/key-cabinet`** (owner, 2026-11-08). Every screen is new; the design is in [desktop/DESIGN.md](../desktop/DESIGN.md). A new Use keys view holds .env export and import, which left Settings. The session logic and every accessible name that the proofs use are unchanged. One per-user NSIS setup program replaces the MSI and NSIS pair. Its review is one Codex review.
+- **UI rebuild in progress on branch `ui/key-cabinet`** (owner, 2026-11-08). Every screen is new; the design is in [desktop/DESIGN.md](../desktop/DESIGN.md). A new Use keys view holds .env export and import, which left Settings. The session logic and every accessible name that the proofs use are unchanged. One per-user NSIS setup program replaces the MSI and NSIS pair. Next on that branch: one Codex review, then the app view for launching a program with keys, so that a user needs no command line.
 - **Terminal and history on branch `feat/terminal-and-history`** (on top of `ui/key-cabinet`). **Open terminal with keys…** opens the system command prompt with one project's keys, and a key's drawer lists its earlier versions, with times and field names only. The design and its failure cases are in [docs/design/launch-with-keys.md](design/launch-with-keys.md). The real windows of this flow are an owner-present test ([FIRST_USE.md](FIRST_USE.md)). A unit test starts a real, windowless child process. Reviews [1](reviews/2026-11-08-terminal-review1.md) and [2](reviews/2026-11-08-terminal-review2.md) failed (T-R1 and T-R2 rows in [FINDINGS.md](FINDINGS.md)), so patching stopped (AGENTS.md).
 - **Owner decision, contract 11.** [PROJECT.md](PROJECT.md) says "Release the vault before starting a child." The desktop session stays open while a terminal runs. The contract is unchanged until the owner decides: amend it for the desktop, or add a native step that releases the vault first. The vault lock is released before the start, and the child inherits no vault handle (a test reads the inherit flag) and no `AKM_*` variable. The decrypted vault stays in AKM's memory while AKM is unlocked.
-- **No new score exists.** The only measured score is 40.5/100 ([baseline review](reviews/2026-10-30-baseline.md)). The full rescore of unit 5 needs several reviewers and waits for the owner.
+- **The latest measured score is 66.25/100** ([full rescore](reviews/2026-11-09-full-rescore.md), 2026-11-09, on `c0a7d3b`, by five independent GPT-6.1 Terra reviewers at max effort; one duplicate root cause was removed from a raw 64.25). The baseline was 40.5/100. The bar is above 90/100, so real secrets still wait. The new defects are the FR rows in [FINDINGS.md](FINDINGS.md). The scale may differ from the baseline's.
+- **New look on branch `ui/key-cabinet`** (owner, 2026-11-08). The owner gave the design of their product Odicto as the model, and rejected the large brass keys. Every screen now uses glass panels, sunken fields, one accent and the glowing stem. A key is a fine 28 px line drawing. The fonts are the same. The design is in [desktop/DESIGN.md](../desktop/DESIGN.md). New users have [GETTING_STARTED.md](GETTING_STARTED.md). The steps on that page come from the screens and the setup configuration: nobody has run the setup program on a clean computer yet. An open select is now AKM's own list; the real select stays as the field. [Look review 1](reviews/2026-11-08-look-review1.md) failed with 4 P2 and 4 P3 (LOOK-R1 rows); all eight are fixed with tests that failed first and caught mutants. [Look review 2](reviews/2026-11-09-look-review2.md) failed with 2 P2 and 2 P3 (LOOK-R2 rows), so patching stopped (see "Next action"). A screen reader or UI Automation gets the system's list, because those tools could not drive AKM's own list (owner's choice, 2026-11-08). The UI-R2 findings stay open, and the choice between options (a), (b) and (c) in "Next action" stays with the owner. Pull request #10 must take the new `styles.css` in a merge.
 
 ## Last full check run
 
-On `3d663e0`, the head after the review 2 redesigns (2026-11-07, fake data only, Rust builds outside the repository). Later commits change docs, the fetch tool and its test (`7ec9166`), the CI workflow, and the test-only fake clipboard (`4f88b3a`); CI ran the full suite on `4f88b3a` and passed.
+On `c0a7d3b`, the head of `ui/key-cabinet` (2026-11-09, fake data only, Rust builds in `C:\akm-build`). Rust sources did not change after `3c4cf2a`.
 
-- Rust: `cargo fmt --check` and Clippy (`-D warnings`) clean. `cargo test --workspace --offline --locked --no-fail-fast` 475 passed, 0 failed, 2 ignored (the opt-in real-clipboard test and one gated test).
-- Frontend: `npm ci`, `npm test` (353 passed in 28 files), the production build, and `npm run test:ui` (51 passed, mocked native boundary).
-- Build: `npm run tauri -- build -- --locked --offline` built the GUI and the unsigned MSI and NSIS installers. None is installed.
-- Security checks: `check_no_network.py` PASS and its test; `check_dependencies.ps1` PASS, with the two Linux-only `cargo audit` warnings of SEC-01.
-- Real readers: KeePassXC 2.8.0 interchange PASS (rotation, Recycle Bin, restore, purge, stale-copy merges); kdbxweb all checks PASS, 0 FAIL.
-- Tools: `check_docs.py` PASS and its test; `test_fetch_keepassxc.ps1` 10 of 10 (after `ba628e8`: CI found a drive-root bug, fixed in the next commit); `test_proof_snapshot.ps1` all cases.
-- Native GUI proofs on these builds, after the verification skill's doctor check: `-JournalOnly` 27 checks PASS, `-JournalExportOnly` 9 checks PASS. No clipboard access, no minimize. The settings file was byte-identical afterwards (`dacba49a…9115`), and no `akm-desktop` process remained.
-- Not run: R4-04, the real clipboard test, the full native GUI proof, the native import dialog, the Windows toast and a real window hide. They need the owner present ([FIRST_USE.md](FIRST_USE.md)).
+- Rust, at `3c4cf2a`: `cargo fmt --check` and Clippy (`-D warnings`) clean. `cargo test --workspace --offline --locked --no-fail-fast` 476 passed, 0 failed, 2 ignored.
+- Frontend: `npm test` 374 passed in 30 files, the production build, and `npm run test:ui` 81 passed (mocked native boundary).
+- Security checks: `check_no_network.py` PASS and its test; `check_dependencies.ps1` PASS at `3c4cf2a`.
+- Real readers on the `akm.exe` below: KeePassXC 2.8.0 interchange PASS; kdbxweb 27 PASS, 0 FAIL.
+- Tools: `check_docs.py` PASS and its test; `test_proof_snapshot.ps1` all cases.
+- Native GUI proofs on the build below: `-JournalOnly` 27 checks PASS, `-JournalExportOnly` 9 checks PASS. No clipboard access, no minimize. The settings file was byte-identical afterwards (`dacba49a…9115`), and no `akm-desktop` process remained. Evidence: `W:\AKM-archive\proofs\20261108-193439-quiet-instrument`.
+- CI: green on `3c4cf2a` ([run 42509623631](https://github.com/Gargeya-Grey/akm-vault/actions/runs/42509623631)). At `c0a7d3b` the job did not start: GitHub reported a failed payment or a spending limit on the account.
+- Not run: R4-04, the real clipboard test, the full native GUI proof, the native import dialog, the Windows toast, a real window hide, install on a clean computer, real high-contrast themes and a real screen reader. They need the owner present ([FIRST_USE.md](FIRST_USE.md)).
 
 ## Builds under test
 
-Builds of `3d663e0`, all unsigned and not installed, SHA-256. The session build folder that held them is deleted; rebuild with the commands in [TESTING.md](TESTING.md) to compare.
+Builds of `c0a7d3b`, all unsigned and not installed by an agent, SHA-256.
 
-- `akm-desktop.exe` `bb551c2facc7610a67a6c5a315b1dc102c43802c1a34244d51246a79685135dd`
-- `akm.exe` `323ea48c98715bd8b556071cc13b1afe87559b83ae4b73bf66dfdb9e3dd2586f`
-- `AKM_0.1.0_x64_en-US.msi` `c312c6341c571812128fdaa0a072c9258ee0d8a65da67dd35034a9be74d86cec`
-- `AKM_0.1.0_x64-setup.exe` `a3dab48bc3aa5ed73b8e034782f6d7356c44faac4e496b4c86e79aada6f3f5b7`
+- `akm-desktop.exe` `5d6bd9cb4e5495691d74fab2b40fefc587cbc02689d5086b97804955774a49bd`
+- `akm.exe` `701f34f2155981e7397be083d81b87ff1cecc1331f39305486b366c4f7197bce`
+- `AKM_0.1.0_x64-setup.exe` `1f44ad9734f0a747d8a24637b9353e5d234788065962bd38b40ca04a57556e59`, in `W:\AKM-archive\installers\`
 
-Each CI run uploads its own build with a `SHA256SUMS.txt`, and keeps it for 90 days. Use the build of the newest run on `main`, or build it yourself ([FIRST_USE.md](FIRST_USE.md), step 1).
+Each CI run uploads its own build with a `SHA256SUMS.txt`, and keeps it for 90 days.
 
 ## Stop rule: the owner's decisions (2026-11-07)
 
@@ -52,11 +52,12 @@ Each CI run uploads its own build with a `SHA256SUMS.txt`, and keeps it for 90 d
 
 ## Next action
 
-0. **Stop rule, UI rebuild.** The branch failed two reviews ([review 1](reviews/2026-11-08-ui-rebuild-review1.md), [review 2](reviews/2026-11-08-ui-rebuild-review2.md)), so patching stopped (AGENTS.md). The design question for the owner: both reviews found that the new compact rows drop or clip facts that the old screens showed (class H). Should every row (a) show each fact in full, on more lines, and then get one more review; (b) get one more round of single fixes and a review; or (c) stay as it is, with the owner accepting the open findings UI-R2-01 to UI-R2-05? Merging and installing wait for that answer.
+0. **Stop rule, new look.** The look failed two reviews ([1](reviews/2026-11-08-look-review1.md), [2](reviews/2026-11-09-look-review2.md)), so patching stopped (AGENTS.md). Both P2 findings of review 2 are in AKM's own select list, which must copy behaviour that the system's list gives for free. The design question for the owner: should the list (a) be reworked so that the active option is tracked by its value and only a keyboard move scrolls the list, and then get one more review; (b) be removed, so that everyone gets the system's list; or (c) stay as it is, with the owner accepting LOOK-R2-01 and LOOK-R2-02? Merging pull request 9 waits for that answer.
+0. **Stop rule, UI rebuild.** The branch failed two reviews ([review 1](reviews/2026-11-08-ui-rebuild-review1.md), [review 2](reviews/2026-11-08-ui-rebuild-review2.md)), so patching stopped (AGENTS.md). The design question for the owner: both reviews found that the new compact rows drop or clip facts that the old screens showed (class H). Should every row (a) show each fact in full, on more lines, and then get one more review; (b) get one more round of single fixes and a review; or (c) stay as it is, with the owner accepting the open findings UI-R2-01 to UI-R2-05? Merging and installing wait for that answer. The setup program of `58ef81b` is in `W:\AKM-archive\installers\` (SHA-256 `0dbbd98f2f5700707b17e3f7d0339439c92aea55202c3f90b99d728f190dd358`). The GUI proofs did not run on that build: the screen saver was on, so UI Automation could not reach the window. Run `-JournalOnly` and `-JournalExportOnly` on it with the screen on.
 0a. **Stop rule, terminal launch.** The design question for the owner: a modal native window and a lock can never be one atomic step, and review 1 and review 2 pull in opposite directions (T-R1-05 and T-R1-06 against T-R2-01 and T-R2-02). Which limit does the owner accept? (a) A lock is always prompt. A journal stall cannot delay it, and a review that lists names only can appear just after a lock, but it starts nothing. A `run-requested` record can then exist for a launch that never started. (b) No record and no review can ever follow a lock, and a stalled journal can delay the lock. (c) Remove the terminal launch, and keep the key history. The owner also decides contract 11 (Status).
 1. The owner runs the six tests in [FIRST_USE.md](FIRST_USE.md), and chooses option A or B for R4-04. `tools/verify_windows_app.ps1` now confirms the native import window (P2R2-02), but that path has not run on the real GUI.
 2. Release decisions for the owner: SEC-02 to SEC-05, 2-W-01 and P2R2-07 in [FINDINGS.md](FINDINGS.md).
-3. Later units: P2R2-06 (tests that compare raw temp paths) and the unit 5 full rescore, which the release gate needs.
+3. Later units: P2R2-06 (tests that compare raw temp paths), and the FR rows of the rescore, starting with FR-01, FR-02 and FR-03. The release gate needs a new full review above 90.
 
 ## Local state outside the repository
 

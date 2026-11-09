@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from "react";
 import type { Theme, View } from "../types";
 import { BrandMark } from "./glyphs";
 import { Icon } from "./Icon";
@@ -25,6 +26,29 @@ interface Props {
 }
 
 export function NavBar({ view, onView, unlocked, theme, onToggleTheme, onLock, onReload }: Props) {
+  const navRef = useRef<HTMLElement>(null);
+  const [pill, setPill] = useState<{ top: number; height: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!unlocked) return;
+    const nav = navRef.current;
+    const place = () => {
+      const current = nav?.querySelector('[aria-current="page"]');
+      if (!nav || !current) return setPill(null);
+      const box = current.getBoundingClientRect();
+      setPill({ top: box.top - nav.getBoundingClientRect().top, height: box.height });
+    };
+    place();
+    window.addEventListener("resize", place);
+    // A font that loads late or a text-size change moves the items without a window resize.
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    nav?.querySelectorAll("button").forEach((item) => observer?.observe(item));
+    return () => {
+      window.removeEventListener("resize", place);
+      observer?.disconnect();
+    };
+  }, [view, unlocked]);
+
   const next = theme === "dark" ? "light" : "dark";
   const themeSwitch = (
     <button type="button" className="theme" aria-label={`Switch to ${next} mode`} onClick={onToggleTheme}>
@@ -38,7 +62,7 @@ export function NavBar({ view, onView, unlocked, theme, onToggleTheme, onLock, o
   const link = (section: { id: View; label: string; icon: IconName }) => (
     <li key={section.id}>
       <button type="button" className="nav-link" aria-current={view === section.id ? "page" : undefined} onClick={() => onView(section.id)}>
-        <Icon name={section.icon} size={20} />
+        <Icon name={section.icon} size={18} />
         <span>{section.label}</span>
       </button>
     </li>
@@ -50,7 +74,8 @@ export function NavBar({ view, onView, unlocked, theme, onToggleTheme, onLock, o
         <BrandMark />
         <p className="bar-name">AKM</p>
       </div>
-      <nav aria-label="Sections">
+      <nav ref={navRef} aria-label="Sections">
+        {pill && <span className="nav-pill" aria-hidden="true" style={{ height: pill.height, transform: `translateY(${pill.top}px)` }} />}
         <ul>{primary.map(link)}</ul>
         <ul className="rail-lower">{secondary.map(link)}</ul>
       </nav>
