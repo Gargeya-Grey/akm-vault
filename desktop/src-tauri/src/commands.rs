@@ -1455,6 +1455,25 @@ mod tests {
     }
 
     #[test]
+    fn a_lock_just_before_the_import_window_appears_applies_nothing_even_if_the_user_approves() {
+        let (session, directory) = test_session();
+        let session = Arc::new(session);
+        let locker = session.clone();
+        let confirm = ScriptedConfirm::new(true).on_present(move || locker.lock().unwrap());
+        let (operation, reply) = import_with_lost_reply(&session, &confirm);
+        assert_eq!(reply.err().unwrap().kind, "locked");
+        assert_eq!(confirm.shown().len(), 1, "the accepted limit of option (a)");
+        let record = import_notice_for(&session, &operation).expect("no native outcome record");
+        assert_eq!(record["kind"], "importFailed");
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
+    }
+
+    #[test]
     fn a_failed_import_window_is_an_error_and_never_a_decline() {
         let (session, directory) = test_session();
         let confirm = ScriptedConfirm::new(true).failing(crate::review_window::ReviewFailure::new(

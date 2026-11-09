@@ -1130,6 +1130,79 @@ mod tests {
     }
 
     #[test]
+    fn a_lock_just_before_the_window_appears_starts_nothing_even_if_the_user_approves() {
+        let fixture = fake_vault(&DEV);
+        let mut host = FakeHost::choosing(fixture.directory.path());
+        let session = fixture.session.clone();
+        host.before_window = Box::new(move || session.lock().unwrap());
+        let error = launch(&fixture, &host).err().unwrap();
+        assert_eq!(error.kind, "locked");
+        assert_eq!(host.events(), ["window", "folder", "confirm"]);
+        assert!(host.launched().is_empty(), "a terminal started");
+        assert!(
+            !fixture
+                .journal_actions()
+                .iter()
+                .any(|action| action == "run-requested"),
+            "a launch was recorded after the lock"
+        );
+        let steps = host.steps.lock().unwrap().clone();
+        assert!(steps.contains(&LaunchStep::LastCheckPassed), "{steps:?}");
+        assert!(!steps.contains(&LaunchStep::RecordNext), "{steps:?}");
+        assert!(!steps.contains(&LaunchStep::ValuesCopied), "{steps:?}");
+        assert!(!steps.contains(&LaunchStep::BeforeStart), "{steps:?}");
+    }
+
+    #[test]
+    fn a_lock_at_each_step_of_the_launch_has_the_outcome_of_the_state_table() {
+        use LaunchStep::*;
+        // The step, whether a review appears, whether a record is written, whether the values
+        // leave the vault, and whether a terminal starts.
+        let table = [
+            (Planned, false, false, false, false),
+            (FolderChecked, false, false, false, false),
+            (LastCheckPassed, true, false, false, false),
+            (Approved, true, false, false, false),
+            (RecordNext, true, true, false, false),
+            (Recorded, true, true, false, false),
+            (ValuesCopied, true, true, true, false),
+            (BeforeStart, true, true, true, false),
+            (Started, true, true, true, true),
+        ];
+        for (step, review, record, values, started) in table {
+            let fixture = fake_vault(&DEV);
+            let mut host = FakeHost::choosing(fixture.directory.path());
+            let session = fixture.session.clone();
+            host.at_step = Box::new(move |reached| {
+                if reached == step {
+                    session.lock().unwrap();
+                }
+            });
+            let result = launch(&fixture, &host);
+            if started {
+                assert_eq!(result.unwrap(), Some(2), "{step:?}");
+            } else {
+                assert_eq!(result.err().unwrap().kind, "locked", "{step:?}");
+            }
+            assert_eq!(host.reviews.lock().unwrap().len() == 1, review, "{step:?}");
+            assert_eq!(
+                fixture
+                    .journal_actions()
+                    .iter()
+                    .any(|action| action == "run-requested"),
+                record,
+                "{step:?}"
+            );
+            let steps = host.steps.lock().unwrap().clone();
+            assert_eq!(steps.contains(&ValuesCopied), values, "{step:?}: {steps:?}");
+            assert_eq!(!host.launched().is_empty(), started, "{step:?}");
+            if !started {
+                assert!(!steps.contains(&Started), "{step:?}");
+            }
+        }
+    }
+
+    #[test]
     fn a_failed_review_window_is_an_error_and_starts_nothing() {
         let fixture = fake_vault(&DEV);
         let host = FakeHost::choosing(fixture.directory.path());
