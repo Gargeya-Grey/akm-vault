@@ -18,7 +18,14 @@ import type {
 
 const mutations = new Set(["vault_create", "vault_upgrade", "key_add", "key_update", "key_remove", "key_rotate", "key_restore", "key_purge", "env_import", "env_save", "env_launch_terminal"]);
 // A request that the user can still decline in a native window answers null when they do.
-const declinable = new Set(["env_import", "env_save", "env_launch_terminal"]);
+// The disclosing commands are on the list too: a page can read its session ID, so native asks the
+// user before it shows or copies a value (the bulk commands always, the single-key commands once a
+// session is over its budget). A decline gives no value and writes nothing to the clipboard.
+const declinable = new Set(["env_import", "env_save", "env_launch_terminal", "key_reveal", "key_copy", "env_export", "env_copy"]);
+
+function declined(what: string) {
+  return { kind: "declined", message: `Cancelled. ${what}` };
+}
 const statusReplies = new Set(["vault_status", "vault_unlock", "vault_create", "vault_upgrade", "vault_reload"]);
 
 // Every command that reads or changes the open vault, or renews its idle deadline, names the
@@ -151,8 +158,17 @@ export const api = {
   },
 
   keys: () => invoke<KeyView[]>("keys_list"),
-  reveal: (id: string) => invoke<string>("key_reveal", { id }),
-  copy: (id: string) => invoke<number>("key_copy", { id }),
+  // A decline in the native window rejects with kind "declined": no value was shown.
+  reveal: async (id: string) => {
+    const value = await invoke<string | null>("key_reveal", { id });
+    if (value === null) throw declined("No value was shown.");
+    return value;
+  },
+  copy: async (id: string) => {
+    const seconds = await invoke<number | null>("key_copy", { id });
+    if (seconds === null) throw declined("Nothing was copied.");
+    return seconds;
+  },
   add: (draft: KeyDraft) => invoke<KeyView>("key_add", { draft }),
   update: (id: string, draft: KeyDraft) =>
     invoke<KeyView>("key_update", { id, draft }),
@@ -165,10 +181,11 @@ export const api = {
   purge: (id: string) => invoke<void>("key_purge", { id }),
 
   audit: (limit = 300) => invoke<AuditReport>("audit_read", { limit }),
+  // Native shows the scope and the names and asks first. null means that the user declined there.
   exportEnv: (project: string | null, environment: string | null) =>
-    invoke<string>("env_export", { project, environment, all: false }),
+    invoke<string | null>("env_export", { project, environment, all: false }),
   copyEnv: (project: string | null, environment: string | null) =>
-    invoke<number>("env_copy", { project, environment, all: false }),
+    invoke<number | null>("env_copy", { project, environment, all: false }),
   saveEnv: (
     project: string | null,
     environment: string | null,

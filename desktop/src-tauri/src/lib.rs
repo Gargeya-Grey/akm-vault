@@ -2,6 +2,7 @@ mod clipboard;
 #[cfg(test)]
 mod clipboard_fake;
 mod commands;
+mod disclosure;
 #[doc(hidden)]
 pub mod error;
 mod import_review;

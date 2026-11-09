@@ -132,6 +132,53 @@ struct NativeOwner {
     claimed: bool,
 }
 
+/// How many single-key disclosures (a reveal or a copy) one session may make in a rolling
+/// minute before the next one needs the approval of the user in a native window. A page can
+/// read its session ID, so the ID is no user gesture: this budget stops a loop of single
+/// requests from doing the work of one bulk request (finding FR-03).
+pub const FREE_SINGLE_DISCLOSURES: usize = 5;
+pub const DISCLOSURE_WINDOW: Duration = Duration::from_secs(60);
+
+/// What the budget decided about one single-key request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Admission {
+    /// Inside the budget. The request is counted.
+    Free,
+    /// Over the budget. The request goes on only after the user approves it in a native window.
+    NeedsApproval,
+}
+
+/// The times of the single-key disclosures of one session. It belongs to the session whose
+/// ticket it holds: a request of any other session starts a new log, and a lock or a new
+/// opening clears it.
+#[derive(Default)]
+struct DisclosureLog {
+    ticket: Option<Ticket>,
+    times: Vec<Duration>,
+}
+
+impl DisclosureLog {
+    fn times_for(&mut self, ticket: Ticket, now: Duration) -> &mut Vec<Duration> {
+        if self.ticket != Some(ticket) {
+            self.ticket = Some(ticket);
+            self.times.clear();
+        }
+        self.times
+            .retain(|at| now.saturating_sub(*at) < DISCLOSURE_WINDOW);
+        &mut self.times
+    }
+}
+
+/// The one native confirmation window for a disclosure that is open. A second request waits
+/// no turn: it is refused, so a page cannot stack windows over the user.
+pub struct ReviewSlot<'a>(&'a AtomicBool);
+
+impl Drop for ReviewSlot<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 struct Gate {
     policy: Policy,
     owner: Option<NativeOwner>,
@@ -140,6 +187,7 @@ struct Gate {
     /// A lock transition was seen and its cleanup attempt is still owed. The guard that
     /// saw the transition settles it after it released the gate (unit 1h, design D2).
     cleanup_owed: bool,
+    disclosures: DisclosureLog,
     path: Option<PathBuf>,
     warnings: Vec<ApplicationNotice>,
     notices: Vec<OperationNotice>,
@@ -205,6 +253,7 @@ pub struct Session {
     gate: Mutex<Gate>,
     lease: Mutex<LeaseCell>,
     exiting: AtomicBool,
+    review_open: AtomicBool,
     vault: Mutex<StoredVault>,
     open_serial: Mutex<()>,
     clock: Arc<dyn Clock>,
@@ -250,6 +299,7 @@ impl Session {
                 revision: 0,
                 presentation: 0,
                 cleanup_owed: false,
+                disclosures: DisclosureLog::default(),
                 path: None,
                 warnings: Vec::new(),
                 notices: Vec::new(),
@@ -260,6 +310,7 @@ impl Session {
                 episode: None,
             }),
             exiting: AtomicBool::new(false),
+            review_open: AtomicBool::new(false),
             vault: Mutex::new(StoredVault::default()),
             open_serial: Mutex::new(()),
             clock,
@@ -401,6 +452,7 @@ impl Session {
     }
 
     fn retire_owner(&self, gate: &mut Gate) {
+        gate.disclosures = DisclosureLog::default();
         if let Some(owner) = gate.owner.take() {
             (self.notify_locked)(NativeLockNotice {
                 session_id: owner.id.to_string(),
@@ -506,6 +558,47 @@ impl Session {
             return Err(CommandError::locked());
         }
         Ok(())
+    }
+
+    /// Counts one single-key request of the session `ticket` against its budget. The gate is
+    /// held only for this count in memory.
+    pub fn admit_single_disclosure(&self, ticket: Ticket) -> Result<Admission, CommandError> {
+        let mut gate = self.gate()?;
+        let now = self.clock.now();
+        if self.current(&mut gate)?.ticket != ticket {
+            return Err(CommandError::locked());
+        }
+        let times = gate.disclosures.times_for(ticket, now);
+        if times.len() < FREE_SINGLE_DISCLOSURES {
+            times.push(now);
+            Ok(Admission::Free)
+        } else {
+            Ok(Admission::NeedsApproval)
+        }
+    }
+
+    /// Counts a request that the user approved, so that approvals fill the window too.
+    pub fn count_approved_disclosure(&self, ticket: Ticket) -> Result<(), CommandError> {
+        let mut gate = self.gate()?;
+        let now = self.clock.now();
+        if self.current(&mut gate)?.ticket != ticket {
+            return Err(CommandError::locked());
+        }
+        gate.disclosures.times_for(ticket, now).push(now);
+        Ok(())
+    }
+
+    /// Takes the one place for a native confirmation window of a disclosure.
+    pub fn open_review(&self) -> Result<ReviewSlot<'_>, CommandError> {
+        self.review_open
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| {
+                CommandError::new(
+                    "busy",
+                    "Another confirmation window is open. Answer it first, then try again.",
+                )
+            })?;
+        Ok(ReviewSlot(&self.review_open))
     }
 
     /// The one way to perform a session-scoped side effect (a settings write, a

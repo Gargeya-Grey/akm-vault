@@ -287,3 +287,29 @@ test("a history reply overtaken by a session change is suppressed", async () => 
   resolve([{ index: 0, modifiedAt: null, changed: [], secretChanged: false }]);
   expect(await outcome).toMatchObject({ kind: "locked" });
 });
+
+test("a disclosure the user declined in the native window rejects as declined and carries no value", async () => {
+  native.invoke.mockResolvedValueOnce(null);
+  const revealed = await api.reveal("fake-id").catch((error: unknown) => error);
+  expect(revealed).toMatchObject({ kind: "declined", message: expect.stringContaining("No value was shown") });
+  native.invoke.mockResolvedValueOnce(null);
+  const copied = await api.copy("fake-id").catch((error: unknown) => error);
+  expect(copied).toMatchObject({ kind: "declined", message: expect.stringContaining("Nothing was copied") });
+  expect(retainedCompletions()).toHaveLength(0); // a decline is no completed mutation
+});
+
+test("a declined bulk export or copy answers null, never a value or a number", async () => {
+  native.invoke.mockResolvedValueOnce(null);
+  expect(await api.exportEnv("fake-scope", "fake-env")).toBeNull();
+  native.invoke.mockResolvedValueOnce(null);
+  expect(await api.copyEnv("fake-scope", "fake-env")).toBeNull();
+  native.invoke.mockResolvedValueOnce("TOKEN=fake-approved\n");
+  expect(await api.exportEnv("fake-scope", "fake-env")).toBe("TOKEN=fake-approved\n");
+});
+
+test("an approved single reveal and copy still answer the value and the clear time", async () => {
+  native.invoke.mockResolvedValueOnce("fake-approved-value");
+  expect(await api.reveal("fake-id")).toBe("fake-approved-value");
+  native.invoke.mockResolvedValueOnce(30);
+  expect(await api.copy("fake-id")).toBe(30);
+});

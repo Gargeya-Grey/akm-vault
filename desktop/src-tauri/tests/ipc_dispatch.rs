@@ -8,6 +8,9 @@ mod clipboard_fake;
 #[path = "../src/commands.rs"]
 #[allow(unused_imports)]
 mod commands;
+#[path = "../src/disclosure.rs"]
+#[allow(unused_imports)]
+mod disclosure;
 #[path = "../src/error.rs"]
 #[allow(unused_imports)]
 mod error;
@@ -47,7 +50,7 @@ use commands::*;
 use session::{Access, Held, MonotonicClock, Session, VaultState};
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc, Arc, Mutex,
     },
     time::Duration,
@@ -92,6 +95,9 @@ struct Dialog {
     approve: AtomicBool,
     window_live: AtomicBool,
     hold: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    /// How many windows opened, and the text of the last one.
+    opened: AtomicUsize,
+    last: Mutex<String>,
 }
 impl Dialog {
     fn new() -> Arc<Self> {
@@ -99,6 +105,8 @@ impl Dialog {
             approve: AtomicBool::new(true),
             window_live: AtomicBool::new(true),
             hold: Mutex::new(None),
+            opened: AtomicUsize::new(0),
+            last: Mutex::new(String::new()),
         })
     }
 
@@ -119,7 +127,12 @@ impl import_review::ImportConfirm for Dialog {
     }
 }
 impl review_window::ReviewDialog for &Dialog {
-    fn show(&self, _: &review_window::ReviewText) -> Result<i32, review_window::ReviewFailure> {
+    fn show(
+        &self,
+        review: &review_window::ReviewText,
+    ) -> Result<i32, review_window::ReviewFailure> {
+        self.opened.fetch_add(1, Ordering::SeqCst);
+        *self.last.lock().unwrap() = review.text.clone();
         let held = self.hold.lock().unwrap().take();
         if let Some((entered, release)) = held {
             entered.send(()).unwrap();
@@ -682,12 +695,156 @@ fn main() {
     a_discard_names_its_session(&app, webview, &session, &dialog, directory.path());
     the_launch_command_takes_a_scope_and_no_program(webview, &terminal, directory.path());
     the_history_command_answers_times_and_field_names(webview, directory.path());
+    a_page_that_holds_the_session_id_cannot_disclose_without_the_user(
+        webview,
+        &dialog,
+        &clipboard,
+        directory.path(),
+    );
     a_stale_request_never_acts_on_the_session_that_replaced_its_own(
         webview,
         &session,
         &clipboard,
         directory.path(),
     );
+}
+
+/// FR-03. A compromised page reads its session ID and calls the disclosing commands directly,
+/// with no click. Through the production handlers: no value leaves and nothing reaches the
+/// clipboard unless the user approved it in the native window. A decline is a typed `null`.
+fn a_page_that_holds_the_session_id_cannot_disclose_without_the_user(
+    webview: &tauri::Webview<MockRuntime>,
+    dialog: &Arc<Dialog>,
+    clipboard: &Clipboard,
+    directory: &std::path::Path,
+) {
+    let (_session_id, _) = open_new(webview, directory, "compromised.kdbx");
+    let mut ids = Vec::new();
+    for (title, secret, project, variable) in [
+        ("Fake page one", "fake-page-secret-one", "demo", "PAGE_ONE"),
+        ("Fake page two", "fake-page-secret-two", "demo", "PAGE_TWO"),
+        (
+            "Fake page three",
+            "fake-page-secret-three",
+            "other",
+            "PAGE_THREE",
+        ),
+    ] {
+        let added = call(
+            webview,
+            "key_add",
+            serde_json::json!({"draft": {"title": title, "secret": secret, "project": project, "environment": "dev", "envVar": variable}}),
+        )
+        .unwrap();
+        ids.push(added["id"].as_str().unwrap().to_string());
+    }
+    let secrets = [
+        "fake-page-secret-one",
+        "fake-page-secret-two",
+        "fake-page-secret-three",
+    ];
+    let leaked = |text: &str| secrets.iter().any(|secret| text.contains(secret));
+    let sequence = clipboard.lock().unwrap().sequence;
+    dialog.approve.store(false, Ordering::SeqCst);
+    let opened = dialog.opened.load(Ordering::SeqCst);
+
+    // Bulk: all keys and one scope, as a preview and as a copy.
+    for scope in [
+        serde_json::json!({"project": null, "environment": null, "all": true}),
+        serde_json::json!({"project": "demo", "environment": "dev", "all": false}),
+    ] {
+        for command in ["env_export", "env_copy"] {
+            let answer = call(webview, command, scope.clone()).unwrap();
+            assert_eq!(answer, serde_json::Value::Null, "{command}: declined");
+        }
+    }
+    assert_eq!(
+        dialog.opened.load(Ordering::SeqCst) - opened,
+        4,
+        "each bulk request opened the native window"
+    );
+    let window = dialog.last.lock().unwrap().clone();
+    assert!(
+        window.contains("PAGE_ONE") && window.contains("PAGE_TWO"),
+        "{window}"
+    );
+    assert!(!leaked(&window), "the window shows no value: {window}");
+    assert_eq!(
+        clipboard.lock().unwrap().sequence,
+        sequence,
+        "no clipboard write"
+    );
+    assert!(!leaked(&clipboard_text(clipboard)));
+
+    // Single keys: a loop of reveals and copies. Only the free budget leaves the vault.
+    let opened = dialog.opened.load(Ordering::SeqCst);
+    let (mut shown, mut copied, mut asked) = (0, 0, 0);
+    for round in 0..30 {
+        let reveal = call(
+            webview,
+            "key_reveal",
+            serde_json::json!({"id": ids[round % 3]}),
+        )
+        .unwrap();
+        if let Some(value) = reveal.as_str() {
+            assert!(secrets.contains(&value));
+            shown += 1;
+        } else {
+            assert_eq!(reveal, serde_json::Value::Null);
+            asked += 1;
+        }
+        let before_copy = clipboard.lock().unwrap().sequence;
+        let copy = call(
+            webview,
+            "key_copy",
+            serde_json::json!({"id": ids[round % 3]}),
+        )
+        .unwrap();
+        if copy.is_null() {
+            asked += 1;
+            assert_eq!(
+                clipboard.lock().unwrap().sequence,
+                before_copy,
+                "a declined copy writes nothing"
+            );
+        } else {
+            copied += 1;
+            assert_ne!(clipboard.lock().unwrap().sequence, before_copy);
+        }
+    }
+    assert_eq!(
+        shown + copied,
+        session::FREE_SINGLE_DISCLOSURES,
+        "only the free budget left the vault"
+    );
+    assert_eq!(
+        dialog.opened.load(Ordering::SeqCst) - opened,
+        asked,
+        "every other request opened the native window"
+    );
+
+    // The user approves: the same call now returns the value.
+    dialog.approve.store(true, Ordering::SeqCst);
+    let preview = call(
+        webview,
+        "env_export",
+        serde_json::json!({"project": "demo", "environment": "dev", "all": false}),
+    )
+    .unwrap();
+    let preview = preview.as_str().expect("an approved preview");
+    assert!(
+        preview.contains("PAGE_ONE=fake-page-secret-one"),
+        "{preview}"
+    );
+    let copied_after = call(
+        webview,
+        "env_copy",
+        serde_json::json!({"project": "demo", "environment": "dev", "all": false}),
+    )
+    .unwrap();
+    assert_eq!(copied_after, serde_json::json!(30));
+    assert!(clipboard_text(clipboard).contains("PAGE_TWO=fake-page-secret-two"));
+    println!("PASS: env_export, env_copy, key_reveal and key_copy called by a page with only the session ID disclose nothing and write no clipboard without the native approval; a decline answers null; the single-key budget stops a loop at the free count.");
 }
 
 /// Class B (P2R2-03). Every command that acts on the open vault names the session of the page

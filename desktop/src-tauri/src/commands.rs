@@ -15,6 +15,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     clipboard::CLEAR_AFTER,
+    disclosure::{self, Approval, BulkUse, DisclosureReview},
     error::CommandError,
     import_review::{ConfirmState, ImportConfirm, ImportReview},
     launch::{self, TerminalState},
@@ -22,7 +23,8 @@ use crate::{
     reminders::{ReminderState, ReminderStatus},
     review_window::ReviewAnswer,
     session::{
-        Access, OperationWarningKind, Session, Snapshot, Stamped, VaultState, WarningReport,
+        Access, Admission, OperationWarningKind, Session, Snapshot, Stamped, VaultState,
+        WarningReport,
     },
     settings::{current_path, settings_file, PreferenceState, PreferenceStore},
     views::*,
@@ -346,19 +348,57 @@ pub async fn keys_list(
     .await
 }
 
+/// Shows one key's value to the page. `None` means that the user declined in the native window
+/// that a request over the budget of the session needs (`session::FREE_SINGLE_DISCLOSURES`).
 #[tauri::command]
 pub async fn key_reveal(
     state: State<'_, VaultState>,
+    confirm: State<'_, ConfirmState>,
     session_id: String,
     id: String,
-) -> Result<String, CommandError> {
+) -> Result<Option<String>, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot_for(&session_id)?;
+    let confirm = confirm.0.clone();
     blocking(move || {
-        let secret = requested_key_at(&session, expected, &id, KeyDisclosure::Reveal)?;
-        session.reveal(secret)
+        single_disclosure(
+            &session,
+            confirm.as_ref(),
+            &session_id,
+            &id,
+            KeyDisclosure::Reveal,
+        )?
+        .map(|secret| session.reveal(secret))
+        .transpose()
     })
     .await
+}
+
+/// One key's secret, if the budget allows it or the user approves it. The budget counts the
+/// request before anything is read. Over it, a native window names the key and nothing else,
+/// no gate is held while it is open, and the read that follows is bound to the session, the
+/// revision and the presentation of the request, so a lock, a change or a hide during the
+/// window refuses it.
+fn single_disclosure(
+    session: &Session,
+    host: &dyn ImportConfirm,
+    session_id: &str,
+    id: &str,
+    action: KeyDisclosure,
+) -> Result<Option<Stamped<Zeroizing<String>>>, CommandError> {
+    let expected = session.snapshot_for(session_id)?;
+    if session.admit_single_disclosure(expected.ticket)? == Admission::NeedsApproval {
+        let title = session
+            .access_reviewed(Access::Read, expected, |vault| {
+                Ok(vault.get_by_id(id)?.title)
+            })?
+            .value;
+        let review = DisclosureReview::single(action, &title)?;
+        match disclosure::ask(session, host, expected.ticket, &review)? {
+            Approval::Declined => return Ok(None),
+            Approval::Approved => session.count_approved_disclosure(expected.ticket)?,
+        }
+    }
+    requested_key_at(session, expected, id, action).map(Some)
 }
 
 #[cfg(test)]
@@ -383,18 +423,30 @@ fn requested_key_at(
     })
 }
 
+/// Copies one key's value. `None` means that the user declined (see `key_reveal`). Nothing
+/// reaches the clipboard then.
 #[tauri::command]
 pub async fn key_copy(
     state: State<'_, VaultState>,
+    confirm: State<'_, ConfirmState>,
     session_id: String,
     id: String,
-) -> Result<u64, CommandError> {
+) -> Result<Option<u64>, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot_for(&session_id)?;
+    let confirm = confirm.0.clone();
     blocking(move || {
-        let secret = requested_key_at(&session, expected, &id, KeyDisclosure::Copy)?;
+        let Some(secret) = single_disclosure(
+            &session,
+            confirm.as_ref(),
+            &session_id,
+            &id,
+            KeyDisclosure::Copy,
+        )?
+        else {
+            return Ok(None);
+        };
         session.copy_stamped(secret)?;
-        Ok(CLEAR_AFTER.as_secs())
+        Ok(Some(CLEAR_AFTER.as_secs()))
     })
     .await
 }
@@ -733,47 +785,108 @@ fn extract_export_at(
     })
 }
 
+/// The values of a scope, for the preview. Every request needs the user's click in a native
+/// window that lists the scope and the names: a page can read its session ID, so the ID is no
+/// gesture (FR-03). `None` means that the user declined, and no value left the vault.
 #[tauri::command]
 pub async fn env_export(
     state: State<'_, VaultState>,
+    confirm: State<'_, ConfirmState>,
     session_id: String,
     project: Option<String>,
     environment: Option<String>,
     all: bool,
-) -> Result<String, CommandError> {
+) -> Result<Option<String>, CommandError> {
     let scope = ExportScope::new(project, environment, all)?;
     let session = state.0.clone();
-    let expected = session.snapshot_for(&session_id)?;
+    let confirm = confirm.0.clone();
     blocking(move || {
-        let exported = extract_export_at(&session, expected, &scope, ".env preview")?;
-        session.reveal(exported)
+        bulk_disclosure(
+            &session,
+            confirm.as_ref(),
+            &session_id,
+            &scope,
+            BulkUse::Preview,
+            |expected| {
+                let exported = extract_export_at(&session, expected, &scope, ".env preview")?;
+                session.reveal(exported)
+            },
+        )
     })
     .await
 }
 
+/// The values of a scope, for the clipboard. Approved like `env_export`. `None` means that the
+/// user declined, and nothing reached the clipboard.
 #[tauri::command]
 pub async fn env_copy(
     state: State<'_, VaultState>,
+    confirm: State<'_, ConfirmState>,
     session_id: String,
     project: Option<String>,
     environment: Option<String>,
     all: bool,
-) -> Result<u64, CommandError> {
+) -> Result<Option<u64>, CommandError> {
     let scope = ExportScope::new(project, environment, all)?;
     let session = state.0.clone();
-    let expected = session.snapshot_for(&session_id)?;
+    let confirm = confirm.0.clone();
     blocking(move || {
-        let exported = extract_export_at(&session, expected, &scope, "clipboard")?;
-        if exported.value.is_empty() {
-            return Err(CommandError::new(
-                "invalid",
-                "No keys match that export scope.",
-            ));
-        }
-        session.copy_stamped(exported)?;
-        Ok(CLEAR_AFTER.as_secs())
+        bulk_disclosure(
+            &session,
+            confirm.as_ref(),
+            &session_id,
+            &scope,
+            BulkUse::Clipboard,
+            |expected| {
+                let exported = extract_export_at(&session, expected, &scope, "clipboard")?;
+                if exported.value.is_empty() {
+                    return Err(CommandError::new(
+                        "invalid",
+                        "No keys match that export scope.",
+                    ));
+                }
+                session.copy_stamped(exported)?;
+                Ok(CLEAR_AFTER.as_secs())
+            },
+        )
     })
     .await
+}
+
+/// A bulk disclosure after the user approved it. The names come from a plan that holds no value.
+/// An empty scope shows no window, because no value can leave. `disclose` reads the vault bound
+/// to the session, the revision and the presentation of the request, so the plan that the user
+/// approved is the plan that is read: a change in between refuses it.
+fn bulk_disclosure<T>(
+    session: &Session,
+    host: &dyn ImportConfirm,
+    session_id: &str,
+    scope: &ExportScope,
+    purpose: BulkUse,
+    disclose: impl FnOnce(Snapshot) -> Result<T, CommandError>,
+) -> Result<Option<T>, CommandError> {
+    let expected = session.snapshot_for(session_id)?;
+    let names = session
+        .access_reviewed(Access::Read, expected, |vault| {
+            let plan = vault.plan_env(
+                scope.project.as_deref(),
+                scope.environment.as_deref(),
+                scope.all,
+            )?;
+            Ok(plan.names().map(str::to_owned).collect::<Vec<_>>())
+        })?
+        .value;
+    if !names.is_empty() {
+        let review = DisclosureReview::bulk(
+            purpose,
+            scope.project.as_deref().zip(scope.environment.as_deref()),
+            names,
+        )?;
+        if disclosure::ask(session, host, expected.ticket, &review)? == Approval::Declined {
+            return Ok(None);
+        }
+    }
+    disclose(expected).map(Some)
 }
 
 #[tauri::command]
@@ -3101,5 +3214,521 @@ mod tests {
         assert!(first.join().unwrap().is_err());
         let saved: Settings = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
         assert_eq!(saved.vault_path.as_deref(), Some("pre-existing.kdbx"));
+    }
+
+    // ---- FR-03: a disclosure needs the user, not the session ID ----
+
+    struct Stepped(std::sync::atomic::AtomicU64);
+    impl Stepped {
+        fn set(&self, seconds: u64) {
+            self.0.store(seconds, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    impl crate::session::Clock for Stepped {
+        fn now(&self) -> std::time::Duration {
+            std::time::Duration::from_secs(self.0.load(std::sync::atomic::Ordering::SeqCst))
+        }
+    }
+
+    struct Disclosing {
+        session: Arc<Session>,
+        clock: Arc<Stepped>,
+        clipboard: Arc<Mutex<crate::clipboard::tests::FakeData>>,
+        keys: Vec<String>,
+        _directory: tempfile::TempDir,
+    }
+
+    /// An unlocked session with a fake clock, a fake clipboard and three fake keys: two in
+    /// `app/dev` and one in `app/prod`.
+    fn disclosing() -> Disclosing {
+        use crate::{
+            clipboard::tests::{FakeClipboard, FakeData},
+            policy::Signal,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let clock = Arc::new(Stepped(std::sync::atomic::AtomicU64::new(1_000)));
+        let clipboard = Arc::new(Mutex::new(FakeData::default()));
+        let session = Arc::new(Session::new(
+            clock.clone(),
+            Box::new(FakeClipboard(clipboard.clone())),
+            Arc::new(|_| {}),
+        ));
+        session.observe(Signal::Available);
+        let ticket = session.begin_open().unwrap();
+        session
+            .open(ticket, || {
+                Vault::create(
+                    directory.path().join("vault.kdbx"),
+                    "fake-test-password-123!",
+                    None,
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        let mut keys = Vec::new();
+        session
+            .access(Access::Write, None, |vault| {
+                for (title, secret, project, environment, variable) in [
+                    ("One", "fake-secret-one", "app", "dev", "ONE_KEY"),
+                    ("Two", "fake-secret-two", "app", "dev", "TWO_KEY"),
+                    ("Three", "fake-secret-three", "app", "prod", "THREE_KEY"),
+                ] {
+                    let key = vault.add(akm_core::ApiKeyInput {
+                        project: Some(project.into()),
+                        environment: Some(environment.into()),
+                        env_var: Some(variable.into()),
+                        ..akm_core::ApiKeyInput::new(title, secret)
+                    })?;
+                    keys.push(key.id.to_string());
+                }
+                Ok(())
+            })
+            .unwrap();
+        Disclosing {
+            session,
+            clock,
+            clipboard,
+            keys,
+            _directory: directory,
+        }
+    }
+
+    fn reveal_one(
+        f: &Disclosing,
+        host: &ScriptedConfirm,
+        action: KeyDisclosure,
+    ) -> Result<Option<Stamped<Zeroizing<String>>>, CommandError> {
+        single_disclosure(&f.session, host, &owner(&f.session), &f.keys[0], action)
+    }
+
+    fn bulk_preview(
+        f: &Disclosing,
+        host: &ScriptedConfirm,
+        scope: &ExportScope,
+    ) -> Result<Option<String>, CommandError> {
+        bulk_disclosure(
+            &f.session,
+            host,
+            &owner(&f.session),
+            scope,
+            BulkUse::Preview,
+            |expected| {
+                let exported = extract_export_at(&f.session, expected, scope, ".env preview")?;
+                f.session.reveal(exported)
+            },
+        )
+    }
+
+    fn bulk_copy(
+        f: &Disclosing,
+        host: &ScriptedConfirm,
+        scope: &ExportScope,
+    ) -> Result<Option<u64>, CommandError> {
+        bulk_disclosure(
+            &f.session,
+            host,
+            &owner(&f.session),
+            scope,
+            BulkUse::Clipboard,
+            |expected| {
+                let exported = extract_export_at(&f.session, expected, scope, "clipboard")?;
+                f.session.copy_stamped(exported)?;
+                Ok(CLEAR_AFTER.as_secs())
+            },
+        )
+    }
+
+    fn everything() -> ExportScope {
+        ExportScope::new(None, None, true).unwrap()
+    }
+
+    fn clipboard_text(f: &Disclosing) -> String {
+        f.clipboard.lock().unwrap().text.clone()
+    }
+
+    #[test]
+    fn fr03_a_bulk_preview_shows_the_scope_and_the_names_and_reveals_only_after_approval() {
+        let f = disclosing();
+        let declined = ScriptedConfirm::new(false);
+
+        let answer = bulk_preview(&f, &declined, &everything()).unwrap();
+
+        assert_eq!(answer, None, "declined gives no value");
+        let shown = declined.shown();
+        assert_eq!(shown.len(), 1);
+        assert!(shown[0].contains("ALL keys of the vault"), "{}", shown[0]);
+        for name in ["ONE_KEY", "TWO_KEY", "THREE_KEY"] {
+            assert!(shown[0].contains(name), "{name}: {}", shown[0]);
+        }
+        assert!(
+            !shown[0].contains("fake-secret"),
+            "the window never shows a value: {}",
+            shown[0]
+        );
+
+        let approved = ScriptedConfirm::new(true);
+        let scope = ExportScope::new(Some("app".into()), Some("dev".into()), false).unwrap();
+        let text = bulk_preview(&f, &approved, &scope).unwrap().unwrap();
+        assert!(text.contains("fake-secret-one") && text.contains("fake-secret-two"));
+        assert!(!text.contains("fake-secret-three"), "only the scope");
+        let window = &approved.shown()[0];
+        assert!(
+            window.contains(r#"project "app", environment "dev""#),
+            "{window}"
+        );
+        assert!(window.contains("2 variables"), "{window}");
+        assert!(!window.contains("THREE_KEY"), "{window}");
+    }
+
+    #[test]
+    fn fr03_a_declined_bulk_copy_writes_nothing_to_the_clipboard() {
+        let f = disclosing();
+
+        let answer = bulk_copy(&f, &ScriptedConfirm::new(false), &everything()).unwrap();
+
+        assert_eq!(answer, None);
+        let data = f.clipboard.lock().unwrap();
+        assert_eq!(data.sequence, 0, "no clipboard write happened");
+        assert_eq!(data.text, "");
+    }
+
+    #[test]
+    fn fr03_an_approved_bulk_copy_reaches_the_clipboard_once() {
+        let f = disclosing();
+
+        let answer = bulk_copy(&f, &ScriptedConfirm::new(true), &everything()).unwrap();
+
+        assert_eq!(answer, Some(CLEAR_AFTER.as_secs()));
+        assert!(clipboard_text(&f).contains("fake-secret-three"));
+        assert_eq!(f.clipboard.lock().unwrap().sequence, 1);
+    }
+
+    #[test]
+    fn fr03_a_window_that_fails_is_an_error_and_never_a_decline() {
+        let f = disclosing();
+        let broken = ScriptedConfirm::new(true).failing(crate::review_window::ReviewFailure::new(
+            "the window code stopped",
+        ));
+
+        let error = bulk_copy(&f, &broken, &everything()).unwrap_err();
+
+        assert_eq!(error.kind, "reviewFailed");
+        assert_eq!(f.clipboard.lock().unwrap().sequence, 0);
+        let broken = ScriptedConfirm::new(true).failing(crate::review_window::ReviewFailure::new(
+            "the window code stopped",
+        ));
+        assert_eq!(
+            bulk_preview(&f, &broken, &everything()).unwrap_err().kind,
+            "reviewFailed"
+        );
+    }
+
+    #[test]
+    fn fr03_a_lock_while_the_window_is_open_discloses_nothing() {
+        let f = disclosing();
+        let session = f.session.clone();
+        let locking = ScriptedConfirm::during(true, move || session.lock().unwrap());
+
+        let error = bulk_copy(&f, &locking, &everything()).unwrap_err();
+
+        assert_eq!(error.kind, "locked");
+        assert_eq!(
+            f.clipboard.lock().unwrap().sequence,
+            0,
+            "nothing was copied"
+        );
+    }
+
+    #[test]
+    fn fr03_a_change_while_the_window_is_open_refuses_the_disclosure() {
+        let f = disclosing();
+        let session = f.session.clone();
+        let changing = ScriptedConfirm::during(true, move || {
+            session
+                .access(Access::Write, None, |vault| {
+                    vault.add(akm_core::ApiKeyInput {
+                        env_var: Some("LATE_KEY".into()),
+                        ..akm_core::ApiKeyInput::new("Late", "fake-late")
+                    })?;
+                    Ok(())
+                })
+                .unwrap();
+        });
+
+        let error = bulk_preview(&f, &changing, &everything()).unwrap_err();
+
+        assert_eq!(
+            error.kind, "stalePreview",
+            "the plan that was approved is not the plan that would be read: {error:?}"
+        );
+    }
+
+    #[test]
+    fn fr03_a_hidden_window_shows_no_dialog_and_discloses_nothing() {
+        let f = disclosing();
+        let hidden = ScriptedConfirm::new(true);
+        hidden
+            .window
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let error = bulk_copy(&f, &hidden, &everything()).unwrap_err();
+
+        assert_eq!(error.kind, "viewChanged");
+        assert!(hidden.shown().is_empty());
+        assert_eq!(f.clipboard.lock().unwrap().sequence, 0);
+    }
+
+    #[test]
+    fn fr03_an_empty_scope_shows_no_window_and_reveals_no_value() {
+        let f = disclosing();
+        let host = ScriptedConfirm::new(true);
+        let scope = ExportScope::new(Some("none".into()), Some("none".into()), false).unwrap();
+
+        let text = bulk_preview(&f, &host, &scope).unwrap().unwrap();
+
+        assert!(host.shown().is_empty());
+        assert!(!text.contains("fake-secret"), "{text}");
+    }
+
+    #[test]
+    fn fr03_a_second_window_is_refused_while_one_is_open() {
+        let f = disclosing();
+        let session = f.session.clone();
+        let inner = Arc::new(Mutex::new(None));
+        let sink = inner.clone();
+        let (gate_session, keys) = (f.session.clone(), f.keys.clone());
+        let outer = ScriptedConfirm::during(true, move || {
+            let second = ScriptedConfirm::new(true);
+            let result = bulk_disclosure(
+                &gate_session,
+                &second,
+                &owner(&gate_session),
+                &everything(),
+                BulkUse::Preview,
+                |_| Ok(()),
+            );
+            *sink.lock().unwrap() = Some((result.err().map(|e| e.kind), second.shown().len()));
+            let _ = &keys;
+        });
+
+        bulk_preview(&f, &outer, &everything()).unwrap();
+
+        let (kind, shown) = inner.lock().unwrap().take().unwrap();
+        assert_eq!(kind.as_deref(), Some("busy"));
+        assert_eq!(shown, 0, "the second window never opened");
+        let _ = session;
+    }
+
+    #[test]
+    fn fr03_single_keys_are_free_up_to_the_budget_then_need_the_user() {
+        let f = disclosing();
+        let host = ScriptedConfirm::new(false);
+
+        for n in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            let secret = reveal_one(&f, &host, KeyDisclosure::Reveal)
+                .unwrap_or_else(|e| panic!("request {n}: {e:?}"))
+                .unwrap_or_else(|| panic!("request {n} is inside the budget"));
+            assert_eq!(secret.value.as_str(), "fake-secret-one");
+        }
+        assert!(host.shown().is_empty(), "no window inside the budget");
+
+        let sixth = reveal_one(&f, &host, KeyDisclosure::Reveal).unwrap();
+
+        assert!(sixth.is_none(), "the sixth is declined by the user");
+        let shown = host.shown();
+        assert_eq!(shown.len(), 1);
+        assert!(shown[0].contains("One"), "names the key: {}", shown[0]);
+        assert!(!shown[0].contains("fake-secret"), "{}", shown[0]);
+    }
+
+    #[test]
+    fn fr03_a_loop_of_single_copies_cannot_drain_the_vault_without_approval() {
+        let f = disclosing();
+        let host = ScriptedConfirm::new(false);
+        let mut leaked = 0;
+
+        for _ in 0..40 {
+            if single_disclosure(
+                &f.session,
+                &host,
+                &owner(&f.session),
+                &f.keys[1],
+                KeyDisclosure::Copy,
+            )
+            .unwrap()
+            .map(|secret| f.session.copy_stamped(secret))
+            .transpose()
+            .unwrap()
+            .is_some()
+            {
+                leaked += 1;
+            }
+        }
+
+        assert_eq!(leaked, crate::session::FREE_SINGLE_DISCLOSURES);
+        assert_eq!(
+            f.clipboard.lock().unwrap().sequence as usize,
+            crate::session::FREE_SINGLE_DISCLOSURES,
+            "writes stop at the budget"
+        );
+        assert_eq!(
+            host.shown().len(),
+            40 - crate::session::FREE_SINGLE_DISCLOSURES
+        );
+    }
+
+    #[test]
+    fn fr03_the_budget_is_a_rolling_minute_on_the_clock() {
+        let f = disclosing();
+        let host = ScriptedConfirm::new(false);
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            assert!(reveal_one(&f, &host, KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some());
+            f.clock
+                .set(f.clock.0.load(std::sync::atomic::Ordering::SeqCst) + 1);
+        }
+        assert!(reveal_one(&f, &host, KeyDisclosure::Reveal)
+            .unwrap()
+            .is_none());
+
+        // The oldest request is 60 s old now: one slot frees, and only one.
+        f.clock.set(1_000 + 60);
+        assert!(reveal_one(&f, &host, KeyDisclosure::Reveal)
+            .unwrap()
+            .is_some());
+        assert!(reveal_one(&f, &host, KeyDisclosure::Reveal)
+            .unwrap()
+            .is_none());
+
+        f.clock.set(1_000 + 200);
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            assert!(reveal_one(&f, &host, KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some());
+        }
+    }
+
+    #[test]
+    fn fr03_an_approved_single_key_counts_against_the_budget_and_a_lock_clears_it() {
+        let f = disclosing();
+        let yes = ScriptedConfirm::new(true);
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            reveal_one(&f, &yes, KeyDisclosure::Reveal)
+                .unwrap()
+                .unwrap();
+        }
+        assert!(yes.shown().is_empty());
+        reveal_one(&f, &yes, KeyDisclosure::Reveal)
+            .unwrap()
+            .unwrap();
+        assert_eq!(yes.shown().len(), 1, "the sixth asked");
+        reveal_one(&f, &yes, KeyDisclosure::Reveal)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            yes.shown().len(),
+            2,
+            "an approval buys one request, not a pass"
+        );
+
+        f.session.lock().unwrap();
+        f.session.observe(crate::policy::Signal::Available);
+        let ticket = f.session.begin_open().unwrap();
+        f.session
+            .open(ticket, || {
+                Vault::open(
+                    f._directory.path().join("vault.kdbx"),
+                    "fake-test-password-123!",
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        let fresh = ScriptedConfirm::new(false);
+        let id = f.keys[0].clone();
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            assert!(single_disclosure(
+                &f.session,
+                &fresh,
+                &owner(&f.session),
+                &id,
+                KeyDisclosure::Reveal
+            )
+            .unwrap()
+            .is_some());
+        }
+        assert!(fresh.shown().is_empty(), "a new session has a new budget");
+    }
+
+    #[test]
+    fn fr03_a_lock_while_a_single_key_window_is_open_discloses_nothing() {
+        let f = disclosing();
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            reveal_one(&f, &ScriptedConfirm::new(true), KeyDisclosure::Copy)
+                .unwrap()
+                .unwrap();
+        }
+        let session = f.session.clone();
+        let locking = ScriptedConfirm::during(true, move || session.lock().unwrap());
+
+        let error = reveal_one(&f, &locking, KeyDisclosure::Copy).err().unwrap();
+
+        assert_eq!(error.kind, "locked");
+    }
+
+    #[test]
+    fn fr03_every_disclosing_command_goes_through_the_native_approval() {
+        let source = include_str!("commands.rs");
+        let code = &source[..source.find("\nmod tests {").unwrap()];
+        for (command, helper) in [
+            ("key_reveal", "single_disclosure("),
+            ("key_copy", "single_disclosure("),
+            ("env_export", "bulk_disclosure("),
+            ("env_copy", "bulk_disclosure("),
+        ] {
+            let start = code
+                .find(&format!("pub async fn {command}("))
+                .unwrap_or_else(|| panic!("{command} is a command"));
+            let body = &code[start..];
+            let body = &body[..body.find("\n}\n").unwrap()];
+            assert!(body.contains(helper), "{command} calls {helper}");
+            assert!(
+                body.contains("confirm: State<'_, ConfirmState>"),
+                "{command} takes the native window"
+            );
+            assert!(
+                !body.contains("snapshot_for"),
+                "{command} takes no snapshot of its own: the helper binds the read to the approval"
+            );
+        }
+    }
+
+    #[test]
+    fn fr03_an_approved_request_fills_the_rolling_minute_too() {
+        let f = disclosing();
+        let yes = ScriptedConfirm::new(true);
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            reveal_one(&f, &yes, KeyDisclosure::Reveal)
+                .unwrap()
+                .unwrap();
+        }
+        f.clock.set(1_050);
+        reveal_one(&f, &yes, KeyDisclosure::Reveal)
+            .unwrap()
+            .unwrap();
+        assert_eq!(yes.shown().len(), 1, "the sixth asked and was approved");
+
+        // The five free requests are 61 s old. The approved one is 11 s old and still counts.
+        f.clock.set(1_061);
+        let no = ScriptedConfirm::new(false);
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES - 1 {
+            assert!(reveal_one(&f, &no, KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some());
+        }
+        assert!(no.shown().is_empty());
+        assert!(reveal_one(&f, &no, KeyDisclosure::Reveal)
+            .unwrap()
+            .is_none());
     }
 }

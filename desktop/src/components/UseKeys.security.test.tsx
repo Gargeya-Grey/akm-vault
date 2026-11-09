@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   keys: vi.fn().mockResolvedValue([]),
   importEnv: vi.fn().mockResolvedValue({ added: 1, updated: 1 }),
   exportEnv: vi.fn(),
+  copyEnv: vi.fn(),
   launchTerminal: vi.fn(),
 }));
 
@@ -270,4 +271,27 @@ test("a failed launch after a hide shows no error either", async () => {
   hide();
   await act(async () => reject({ kind: "launch", message: "The terminal could not be started." }));
   expect(screen.queryByText("The terminal could not be started.")).toBeNull();
+});
+
+test("a preview that the user declined in the native window shows a cancel message and no values", async () => {
+  mocks.keys.mockResolvedValueOnce([{ project: "demo", environment: "prod" }]);
+  mocks.exportEnv.mockResolvedValueOnce(null);
+  await act(async () => { render(<UseKeys />); });
+  fireEvent.change(screen.getByLabelText("Project"), { target: { value: "demo" } });
+  fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "prod" } });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Preview" })); });
+  expect(document.body.textContent).toContain("Cancelled. No values were shown.");
+  expect(document.body.textContent).not.toContain("Previewed");
+  expect(screen.queryByText("Hide preview")).toBeNull();
+});
+
+test("a copy that the user declined in the native window says that nothing was copied", async () => {
+  mocks.keys.mockResolvedValueOnce([{ project: "demo", environment: "prod" }]);
+  mocks.copyEnv.mockResolvedValueOnce(null);
+  await act(async () => { render(<UseKeys />); });
+  fireEvent.change(screen.getByLabelText("Project"), { target: { value: "demo" } });
+  fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "prod" } });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Copy to clipboard" })); });
+  expect(document.body.textContent).toContain("Cancelled. Nothing was copied.");
+  expect(document.body.textContent).not.toContain("clipboard in");
 });

@@ -157,6 +157,11 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     try {
       const text = await api.exportEnv(scope.project, scope.environment);
       if (currentRequest !== exportRequest.current || document.hidden) return;
+      if (text === null) {
+        setPreview(null);
+        setMessage({ tone: "ok", text: "Cancelled. No values were shown." });
+        return;
+      }
       setPreview({ ...scope, text });
       const lines = text.split("\n").filter((line) => line.trim()).length;
       setMessage({
@@ -183,7 +188,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
       if (currentRequest !== sideEffectRequest.current) return;
       setMessage({
         tone: "ok",
-        text: clipboardCopyText(seconds),
+        text: seconds === null ? "Cancelled. Nothing was copied." : clipboardCopyText(seconds),
       });
     } catch (cause) {
       if (currentRequest === sideEffectRequest.current) setMessage({ tone: "error", text: errorText(cause) });
