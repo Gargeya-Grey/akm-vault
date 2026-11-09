@@ -114,6 +114,70 @@ impl AuditSnapshot {
     }
 }
 
+/// The action of the first record of a journal that replaced a damaged one.
+pub const RECOVERED: &str = "journal-recovered";
+
+/// What a recovery kept and what it started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recovery {
+    /// The damaged journal, unchanged, under its dated name beside the new journal.
+    pub kept: PathBuf,
+    /// The size of the kept file.
+    pub bytes: u64,
+    /// The SHA-256 of the kept file, in hex. The first record of the new journal states it.
+    pub sha256: String,
+}
+
+/// The steps of a recovery at which a test can make the file system fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecoveryStep {
+    CreateNew,
+    SyncNew,
+    RenameAside,
+    Install,
+    Restore,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_RECOVERY_AT: std::cell::RefCell<Vec<RecoveryStep>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Makes the next arrival at `step` fail, once.
+#[cfg(test)]
+pub(crate) fn fail_recovery_at(step: RecoveryStep) {
+    FAIL_RECOVERY_AT.with(|fail| fail.borrow_mut().push(step));
+}
+
+/// Production does nothing here. A test makes a step fail.
+fn reach(step: RecoveryStep) -> Result<()> {
+    #[cfg(test)]
+    {
+        let injected = FAIL_RECOVERY_AT.with(|fail| {
+            let mut fail = fail.borrow_mut();
+            let position = fail.iter().position(|planned| *planned == step)?;
+            fail.remove(position);
+            Some(())
+        });
+        if injected.is_some() {
+            return Err(std::io::Error::other(format!("injected failure at {step:?}")).into());
+        }
+    }
+    let _ = step;
+    Ok(())
+}
+
+/// Removes the pending file that this call created, and says so in the error if it cannot.
+fn with_leftover(error: Error, pending: &Path) -> Error {
+    match fs::remove_file(pending) {
+        Ok(()) => error,
+        Err(_) => Error::Journal(format!(
+            "{error}. The file {} was left behind and may be deleted",
+            pending.display()
+        )),
+    }
+}
+
 /// A record to append. The chain adds the sequence number, the time and the links.
 pub(crate) struct NewRecord<'a> {
     pub action: &'a str,
@@ -127,6 +191,8 @@ trait Store: Send + Sync {
     fn read(&self) -> Result<Option<File>>;
     fn lock(&self, exclusive: bool) -> Result<File>;
     fn append(&self) -> Result<File>;
+    /// A new file in the same folder, for writing. It fails if the name is taken.
+    fn create_new(&self, path: &Path) -> Result<File>;
 }
 
 fn lock_path(path: &Path) -> PathBuf {
@@ -183,6 +249,11 @@ impl Store for PlainStore {
         self.parent()?;
         Ok(OpenOptions::new().create(true).append(true).open(&self.0)?)
     }
+
+    fn create_new(&self, path: &Path) -> Result<File> {
+        self.parent()?;
+        Ok(OpenOptions::new().create_new(true).write(true).open(path)?)
+    }
 }
 
 struct PrivateStore(PathBuf);
@@ -201,6 +272,11 @@ impl Store for PrivateStore {
     fn append(&self) -> Result<File> {
         private_fs::open_file(&self.0, OpenMode::Append)?
             .ok_or_else(|| Error::Journal("cannot open the journal".into()))
+    }
+
+    fn create_new(&self, path: &Path) -> Result<File> {
+        private_fs::open_file(path, OpenMode::CreateNew)?
+            .ok_or_else(|| Error::Journal("cannot create the new journal file".into()))
     }
 }
 
@@ -252,11 +328,31 @@ impl ChainFile {
 
     pub(crate) fn append_all(&self, records: &[NewRecord<'_>]) -> Result<()> {
         let _lock = self.store.lock(true)?;
-        let (mut seq, mut prev) = self.tail()?.unwrap_or((0, self.genesis.clone()));
+        let (seq, prev) = self.tail()?.unwrap_or((0, self.genesis.clone()));
+        let bytes = self.encode(records, &prev, seq, Utc::now())?;
+        let mut file = self.store.append()?;
+        file.write_all(&bytes)?;
+        #[cfg(test)]
+        if FAIL_NEXT_SYNC.with(|fail| fail.replace(false)) {
+            return Err(std::io::Error::other("injected journal sync failure").into());
+        }
+        file.sync_data()?;
+        Ok(())
+    }
+
+    /// The lines of `records`, chained after `prev` (the hash of record number `seq`).
+    fn encode(
+        &self,
+        records: &[NewRecord<'_>],
+        prev: &str,
+        mut seq: u64,
+        first_time: DateTime<Utc>,
+    ) -> Result<Vec<u8>> {
+        let mut prev = prev.to_string();
         let mut bytes = Vec::new();
-        for record in records {
+        for (index, record) in records.iter().enumerate() {
             seq += 1;
-            let ts = Utc::now();
+            let ts = if index == 0 { first_time } else { Utc::now() };
             let hash = digest(seq, &ts, record.action, record.key_id, record.detail, &prev);
             let entry = AuditEntry {
                 seq,
@@ -270,14 +366,7 @@ impl ChainFile {
             serde_json::to_writer(&mut bytes, &entry)?;
             bytes.push(b'\n');
         }
-        let mut file = self.store.append()?;
-        file.write_all(&bytes)?;
-        #[cfg(test)]
-        if FAIL_NEXT_SYNC.with(|fail| fail.replace(false)) {
-            return Err(std::io::Error::other("injected journal sync failure").into());
-        }
-        file.sync_data()?;
-        Ok(())
+        Ok(bytes)
     }
 
     pub fn read(&self, limit: usize) -> Result<Vec<AuditEntry>> {
@@ -376,6 +465,147 @@ impl ChainFile {
         Ok(snapshot)
     }
 
+    /// Keeps a damaged chain file aside under a dated name, byte for byte, and starts a new
+    /// chain in its place. The first record of the new chain states the gap and the SHA-256 of
+    /// the kept file; `then` follows it. The chain file must be damaged.
+    ///
+    /// The order is what keeps the old journal usable as evidence after every failure. The
+    /// new chain is written and synced to a file of its own first. Then the damaged file is
+    /// renamed, and only then the new file takes its name. A failure before the first
+    /// rename leaves the damaged file where it was. A failure of the second rename puts the
+    /// damaged file back. Only a failure of both leaves the name free, and the error says so.
+    /// Only a file that this call created is ever removed.
+    pub(crate) fn recover(&self, now: DateTime<Utc>, then: &[NewRecord<'_>]) -> Result<Recovery> {
+        let _lock = self.store.lock(true)?;
+        let Some(file) = self.store.read()? else {
+            return Err(Error::Journal(
+                "there is no journal file to keep aside".into(),
+            ));
+        };
+        if self.chain(file, 0)?.state != AuditState::Corrupt {
+            return Err(Error::Invalid(
+                "The activity journal is not damaged, so nothing was moved.".into(),
+            ));
+        }
+        let (bytes, sha256) = self.fingerprint()?;
+        let kept = self.free_kept_path(now)?;
+        let kept_name = kept
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let detail = format!(
+            "history before this record cannot be proved complete; the damaged journal ({bytes} bytes, SHA-256 {sha256}) is kept as {kept_name}"
+        );
+        let mut records = vec![NewRecord {
+            action: RECOVERED,
+            key_id: None,
+            detail: Some(&detail),
+        }];
+        records.extend(then.iter().map(|record| NewRecord {
+            action: record.action,
+            key_id: record.key_id,
+            detail: record.detail,
+        }));
+        let new_chain = self.encode(&records, &self.genesis, 0, now)?;
+
+        let pending = self.pending_path();
+        reach(RecoveryStep::CreateNew)?;
+        let mut created = self.store.create_new(&pending)?;
+        // From here the pending file is ours, and only this call removes it.
+        let written = reach(RecoveryStep::SyncNew)
+            .and_then(|()| Ok(created.write_all(&new_chain)?))
+            .and_then(|()| Ok(created.sync_data()?));
+        drop(created);
+        if let Err(error) = written {
+            return Err(with_leftover(error, &pending));
+        }
+
+        let aside = reach(RecoveryStep::RenameAside)
+            .and_then(|()| fs::rename(&self.path, &kept).map_err(Error::from));
+        if let Err(error) = aside {
+            return Err(with_leftover(
+                Error::Journal(format!(
+                    "the damaged journal could not be kept aside, so nothing was changed ({error})"
+                )),
+                &pending,
+            ));
+        }
+        let installed = reach(RecoveryStep::Install)
+            .and_then(|()| fs::rename(&pending, &self.path).map_err(Error::from));
+        if let Err(error) = installed {
+            let restored = reach(RecoveryStep::Restore)
+                .and_then(|()| fs::rename(&kept, &self.path).map_err(Error::from));
+            return Err(match restored {
+                Ok(()) => with_leftover(
+                    Error::Journal(format!(
+                        "the new journal could not be started, so the damaged journal was put back ({error})"
+                    )),
+                    &pending,
+                ),
+                Err(restore) => Error::Journal(format!(
+                    "the new journal could not be started ({error}) and the damaged journal could not be put back ({restore}). The damaged journal is kept as {}. The new journal is {}. Move one of them to {} to continue",
+                    kept.display(),
+                    pending.display(),
+                    self.path.display()
+                )),
+            });
+        }
+        Ok(Recovery {
+            kept,
+            bytes,
+            sha256,
+        })
+    }
+
+    /// The size and the SHA-256 of the file as it is now.
+    fn fingerprint(&self) -> Result<(u64, String)> {
+        let Some(file) = self.store.read()? else {
+            return Err(Error::Journal("the journal file disappeared".into()));
+        };
+        let mut reader = BufReader::new(file);
+        let mut hasher = Sha256::new();
+        let mut bytes = 0u64;
+        let mut block = [0u8; 8192];
+        loop {
+            let read = std::io::Read::read(&mut reader, &mut block)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&block[..read]);
+            bytes += read as u64;
+        }
+        Ok((bytes, hex::encode(hasher.finalize())))
+    }
+
+    /// `<journal>.damaged-<UTC time>`, with a number added if that name is taken. The name does
+    /// not end in `.jsonl`, so nothing reads it as a journal.
+    fn free_kept_path(&self, now: DateTime<Utc>) -> Result<PathBuf> {
+        let stamp = now.format("%Y%m%dT%H%M%SZ");
+        for number in 1..=100u32 {
+            let mut name = self.path.as_os_str().to_os_string();
+            name.push(if number == 1 {
+                format!(".damaged-{stamp}")
+            } else {
+                format!(".damaged-{stamp}-{number}")
+            });
+            let candidate = PathBuf::from(name);
+            match fs::symlink_metadata(&candidate) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(candidate),
+                Err(error) => return Err(error.into()),
+                Ok(_) => {}
+            }
+        }
+        Err(Error::Journal(
+            "too many kept journals have the same time stamp".into(),
+        ))
+    }
+
+    fn pending_path(&self) -> PathBuf {
+        let mut name = self.path.as_os_str().to_os_string();
+        name.push(format!(".recovering-{}", uuid::Uuid::new_v4().simple()));
+        PathBuf::from(name)
+    }
+
     // The caller holds the exclusive lock.
     fn tail(&self) -> Result<Option<(u64, String)>> {
         let Some(file) = self.store.read()? else {
@@ -454,6 +684,31 @@ impl AuditLog {
 
     pub fn verify(&self) -> Result<Option<u64>> {
         self.snapshot(0)?.verification()
+    }
+
+    /// A deliberate recovery from a damaged journal. It touches the journal of this vault and
+    /// no other file of the folder. The damaged file is kept under a dated name beside the
+    /// journal, byte for byte, and a new journal starts with one record that states the gap and
+    /// the SHA-256 of the kept file. Appends and disclosure work again after that. A journal
+    /// that is not damaged is refused. A failure at any step leaves the damaged journal as
+    /// evidence, in place.
+    pub fn recover_damaged(&self) -> Result<Recovery> {
+        self.recover_damaged_at(Utc::now())
+    }
+
+    pub fn recover_damaged_at(&self, now: DateTime<Utc>) -> Result<Recovery> {
+        let Some(folder) = self.root.open()? else {
+            return Err(Error::Journal("there is no journal to recover".into()));
+        };
+        journal::record(&folder, &self.evidence, |placement| {
+            let chain = ChainFile::private(folder.journal_file(&placement.id), &placement.id);
+            let owed = placement.owes_rollback.then_some(NewRecord {
+                action: "vault-rolled-back",
+                key_id: None,
+                detail: Some("vault content matches an earlier version that this device saw"),
+            });
+            chain.recover(now, owed.as_slice())
+        })
     }
 
     /// Reads the journal and the notices about it. Creates nothing and changes nothing.
@@ -579,4 +834,256 @@ fn digest(
     hasher.update(b"\n");
     hasher.update(detail.unwrap_or("").as_bytes());
     hex::encode(hasher.finalize())
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use crate::journal::{JournalRoot, VaultEvidence};
+    use chrono::TimeZone;
+
+    struct Fixture {
+        directory: tempfile::TempDir,
+        log: AuditLog,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let vault = directory.path().join("vault.kdbx");
+            fs::write(&vault, b"fake vault bytes").unwrap();
+            let log = AuditLog::new(
+                JournalRoot::at(directory.path().join("journal")),
+                VaultEvidence::from_file(&vault),
+            );
+            Self { directory, log }
+        }
+
+        fn journal(&self) -> PathBuf {
+            self.log.journal_path().unwrap().expect("a bound journal")
+        }
+
+        /// A journal of three records, then a line that is no record.
+        fn damaged(&self) -> Vec<u8> {
+            for action in ["add-completed", "reveal-requested", "copy-requested"] {
+                self.log.append(action, None, Some("fake")).unwrap();
+            }
+            let path = self.journal();
+            let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(b"{this is not a record}\n").unwrap();
+            drop(file);
+            fs::read(&path).unwrap()
+        }
+
+        /// Every file of the journal folder with its bytes, to compare before and after.
+        fn folder(&self) -> Vec<(String, Vec<u8>)> {
+            let mut files: Vec<_> = fs::read_dir(self.directory.path().join("journal"))
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    (
+                        entry.file_name().to_string_lossy().into_owned(),
+                        fs::read(entry.path()).unwrap_or_default(),
+                    )
+                })
+                .collect();
+            files.sort();
+            files
+        }
+    }
+
+    fn then() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 11, 9, 10, 15, 0).unwrap()
+    }
+
+    #[test]
+    fn fr14_a_damaged_journal_is_kept_byte_for_byte_and_a_new_one_starts_with_the_gap() {
+        let fixture = Fixture::new();
+        let damaged = fixture.damaged();
+        let path = fixture.journal();
+        assert!(
+            fixture.log.append("reveal-requested", None, None).is_err(),
+            "appends are refused while the journal is damaged"
+        );
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            damaged,
+            "the refusal changed nothing"
+        );
+
+        let recovery = fixture.log.recover_damaged_at(then()).unwrap();
+
+        assert_eq!(
+            fs::read(&recovery.kept).unwrap(),
+            damaged,
+            "kept byte for byte"
+        );
+        assert_eq!(recovery.bytes, damaged.len() as u64);
+        assert_eq!(recovery.sha256, hex::encode(Sha256::digest(&damaged)));
+        assert_eq!(
+            recovery.kept.file_name().unwrap().to_string_lossy(),
+            format!(
+                "{}.damaged-20261109T101500Z",
+                path.file_name().unwrap().to_string_lossy()
+            )
+        );
+        assert_eq!(recovery.kept.parent(), path.parent(), "beside the journal");
+        let entries = fixture.log.read(10).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].seq, 1);
+        assert_eq!(entries[0].action, RECOVERED);
+        let detail = entries[0].detail.as_deref().unwrap();
+        assert!(detail.contains(&recovery.sha256), "{detail}");
+        assert!(detail.contains("cannot be proved complete"), "{detail}");
+        assert!(
+            detail.contains(
+                &recovery
+                    .kept
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            ),
+            "{detail}"
+        );
+        assert_eq!(
+            fixture.log.verify().unwrap(),
+            None,
+            "the new chain is consistent"
+        );
+
+        fixture
+            .log
+            .append("reveal-requested", None, Some("after"))
+            .unwrap();
+        let entries = fixture.log.read(10).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|e| e.action.as_str())
+                .collect::<Vec<_>>(),
+            [RECOVERED, "reveal-requested"]
+        );
+    }
+
+    #[test]
+    fn fr14_a_journal_that_is_not_damaged_is_refused_and_nothing_moves() {
+        let fixture = Fixture::new();
+        fixture.log.append("add-completed", None, None).unwrap();
+        let before = fixture.folder();
+
+        let error = fixture.log.recover_damaged_at(then()).unwrap_err();
+
+        assert!(error.to_string().contains("not damaged"), "{error}");
+        assert_eq!(fixture.folder(), before);
+    }
+
+    #[test]
+    fn fr14_without_a_journal_nothing_is_created() {
+        let fixture = Fixture::new();
+
+        assert!(fixture.log.recover_damaged_at(then()).is_err());
+        assert!(!fixture.directory.path().join("journal").exists());
+    }
+
+    #[test]
+    fn fr14_a_failure_at_each_step_leaves_the_damaged_journal_in_place_and_blocked() {
+        for step in [
+            RecoveryStep::CreateNew,
+            RecoveryStep::SyncNew,
+            RecoveryStep::RenameAside,
+            RecoveryStep::Install,
+        ] {
+            let fixture = Fixture::new();
+            let damaged = fixture.damaged();
+            let before = fixture.folder();
+            fail_recovery_at(step);
+
+            let error = fixture.log.recover_damaged_at(then()).unwrap_err();
+
+            assert!(error.to_string().contains("injected"), "{step:?}: {error}");
+            assert_eq!(
+                fixture.folder(),
+                before,
+                "{step:?}: the folder is as it was: no kept file, no leftover"
+            );
+            assert_eq!(fs::read(fixture.journal()).unwrap(), damaged, "{step:?}");
+            assert!(
+                fixture.log.append("reveal-requested", None, None).is_err(),
+                "{step:?}: disclosure stays blocked"
+            );
+            // A retry after the cause is gone works.
+            let recovery = fixture.log.recover_damaged_at(then()).unwrap();
+            assert_eq!(fs::read(recovery.kept).unwrap(), damaged, "{step:?}");
+            fixture.log.append("reveal-requested", None, None).unwrap();
+        }
+    }
+
+    #[test]
+    fn fr14_when_the_damaged_journal_cannot_be_put_back_the_error_names_both_files() {
+        let fixture = Fixture::new();
+        let damaged = fixture.damaged();
+        fail_recovery_at(RecoveryStep::Install);
+        fail_recovery_at(RecoveryStep::Restore);
+
+        let error = fixture
+            .log
+            .recover_damaged_at(then())
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains(".damaged-20261109T101500Z"), "{error}");
+        assert!(error.contains(".recovering-"), "{error}");
+        let names: Vec<_> = fixture.folder().into_iter().map(|(name, _)| name).collect();
+        let kept = names
+            .iter()
+            .find(|name| name.contains(".damaged-"))
+            .expect("the damaged journal is kept");
+        let kept_bytes = fs::read(fixture.directory.path().join("journal").join(kept)).unwrap();
+        assert_eq!(kept_bytes, damaged, "the evidence is intact");
+    }
+
+    #[test]
+    fn fr14_it_touches_only_the_journal_it_was_opened_for() {
+        let fixture = Fixture::new();
+        fixture.damaged();
+        let folder = fixture.directory.path().join("journal");
+        let sentinels = [
+            (
+                "j-00000000000000000000000000000000.jsonl",
+                b"another journal".as_slice(),
+            ),
+            ("notes.txt", b"not ours".as_slice()),
+        ];
+        for (name, bytes) in sentinels {
+            fs::write(folder.join(name), bytes).unwrap();
+        }
+        // The first dated name is taken by a file that this call did not create.
+        let path = fixture.journal();
+        let taken = PathBuf::from(format!("{}.damaged-20261109T101500Z", path.display()));
+        fs::write(&taken, b"someone else's file").unwrap();
+
+        let recovery = fixture.log.recover_damaged_at(then()).unwrap();
+
+        for (name, bytes) in sentinels {
+            assert_eq!(fs::read(folder.join(name)).unwrap(), bytes, "{name}");
+        }
+        assert_eq!(fs::read(&taken).unwrap(), b"someone else's file");
+        assert!(
+            recovery
+                .kept
+                .to_string_lossy()
+                .ends_with("damaged-20261109T101500Z-2"),
+            "{}",
+            recovery.kept.display()
+        );
+        assert!(
+            fs::read_dir(&folder).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".recovering-")),
+            "no pending file is left"
+        );
+    }
 }
