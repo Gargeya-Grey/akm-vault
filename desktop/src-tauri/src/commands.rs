@@ -815,6 +815,7 @@ pub async fn env_save<R: tauri::Runtime>(
             .path()
             .app_config_dir()
             .map_err(CommandError::internal)?;
+        let remnants = private_export::Remnants::default();
         let saved = session.publish(
             expected,
             || {
@@ -823,6 +824,7 @@ pub async fn env_save<R: tauri::Runtime>(
                     &body,
                     &[vault_path, settings],
                     &[config_dir],
+                    &remnants,
                 )
             },
             |prepared| {
@@ -834,7 +836,8 @@ pub async fn env_save<R: tauri::Runtime>(
                     )
                 })
             },
-        )?;
+        );
+        let saved = report_remnants(&session, &remnants, saved)?;
         Ok(Some(saved.display().to_string()))
     })
     .await
@@ -870,6 +873,25 @@ fn requested_file_export_at(
             })
         })
         .map(|exported| exported.value)
+}
+
+/// A temporary file whose deletion could not be confirmed may still hold the plaintext keys, so
+/// the user must hear of it however the export ended. The text goes to the error of a failed
+/// export, and to the application warnings too: a lock can overtake the reply, and a warning
+/// outlives the session.
+fn report_remnants<T>(
+    session: &Session,
+    remnants: &private_export::Remnants,
+    result: Result<T, CommandError>,
+) -> Result<T, CommandError> {
+    let Some(warning) = remnants.warning() else {
+        return result;
+    };
+    session.warn(warning.clone());
+    result.map_err(|error| CommandError {
+        message: format!("{} {warning}", error.message),
+        ..error
+    })
 }
 
 fn publish_and_record(
@@ -1248,6 +1270,63 @@ mod tests {
             })
             .unwrap();
         (session, directory)
+    }
+
+    #[test]
+    fn fr04_a_failed_export_with_a_remnant_names_it_in_the_error_and_in_the_warnings() {
+        let (session, _directory) = test_session();
+        let remnants = private_export::Remnants::default();
+        let remnant = PathBuf::from(r"C:\fake-folder\.akm-export-00000000.tmp");
+        remnants.record(remnant.clone());
+
+        let error = report_remnants::<()>(
+            &session,
+            &remnants,
+            Err(CommandError::new("stalePreview", "The vault changed.")),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind, "stalePreview");
+        assert!(error.message.starts_with("The vault changed. "));
+        let shown = remnant.display().to_string();
+        assert!(error.message.contains(&shown), "{}", error.message);
+        let warnings = serde_json::to_value(session.warnings().unwrap()).unwrap();
+        let application = warnings["application"].as_array().unwrap();
+        assert_eq!(application.len(), 1);
+        assert!(application[0]["message"].as_str().unwrap().contains(&shown));
+    }
+
+    #[test]
+    fn fr04_a_saved_export_with_a_remnant_still_warns() {
+        let (session, _directory) = test_session();
+        let remnants = private_export::Remnants::default();
+        remnants.record(PathBuf::from(r"C:\fake-folder\.akm-export-11111111.tmp"));
+
+        let saved = report_remnants(&session, &remnants, Ok(7)).unwrap();
+
+        assert_eq!(saved, 7);
+        let warnings = serde_json::to_value(session.warnings().unwrap()).unwrap();
+        assert_eq!(warnings["application"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fr04_without_a_remnant_the_result_and_the_warnings_are_untouched() {
+        let (session, _directory) = test_session();
+        let remnants = private_export::Remnants::default();
+
+        let error = report_remnants::<()>(
+            &session,
+            &remnants,
+            Err(CommandError::new("locked", "The session is locked.")),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            (error.kind.as_str(), error.message.as_str()),
+            ("locked", "The session is locked.")
+        );
+        let warnings = serde_json::to_value(session.warnings().unwrap()).unwrap();
+        assert!(warnings["application"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -1857,6 +1936,7 @@ mod tests {
                             &exported.value,
                             std::slice::from_ref(&path),
                             &[],
+                            &private_export::Remnants::default(),
                         )
                     },
                     |prepared| {

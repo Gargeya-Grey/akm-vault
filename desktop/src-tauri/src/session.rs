@@ -1357,6 +1357,7 @@ mod tests {
                             "TOKEN=fake-view-export\n",
                             &[],
                             &[],
+                            &crate::private_export::Remnants::default(),
                         )?;
                         if !authorized {
                             stalled_tx.send(()).unwrap();
@@ -1412,6 +1413,7 @@ mod tests {
                             "TOKEN=fake-refused\n",
                             &[],
                             &[],
+                            &crate::private_export::Remnants::default(),
                         )?;
                         prepared_tx.send(()).unwrap();
                         release_rx.recv().unwrap();
@@ -2849,8 +2851,13 @@ mod tests {
             session.publish(
                 snapshot,
                 || {
-                    let prepared =
-                        crate::private_export::prepare_private(&path, "TOKEN=fake\n", &[], &[])?;
+                    let prepared = crate::private_export::prepare_private(
+                        &path,
+                        "TOKEN=fake\n",
+                        &[],
+                        &[],
+                        &crate::private_export::Remnants::default(),
+                    )?;
                     prepared_tx.send(()).unwrap();
                     release_rx.recv().unwrap();
                     Ok(prepared)
@@ -2884,7 +2891,15 @@ mod tests {
         let exporter = std::thread::spawn(move || {
             session.publish(
                 snapshot,
-                || crate::private_export::prepare_private(&path, "TOKEN=fake\n", &[], &[]),
+                || {
+                    crate::private_export::prepare_private(
+                        &path,
+                        "TOKEN=fake\n",
+                        &[],
+                        &[],
+                        &crate::private_export::Remnants::default(),
+                    )
+                },
                 |prepared| {
                     authorized_tx.send(()).unwrap();
                     release_rx.recv().unwrap();

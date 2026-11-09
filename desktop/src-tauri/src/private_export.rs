@@ -2,6 +2,7 @@ use std::{
     fs::{self, File},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, PoisonError},
 };
 
 use crate::error::CommandError;
@@ -169,16 +170,64 @@ fn is_reparse(metadata: &fs::Metadata) -> bool {
     metadata.is_symlink()
 }
 
+/// The temporary files whose deletion was requested and not confirmed. Such a file may still
+/// hold the plaintext keys. The caller of `prepare_private` owns the log and reads it after the
+/// export ended: a drop cannot return an error, so the log is how a failed cleanup is reported.
+#[derive(Clone, Default)]
+pub struct Remnants(Arc<Mutex<Vec<PathBuf>>>);
+
+impl Remnants {
+    pub(crate) fn record(&self, path: PathBuf) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(path);
+    }
+
+    /// The text that names each possible remnant, or `None` when every cleanup was confirmed.
+    /// It holds a path and no value.
+    pub fn warning(&self) -> Option<String> {
+        let paths = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if paths.is_empty() {
+            return None;
+        }
+        let list = paths
+            .iter()
+            .map(|path| format!("\"{}\"", path.display()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!(
+            "AKM could not confirm that it deleted the temporary export file {list}. It may still hold the plaintext keys. Delete it yourself."
+        ))
+    }
+}
+
+/// Asks the system to delete the file behind a handle. `true` means that the request was
+/// accepted. The file goes when the last handle closes.
+type Discard = fn(&File) -> bool;
+
+#[cfg(windows)]
+fn system_discard(file: &File) -> bool {
+    windows::discard(file)
+}
+
+#[cfg(not(windows))]
+fn system_discard(_: &File) -> bool {
+    false
+}
+
 struct TempFile {
     file: File,
+    path: PathBuf,
     published: bool,
+    discard: Discard,
+    remnants: Remnants,
 }
 
 impl Drop for TempFile {
     fn drop(&mut self) {
-        #[cfg(windows)]
-        if !self.published {
-            windows::discard(&self.file);
+        if !self.published && !(self.discard)(&self.file) {
+            self.remnants.record(self.path.clone());
         }
     }
 }
@@ -202,17 +251,21 @@ impl PreparedExport {
     }
 }
 
+/// Writes the plaintext to a private temporary file beside `path`. Every temporary file whose
+/// deletion cannot be confirmed is recorded in `remnants`, whatever the way the export ends.
 pub fn prepare_private(
     path: &Path,
     contents: &str,
     protected: &[PathBuf],
     protected_dirs: &[PathBuf],
+    remnants: &Remnants,
 ) -> Result<PreparedExport, CommandError> {
     prepare_private_with(
         path,
         contents,
         protected,
         protected_dirs,
+        remnants,
         &mut SystemExportIo,
     )
 }
@@ -222,12 +275,13 @@ fn prepare_private_with(
     contents: &str,
     protected: &[PathBuf],
     protected_dirs: &[PathBuf],
+    remnants: &Remnants,
     export_io: &mut impl ExportIo,
 ) -> Result<PreparedExport, CommandError> {
     let destination = validate_destination(path, protected, protected_dirs)?;
     #[cfg(windows)]
     let parents = windows::pin_local_parents(&destination)?;
-    let temp = prepare_temp(&destination, contents, export_io)?;
+    let temp = prepare_temp(&destination, contents, remnants, export_io)?;
     validate_destination(&destination, protected, protected_dirs)?;
     Ok(PreparedExport {
         destination,
@@ -257,6 +311,11 @@ trait ExportIo {
     fn publish(&mut self, file: &File, destination: &Path) -> Result<(), CommandError> {
         replace(file, destination)
     }
+
+    /// How a temporary file that must go is deleted. A test replaces it to fail the request.
+    fn discard(&self) -> Discard {
+        system_discard
+    }
 }
 
 struct SystemExportIo;
@@ -265,6 +324,7 @@ impl ExportIo for SystemExportIo {}
 fn prepare_temp(
     path: &Path,
     contents: &str,
+    remnants: &Remnants,
     export_io: &mut impl ExportIo,
 ) -> Result<TempFile, CommandError> {
     let parent = path
@@ -273,7 +333,10 @@ fn prepare_temp(
     let temp_path = parent.join(format!(".akm-export-{}.tmp", uuid::Uuid::new_v4()));
     let mut temp = TempFile {
         file: export_io.create_private(&temp_path)?,
+        path: temp_path,
         published: false,
+        discard: export_io.discard(),
+        remnants: remnants.clone(),
     };
     #[cfg(windows)]
     windows::verify_private_acl(&temp.file)?;
@@ -482,16 +545,17 @@ mod windows {
         Ok(())
     }
 
-    pub(super) fn discard(file: &File) {
+    /// Whether Windows accepted the delete request. The handle identifies our file even if its
+    /// temporary name has been replaced.
+    pub(super) fn discard(file: &File) -> bool {
         let info = FILE_DISPOSITION_INFO { DeleteFile: true };
-        // The handle identifies our file even if its temporary name has been replaced.
         unsafe {
             SetFileInformationByHandle(
                 file.as_raw_handle(),
                 FileDispositionInfo,
                 std::ptr::from_ref(&info).cast(),
                 size_of::<FILE_DISPOSITION_INFO>() as u32,
-            );
+            ) != 0
         }
     }
 
@@ -632,7 +696,14 @@ mod tests {
         protected: &[PathBuf],
         protected_dirs: &[PathBuf],
     ) -> Result<PathBuf, CommandError> {
-        prepare_private(path, contents, protected, protected_dirs)?.publish()
+        prepare_private(
+            path,
+            contents,
+            protected,
+            protected_dirs,
+            &Remnants::default(),
+        )?
+        .publish()
     }
 
     #[cfg(windows)]
@@ -660,7 +731,14 @@ mod tests {
     fn cancellation_removes_the_owned_file_after_its_temp_name_is_replaced() {
         let directory = temporary_directory();
         let target = directory.path().join("out.env");
-        let prepared = prepare_private(&target, "TOKEN=fake-owned\n", &[], &[]).unwrap();
+        let prepared = prepare_private(
+            &target,
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &Remnants::default(),
+        )
+        .unwrap();
         let (replacement, displaced) = displace_temp(directory.path());
 
         drop(prepared);
@@ -687,7 +765,14 @@ mod tests {
     fn publication_moves_the_owned_file_after_its_temp_name_is_replaced() {
         let directory = temporary_directory();
         let target = directory.path().join("out.env");
-        let prepared = prepare_private(&target, "TOKEN=fake-owned\n", &[], &[]).unwrap();
+        let prepared = prepare_private(
+            &target,
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &Remnants::default(),
+        )
+        .unwrap();
         let (replacement, displaced) = displace_temp(directory.path());
 
         assert_eq!(prepared.publish().unwrap(), target);
@@ -739,11 +824,238 @@ mod tests {
         let temp = prepare_temp(
             &directory.path().join("out.env"),
             "TOKEN=fake\n",
+            &Remnants::default(),
             &mut SystemExportIo,
         )
         .unwrap();
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
         drop(temp);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
+    /// The Windows delete request, refused. It leaves the file where it is, as a real refusal does.
+    #[cfg(windows)]
+    fn delete_refused(_: &File) -> bool {
+        false
+    }
+
+    /// An export system whose delete request is always refused, and that fails where it is told.
+    #[cfg(windows)]
+    #[derive(Default)]
+    struct DeleteRefused {
+        fail_sync: bool,
+        fail_publish: bool,
+    }
+
+    #[cfg(windows)]
+    impl ExportIo for DeleteRefused {
+        fn sync(&mut self, file: &File) -> Result<(), CommandError> {
+            file.sync_all().map_err(io)?;
+            if self.fail_sync {
+                return Err(io(std::io::Error::other("injected sync failure")));
+            }
+            Ok(())
+        }
+
+        fn publish(&mut self, _file: &File, _destination: &Path) -> Result<(), CommandError> {
+            if self.fail_publish {
+                return Err(io(std::io::Error::other("injected publication failure")));
+            }
+            Ok(())
+        }
+
+        fn discard(&self) -> Discard {
+            delete_refused
+        }
+    }
+
+    #[cfg(windows)]
+    fn temporary_files(directory: &Path) -> Vec<PathBuf> {
+        fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(".akm-export-")
+            })
+            .collect()
+    }
+
+    /// The remnant is real and the warning names it, and the warning holds no value.
+    #[cfg(windows)]
+    fn assert_remnant_is_named(directory: &Path, remnants: &Remnants) {
+        let left = temporary_files(directory);
+        assert_eq!(left.len(), 1, "the refused delete leaves the file");
+        assert_eq!(
+            fs::read(&left[0]).unwrap(),
+            b"TOKEN=fake-owned\n",
+            "the remnant holds the plaintext"
+        );
+        let warning = remnants
+            .warning()
+            .expect("an unconfirmed delete is reported");
+        assert!(
+            warning.contains(&left[0].display().to_string()),
+            "the warning names the remnant: {warning}"
+        );
+        assert!(!warning.contains("fake-owned"), "{warning}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fr04_a_refused_delete_after_a_failed_sync_names_the_remnant() {
+        let directory = temporary_directory();
+        let target = directory.path().join("out.env");
+        let remnants = Remnants::default();
+        let mut export_io = DeleteRefused {
+            fail_sync: true,
+            ..Default::default()
+        };
+
+        let error = prepare_private_with(
+            &target,
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &remnants,
+            &mut export_io,
+        )
+        .err()
+        .expect("injected sync failure");
+
+        assert_eq!(error.message, "injected sync failure");
+        assert_remnant_is_named(directory.path(), &remnants);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fr04_a_refused_delete_after_a_failed_publication_names_the_remnant() {
+        let directory = temporary_directory();
+        let target = directory.path().join("out.env");
+        let remnants = Remnants::default();
+        let prepared = prepare_private_with(
+            &target,
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &remnants,
+            &mut DeleteRefused {
+                fail_publish: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(remnants.warning().is_none(), "nothing is dropped yet");
+
+        let error = prepared
+            .publish_with(&mut DeleteRefused {
+                fail_publish: true,
+                ..Default::default()
+            })
+            .unwrap_err();
+
+        assert_eq!(error.message, "injected publication failure");
+        assert_remnant_is_named(directory.path(), &remnants);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fr04_a_refused_delete_after_a_cancelled_export_names_the_remnant() {
+        let directory = temporary_directory();
+        let target = directory.path().join("out.env");
+        let remnants = Remnants::default();
+        let prepared = prepare_private_with(
+            &target,
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &remnants,
+            &mut DeleteRefused::default(),
+        )
+        .unwrap();
+
+        drop(prepared);
+
+        assert_remnant_is_named(directory.path(), &remnants);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fr04_a_failed_validation_after_the_write_with_a_refused_delete_names_the_remnant() {
+        struct LateVault<'a>(&'a Path, DeleteRefused);
+        impl ExportIo for LateVault<'_> {
+            fn sync(&mut self, file: &File) -> Result<(), CommandError> {
+                file.sync_all().map_err(io)?;
+                fs::write(self.0, [0x03, 0xd9, 0xa2, 0x9a, 0x67, 0xfb, 0x4b, 0xb5]).map_err(io)
+            }
+
+            fn discard(&self) -> Discard {
+                self.1.discard()
+            }
+        }
+
+        let directory = temporary_directory();
+        let target = directory.path().join("out.env");
+        let remnants = Remnants::default();
+
+        let error = prepare_private_with(
+            &target,
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &remnants,
+            &mut LateVault(&target, DeleteRefused::default()),
+        )
+        .err()
+        .expect("the destination became a vault");
+
+        assert_eq!(error.kind, "invalidPath");
+        let left = temporary_files(directory.path());
+        assert_eq!(left.len(), 1);
+        assert!(remnants
+            .warning()
+            .unwrap()
+            .contains(&left[0].display().to_string()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fr04_a_confirmed_delete_reports_nothing_whichever_way_the_export_ends() {
+        let directory = temporary_directory();
+        let target = directory.path().join("out.env");
+        let remnants = Remnants::default();
+
+        let failed = prepare_private_with(
+            &target,
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &remnants,
+            &mut FailedSync,
+        );
+        assert!(failed.is_err());
+        drop(prepare_private(&target, "TOKEN=fake-owned\n", &[], &[], &remnants).unwrap());
+
+        assert!(temporary_files(directory.path()).is_empty());
+        assert!(remnants.warning().is_none());
+
+        struct FailedSync;
+        impl ExportIo for FailedSync {
+            fn sync(&mut self, _file: &File) -> Result<(), CommandError> {
+                Err(io(std::io::Error::other("injected sync failure")))
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fr04_the_windows_delete_request_reports_whether_it_was_accepted() {
+        let directory = temporary_directory();
+        let file = windows::create_private(&directory.path().join("probe.tmp")).unwrap();
+        assert!(windows::discard(&file), "Windows accepts a delete request");
+        drop(file);
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
     }
 
@@ -777,9 +1089,16 @@ mod tests {
         let target = directory.path().join("out.env");
         let mut export_io = ExistingTemp(None);
 
-        let error = prepare_private_with(&target, "TOKEN=fake\n", &[], &[], &mut export_io)
-            .err()
-            .expect("CREATE_NEW must refuse an existing temporary name");
+        let error = prepare_private_with(
+            &target,
+            "TOKEN=fake\n",
+            &[],
+            &[],
+            &Remnants::default(),
+            &mut export_io,
+        )
+        .err()
+        .expect("CREATE_NEW must refuse an existing temporary name");
 
         assert_eq!(error.kind, "io");
         assert_eq!(
@@ -823,7 +1142,14 @@ mod tests {
         let directory = temporary_directory();
         let target = directory.path().join("out.env");
         let mut export_io = IgnoredAcl { wrote: false };
-        let result = prepare_private_with(&target, "TOKEN=fake\n", &[], &[], &mut export_io);
+        let result = prepare_private_with(
+            &target,
+            "TOKEN=fake\n",
+            &[],
+            &[],
+            &Remnants::default(),
+            &mut export_io,
+        );
         assert!(
             result.is_err() && !export_io.wrote,
             "an unverified DACL must fail before any plaintext is written"
@@ -897,10 +1223,16 @@ mod tests {
                 directory: directory.path().to_path_buf(),
                 displaced: None,
             };
-            let error =
-                prepare_private_with(&target, "TOKEN=fake-owned\n", &[], &[], &mut export_io)
-                    .err()
-                    .expect("injected preparation failure");
+            let error = prepare_private_with(
+                &target,
+                "TOKEN=fake-owned\n",
+                &[],
+                &[],
+                &Remnants::default(),
+                &mut export_io,
+            )
+            .err()
+            .expect("injected preparation failure");
 
             assert_eq!(error.kind, "io");
             assert_eq!(error.message, format!("injected {failure:?} failure"));
@@ -937,7 +1269,14 @@ mod tests {
         let directory = temporary_directory();
         let target = directory.path().join("out.env");
         fs::write(&target, b"previous approved export\n").unwrap();
-        let prepared = prepare_private(&target, "TOKEN=fake-owned\n", &[], &[]).unwrap();
+        let prepared = prepare_private(
+            &target,
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &Remnants::default(),
+        )
+        .unwrap();
         let mut export_io = FailedPublication { displaced: None };
 
         let error = prepared.publish_with(&mut export_io).unwrap_err();
@@ -970,7 +1309,14 @@ mod tests {
         let directory = temporary_directory();
         let target = directory.path().join("out.env");
         fs::write(&target, b"previous approved export\n").unwrap();
-        let prepared = prepare_private(&target, "TOKEN=fake-owned\n", &[], &[]).unwrap();
+        let prepared = prepare_private(
+            &target,
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &Remnants::default(),
+        )
+        .unwrap();
         let (replacement, displaced) = displace_temp(directory.path());
         let blocker = fs::OpenOptions::new()
             .read(true)
@@ -1015,6 +1361,7 @@ mod tests {
             "TOKEN=fake-owned\n",
             &[],
             &[],
+            &Remnants::default(),
             &mut LateVault(target.clone()),
         )
         .err()
