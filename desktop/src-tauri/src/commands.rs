@@ -977,29 +977,36 @@ fn run_import(
         reviewed.value,
     )?;
     let ticket = reviewed.snapshot.ticket;
+    // From here on the import is dispatched, so every stop leaves an outcome record (contract 7).
+    // The page can lose this reply, and the record is then the only truth about the request.
+    let refused = |error: CommandError| {
+        session.record_import(ticket, &operation, OperationWarningKind::ImportFailed);
+        error
+    };
     if review.changes_anything() {
         // No dialog for a window nobody sees, or for a vault that is no longer what was read.
         // A modal dialog cannot be shown under the session gate, so the write below checks
         // the session and the revision again, under the gate.
         ensure_window_shown(confirm)?;
-        if !session.snapshot()?.same_vault(&reviewed.snapshot) {
-            return Err(CommandError::new(
+        if !session
+            .snapshot()
+            .map_err(refused)?
+            .same_vault(&reviewed.snapshot)
+        {
+            return Err(refused(CommandError::new(
                 "stalePreview",
                 "The vault changed before the confirmation could be shown. Start it again.",
-            ));
+            )));
         }
         let dialog = confirm.review_dialog();
-        session.ensure(ticket)?;
+        session.ensure(ticket).map_err(refused)?;
         match review.ask(dialog.as_ref()) {
             ReviewAnswer::Approved => {}
             ReviewAnswer::Declined => {
                 session.record_import(ticket, &operation, OperationWarningKind::ImportDeclined);
                 return Ok(None);
             }
-            ReviewAnswer::Failed(failure) => {
-                session.record_import(ticket, &operation, OperationWarningKind::ImportFailed);
-                return Err(failure.into());
-            }
+            ReviewAnswer::Failed(failure) => return Err(refused(failure.into())),
         }
     }
     // The write is bound to the session and the revision of the request: a lock, another
@@ -1413,6 +1420,38 @@ mod tests {
             Some("dev".into()),
         );
         (operation, reply)
+    }
+
+    #[test]
+    fn a_lock_before_the_import_review_leaves_a_truthful_outcome_even_if_the_reply_is_lost() {
+        let (session, directory) = test_session();
+        let session = Arc::new(session);
+        let locker = session.clone();
+        let confirm = ScriptedConfirm::new(true).on_prepare(move || locker.lock().unwrap());
+        let (operation, reply) = import_with_lost_reply(&session, &confirm);
+        assert_eq!(reply.err().unwrap().kind, "locked");
+        assert!(confirm.shown().is_empty());
+        let record = import_notice_for(&session, &operation).expect("no native outcome record");
+        assert_eq!(record["kind"], "importFailed");
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
+    }
+
+    #[test]
+    fn a_lock_at_the_window_check_of_an_import_leaves_a_truthful_outcome() {
+        let (session, _directory) = test_session();
+        let session = Arc::new(session);
+        let locker = session.clone();
+        let confirm = ScriptedConfirm::new(true).on_probe(move || locker.lock().unwrap());
+        let (operation, reply) = import_with_lost_reply(&session, &confirm);
+        assert_eq!(reply.err().unwrap().kind, "locked");
+        assert!(confirm.shown().is_empty());
+        let record = import_notice_for(&session, &operation).expect("no native outcome record");
+        assert_eq!(record["kind"], "importFailed");
     }
 
     #[test]
