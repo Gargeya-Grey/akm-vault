@@ -15,6 +15,7 @@ export function Settings({ status, onLocked }: Props) {
   const [backup, setBackup] = useState<BackupInfo | null>(null);
   const [keyCount, setKeyCount] = useState<number | null>(null);
   const mounted = useRef(true);
+  const listRead = useRef(0);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [reminder, setReminder] = useState<ReminderStatus | null>(null);
@@ -42,13 +43,16 @@ export function Settings({ status, onLocked }: Props) {
     void loadBackup();
   }, [loadBackup]);
 
-  // The status poll can lag a change that just finished. On a failed read the polled count stays.
+  // The status poll can lag a change that just finished, so the list gives the count. A new
+  // polled count starts a new read, the latest read wins, and a failed read uses the polled count.
   useEffect(() => {
+    const read = ++listRead.current;
+    const current = () => mounted.current && read === listRead.current;
     void api.keys().then(
-      (keys) => { if (mounted.current) setKeyCount(keys.length); },
-      () => {},
+      (keys) => { if (current()) setKeyCount(keys.length); },
+      () => { if (current()) setKeyCount(null); },
     );
-  }, []);
+  }, [status.keyCount]);
 
   useEffect(() => {
     void (async () => {

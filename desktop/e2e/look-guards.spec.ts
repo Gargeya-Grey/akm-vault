@@ -176,3 +176,100 @@ for (const theme of ["light", "dark"]) {
     expect(await button.evaluate((node) => getComputedStyle(node).color)).toBe(await tokenColour(page, "--danger"));
   });
 }
+
+function manyEnvironments(count = 45) {
+  return Array.from({ length: count }, (_, index) => ({ environment: `env-${String(index).padStart(3, "0")}` }));
+}
+
+async function menuScroll(page: Page) {
+  return page.locator(".select-menu").evaluate((node) => node.scrollTop);
+}
+
+test("the wheel scrolls an open list, later options stay clickable, and the keyboard still reveals its option", async ({ page }) => {
+  await open(page, "dark", { keys: manyEnvironments() });
+  await page.locator("#filter-environment").click();
+  const menu = page.locator(".select-menu");
+  await expect(menu).toBeVisible();
+  const box = (await menu.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let turn = 0; turn < 5; turn += 1) await page.mouse.wheel(0, 200);
+  await expect.poll(() => menuScroll(page)).toBeGreaterThan(400);
+  const settled = await menuScroll(page);
+  await page.waitForTimeout(150);
+  expect(await menuScroll(page)).toBe(settled);
+  const later = page.locator(".select-option", { hasText: "env-020" });
+  await later.click();
+  await expect(page.locator("#filter-environment")).toHaveValue("env-020");
+  await page.locator("#filter-environment").focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("End");
+  const last = page.locator(".select-option.active");
+  await expect(last).toHaveText(/env-044/);
+  await expect(last).toBeInViewport({ ratio: 1 });
+});
+
+test("a project name of 1,000 characters leaves its heading and Add key in view", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 620 });
+  await open(page, "dark", { keys: [{ project: `P${"name ".repeat(200)}`.trim() }] });
+  await page.locator(".shelf-item", { hasText: "Pname" }).click();
+  await expect(page.locator(".list-head h1")).toContainText("Pname");
+  const add = page.getByRole("button", { name: "Add key", exact: true });
+  await expect(add).toBeInViewport({ ratio: 1 });
+  await expect(page.locator(".list-head h1")).toBeInViewport();
+  const heading = page.locator(".list-head h1");
+  expect(await heading.evaluate((node) => node.scrollHeight)).toBeGreaterThan(await heading.evaluate((node) => node.clientHeight));
+  expect(await heading.evaluate((node) => getComputedStyle(node).overflowY)).toBe("auto");
+});
+
+test("in forced colours, set and unset lock pins have different fills", async ({ page }) => {
+  await open(page);
+  await page.emulateMedia({ forcedColors: "active" });
+  await page.evaluate(() => (window as unknown as { __akmTest: { emitLock: () => void } }).__akmTest.emitLock());
+  await page.getByRole("button", { name: /new vault/i }).first().click();
+  await page.locator('input[type="password"]').first().fill("fake-pass");
+  const fill = (selector: string) => page.locator(selector).first().evaluate((node) => getComputedStyle(node).fill);
+  await expect(page.locator(".lock-pin-set").first()).toBeAttached();
+  expect(await fill(".lock-pin-set")).not.toBe(await fill(".lock-pin:not(.lock-pin-set)"));
+});
+
+for (const width of [900, 1040]) {
+  test(`at ${width} px, recycled keys with one title show each fact in full`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    const prefix = "shared-project-name-".repeat(6);
+    await open(page, "dark", { recycled: [
+      { key: { title: "Twin", project: `${prefix}alpha`, environment: `${prefix}prod`, resolvedEnvVar: `${"V".repeat(90)}_A`, historyCount: 2 }, deletedAt: "2026-06-01T12:00:00Z" },
+      { key: { title: "Twin", project: `${prefix}beta`, environment: `${prefix}test`, resolvedEnvVar: `${"V".repeat(90)}_B`, historyCount: 3 }, deletedAt: null },
+    ] });
+    await page.getByRole("button", { name: "Recycle Bin", exact: true }).click();
+    await expect(page.locator(".bin-row")).toHaveCount(2);
+    for (const text of [`${prefix}alpha`, `${prefix}beta`, `${prefix}prod`, `${prefix}test`, `${"V".repeat(90)}_A`, `${"V".repeat(90)}_B`]) {
+      const fact = page.locator(".bin-row .key-sub", { hasText: text }).first();
+      await expect(fact).toBeVisible();
+      expect(await fact.evaluate((node) => node.scrollWidth <= node.clientWidth && getComputedStyle(node).textOverflow !== "ellipsis"), text).toBe(true);
+    }
+    expect(await page.locator(".stage").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(0);
+  });
+}
+
+test("at 900 px, long variable names in the key list can be read in full", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 800 });
+  const stem = `LONG_VARIABLE_NAME_${"X".repeat(70)}`;
+  await open(page, "dark", { keys: [{ title: "One", resolvedEnvVar: `${stem}_A` }, { title: "Two", resolvedEnvVar: `${stem}_B` }] });
+  for (const name of [`${stem}_A`, `${stem}_B`]) {
+    const cell = page.locator(".key-var", { hasText: name });
+    await expect(cell).toBeVisible();
+    expect(await cell.evaluate((node) => node.scrollWidth <= node.clientWidth && getComputedStyle(node).textOverflow !== "ellipsis"), name).toBe(true);
+  }
+  expect(await page.locator(".stage").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(0);
+});
+
+test("at 900 px, two project names that differ at the end can be told apart on the shelf", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 800 });
+  const stem = "project-with-a-long-common-prefix-".repeat(3);
+  await open(page, "dark", { keys: [{ project: `${stem}one` }, { project: `${stem}two` }] });
+  for (const name of [`${stem}one`, `${stem}two`]) {
+    const label = page.locator(".shelf-item span", { hasText: name }).first();
+    await expect(label).toBeVisible();
+    expect(await label.evaluate((node) => node.scrollWidth <= node.clientWidth && getComputedStyle(node).textOverflow !== "ellipsis"), name).toBe(true);
+  }
+});

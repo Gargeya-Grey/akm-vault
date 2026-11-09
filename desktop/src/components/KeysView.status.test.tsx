@@ -38,7 +38,46 @@ afterEach(() => {
   native.invoke.mockReset();
 });
 
-const row = (name: string, description: string) => screen.getByRole("button", { name, description });
+const row = (name: string, description: string, identity = "Project demo, environment dev, variable FAKE_KEY.") =>
+  screen.getByRole("button", { name, description: `${identity} ${description}` });
+
+test("two keys with one title differ in their accessible description", async () => {
+  await show([key({ id: "a", title: "Twin", project: "alpha", environment: "dev", resolvedEnvVar: "TWIN_A" }), key({ id: "b", title: "Twin", project: null, environment: null, resolvedEnvVar: "TWIN_B" })]);
+  row("Open Twin", "No expiry date. No rotation interval.", "Project alpha, environment dev, variable TWIN_A.");
+  row("Open Twin", "No expiry date. No rotation interval.", "No project, no environment, variable TWIN_B.");
+});
+
+test("a key with no project names that when other keys have a project", async () => {
+  await show([key({ id: "a", title: "Alpha", project: "alpha-project" }), key({ id: "b", title: "Loose", project: null })]);
+  await act(async () => { fireEvent.change(screen.getByRole("searchbox"), { target: { value: "Loose" } }); });
+  expect(screen.getByRole("heading", { name: "No project" }).closest("section")?.textContent).toContain("Loose");
+});
+
+test("a key with no expiry date says so, and the shelf counts the projects", async () => {
+  await show([key({ id: "a", title: "Alpha", project: "one" }), key({ id: "b", title: "Beta", project: "two" })]);
+  expect(screen.getAllByRole("button", { name: /^Open / })[0].textContent).toContain("no expiry");
+  expect(document.querySelector(".shelf-label")?.textContent).toBe("Projects 2");
+});
+
+test("a failed read does not say that the vault is empty, and it can be tried again", async () => {
+  let fail = true;
+  native.invoke.mockImplementation(async (command: string) => {
+    if (command !== "keys_list") throw new Error(`unexpected command ${command}`);
+    if (fail) throw { kind: "internal", message: "fake read failure" };
+    return [key({ title: "Back again" })];
+  });
+  await act(async () => { render(<KeysView />); });
+  await act(async () => {});
+  expect(screen.queryByText("No keys yet.")).toBeNull();
+  expect(document.body.textContent).toContain("fake read failure");
+  expect(screen.getByRole("heading", { name: "AKM could not read the keys." })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^All keys/ })).toBeNull();
+  fail = false;
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Try again" })); });
+  await act(async () => {});
+  screen.getByRole("button", { name: "Open Back again" });
+  expect(screen.queryByText("AKM could not read the keys.")).toBeNull();
+});
 
 test("a search that leaves one project still names that project", async () => {
   await show([key({ id: "a", title: "Alpha", project: "alpha-project" }), key({ id: "b", title: "Beta", project: "beta-project" })]);

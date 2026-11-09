@@ -106,3 +106,94 @@ test("a press with no click count leaves the system's list to assistive tools", 
   expect(allowedSystemList).toBe(true);
   expect(screen.queryByRole("listbox")).toBeNull();
 });
+
+function refreshing(initial: { value: string; label: string }[], value = "") {
+  const onChange = vi.fn();
+  const element = (next: { value: string; label: string }[], disabled = false) => (
+    <FilterSelect id="demo" label="Project" value={value} placeholder="Choose a project" options={next} onChange={onChange} disabled={disabled} />
+  );
+  const view = render(element(initial));
+  const field = screen.getByRole("combobox") as HTMLSelectElement;
+  return { field, onChange, refresh: (next: { value: string; label: string }[], disabled = false) => view.rerender(element(next, disabled)) };
+}
+const named = (...names: string[]) => names.map((name) => ({ value: name, label: name }));
+const activeLabel = () => screen.getByRole("listbox").querySelector(".active")?.textContent;
+
+test("a refresh that adds an earlier option keeps the highlighted option, and Enter chooses it", () => {
+  const { field, onChange, refresh } = refreshing(named("project-43", "project-44"));
+  fireEvent.keyDown(field, { key: "Enter" });
+  fireEvent.keyDown(field, { key: "End" });
+  expect(activeLabel()).toBe("project-44");
+  refresh(named("project-01", "project-43", "project-44"));
+  expect(activeLabel()).toBe("project-44");
+  fireEvent.keyDown(field, { key: "Enter" });
+  expect(onChange).toHaveBeenCalledTimes(1);
+  expect(onChange).toHaveBeenCalledWith("project-44");
+});
+
+test("a refresh that reorders the options keeps the highlighted option", () => {
+  const { field, onChange, refresh } = refreshing(named("alpha", "beta", "gamma"));
+  fireEvent.keyDown(field, { key: "Enter" });
+  fireEvent.keyDown(field, { key: "ArrowDown" });
+  expect(activeLabel()).toBe("alpha");
+  refresh(named("gamma", "beta", "alpha"));
+  expect(activeLabel()).toBe("alpha");
+  fireEvent.keyDown(field, { key: "ArrowUp" });
+  expect(activeLabel()).toBe("beta");
+  fireEvent.keyDown(field, { key: "Enter" });
+  expect(onChange).toHaveBeenCalledWith("beta");
+});
+
+test("a refresh that removes the highlighted option resets to the current value, and Enter changes nothing", () => {
+  const { field, onChange, refresh } = refreshing(named("alpha", "beta", "gamma"), "alpha");
+  fireEvent.keyDown(field, { key: "Enter" });
+  fireEvent.keyDown(field, { key: "End" });
+  expect(activeLabel()).toBe("gamma");
+  refresh(named("alpha"));
+  expect(activeLabel()).toBe("alpha");
+  const active = screen.getByRole("listbox").querySelector(".active");
+  expect(field.getAttribute("aria-activedescendant")).toBe(active?.id);
+  expect(document.getElementById(field.getAttribute("aria-activedescendant") ?? "")).toBe(active);
+  fireEvent.keyDown(field, { key: "Enter" });
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+test("a highlight that a refresh reset stays reset when the option returns", () => {
+  const { field, refresh } = refreshing(named("alpha", "gamma"), "alpha");
+  fireEvent.keyDown(field, { key: "Enter" });
+  fireEvent.keyDown(field, { key: "End" });
+  refresh(named("alpha"));
+  refresh(named("alpha", "gamma"));
+  expect(activeLabel()).toBe("alpha");
+});
+
+test("a field disabled while its list is open does not open the list again when it is enabled", () => {
+  const { field, refresh } = refreshing(named("alpha"));
+  fireEvent.keyDown(field, { key: "Enter" });
+  expect(screen.queryByRole("listbox")).not.toBeNull();
+  refresh(named("alpha"), true);
+  expect(screen.queryByRole("listbox")).toBeNull();
+  refresh(named("alpha"), false);
+  expect(screen.queryByRole("listbox")).toBeNull();
+});
+
+test("only opening the list and a keyboard move scroll the list", () => {
+  const scrolled = vi.fn();
+  const original = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = scrolled;
+  try {
+    const { field } = setup("alpha");
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    scrolled.mockClear();
+    const list = screen.getByRole("listbox");
+    fireEvent.scroll(list);
+    fireEvent.mouseMove(list.querySelectorAll("li")[3]);
+    expect(list.querySelectorAll("li")[3].className).toContain("active");
+    expect(scrolled).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+    expect(scrolled).toHaveBeenCalledTimes(1);
+  } finally {
+    Element.prototype.scrollIntoView = original;
+  }
+});

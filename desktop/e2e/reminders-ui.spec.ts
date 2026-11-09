@@ -37,7 +37,7 @@ for (const theme of ["light", "dark"]) {
     for (const [title, description] of expectations) {
       const row = page.getByRole("button", { name: `Open ${title}`, exact: true });
       await expect(row).toHaveAccessibleName(`Open ${title}`);
-      await expect(row).toHaveAccessibleDescription(description);
+      await expect(row).toHaveAccessibleDescription(`Project demo, environment dev, variable OPENAI_API_KEY. ${description}`);
     }
     expect(errors).toEqual([]);
   });

@@ -33,6 +33,12 @@ type Shelf =
 
 const ALL_KEYS: Shelf = { kind: "all" };
 
+function identityDescription(key: KeyView): string {
+  const project = key.project === null ? "No project" : `Project ${key.project}`;
+  const environment = key.environment === null ? "no environment" : `environment ${key.environment}`;
+  return `${project}, ${environment}, variable ${key.resolvedEnvVar}.`;
+}
+
 function shelfTitle(shelf: Shelf): string {
   if (shelf.kind === "all") return "All keys";
   if (shelf.kind === "attention") return "Needs attention";
@@ -48,6 +54,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
   const [keys, setKeys] = useState<KeyView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [readFailed, setReadFailed] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [chosenShelf, setChosenShelf] = useState<Shelf>(ALL_KEYS);
@@ -68,8 +75,10 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     try {
       setKeys(await api.keys());
       setError(null);
+      setReadFailed(false);
     } catch (cause) {
       setError(errorText(cause));
+      setReadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -138,7 +147,8 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     return [...byProject].sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : a.localeCompare(b)));
   }, [visible]);
   // Rows carry no project column, so the heading is the only place that names the project.
-  const showGroupNames = shelf.kind !== "project" && groups.some(([name]) => name !== null);
+  // On a project shelf the page title names it. In a vault with no projects, no row has one.
+  const showGroupNames = shelf.kind !== "project" && projects.length > 0;
 
   const selected = keys.find((key) => key.id === selectedId) ?? null;
   const showSummary = !loading && attention.total > 0 && !(summary?.dismissed ?? summaryDismissed);
@@ -217,7 +227,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
             </span>
             <span className="key-when-line">
               {used !== null && <LifeRule used={used} tone={state.tone} />}
-              {item.expiresAt && <span className="mono key-sub">{expiryLabel(item)}</span>}
+              <span className={`key-sub${item.expiresAt ? " mono" : ""}`}>{item.expiresAt ? expiryLabel(item) : "no expiry"}</span>
             </span>
           </span>
           <span className={`state state-${state.tone}`}>
@@ -229,7 +239,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           </span>
         </button>
         <span className="sr-only" id={`${statusId}-${item.id}`}>
-          {statusDescription(item, now)}
+          {identityDescription(item)} {statusDescription(item, now)}
         </span>
       </li>
     );
@@ -251,7 +261,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
       <div className="ledger-pane">
         <header className="list-head">
           <h1>
-            {shelfTitle(shelf)} <em className="num">{visible.length}</em>
+            {shelfTitle(shelf)} {!readFailed && <em className="num">{visible.length}</em>}
           </h1>
           <button
             type="button"
@@ -264,7 +274,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           </button>
         </header>
 
-        <nav className="shelf" aria-label="Projects">
+        {!readFailed && <nav className="shelf" aria-label="Projects">
           {shelfButton(ALL_KEYS, "All keys", keys.length)}
           <button
             type="button"
@@ -276,14 +286,14 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
             <span className="num">{attention.total}</span>
             <span>need attention</span>
           </button>
-          {(projects.length > 0 || unfiled > 0) && <p className="shelf-label">Projects</p>}
+          {(projects.length > 0 || unfiled > 0) && <p className="shelf-label">Projects <span className="num">{projects.length}</span></p>}
           {projects.map((option) => (
             <Fragment key={option.value}>
               {shelfButton({ kind: "project", name: option.value }, option.label, keys.filter((key) => key.project === option.value).length)}
             </Fragment>
           ))}
           {unfiled > 0 && shelfButton({ kind: "project", name: null }, "No project", unfiled)}
-        </nav>
+        </nav>}
 
         {showSummary && (
           <AttentionSummary
@@ -345,6 +355,16 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
             <div className="empty-state">
               <h2>Opening the index…</h2>
               <p>The vault is already unlocked. Keys appear here in a moment.</p>
+            </div>
+          ) : readFailed ? (
+            <div className="empty-state">
+              <h2>AKM could not read the keys.</h2>
+              <p>This does not mean that the vault is empty. Try again, or lock the vault and open it again.</p>
+              <div className="empty-actions">
+                <button type="button" className="text-button" onClick={() => void load()}>
+                  Try again
+                </button>
+              </div>
             </div>
           ) : keys.length === 0 ? (
             <div className="empty-state">

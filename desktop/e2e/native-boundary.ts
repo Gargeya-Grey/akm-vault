@@ -4,6 +4,7 @@ import type { ApplicationNotice, KeyView, OperationNotice, ReminderStatus } from
 export interface BoundaryOptions {
   /** Replaces the single default key. */
   keys?: Partial<KeyView>[];
+  recycled?: { key: Partial<KeyView>; deletedAt: string | null }[];
   reminders?: ReminderStatus;
 }
 
@@ -97,6 +98,7 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
               return;
             }
             case "keys_list": return keys;
+            case "recycled_list": return (options.recycled ?? []).map((item, index) => ({ deletedAt: item.deletedAt, key: { ...key, id: `${key.id}-bin-${index}`, ...item.key } }));
             case "reminders_status": return reminders;
             case "reminders_set": reminders = { ...reminders, enabled: args.enabled as boolean, delivery: "none", blocked: false }; return reminders;
             case "reminders_notify": reminders = { ...reminders, delivery: "sent" }; return reminders;
