@@ -1101,6 +1101,8 @@ fn core_notices(gate: &mut Gate, ticket: Ticket, warnings: Vec<VaultWarning>) {
             // one tells the person to inspect the backups. A notice with its own text needs a
             // new kind here, in `types.ts` and in `App.tsx`.
             VaultWarningKind::FilePermissions => OperationWarningKind::BackupRetention,
+            // FR-12: shown as the generic journal notice until the desktop has its own text.
+            VaultWarningKind::JournalLineageUnconfirmed => OperationWarningKind::Journal,
         };
         operation_notice(gate, ticket, kind);
     }

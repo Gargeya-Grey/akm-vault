@@ -415,7 +415,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             reveal,
         } => {
             let password = master_password(false)?;
-            let vault = open_vault(&path, &password)?;
+            let mut vault = open_vault(&path, &password)?;
             drop(password);
             let key = select(&vault, &query)?;
 
@@ -436,6 +436,8 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             } else {
                 None
             };
+            // FR-12: a disclosure writes a journal record, and that can warn.
+            print_warnings(io, &mut vault);
 
             // 1A-R8-01: the default view and every other field receive `KeyMetadata`.
             let metadata = KeyMetadata::new(&key, vault.now());
@@ -680,7 +682,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             let mut command = child::prepare(program, &command[1..])?;
             {
                 let password = master_password(false)?;
-                let vault = open_vault(&path, &password)?;
+                let mut vault = open_vault(&path, &password)?;
                 drop(password);
                 let plan = planned_envs(&vault, &selection)?;
                 let envs = disclosed_envs(
@@ -689,6 +691,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                     &plan,
                     &format!("launch requested; {} keys selected", plan.len()),
                 )?;
+                print_warnings(io, &mut vault);
                 child::inject(&mut command, &envs)?;
             }
 
@@ -700,7 +703,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
         Commands::Export { selection, output } => {
             let output = output.as_deref().map(export::destination).transpose()?;
             let password = master_password(false)?;
-            let vault = open_vault(&path, &password)?;
+            let mut vault = open_vault(&path, &password)?;
             drop(password);
             let plan = planned_envs(&vault, &selection)?;
             // Pairs the two records; the destination stays out of the journal.
@@ -715,6 +718,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                     plan.len()
                 ),
             )?;
+            print_warnings(io, &mut vault);
             drop(vault);
 
             match output {

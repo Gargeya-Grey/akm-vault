@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, NaiveDateTime, Timelike, Utc};
@@ -40,6 +41,9 @@ pub enum VaultWarningKind {
     /// A file that AKM wrote beside the vault could not be made private to the current
     /// user (the file system keeps no Windows permissions, or refused them).
     FilePermissions,
+    /// The vault file changed outside AKM, and AKM cannot confirm that it is the same vault.
+    /// Its history continues in the existing journal (FR-12).
+    JournalLineageUnconfirmed,
 }
 
 #[derive(Debug)]
@@ -61,6 +65,9 @@ pub struct Vault {
     /// shares the vault ID (unit 1b, D12).
     lineage: Vec<String>,
     warnings: Vec<VaultWarning>,
+    /// Set by `log` (which takes `&self`) when a record went into a journal whose link to
+    /// this file is not confirmed. `take_warning_records` turns it into a warning (FR-12).
+    lineage_unconfirmed: AtomicBool,
     journal: JournalRoot,
     clock: Arc<dyn Clock>,
     /// Names this `Vault` value in the proofs and plans that it makes (review 1, finding 3).
@@ -117,6 +124,7 @@ impl Vault {
             fingerprint: None,
             lineage: Vec::new(),
             warnings: Vec::new(),
+            lineage_unconfirmed: AtomicBool::new(false),
             journal,
             clock: Arc::new(SystemClock),
             session: Uuid::new_v4(),
@@ -149,6 +157,7 @@ impl Vault {
             fingerprint,
             lineage: Vec::new(),
             warnings: Vec::new(),
+            lineage_unconfirmed: AtomicBool::new(false),
             journal,
             clock: Arc::new(SystemClock),
             session: Uuid::new_v4(),
@@ -179,7 +188,14 @@ impl Vault {
     }
 
     pub fn take_warning_records(&mut self) -> Vec<VaultWarning> {
-        std::mem::take(&mut self.warnings)
+        let mut warnings = std::mem::take(&mut self.warnings);
+        if self.lineage_unconfirmed.swap(false, Ordering::Relaxed) {
+            warnings.push(VaultWarning {
+                kind: VaultWarningKind::JournalLineageUnconfirmed,
+                message: "this vault file changed outside AKM, so AKM cannot confirm that it is the same vault. Its history continues in the existing journal.".into(),
+            });
+        }
+        warnings
     }
 
     pub fn reload(&mut self) -> Result<()> {
@@ -915,8 +931,13 @@ impl Vault {
     }
 
     pub fn log(&self, action: &str, key: Option<&ApiKey>, detail: Option<&str>) -> Result<()> {
-        self.audit_log()
-            .append(action, key.map(|k| k.id.as_str()), detail)
+        let unconfirmed =
+            self.audit_log()
+                .append_reporting(action, key.map(|k| k.id.as_str()), detail)?;
+        if unconfirmed {
+            self.lineage_unconfirmed.store(true, Ordering::Relaxed);
+        }
+        Ok(())
     }
 
     pub fn save(&mut self) -> Result<()> {

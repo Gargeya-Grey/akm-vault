@@ -1304,3 +1304,55 @@ fn a_version_that_two_journals_recorded_fails_closed_across_processes() {
         strings(&["reveal-requested"])
     );
 }
+
+/// FR-12: the reviewer's probe through the real binary. Copy A to B, change B under a journal
+/// A never sees, replace A with B. The journal of A continues, and the command says that the
+/// file changed outside AKM and that AKM cannot confirm it is the same vault. It says so
+/// once, on stderr, and the command still succeeds.
+#[test]
+fn an_unseen_clone_that_replaces_the_vault_warns_once_and_keeps_the_journal() {
+    for verb in ["get", "export"] {
+        let fixture = Fixture::new();
+        assert_success(&fixture.reveal());
+        let before = fixture.journal_text();
+        let clone = fixture.directory.path().join("clone.kdbx");
+        fs::copy(&fixture.vault, &clone).unwrap();
+        let other_root = fixture.directory.path().join("other-journal-root");
+        let added = fixture
+            .command(&clone, Some(PASSWORD))
+            .env("AKM_JOURNAL_ROOT", &other_root)
+            .args(["add", "ClonedKey", "--secret", "fake-clone-secret"])
+            .output()
+            .unwrap();
+        assert_success(&added);
+        fs::copy(&clone, &fixture.vault).unwrap();
+
+        let run = |fixture: &Fixture| match verb {
+            "get" => fixture.reveal(),
+            _ => fixture
+                .cli()
+                .args(["export", "--project", PROJECT, "--env", ENVIRONMENT])
+                .output()
+                .unwrap(),
+        };
+        let first = run(&fixture);
+        assert_success(&first);
+        let text = stderr(&first);
+        assert!(
+            text.contains("changed outside AKM") && text.contains("cannot confirm"),
+            "{verb}: {text}"
+        );
+        assert!(text.contains("history continues"), "{verb}: {text}");
+        assert!(!text.contains(SECRET) && !stdout(&first).is_empty());
+        assert_eq!(fixture.journals().len(), 1, "{verb}: one journal continues");
+        assert!(fixture.journal_text().starts_with(&before), "{verb}");
+
+        let second = run(&fixture);
+        assert_success(&second);
+        assert!(
+            !stderr(&second).contains("changed outside AKM"),
+            "{verb}: the warning comes once: {}",
+            stderr(&second)
+        );
+    }
+}
