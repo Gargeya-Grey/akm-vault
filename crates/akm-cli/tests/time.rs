@@ -267,3 +267,33 @@ fn a_rotation_interval_over_the_limit_is_refused_and_a_stored_one_is_listed_and_
     assert!(secret.status.success(), "{}", text(&secret.stderr));
     assert_eq!(text(&secret.stdout).trim(), "fake-stored-secret");
 }
+
+// ---------------------------------------------------------------- FR-18: whole seconds only
+
+#[test]
+fn an_expiry_with_a_fraction_of_a_second_is_refused_by_add_and_changes_nothing() {
+    let fixture = Fixture::new();
+    let before = fs::read(&fixture.vault).unwrap();
+    let refused = fixture.try_add(
+        "2026-01-01T00:00:00Z",
+        &["Fractional", "--expires", "2026-11-10T12:00:00.5Z"],
+    );
+    assert!(!refused.status.success());
+    let message = text(&refused.stderr);
+    assert!(message.contains("fraction of a second"), "{message}");
+    assert!(message.contains("2026-11-10T12:00:00Z"), "{message}");
+    assert_eq!(fs::read(&fixture.vault).unwrap(), before);
+
+    fixture.add(
+        "2026-01-01T00:00:00Z",
+        &[
+            "Whole",
+            "--env-var",
+            "WHOLE_KEY",
+            "--expires",
+            "2026-11-10T12:00:00.000Z",
+        ],
+    );
+    let json = fixture.run("2026-01-01T00:00:00Z", "UTC", &["list", "--json"]);
+    assert!(text(&json.stdout).contains("\"expires_at\": \"2026-11-10T12:00:00Z\""));
+}

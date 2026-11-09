@@ -19,11 +19,20 @@ pub fn end_of_day(date: NaiveDate) -> DateTime<Utc> {
 }
 
 /// An expiry from `YYYY-MM-DD` (see [`end_of_day`]) or from a full RFC 3339 instant.
+///
+/// A vault keeps whole seconds. An instant with a fraction of a second is refused, so a
+/// stored expiry is always the instant that the person wrote (FR-18). A fraction of zero
+/// (`.000`) loses nothing and is accepted.
 pub fn parse_expiry(raw: &str) -> Result<DateTime<Utc>> {
     if let Ok(date) = NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
         return Ok(end_of_day(date));
     }
     if let Ok(instant) = DateTime::parse_from_rfc3339(raw) {
+        if instant.timestamp_subsec_nanos() != 0 {
+            return Err(Error::Invalid(format!(
+                "expiry {raw:?} has a fraction of a second, and a vault keeps whole seconds; write it without the fraction, for example 2026-11-10T12:00:00Z"
+            )));
+        }
         return Ok(instant.with_timezone(&Utc));
     }
     Err(Error::Invalid(format!(
