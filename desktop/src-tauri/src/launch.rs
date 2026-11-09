@@ -83,6 +83,7 @@ impl LaunchReview {
         )
     }
 
+    #[cfg(test)]
     pub fn names(&self) -> &[String] {
         &self.names
     }

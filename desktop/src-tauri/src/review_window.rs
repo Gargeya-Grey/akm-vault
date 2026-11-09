@@ -435,7 +435,7 @@ mod tests {
             "Escape and close stay available"
         );
         // SAFETY: the config points into `text`, which is alive, and holds two buttons.
-        let buttons = unsafe { std::slice::from_raw_parts({ config.pButtons }, 2) };
+        let buttons = unsafe { std::slice::from_raw_parts(config.pButtons, 2) };
         let ids: Vec<i32> = buttons.iter().map(|button| button.nButtonID).collect();
         assert_eq!(ids, [CONFIRM_BUTTON, CANCEL_BUTTON]);
     }
