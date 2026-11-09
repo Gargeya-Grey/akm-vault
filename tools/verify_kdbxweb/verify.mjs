@@ -379,6 +379,10 @@ async function buildForeignVault(file) {
   return { akmEntryId: uuidText(akmEntry.uuid), foreignUuid: foreign.uuid.id };
 }
 
+// What the foreign checks compare, and nothing more: the foreign entry's fields (with their protected
+// flags), tags, creation and modification times, attachment bytes and history items, and the foreign
+// group's name, notes, creation time and member entries. They do not compare the file bytes, XML
+// layout, unknown elements or other times (FINDINGS.md FR-24).
 function foreignSnapshot(db, foreignUuid) {
   const foreign = allEntries(db).find((entry) => entry.uuid.id === foreignUuid);
   if (!foreign) throw new Error('foreign entry is missing');
@@ -428,7 +432,7 @@ async function partB(akmExe, work) {
     equal(sha256(readFileSync(vault)), before, 'vault hash after refused write');
   });
 
-  await check('B4 explicit upgrade makes the vault KDBX 4.1 and keeps every foreign byte', async () => {
+  await check('B4 explicit upgrade makes the vault KDBX 4.1 and keeps every compared foreign value (fields, tags, times, history, attachments)', async () => {
     const result = akm(['upgrade', '--yes']);
     equal(result.code, 0, `akm upgrade exit code (${result.err})`);
     const db = await loadVault(vault);
@@ -436,7 +440,7 @@ async function partB(akmExe, work) {
     same(foreignSnapshot(db, state.foreignUuid), state.baseline, 'foreign data after upgrade');
   });
 
-  await check('B5 AKM changes keys (adds one, removes the kdbxweb-written one) and the foreign data survives byte for byte', async () => {
+  await check('B5 AKM changes keys (adds one, removes the kdbxweb-written one) and the compared foreign values survive (fields, tags, creation and modification times, history, attachments)', async () => {
     const added = akm(['add', 'Post interop key', '--project', 'demo', '--env', 'dev', '--secret-stdin'], 'fake-post-secret\n');
     equal(added.code, 0, `akm add exit code (${added.err})`);
     const removed = akm(['rm', state.akmEntryId, '--yes']);
