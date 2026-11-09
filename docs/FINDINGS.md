@@ -221,6 +221,12 @@ From [new look review 2](reviews/2026-11-09-look-review2.md), on `c0a7d3b`. This
 | LOOK-R2-02 | P2 | Open | New look | Stale value | Wheel scrolling in the open list is pulled back to the active option, so a long list cannot be scrolled with the mouse. |
 | LOOK-R2-03 | P3 | Open | New look | H | A 1,000-character project name moves Add key below the window. It stays reachable by scrolling. |
 | LOOK-R2-04 | P3 | Open | New look | J | In forced colours, set and unset lock pins have one fill. The count still shows progress. |
+| LOOK-R3-01 | P2 | Open (stop rule) | UI rebuild | H | Two Recycle Bin entries or two key rows that differ only by issuer look the same, in the row, in the delete confirmation and in the accessibility tree. |
+| LOOK-R3-02 | P3 | Open | UI rebuild | Stale value | Settings keeps the old count while the replacement list read is pending. |
+| LOOK-R3-03 | P3 | Open | UI rebuild | H | An all-unfiled vault shows no "No project" context, and an empty vault shows no project total. |
+| LOOK-R3-04 | P3 | Open | New look | H | A 1,000-character unbroken project name makes a shelf button taller than the shelf, and a long unbroken title overflows the delete confirmation. |
+| LOOK-R3-05 | P3 | Open | UI rebuild | Failure shown as empty | Use keys offers no retry after its list read fails, and an old error stays after a later successful refresh. |
+| LOOK-R3-06 | P3 | Open | New look | I | The stacking guard does not include the Recycle Bin permanent-delete confirmation. |
 
 ## Full rescore (2026-11-09)
 
