@@ -417,9 +417,8 @@ pub fn run_launch(
     Ok(Some(count))
 }
 
-/// The record and the values, in one step under the session gate. A lock that came after the
-/// access began stops both. The vault lock is already held, and vault then gate is the order
-/// that every access takes.
+/// The record, then the values. The session is checked before each one: a lock that came first
+/// stops it. The values are copied under the gate, and only after the record is durable.
 fn disclose_for_launch(
     session: &Session,
     host: &dyn TerminalHost,
@@ -428,18 +427,18 @@ fn disclose_for_launch(
     project: &str,
     environment: &str,
 ) -> Result<LaunchSecrets, CommandError> {
-    let values = session.while_current(ticket, |_held| {
-        host.reached(LaunchStep::RecordNext);
-        let plan = vault.plan_env(Some(project), Some(environment), false)?;
-        let proof = vault.disclose_env(
-            EnvDisclosure::Run,
-            &plan,
-            Some(&format!("launch requested; {} keys selected", plan.len())),
-        )?;
-        host.reached(LaunchStep::Recorded);
-        let values: Result<_, CommandError> = vault.env_vars(&plan, &proof).map_err(Into::into);
-        values
-    })??;
+    let plan = vault.plan_env(Some(project), Some(environment), false)?;
+    session.ensure(ticket)?;
+    host.reached(LaunchStep::RecordNext);
+    // The journal takes a file lock and can stall, so it runs outside the gate. A lock during
+    // the write is prompt. It leaves a record for a launch that never starts (owner's option (a)).
+    let proof = vault.disclose_env(
+        EnvDisclosure::Run,
+        &plan,
+        Some(&format!("launch requested; {} keys selected", plan.len())),
+    )?;
+    host.reached(LaunchStep::Recorded);
+    let values = session.while_current(ticket, |_held| vault.env_vars(&plan, &proof))??;
     host.reached(LaunchStep::ValuesCopied);
     Ok(LaunchSecrets(values))
 }
@@ -458,9 +457,12 @@ mod tests {
         Vault,
     };
     use keepass::db::fields;
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Mutex,
+    use std::{
+        sync::{
+            atomic::{AtomicBool, AtomicU64, Ordering},
+            mpsc, Mutex,
+        },
+        time::Duration,
     };
 
     const PASSWORD: &str = "fake-test-password-123!";
@@ -499,6 +501,10 @@ mod tests {
 
     /// Entries are written to the file, so a name that `add` would refuse can be tested.
     fn fake_vault(entries: &[Entry]) -> Fixture {
+        fake_vault_on(entries, Arc::new(MonotonicClock::default()))
+    }
+
+    fn fake_vault_on(entries: &[Entry], clock: Arc<dyn crate::session::Clock>) -> Fixture {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("vault.kdbx");
         let mut db = keepass::Database::new();
@@ -522,7 +528,7 @@ mod tests {
         )
         .unwrap();
         let session = Arc::new(Session::new(
-            Arc::new(MonotonicClock::default()),
+            clock,
             Box::new(FakeClipboard(Arc::new(Mutex::new(FakeData::default())))),
             Arc::new(|_| {}),
         ));
@@ -672,6 +678,102 @@ mod tests {
                 .any(|action| action == "run-requested"),
             "a launch was recorded"
         );
+    }
+
+    /// A clock that a test moves, to reach the idle deadline.
+    #[derive(Default)]
+    struct SteppedClock(AtomicU64);
+    impl crate::session::Clock for SteppedClock {
+        fn now(&self) -> Duration {
+            Duration::from_secs(self.0.load(Ordering::SeqCst))
+        }
+    }
+
+    fn held_journal_lock(fixture: &Fixture) -> std::fs::File {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(crate::test_support::journal_of(&fixture.vault_path()).lock_path())
+            .unwrap();
+        file.lock().unwrap();
+        file
+    }
+
+    #[test]
+    fn a_held_journal_lock_does_not_delay_a_lock_and_the_launch_then_starts_nothing() {
+        for how in ["explicit lock", "idle expiry", "Windows lock", "suspend"] {
+            let clock = Arc::new(SteppedClock::default());
+            let fixture = fake_vault_on(&DEV, clock.clone());
+            let held = held_journal_lock(&fixture);
+            let (at_record, reached_record) = mpsc::channel();
+            let mut host = FakeHost::choosing(fixture.directory.path());
+            host.at_step = Box::new(move |step| {
+                if step == LaunchStep::RecordNext {
+                    at_record.send(()).unwrap();
+                }
+            });
+            let host = Arc::new(host);
+            let (worker, worker_host, id) =
+                (fixture.session.clone(), host.clone(), fixture.session_id());
+            let launch = std::thread::spawn(move || {
+                run_launch(
+                    &worker,
+                    worker_host.as_ref(),
+                    &id,
+                    Some("app".into()),
+                    Some("dev".into()),
+                )
+            });
+            reached_record
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the launch reached the journal");
+            std::thread::sleep(Duration::from_millis(200));
+
+            let (done, finished) = mpsc::channel();
+            let session = fixture.session.clone();
+            let locker = std::thread::spawn(move || {
+                match how {
+                    "explicit lock" => session.lock().unwrap(),
+                    "idle expiry" => {
+                        clock.0.store(100_000, Ordering::SeqCst);
+                        session.tick();
+                    }
+                    "Windows lock" => session.observe(Signal::Locked),
+                    _ => session.observe(Signal::Suspend),
+                }
+                done.send(()).unwrap();
+            });
+            finished
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap_or_else(|_| panic!("{how}: the lock waited for the journal"));
+            locker.join().unwrap();
+            assert!(fixture.session.snapshot().is_err(), "{how}");
+
+            drop(held);
+            let outcome = launch.join().unwrap();
+            assert_eq!(outcome.err().unwrap().kind, "locked", "{how}");
+            assert!(host.launched().is_empty(), "{how}: a terminal started");
+            assert_eq!(host.events(), ["window", "folder", "confirm"], "{how}");
+            assert!(
+                !host
+                    .steps
+                    .lock()
+                    .unwrap()
+                    .contains(&LaunchStep::ValuesCopied),
+                "{how}: values left the vault"
+            );
+            assert_eq!(
+                fixture
+                    .journal_actions()
+                    .iter()
+                    .filter(|action| *action == "run-requested")
+                    .count(),
+                1,
+                "{how}: the accepted limit is one record for a launch that never started"
+            );
+        }
     }
 
     #[test]
