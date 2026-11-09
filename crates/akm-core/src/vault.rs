@@ -325,7 +325,7 @@ impl Vault {
 
     pub fn update(&mut self, id: &str, input: ApiKeyInput) -> Result<ApiKey> {
         self.ensure_writable()?;
-        input.validate()?;
+        input.validate_fields()?;
         let now = self.clock.now();
         let entry_id = self
             .find_entry_id(id)
@@ -353,6 +353,9 @@ impl Vault {
         }
 
         let secret_changed = before.get(fields::PASSWORD) != Some(input.secret.as_str());
+        if secret_changed {
+            input.reject_nul_secret()?;
+        }
         let stamp = next_stamp(now, &before)?;
         let mut candidate = self.db.clone();
         let key = {
@@ -378,6 +381,11 @@ impl Vault {
         self.ensure_writable()?;
         if secret.is_empty() {
             return Err(Error::Invalid("secret must not be empty".into()));
+        }
+        if secret.contains_nul() {
+            return Err(Error::Invalid(
+                "secret must not contain a NUL character".into(),
+            ));
         }
         let entry_id = self
             .find_entry_id(id)

@@ -2307,3 +2307,46 @@ fn the_readme_names_the_recorded_audit_actions_in_their_order() {
         "the README lists the request before the completion"
     );
 }
+
+/// FR-16: a NUL byte in the secret is refused where the secret comes in, for add and for
+/// rotate. The vault file is byte for byte what it was, and the old secret still reads.
+#[test]
+fn a_secret_with_a_nul_byte_is_refused_by_add_and_rotate_and_changes_nothing() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let fixture = Fixture::new();
+    let before = fs::read(&fixture.vault).unwrap();
+    for args in [
+        &["add", "Nul key", "--env-var", "NUL_KEY", "--secret-stdin"][..],
+        &["rotate", "Demo", "--secret-stdin"][..],
+    ] {
+        let mut child = fixture
+            .cli()
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"fake\0secret\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(!output.status.success(), "{args:?}");
+        let text = stderr(&output);
+        assert!(text.contains("NUL"), "{args:?}: {text}");
+        assert!(!text.contains("fake"), "{args:?}: {text}");
+        assert_eq!(
+            fs::read(&fixture.vault).unwrap(),
+            before,
+            "{args:?}: the vault changed"
+        );
+    }
+    assert_eq!(
+        stored_secret(&fixture.vault, "Demo"),
+        "fake-intended-secret"
+    );
+}

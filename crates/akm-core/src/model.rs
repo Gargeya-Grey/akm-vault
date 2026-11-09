@@ -128,6 +128,10 @@ impl Secret {
         self.0.is_empty()
     }
 
+    pub(crate) fn contains_nul(&self) -> bool {
+        self.0.contains('\0')
+    }
+
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
@@ -183,11 +187,54 @@ impl ApiKeyInput {
         }
     }
     pub fn validate(&self) -> crate::Result<()> {
+        self.validate_fields()?;
+        self.reject_nul_secret()
+    }
+
+    /// A NUL character cannot reach a child process or an environment file, so a secret that
+    /// has one is refused when it comes in (FR-16). A secret that is already stored with one
+    /// stays viewable; `update` asks for this check only when the secret changes.
+    pub(crate) fn reject_nul_secret(&self) -> crate::Result<()> {
+        if self.secret.contains_nul() {
+            return Err(crate::Error::Invalid(
+                "secret must not contain a NUL character".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Everything but the NUL check of the secret.
+    pub(crate) fn validate_fields(&self) -> crate::Result<()> {
         if self.title.trim().is_empty() {
             return Err(crate::Error::Invalid("title must not be empty".into()));
         }
         if self.secret.is_empty() {
             return Err(crate::Error::Invalid("secret must not be empty".into()));
+        }
+        let texts = [
+            ("title", Some(&self.title)),
+            ("username", self.username.as_ref()),
+            ("issuer", self.issuer.as_ref()),
+            ("project", self.project.as_ref()),
+            ("environment", self.environment.as_ref()),
+            ("url", self.url.as_ref()),
+            ("notes", self.notes.as_ref()),
+        ];
+        let lists = [("scope", &self.scopes), ("tag", &self.tags)];
+        let nul_field = texts
+            .iter()
+            .find(|(_, value)| value.is_some_and(|value| value.contains('\0')))
+            .map(|(label, _)| *label)
+            .or_else(|| {
+                lists
+                    .iter()
+                    .find(|(_, values)| values.iter().any(|value| value.contains('\0')))
+                    .map(|(label, _)| *label)
+            });
+        if let Some(label) = nul_field {
+            return Err(crate::Error::Invalid(format!(
+                "{label} must not contain a NUL character"
+            )));
         }
         if let Some(var) = &self.env_var {
             if !is_valid_env_var(var) {
