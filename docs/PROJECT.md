@@ -48,7 +48,7 @@ Reuse established encrypted storage and cryptographic implementations. Do not in
 8. Exports validate explicit scope, permitted local persistent-ACL storage and private handle permissions before plaintext writing. Keep file-handle ownership through publication and cleanup. CLI never overwrites an existing destination; desktop overwrite requires the native dialog's approval.
 9. Bulk export I/O stays outside the security gate. Prepublication authorization is the cancellation boundary. Already-authorized filesystem publication may finish after a lock and must report truthfully.
 10. Clipboard exclusions and Unicode/ANSI/OEM/locale formats are installed before sequence capture in one open interval. Cleanup must not adopt a later sequence or erase a newer identical user copy.
-11. Child processes never inherit `AKM_*`, including `AKM_PASSWORD`. Release the vault before starting a child. Windows command shims are resolved explicitly with conservative argument handling.
+11. Child processes never inherit `AKM_*`, including `AKM_PASSWORD`. CLI: release the vault before starting a child. Desktop (owner, 2026-11-09): the vault lock is released before the child starts, the child inherits no vault handle and no `AKM_*` variable, and the decrypted vault stays in AKM's memory while AKM is unlocked. Windows command shims are resolved explicitly with conservative argument handling.
 12. Post-commit journal failure is a warning, not an invitation to repeat a completed mutation. Logging failure before disclosure/export/launch currently fails closed and is covered by CLI regressions; do not silently replace it with the post-commit policy.
 
 These contracts do not claim that every nearby seam is complete. Open defects are in [FINDINGS.md](FINDINGS.md).
