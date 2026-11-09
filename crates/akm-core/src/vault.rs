@@ -1412,16 +1412,43 @@ fn hardened_config() -> DatabaseConfig {
     config
 }
 
-fn acquire_lock(vault_path: &Path) -> Result<File> {
-    let mut os = vault_path.as_os_str().to_os_string();
+/// The lock file of a vault. Two spellings of one file (a junction, a symbolic link, `.` and
+/// `..`, another letter case) must use one lock, so the name comes from the canonical path of
+/// the vault's folder and, when the vault exists, from its canonical file name (P2R2-07).
+/// If a path cannot be made canonical, the lock is named from the path as it was written,
+/// which is what AKM did before.
+fn lock_path(vault_path: &Path) -> PathBuf {
+    let as_written = || {
+        let mut os = vault_path.as_os_str().to_os_string();
+        os.push(".lock");
+        PathBuf::from(os)
+    };
+    let Some(name) = vault_path.file_name() else {
+        return as_written();
+    };
+    let folder = vault_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let Ok(folder) = fs::canonicalize(folder) else {
+        return as_written();
+    };
+    let name = fs::canonicalize(vault_path)
+        .ok()
+        .and_then(|real| real.file_name().map(std::ffi::OsStr::to_os_string))
+        .unwrap_or_else(|| name.to_os_string());
+    let mut os = folder.join(name).into_os_string();
     os.push(".lock");
-    let lock_path = PathBuf::from(os);
+    PathBuf::from(os)
+}
 
-    if let Some(parent) = lock_path.parent() {
+fn acquire_lock(vault_path: &Path) -> Result<File> {
+    if let Some(parent) = vault_path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
         }
     }
+    let lock_path = lock_path(vault_path);
 
     let file = OpenOptions::new()
         .create(true)
@@ -2063,6 +2090,77 @@ mod tests {
         let own = dir.path().join("own.kdbx");
         Vault::create(&own, PASSWORD, None).unwrap();
         Vault::open(&own, PASSWORD).unwrap();
+    }
+
+    /// P2R2-07: two spellings of one vault file use one lock: a junction to the folder, a
+    /// `.` and `..` detour, and another letter case.
+    #[cfg(windows)]
+    #[test]
+    fn two_spellings_of_one_vault_file_use_one_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("Real Folder");
+        fs::create_dir(&real).unwrap();
+        let vault = real.join("Vault.kdbx");
+        fs::write(&vault, b"fake vault bytes").unwrap();
+        let link = dir.path().join("link");
+        let made = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&link)
+            .arg(&real)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+
+        let spellings = [
+            vault.clone(),
+            link.join("Vault.kdbx"),
+            real.join(".").join("Vault.kdbx"),
+            real.join("..").join("Real Folder").join("Vault.kdbx"),
+            dir.path().join("REAL FOLDER").join("VAULT.KDBX"),
+            link.join("vault.kdbx"),
+        ];
+        let first = lock_path(&spellings[0]);
+        for spelling in &spellings {
+            assert_eq!(lock_path(spelling), first, "{}", spelling.display());
+        }
+
+        // And the lock itself: held through one spelling, refused through every other.
+        let held = acquire_lock(&spellings[1]).unwrap();
+        for spelling in &spellings {
+            assert!(
+                matches!(acquire_lock(spelling), Err(Error::Locked)),
+                "{} was not locked out",
+                spelling.display()
+            );
+        }
+        drop(held);
+        acquire_lock(&spellings[2]).expect("the lock is free again");
+        let _ = fs::remove_dir(&link);
+    }
+
+    /// P2R2-07: a vault that does not exist yet still gets a lock beside its folder, and a
+    /// path that cannot be made canonical keeps the old name.
+    #[test]
+    fn the_lock_of_a_new_vault_and_of_an_unresolvable_path_is_named_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let new = dir.path().join("sub").join("new.kdbx");
+        let lock = acquire_lock(&new).unwrap();
+        assert!(dir.path().join("sub").exists());
+        let named = lock_path(&new);
+        assert!(
+            named.to_string_lossy().ends_with("new.kdbx.lock"),
+            "{named:?}"
+        );
+        assert!(named.exists());
+        drop(lock);
+        // No folder to resolve: the name is the written path plus `.lock`.
+        let missing = Path::new(r"Z:\no\such\folder\vault.kdbx");
+        assert_eq!(
+            lock_path(missing),
+            PathBuf::from(r"Z:\no\such\folder\vault.kdbx.lock")
+        );
     }
 
     #[test]
