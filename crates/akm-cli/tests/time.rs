@@ -205,3 +205,65 @@ fn a_full_instant_expiry_and_a_bad_date_are_handled_by_the_same_rule() {
         text(&bad.stderr)
     );
 }
+
+// ---------------------------------------------------------------------- FR-15: the interval
+
+#[test]
+fn a_rotation_interval_over_the_limit_is_refused_and_a_stored_one_is_listed_and_read() {
+    let fixture = Fixture::new();
+    for days in ["36501", "4294967295"] {
+        let before = fs::read(&fixture.vault).unwrap();
+        let refused = fixture.try_add(
+            "2026-01-01T00:00:00Z",
+            &[
+                "Too long",
+                "--env-var",
+                "TOO_LONG_KEY",
+                "--rotation-days",
+                days,
+            ],
+        );
+        assert!(!refused.status.success(), "{days}");
+        let message = text(&refused.stderr);
+        assert!(message.contains("36500"), "{days}: {message}");
+        assert_eq!(fs::read(&fixture.vault).unwrap(), before, "vault unchanged");
+    }
+
+    // A vault that another program wrote, with an interval no date can hold.
+    use keepass::db::fields;
+    let mut db = Database::new();
+    db.config.version = DatabaseVersion::KDB4(1);
+    db.config.kdf_config = KdfConfig::Aes { rounds: 10 };
+    {
+        let mut root = db.root_mut();
+        let mut group = root.add_group();
+        group.name = "API Keys".into();
+        let mut entry = group.add_entry();
+        entry.set_unprotected(fields::TITLE, "Stored");
+        entry.set_protected(fields::PASSWORD, "fake-stored-secret");
+        entry.set_unprotected("AKM_ENV_VAR", "STORED_KEY");
+        entry.set_unprotected("AKM_ROTATION_DAYS", "4294967295");
+        entry.set_unprotected("AKM_SECRET_CHANGED", "2026-01-01T00:00:00Z");
+    }
+    db.save(
+        &mut fs::File::create(&fixture.vault).unwrap(),
+        DatabaseKey::new().with_password(PASSWORD),
+    )
+    .unwrap();
+    let now = "2026-06-01T00:00:00Z";
+    let list = fixture.run(now, "UTC", &["list"]);
+    assert!(list.status.success(), "{}", text(&list.stderr));
+    assert!(row(&text(&list.stdout), "Stored").contains("unknown"));
+    let json = fixture.run(now, "UTC", &["list", "--json"]);
+    assert!(json.status.success(), "{}", text(&json.stderr));
+    let get = fixture.run(now, "UTC", &["get", "Stored"]);
+    assert!(get.status.success(), "{}", text(&get.stderr));
+    let shown = text(&get.stdout);
+    assert!(
+        shown.contains("Rotation:    4294967295 days (due date unknown"),
+        "{shown}"
+    );
+    let secret = fixture.run(now, "UTC", &["get", "Stored", "--field", "secret"]);
+    assert!(secret.status.success(), "{}", text(&secret.stderr));
+    assert_eq!(text(&secret.stdout).trim(), "fake-stored-secret");
+}

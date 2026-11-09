@@ -1245,6 +1245,10 @@ fn print_key(
             "Rotation:    {interval} days ({})",
             remaining_text(remaining)
         )?,
+        (Some(interval), None) if key.secret_changed_at.is_some() => writeln!(
+            out,
+            "Rotation:    {interval} days (due date unknown: the interval is longer than the dates AKM can show)"
+        )?,
         (Some(interval), None) => writeln!(
             out,
             "Rotation:    {interval} days (due date unknown: no secret-change time is recorded)"

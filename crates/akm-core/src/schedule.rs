@@ -63,7 +63,9 @@ impl Remaining {
     }
 }
 
-/// The due instant of a rotation interval that starts at `changed`.
-pub fn rotation_due(changed: DateTime<Utc>, days: u32) -> DateTime<Utc> {
-    changed + Duration::days(i64::from(days))
+/// The due instant of a rotation interval that starts at `changed`. `None` when the instant
+/// is out of the range that a date can hold: a stored interval is not trusted (FR-15), and
+/// no value can make this panic.
+pub fn rotation_due(changed: DateTime<Utc>, days: u32) -> Option<DateTime<Utc>> {
+    changed.checked_add_signed(Duration::try_days(i64::from(days))?)
 }

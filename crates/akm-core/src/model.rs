@@ -7,6 +7,9 @@ use crate::schedule::{rotation_due, Remaining};
 
 /// Custom field names written into the KDBX entry. KeePassXC preserves unknown
 /// fields, so the vault stays fully readable outside this app.
+/// The longest rotation interval that input accepts: 100 years (FR-15).
+pub const MAX_ROTATION_DAYS: u32 = 36_500;
+
 pub const META_ID: &str = "AKM_ID";
 pub const META_ISSUER: &str = "AKM_ISSUER";
 pub const META_PROJECT: &str = "AKM_PROJECT";
@@ -91,7 +94,7 @@ impl ApiKey {
     /// When the rotation interval elapses, counted from the last secret change. It is `None`
     /// when AKM knows no such time: an edit of notes or metadata never counts.
     pub fn rotation_due_at(&self) -> Option<DateTime<Utc>> {
-        Some(rotation_due(self.secret_changed_at?, self.rotation_days?))
+        rotation_due(self.secret_changed_at?, self.rotation_days?)
     }
 
     /// The distance to [`ApiKey::rotation_due_at`]: exact for scheduling, whole days for display.
@@ -208,6 +211,11 @@ impl ApiKeyInput {
                 return Err(crate::Error::Invalid(
                     "rotation_days must be greater than zero".into(),
                 ));
+            }
+            if days > MAX_ROTATION_DAYS {
+                return Err(crate::Error::Invalid(format!(
+                    "rotation_days must be at most {MAX_ROTATION_DAYS} (100 years)"
+                )));
             }
         }
         Ok(())
