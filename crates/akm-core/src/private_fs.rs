@@ -47,6 +47,79 @@ pub(crate) fn storage_allows(
     Ok(())
 }
 
+/// Test switch: pretend that the file system cannot keep private permissions (FR-05).
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::cell::Cell;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Mode {
+        Normal,
+        /// The call that creates the file with the descriptor fails.
+        CreateFails,
+        /// The file is created, but the file system ignores the descriptor (FAT, exFAT).
+        DescriptorIgnored,
+    }
+
+    thread_local! {
+        static MODE: Cell<Mode> = const { Cell::new(Mode::Normal) };
+    }
+
+    pub(crate) fn set(mode: Mode) {
+        MODE.with(|cell| cell.set(mode));
+    }
+
+    pub(crate) fn mode() -> Mode {
+        MODE.with(Cell::get)
+    }
+}
+
+/// Creates a new file beside a vault (a temporary vault, a backup) that only the current
+/// user can use: the same protected descriptor as the journal files (FR-05, design D4).
+///
+/// The save must not fail because a file system cannot keep permissions (exFAT, a network
+/// share). In that case the file is created the plain way and the second value says why it
+/// is not private, so the caller can warn. A file that already exists is always an error.
+pub(crate) fn create_new_private(path: &Path) -> std::io::Result<(File, Option<String>)> {
+    use std::fs::OpenOptions;
+    let plain = || OpenOptions::new().write(true).create_new(true).open(path);
+    #[cfg(windows)]
+    {
+        let created = match () {
+            #[cfg(test)]
+            () if testing::mode() == testing::Mode::CreateFails => {
+                Err(std::io::Error::other("test: the call failed"))
+            }
+            #[cfg(test)]
+            () if testing::mode() == testing::Mode::DescriptorIgnored => plain(),
+            () => imp::create_private(path),
+        };
+        match created {
+            Ok(file) => {
+                let note = imp::why_not_private(&file, path);
+                Ok((file, note))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(error),
+            Err(error) => Ok((
+                plain()?,
+                Some(format!(
+                    "the file system refused private permissions ({error})"
+                )),
+            )),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Ok((plain()?, None))
+    }
+}
+
+/// Test helper: the Windows permissions check of the journal files, run on any file.
+#[cfg(all(windows, test))]
+pub(crate) fn check_private(path: &Path) -> Result<()> {
+    imp::check_private(path)
+}
+
 #[cfg(windows)]
 pub(crate) use imp::{create_private_dir, file_id, open_dir, open_file, reject_links};
 
@@ -401,6 +474,35 @@ mod imp {
             }
             _ => refuse(format!("cannot open {}: {error}", path.display())),
         }
+    }
+
+    /// Creates a new file with the private descriptor. Fails if the file exists.
+    pub(crate) fn create_private(path: &Path) -> io::Result<File> {
+        open_raw(
+            path,
+            FILE_GENERIC_WRITE | READ_CONTROL,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            true,
+        )
+    }
+
+    /// Why a file just created is not private, or `None` when it is. A file system that
+    /// ignores the descriptor (FAT, exFAT) shows here.
+    pub(crate) fn why_not_private(file: &File, path: &Path) -> Option<String> {
+        match verify(file, path) {
+            Ok(()) => None,
+            Err(Error::Journal(reason)) => Some(reason),
+            Err(other) => Some(other.to_string()),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn check_private(path: &Path) -> Result<()> {
+        let file = open_file(path, OpenMode::Read)?
+            .ok_or_else(|| refuse(format!("{} does not exist", path.display())))?;
+        verify(&file, path)
     }
 
     /// Opens an existing folder for use. `None` when it does not exist.

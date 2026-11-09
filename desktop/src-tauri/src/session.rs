@@ -1097,6 +1097,10 @@ fn core_notices(gate: &mut Gate, ticket: Ticket, warnings: Vec<VaultWarning>) {
             VaultWarningKind::BackupRefresh => OperationWarningKind::BackupRefresh,
             VaultWarningKind::BackupPrune => OperationWarningKind::BackupPrune,
             VaultWarningKind::BackupRetention => OperationWarningKind::BackupRetention,
+            // FR-05: the desktop has no notice of its own for this yet. The nearest existing
+            // one tells the person to inspect the backups. A notice with its own text needs a
+            // new kind here, in `types.ts` and in `App.tsx`.
+            VaultWarningKind::FilePermissions => OperationWarningKind::BackupRetention,
         };
         operation_notice(gate, ticket, kind);
     }

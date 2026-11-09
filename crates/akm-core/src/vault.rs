@@ -37,6 +37,9 @@ pub enum VaultWarningKind {
     BackupRefresh,
     BackupPrune,
     BackupRetention,
+    /// A file that AKM wrote beside the vault could not be made private to the current
+    /// user (the file system keeps no Windows permissions, or refused them).
+    FilePermissions,
 }
 
 #[derive(Debug)]
@@ -936,6 +939,7 @@ impl Vault {
         let _lock = acquire_lock(&self.path)?;
         let original = self.checked_source()?;
         let mut tmp = PendingFile::temporary(&self.path)?;
+        let mut not_private = tmp.not_private.take();
         candidate
             .save(tmp.file_mut(), self.key.clone())
             .map_err(|e| Error::Save(e.to_string()))?;
@@ -966,6 +970,7 @@ impl Vault {
                 bytes_fingerprint(bytes)
             );
             let mut backup = PendingFile::new(self.sibling(&suffix))?;
+            not_private = not_private.or(backup.not_private.take());
             backup.file_mut().write_all(bytes)?;
             backup.sync_and_close()?;
             if fs::read(&backup.path)? != *bytes {
@@ -1006,11 +1011,12 @@ impl Vault {
             backup.keep();
         }
         if let Some(bytes) = original {
-            if let Err(error) = self.refresh_legacy_backup(&bytes) {
-                self.warnings.push(VaultWarning {
+            match self.refresh_legacy_backup(&bytes) {
+                Ok(reason) => not_private = not_private.or(reason),
+                Err(error) => self.warnings.push(VaultWarning {
                     kind: VaultWarningKind::BackupRefresh,
                     message: format!("vault saved, but .bak could not be refreshed: {error}"),
-                });
+                }),
             }
             let retained = backup.as_ref().is_some_and(|backup| {
                 // A pre-commit copy is not proof of post-maintenance retention.
@@ -1035,6 +1041,14 @@ impl Vault {
                 });
             }
         }
+        if let Some(reason) = not_private {
+            self.warnings.push(VaultWarning {
+                kind: VaultWarningKind::FilePermissions,
+                message: format!(
+                    "vault saved, but its files could not be made private to your account: {reason}. Anyone who can read this folder can copy the encrypted vault and its backups."
+                ),
+            });
+        }
         Ok(())
     }
 
@@ -1056,12 +1070,13 @@ impl Vault {
         }
     }
 
-    fn refresh_legacy_backup(&self, bytes: &[u8]) -> Result<()> {
+    /// Returns why the new `.bak` is not private to the current user, if it is not.
+    fn refresh_legacy_backup(&self, bytes: &[u8]) -> Result<Option<String>> {
         let mut tmp = PendingFile::temporary(&self.path)?;
         tmp.file_mut().write_all(bytes)?;
         tmp.sync_and_close()?;
         fs::rename(&tmp.path, self.sibling(".bak"))?;
-        Ok(())
+        Ok(tmp.not_private.take())
     }
 
     fn prune_backups(&self, protected: &Path) -> Result<()> {
@@ -1546,18 +1561,20 @@ struct PendingFile {
     path: PathBuf,
     file: Option<File>,
     remove_on_drop: bool,
+    /// Why the file is not private to the current user, if it is not (FR-05).
+    not_private: Option<String>,
 }
 
 impl PendingFile {
+    /// Every file that AKM writes beside a vault (the temporary vault, dated backups and
+    /// the `.bak` copy) starts here, so each one gets the private descriptor.
     fn new(path: PathBuf) -> Result<Self> {
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
+        let (file, not_private) = crate::private_fs::create_new_private(&path)?;
         Ok(Self {
             path,
             file: Some(file),
             remove_on_drop: true,
+            not_private,
         })
     }
 
@@ -1872,6 +1889,74 @@ mod tests {
         let mut vault = Vault::open(&path, PASSWORD).unwrap();
         vault.upgrade().unwrap();
         (dir, path, vault)
+    }
+
+    /// FR-05: the vault, the `.bak` copy and every dated backup that a save writes carry
+    /// the private descriptor (owner and one allow entry: the current user).
+    #[cfg(windows)]
+    #[test]
+    fn a_save_leaves_the_vault_and_every_backup_private_to_the_current_user() {
+        let (dir, path, mut vault) = fixture_vault();
+        vault.take_warning_records();
+        vault
+            .add(ApiKeyInput::new("Fake first", "fake-first-value"))
+            .unwrap();
+        vault
+            .add(ApiKeyInput::new("Fake second", "fake-second-value"))
+            .unwrap();
+        let mut checked = 0;
+        for entry in fs::read_dir(dir.path()).unwrap() {
+            let file = entry.unwrap().path();
+            let name = file.file_name().unwrap().to_string_lossy().into_owned();
+            if name.ends_with(".lock") {
+                continue;
+            }
+            crate::private_fs::check_private(&file)
+                .unwrap_or_else(|error| panic!("{name} is not private: {error}"));
+            checked += 1;
+        }
+        assert!(path.exists());
+        assert!(dir.path().join("vault.kdbx.bak").exists());
+        // The vault, the .bak copy and at least the dated backups of the three saves.
+        assert!(checked >= 5, "only {checked} files were checked");
+        assert!(
+            vault.take_warning_records().is_empty(),
+            "a normal save warns about nothing"
+        );
+    }
+
+    /// FR-05: a file system that cannot keep private permissions does not stop the save.
+    /// The save succeeds and a typed warning says why the files are not private. Both ways
+    /// to fail are covered: the create call fails, and the file system ignores the
+    /// descriptor (the warning then comes from the real permissions check).
+    #[cfg(windows)]
+    #[test]
+    fn a_save_on_a_file_system_without_private_files_succeeds_and_warns() {
+        use crate::private_fs::testing::{set, Mode};
+        for mode in [Mode::CreateFails, Mode::DescriptorIgnored] {
+            let (dir, path, mut vault) = fixture_vault();
+            vault.take_warning_records();
+            set(mode);
+            let added = vault
+                .add(ApiKeyInput::new("Fake plain", "fake-plain-value"))
+                .unwrap();
+            set(Mode::Normal);
+            let warnings = vault.take_warning_records();
+            let warning = warnings
+                .iter()
+                .find(|warning| warning.kind == VaultWarningKind::FilePermissions)
+                .expect("the save warns");
+            assert!(
+                warning.message.contains("vault saved"),
+                "{}",
+                warning.message
+            );
+            assert!(warning.message.contains("private"), "{}", warning.message);
+            assert!(!warning.message.contains("fake-plain-value"));
+            let reopened = Vault::open(&path, PASSWORD).unwrap();
+            assert_eq!(reopened.get_by_id(&added.id).unwrap().title, "Fake plain");
+            drop(dir);
+        }
     }
 
     #[test]
