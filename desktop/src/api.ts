@@ -59,6 +59,8 @@ async function invoke<T>(command: string, args?: Record<string, unknown>, expect
     if (operation !== undefined && errorKind(error) !== "unknown") acknowledgeImportRecord(operation);
     if (errorKind(error) === "completedWhileLocked" || (knownSuccess && mutations.has(command))) {
       if (outcome !== undefined) settleOutcome(outcome, "completedWhileLocked");
+      // A terminal that opened cannot be taken back, so its notice must say that it holds keys.
+      else if (command === "env_launch_terminal") settleOutcome(beginOutcome("terminal", generation), "completedWhileLocked");
       else reportCompletion(generation);
       throw completedWhileLocked(); // Do not forward native details, even in a known-commit error.
     }

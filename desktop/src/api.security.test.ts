@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { api } from "./api";
 import { adoptReservation, nativeOwner, releaseNativeOwner } from "./nativeSession";
 import { acknowledgeNotices, retainedOperationNotices } from "./operationNotices";
-import { acknowledgeCompletions, COMPLETION_EVENT, invalidateSession, retainedCompletions, SESSION_LOSS_EVENT } from "./sessionBoundary";
+import { acknowledgeCompletions, COMPLETION_EVENT, invalidateSession, retainedCompletions, sessionGeneration, SESSION_LOSS_EVENT } from "./sessionBoundary";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
 const IMPORT = ["TOKEN=fake-private-value", "private-scope", "private-env"] as const;
@@ -242,6 +242,26 @@ test("a terminal launch overtaken by a session change reports a completion, not 
     resolve(1);
     expect(await outcome).toMatchObject({ kind: "completedWhileLocked", message: expect.stringContaining("Do not repeat") });
     expect(lost).toHaveBeenCalledTimes(1);
+  } finally { window.removeEventListener(SESSION_LOSS_EVENT, lost); }
+});
+
+test("a terminal launch overtaken by a session change keeps a terminal notice, owned by the old session", async () => {
+  let resolve!: (value: unknown) => void;
+  native.invoke.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+  const origin = sessionGeneration();
+  const lost = vi.fn();
+  window.addEventListener(SESSION_LOSS_EVENT, lost);
+  try {
+    const outcome = api.launchTerminal("fake-project", "fake-env").catch((error: unknown) => error);
+    invalidateSession();
+    const newer = sessionGeneration();
+    resolve(2);
+    expect(await outcome).toMatchObject({ kind: "completedWhileLocked" });
+    expect(retainedCompletions()).toMatchObject([{ operation: "terminal", outcome: "completedWhileLocked", generation: origin }]);
+    expect(lost).toHaveBeenCalledTimes(1);
+    expect((lost.mock.calls[0][0] as CustomEvent<{ generation: number }>).detail.generation).toBe(origin);
+    expect(origin).not.toBe(newer);
+    expect(sessionGeneration()).toBe(newer);
   } finally { window.removeEventListener(SESSION_LOSS_EVENT, lost); }
 });
 

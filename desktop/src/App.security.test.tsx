@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
-import { acknowledgeCompletions, COMPLETION_MESSAGE, reportCompletion, retainedCompletions } from "./sessionBoundary";
+import { acknowledgeCompletions, beginOutcome, COMPLETION_MESSAGE, reportCompletion, retainedCompletions, sessionGeneration, settleOutcome } from "./sessionBoundary";
 import { beginNativeOpen, endNativeOpen } from "./nativeSession";
 
 const native = vi.hoisted(() => ({
@@ -92,6 +92,14 @@ test("a completed-operation receipt stays visible without reopening views", asyn
   expect(screen.queryByText("Unlocked secrets region")).toBeNull();
   act(() => native.onLock?.({ payload: { sessionId: native.owner } }));
   expect(screen.getByText(COMPLETION_MESSAGE)).toBeTruthy();
+});
+
+test("the retained notice of a terminal from an older session names the terminal and leaves the newer session open", async () => {
+  render(<App />);
+  await screen.findByText("Unlocked secrets region");
+  act(() => settleOutcome(beginOutcome("terminal", sessionGeneration() - 1), "completedWhileLocked"));
+  expect(screen.getByText(/A terminal opened with keys\. It keeps them until you close it, even after AKM locks\./)).toBeTruthy();
+  expect(screen.getByText("Unlocked secrets region")).toBeTruthy();
 });
 
 test("a lock during the initial status request requires fresh metadata for a usable locked screen", async () => {
