@@ -189,6 +189,30 @@ fn import_never_updates_a_different_project_or_environment() {
     );
     assert_eq!(vault.get_by_id(&original.id).unwrap(), original);
     assert_eq!(vault.list().len(), 2);
+
+    // FR-22: metadata does not hold the secret, so compare the protected values of both
+    // scopes, in memory and after the vault is opened again.
+    let other = vault
+        .list()
+        .into_iter()
+        .find(|key| key.project.as_deref() == Some("other"))
+        .expect("the import added a key in the other scope");
+    assert_ne!(other.id, original.id);
+    for (label, vault) in [
+        ("in memory", &vault),
+        ("after reopening", &Vault::open(&path, PASSWORD).unwrap()),
+    ] {
+        assert_eq!(
+            secret_of(vault, &original.id),
+            "sk-test-123456789",
+            "the original scope keeps its own secret {label}"
+        );
+        assert_eq!(
+            secret_of(vault, &other.id),
+            "other-project-secret",
+            "the other scope holds the imported secret {label}"
+        );
+    }
 }
 
 #[test]
@@ -623,6 +647,13 @@ fn blocked_rename_rolls_back_memory_cleans_temps_and_keeps_known_good_backup() {
         };
         assert!(result.is_err(), "{operation}");
         assert_eq!(vault.list(), vec![original.clone()], "{operation}");
+        // FR-22: metadata does not hold the secret. A failed change must not alter the
+        // protected value in memory either.
+        assert_eq!(
+            secret_of(&vault, &original.id),
+            "sk-test-123456789",
+            "{operation}: the secret in memory after the failed change"
+        );
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert_eq!(std::fs::read(&backup).unwrap(), known_good);
         assert!(!std::fs::read_dir(dir.path()).unwrap().any(|entry| entry
@@ -634,12 +665,18 @@ fn blocked_rename_rolls_back_memory_cleans_temps_and_keeps_known_good_backup() {
         vault
             .add(ApiKeyInput::new("Later", "later-secret"))
             .unwrap();
+        let reopened = Vault::open(&path, PASSWORD).unwrap();
+        assert_eq!(reopened.get_by_id(&original.id).unwrap(), original);
+        // FR-22: the later save must not have persisted a changed secret.
         assert_eq!(
-            Vault::open(&path, PASSWORD)
-                .unwrap()
-                .get_by_id(&original.id)
-                .unwrap(),
-            original
+            secret_of(&reopened, &original.id),
+            "sk-test-123456789",
+            "{operation}: the secret on disk after the later save"
+        );
+        assert_eq!(
+            secret_of(&vault, &original.id),
+            "sk-test-123456789",
+            "{operation}: the secret in memory after the later save"
         );
     }
 }

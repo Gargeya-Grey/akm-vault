@@ -326,13 +326,58 @@ fn existing_short_password_vaults_still_unlock() {
     assert_eq!(output.stdout, b"no keys\n");
 }
 
+/// The environment that a command gives its child, as the test builds it: the test process's
+/// own variables with the command's explicit changes applied. Names are upper-cased (Windows
+/// ignores case) and the hidden `=C:` drive entries are left out.
+fn effective_environment(command: &Command) -> std::collections::BTreeMap<String, String> {
+    let mut environment: std::collections::BTreeMap<String, String> = std::env::vars_os()
+        .map(|(name, value)| {
+            (
+                name.to_string_lossy().to_ascii_uppercase(),
+                value.to_string_lossy().into_owned(),
+            )
+        })
+        .filter(|(name, _)| !name.starts_with('='))
+        .collect();
+    for (name, value) in command.get_envs() {
+        let name = name.to_string_lossy().to_ascii_uppercase();
+        match value {
+            Some(value) => {
+                environment.insert(name, value.to_string_lossy().into_owned());
+            }
+            None => {
+                environment.remove(&name);
+            }
+        }
+    }
+    environment
+}
+
 #[test]
 fn run_scrubs_all_akm_variables_preserves_normal_environment_and_child_exit() {
-    let fixture = Fixture::new();
+    // FR-22: three scopes. Only `demo`/`dev` may reach the child, and the child's whole
+    // environment must be exactly the inherited one plus that scope's key.
+    let fixture = Fixture::with_keys(&[
+        ("Demo", "DEMO_SECRET", "fake-intended-secret", "demo", "dev"),
+        (
+            "Other project",
+            "OTHER_SECRET",
+            "fake-other-project-secret",
+            "other",
+            "dev",
+        ),
+        (
+            "Other environment",
+            "PROD_SECRET",
+            "fake-other-environment-secret",
+            "demo",
+            "prod",
+        ),
+    ]);
     let path = fixture.report("child.json");
     let audit = fixture.log();
-    let output = fixture
-        .probe_command(&path)
+    let mut command = fixture.probe_command(&path);
+    command
         .env("AKM_VAULT", &fixture.vault)
         .env("aKm_ToKeN", "fake-mixed-case-private-token")
         .env("AkM_Another", "fake-private-token")
@@ -340,16 +385,26 @@ fn run_scrubs_all_akm_variables_preserves_normal_environment_and_child_exit() {
         .env("CLI_TEST_AUDIT", audit.path())
         .env("CLI_TEST_BLOCK_AUDIT", "1")
         .env("CLI_TEST_EXIT", "7")
-        .env("DEMO_SECRET", "wrong-inherited-secret")
-        .output()
-        .unwrap();
+        .env("DEMO_SECRET", "wrong-inherited-secret");
+    let mut expected = effective_environment(&command);
+    expected.retain(|name, _| !name.starts_with("AKM_"));
+    expected.insert("DEMO_SECRET".into(), "fake-intended-secret".into());
+    let output = command.output().unwrap();
     assert_eq!(output.status.code(), Some(7), "{}", stderr(&output));
     let child = report(&path);
     assert_eq!(child["akm_names"], json!([]));
     assert_eq!(child["secret"], "fake-intended-secret");
+    assert_eq!(child["other_secret"], Value::Null);
+    assert_eq!(child["prod_secret"], Value::Null);
     assert_eq!(child["normal"], "ordinary-inherited-value");
     assert_eq!(child["path"], std::env::var("PATH").unwrap());
     assert_eq!(child["last_audit_action"], "run-requested");
+    let actual: std::collections::BTreeMap<String, String> =
+        serde_json::from_value(child["environment"].clone()).unwrap();
+    assert_eq!(
+        actual, expected,
+        "the child's complete environment is the inherited one, without AKM_*, plus the selected scope"
+    );
     assert!(audit.path().is_dir());
     assert!(stderr(&output).is_empty(), "{}", stderr(&output));
 }
@@ -1974,6 +2029,11 @@ fn child_probe() {
             "akm_names": akm_names,
             "secret": std::env::var("DEMO_SECRET").ok(),
             "other_secret": std::env::var("OTHER_SECRET").ok(),
+            "prod_secret": std::env::var("PROD_SECRET").ok(),
+            "environment": std::env::vars_os()
+                .map(|(name, value)| (name.to_string_lossy().to_ascii_uppercase(), value.to_string_lossy().into_owned()))
+                .filter(|(name, _)| !name.starts_with('='))
+                .collect::<std::collections::BTreeMap<_, _>>(),
             "normal": std::env::var("CLI_TEST_NORMAL").ok(),
             "path": std::env::var("PATH").ok(),
             "arguments": forwarded,
