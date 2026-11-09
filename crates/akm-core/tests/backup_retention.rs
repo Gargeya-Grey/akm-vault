@@ -20,11 +20,19 @@ fn dated_files(directory: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(bytes))
+}
+
+/// Five backups that AKM owns by its own rule (the name holds the SHA-256 of the bytes) and
+/// whose timestamps sort after any real one.
 fn future_backups(directory: &Path, empty_bytes: &[u8]) {
     for index in 0..5 {
         let name = format!(
-            "vault.kdbx.bak.29990101T00000{index}000000000Z_{}.kdbx",
-            uuid::Uuid::new_v4()
+            "vault.kdbx.bak.29990101T00000{index}000000000Z_{}_{}.kdbx",
+            uuid::Uuid::new_v4(),
+            sha256_hex(empty_bytes)
         );
         fs::write(directory.join(name), empty_bytes).unwrap();
     }
@@ -105,4 +113,86 @@ fn protected_original_is_reselected_for_each_write_despite_future_names() {
             "write {index} must protect its own immediate original"
         );
     }
+}
+
+/// FR-01: pruning deletes only a file that proves it is an AKM backup: the name holds the
+/// SHA-256 of the file's bytes and the bytes hash to that value.
+#[test]
+fn pruning_deletes_only_backups_that_prove_they_are_owned() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.kdbx");
+    fixture(&path);
+    let mut vault = Vault::open(&path, PASSWORD).unwrap();
+
+    let old_format = |tag: u8| {
+        format!(
+            "vault.kdbx.bak.20200101T0000{tag:02}000000000Z_{}.kdbx",
+            uuid::Uuid::new_v4()
+        )
+    };
+    let new_format = |tag: u8, hash: &str| {
+        format!(
+            "vault.kdbx.bak.20200102T0000{tag:02}000000000Z_{}_{hash}.kdbx",
+            uuid::Uuid::new_v4()
+        )
+    };
+    let wrong_hash = sha256_hex(b"some other bytes");
+    let mut sentinels: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    for (name, bytes) in [
+        // The old name pattern: not self-certifying, so never owned.
+        (old_format(1), b"foreign file, old pattern".to_vec()),
+        (old_format(2), b"another foreign file".to_vec()),
+        // The new pattern with a hash that the bytes do not have.
+        (
+            new_format(3, &wrong_hash),
+            b"foreign file, wrong hash".to_vec(),
+        ),
+        // The new pattern with an upper-case hash is not the format AKM writes.
+        (
+            new_format(4, &sha256_hex(b"upper").to_uppercase()),
+            b"upper".to_vec(),
+        ),
+        // The new pattern with a short hash.
+        (new_format(5, "abc123"), b"short hash".to_vec()),
+    ] {
+        let target = dir.path().join(name);
+        fs::write(&target, &bytes).unwrap();
+        sentinels.push((target, bytes));
+    }
+    // A directory that carries a genuine-looking name is not a file AKM wrote.
+    let directory_sentinel = dir.path().join(new_format(6, &sha256_hex(b"")));
+    fs::create_dir(&directory_sentinel).unwrap();
+
+    for index in 0..9 {
+        vault
+            .add(ApiKeyInput::new(format!("Fake {index}"), "fake-only-value"))
+            .unwrap();
+    }
+
+    for (target, bytes) in &sentinels {
+        assert_eq!(
+            &fs::read(target).expect("a foreign file must survive pruning"),
+            bytes,
+            "{}",
+            target.display()
+        );
+    }
+    assert!(directory_sentinel.is_dir());
+    let owned: Vec<PathBuf> = dated_files(dir.path())
+        .into_iter()
+        .filter(|p| {
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            p.is_file()
+                && name.rsplit_once('_').is_some_and(|(_, tail)| {
+                    tail.strip_suffix(".kdbx").is_some_and(|hash| {
+                        hash.len() == 64 && hash == sha256_hex(&fs::read(p).unwrap())
+                    })
+                })
+        })
+        .collect();
+    assert_eq!(
+        owned.len(),
+        5,
+        "nine saves keep five owned backups: {owned:?}"
+    );
 }

@@ -950,10 +950,13 @@ impl Vault {
 
         self.checked_source()?;
         let mut backup = if let Some(bytes) = &original {
+            // The name holds the SHA-256 of the bytes, so pruning can prove that a file is
+            // one of ours (FR-01, fault class F).
             let suffix = format!(
-                ".bak.{}_{}.kdbx",
+                ".bak.{}_{}_{}.kdbx",
                 Utc::now().format("%Y%m%dT%H%M%S%fZ"),
-                Uuid::new_v4()
+                Uuid::new_v4(),
+                bytes_fingerprint(bytes)
             );
             let mut backup = PendingFile::new(self.sibling(&suffix))?;
             backup.file_mut().write_all(bytes)?;
@@ -1060,30 +1063,29 @@ impl Vault {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        let prefix = format!(
-            "{}.bak.",
-            self.path.file_name().unwrap_or_default().to_string_lossy()
-        );
+        let vault_name = self.path.file_name().unwrap_or_default().to_string_lossy();
         let mut backups = Vec::new();
         for entry in fs::read_dir(parent)? {
             let entry = entry?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if let Some((timestamp, id)) = name
-                .strip_prefix(&prefix)
-                .and_then(|name| name.split_once('_'))
-            {
-                if timestamp.len() == 25
-                    && id
-                        .strip_suffix(".kdbx")
-                        .is_some_and(|id| Uuid::parse_str(id).is_ok())
-                    // The directory enumeration may add a leading `./` for a
-                    // basename-only vault path. Compare the entry within this
-                    // same parent, not two differently-spelled relative paths.
-                    && entry.path().file_name() != protected.file_name()
-                {
-                    backups.push(entry.path());
-                }
+            // The directory enumeration may add a leading `./` for a basename-only vault
+            // path. Compare the entry within this same parent, not two differently-spelled
+            // relative paths.
+            if entry.path().file_name() == protected.file_name() {
+                continue;
+            }
+            let Some(certified_hash) = certified_backup_hash(&vault_name, &name) else {
+                continue;
+            };
+            // Only a regular file that this save code wrote: not a link, not a folder.
+            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                continue;
+            }
+            // A name is not proof. The bytes must hash to the value in the name.
+            let path = entry.path();
+            if fs::read(&path).is_ok_and(|bytes| bytes_fingerprint(&bytes) == certified_hash) {
+                backups.push(path);
             }
         }
         backups.sort();
@@ -1375,6 +1377,28 @@ fn acquire_lock(vault_path: &Path) -> Result<File> {
 
 fn bytes_fingerprint(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+/// The SHA-256 that a dated backup name claims for its bytes, if the name has the format
+/// that `commit` writes: `<vault file name>.bak.<25-character time>_<uuid>_<64 lower-case
+/// hex digits>.kdbx`. A name in any other format (the format before FR-01 had no hash, and a
+/// foreign file can have any name) is not ours, and pruning never touches it.
+fn certified_backup_hash<'a>(vault_name: &str, file_name: &'a str) -> Option<&'a str> {
+    let rest = file_name
+        .strip_prefix(vault_name)?
+        .strip_prefix(".bak.")?
+        .strip_suffix(".kdbx")?;
+    let (timestamp, rest) = rest.split_once('_')?;
+    let (id, hash) = rest.split_once('_')?;
+    let well_formed = timestamp.len() == 25
+        && timestamp.is_ascii()
+        && id.len() == 36
+        && Uuid::parse_str(id).is_ok()
+        && hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+    well_formed.then_some(hash)
 }
 
 #[derive(PartialEq, Eq)]

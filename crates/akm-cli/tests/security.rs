@@ -1226,9 +1226,14 @@ fn check_protected_original_in_actual_cli(relative: bool) {
     let empty_path = fixture.report("empty.kdbx");
     write_database(&empty_path, PASSWORD, &[]);
     let empty = fs::read(&empty_path).unwrap();
+    // Backups that AKM owns by its own rule: the name holds the SHA-256 of the bytes (FR-01).
+    let empty_hash = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(&empty))
+    };
     for index in 0..5 {
         let name = format!(
-            "vault.kdbx.bak.29990101T00000{index}000000000Z_00000000-0000-4000-8000-{:012}.kdbx",
+            "vault.kdbx.bak.29990101T00000{index}000000000Z_00000000-0000-4000-8000-{:012}_{empty_hash}.kdbx",
             index + 1
         );
         fs::write(fixture.report(&name), &empty).unwrap();
