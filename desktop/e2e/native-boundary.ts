@@ -4,6 +4,8 @@ import type { ApplicationNotice, KeyView, OperationNotice, ReminderStatus } from
 export interface BoundaryOptions {
   /** Replaces the single default key. */
   keys?: Partial<KeyView>[];
+  recycled?: { key: Partial<KeyView>; deletedAt: string | null }[];
+  auditEntries?: { seq: string; ts: string; action: string; keyTitle: string | null; project: string | null; environment: string | null; keyId: string | null; detail: string | null }[];
   reminders?: ReminderStatus;
 }
 
@@ -97,10 +99,11 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
               return;
             }
             case "keys_list": return keys;
+            case "recycled_list": return (options.recycled ?? []).map((item, index) => ({ deletedAt: item.deletedAt, key: { ...key, id: `${key.id}-bin-${index}`, ...item.key } }));
             case "reminders_status": return reminders;
             case "reminders_set": reminders = { ...reminders, enabled: args.enabled as boolean, delivery: "none", blocked: false }; return reminders;
             case "reminders_notify": reminders = { ...reminders, delivery: "sent" }; return reminders;
-            case "audit_read": return { path: "C:/fake-test/journal/j-00000000000000000000000000000000.jsonl", state: "consistent", damage: null, identity: "confirmed", notices: [], brokenAt: null, problemLine: null, totalEntries: 3, entries: [
+            case "audit_read": return { path: "C:/fake-test/journal/j-00000000000000000000000000000000.jsonl", state: "consistent", damage: null, identity: "confirmed", notices: [], brokenAt: null, problemLine: null, totalEntries: options.auditEntries?.length ?? 3, entries: options.auditEntries ?? [
               { seq: "1", ts: "2026-10-31T00:00:00Z", action: "copy", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: null },
               { seq: "2", ts: "2026-10-31T00:00:00Z", action: "copy-requested", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: null },
               { seq: "3", ts: "2026-10-31T00:00:00Z", action: "add-completed", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: "fake detail: 2 keys added, 1 updated" },

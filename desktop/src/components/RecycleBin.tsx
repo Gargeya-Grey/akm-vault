@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { api, errorText } from "../api";
 import { formatDateTime, plural } from "../format";
 import type { RecycledKey } from "../types";
@@ -15,18 +15,22 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
   const [items, setItems] = useState<RecycledKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [readFailed, setReadFailed] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [purging, setPurging] = useState<RecycledKey | null>(null);
   const [purgeError, setPurgeError] = useState<string | null>(null);
+  const factsId = useId();
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       setItems(await api.recycled());
       setError(null);
+      setReadFailed(false);
     } catch (cause) {
       setError(errorText(cause));
+      setReadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -98,6 +102,16 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
             <h2>Opening the Recycle Bin…</h2>
             <p>The vault is already unlocked. Removed keys appear here in a moment.</p>
           </div>
+        ) : readFailed ? (
+          <div className="empty-state">
+            <h2>AKM could not read the Recycle Bin.</h2>
+            <p>This does not mean that the Recycle Bin is empty.</p>
+            <div className="empty-actions">
+              <button type="button" className="text-button" onClick={() => void load()}>
+                Try again
+              </button>
+            </div>
+          </div>
         ) : items.length === 0 ? (
           <div className="empty-state">
             <EmptyBin />
@@ -109,16 +123,17 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
             {items.map((item) => (
               <li className="bin-row" key={item.key.id}>
                 <KeyCut id={item.key.id} />
-                <span className="key-ident">
+                <span className="key-ident" id={`${factsId}-${item.key.id}`}>
                   <span className="key-title">{item.key.title}</span>
+                  <span className="key-sub">{item.key.project ?? "No project"}</span>
+                  <span className="key-sub">{item.key.environment ?? "No environment"}</span>
+                  <span className="key-sub mono">{item.key.resolvedEnvVar}</span>
+                  <span className="key-sub">{item.key.issuer ?? "No issuer"}</span>
+                  <span className="key-sub mono">ID {item.key.id}</span>
                   <span className="key-sub">
-                    {item.key.project ?? "No project"}
-                    {item.key.environment ? ` · ${item.key.environment}` : ""}
+                    Removed <span className="mono">{item.deletedAt ? formatDateTime(item.deletedAt) : "at an unknown time"}</span>
                     {item.key.historyCount > 0 && ` · ${plural(item.key.historyCount, "earlier version")}`}
                   </span>
-                </span>
-                <span className="key-sub">
-                  Removed <span className="mono">{item.deletedAt ? formatDateTime(item.deletedAt) : "at an unknown time"}</span>
                 </span>
                 <span className="action-cluster">
                   <button
@@ -127,6 +142,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
                     onClick={() => void restore(item)}
                     disabled={readOnly || busyId !== null}
                     aria-label={`Restore ${item.key.title}`}
+                    aria-describedby={`${factsId}-${item.key.id}`}
                   >
                     <Icon name="refresh" />
                     Restore
@@ -137,6 +153,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
                     onClick={() => { setPurgeError(null); setPurging(item); }}
                     disabled={readOnly || busyId !== null}
                     aria-label={`Delete ${item.key.title} for good`}
+                    aria-describedby={`${factsId}-${item.key.id}`}
                   >
                     <Icon name="trash" />
                     Delete for good
@@ -162,6 +179,14 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
             backups can still hold the key. AKM records the deletion, but a KeePassXC merge with an
             older copy may bring the key back.
           </p>
+          <div className="fact-list">
+            <div className="fact-row"><span className="fact-key">Project</span><span className="fact-value">{purging.key.project ?? "No project"}</span></div>
+            <div className="fact-row"><span className="fact-key">Environment</span><span className="fact-value">{purging.key.environment ?? "No environment"}</span></div>
+            <div className="fact-row"><span className="fact-key">Variable</span><span className="fact-value mono">{purging.key.resolvedEnvVar}</span></div>
+            <div className="fact-row"><span className="fact-key">Issuer</span><span className="fact-value">{purging.key.issuer ?? "No issuer"}</span></div>
+            <div className="fact-row"><span className="fact-key">ID</span><span className="fact-value mono">{purging.key.id}</span></div>
+            <div className="fact-row"><span className="fact-key">Removed</span><span className="fact-value">{purging.deletedAt ? formatDateTime(purging.deletedAt) : "At an unknown time"}</span></div>
+          </div>
           {purgeError && <Notice tone="error">{purgeError}</Notice>}
         </ConfirmDialog>
       )}

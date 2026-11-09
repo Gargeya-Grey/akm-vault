@@ -122,7 +122,7 @@ export function Unlock({ status, onUnlocked }: Props) {
         <ul className="lock-promises">
           <li>
             <strong>A real KeePass file</strong>
-            <span>KDBX 4.1 with AES-256 and Argon2id. Open it in KeePassXC at any time, with no dependency on this app.</span>
+            <span>A new vault uses KDBX 4.1 with AES-256 and Argon2id. A vault you open keeps its own settings. Open it in KeePassXC at any time, with no dependency on this app.</span>
           </li>
           <li>
             <strong>No recovery path</strong>

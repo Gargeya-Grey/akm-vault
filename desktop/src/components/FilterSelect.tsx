@@ -1,4 +1,4 @@
-import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 
@@ -47,6 +47,8 @@ function placeBelow(trigger: DOMRect): Placement {
 /// A labelled select. The real select stays as the field, so its name, value and
 /// automation stay the same. A real press or a key opens this list in place of the
 /// system's list. Focus stays on the field. The list closes when the field loses focus.
+/// The highlight is an option's value, not its position, because the options can change
+/// while the list is open. Only opening the list and a keyboard move scroll it.
 export function FilterSelect({
   id,
   label,
@@ -60,11 +62,16 @@ export function FilterSelect({
   const typed = useRef({ text: "", at: 0 });
   const menuId = useId();
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
+  const [activeValue, setActiveValue] = useState("");
+  const [revealRequest, setRevealRequest] = useState(0);
   const [place, setPlace] = useState<Placement | null>(null);
 
   const choices: Option[] = [{ value: "", label: placeholder }, ...options];
   const current = Math.max(0, choices.findIndex((choice) => choice.value === value));
+  const highlighted = choices.findIndex((choice) => choice.value === activeValue);
+  const active = highlighted >= 0 ? highlighted : current;
+  // A highlighted option that a refresh removed stays reset, even if the option returns.
+  if (highlighted < 0 && activeValue !== choices[current].value) setActiveValue(choices[current].value);
   const optionId = (index: number) => `${menuId}-${index}`;
   const showing = open && !disabled;
 
@@ -83,19 +90,31 @@ export function FilterSelect({
     };
   }, [showing, position]);
 
+  const placed = showing && place !== null;
   useLayoutEffect(() => {
-    if (showing) document.getElementById(`${menuId}-${active}`)?.scrollIntoView?.({ block: "nearest" });
-  }, [showing, active, menuId, place]);
+    if (placed) document.getElementById(optionId(active))?.scrollIntoView?.({ block: "nearest" });
+    // Only a new request or a newly placed list scrolls. A refresh, a hover and the wheel do not.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealRequest, placed]);
+
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   function show() {
-    setActive(current);
+    setActiveValue(choices[current].value);
+    setPlace(null);
     setOpen(true);
   }
 
-  function choose(index: number) {
+  function moveTo(index: number) {
+    setActiveValue(choices[index].value);
+    setRevealRequest((request) => request + 1);
+  }
+
+  function choose(next: Option) {
     setOpen(false);
-    const next = choices[index];
-    if (next && next.value !== value) onChange(next.value);
+    if (next.value !== value) onChange(next.value);
   }
 
   function matchTyped(key: string) {
@@ -104,7 +123,7 @@ export function FilterSelect({
     typed.current = { text, at: now };
     const wanted = text.toLocaleLowerCase();
     const found = choices.findIndex((choice) => choice.label.toLocaleLowerCase().startsWith(wanted));
-    if (found >= 0) setActive(found);
+    if (found >= 0) moveTo(found);
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLSelectElement>) {
@@ -126,10 +145,10 @@ export function FilterSelect({
     };
     if (event.key in moves) {
       event.preventDefault();
-      setActive(moves[event.key]);
+      moveTo(moves[event.key]);
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      choose(active);
+      choose(choices[active]);
     } else if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -188,8 +207,8 @@ export function FilterSelect({
               role="option"
               aria-selected={index === current}
               className={`select-option${index === active ? " active" : ""}`}
-              onMouseMove={() => { if (index !== active) setActive(index); }}
-              onClick={() => choose(index)}
+              onMouseMove={() => setActiveValue(choice.value)}
+              onClick={() => choose(choice)}
             >
               <span>{choice.label}</span>
               {index === current && <Icon name="check" />}

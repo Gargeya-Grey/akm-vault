@@ -42,6 +42,47 @@ test("the key count comes from the current key list, not from the last status po
   expect(screen.getByText("in this vault").textContent).toBe("3 in this vault");
 });
 
+test("a newer status count makes Settings read the list again and show the new count", async () => {
+  mocks.keys.mockResolvedValueOnce([{}]).mockResolvedValueOnce([{}, {}]);
+  const view = render(<Settings status={{ ...status, keyCount: 1 }} onLocked={() => {}} />);
+  await act(async () => {});
+  expect(screen.getByText("in this vault").textContent).toBe("1 in this vault");
+  await act(async () => { view.rerender(<Settings status={{ ...status, keyCount: 2 }} onLocked={() => {}} />); });
+  await act(async () => {});
+  expect(screen.getByText("in this vault").textContent).toBe("2 in this vault");
+});
+
+test("an older list reply that arrives after a newer status changes nothing", async () => {
+  let older: (keys: object[]) => void = () => {};
+  mocks.keys.mockImplementationOnce(() => new Promise((resolve) => { older = resolve; })).mockResolvedValueOnce([{}, {}]);
+  const view = render(<Settings status={{ ...status, keyCount: 1 }} onLocked={() => {}} />);
+  await act(async () => { view.rerender(<Settings status={{ ...status, keyCount: 2 }} onLocked={() => {}} />); });
+  await act(async () => {});
+  await act(async () => { older([{}]); });
+  expect(screen.getByText("in this vault").textContent).toBe("2 in this vault");
+});
+
+test("while the replacement read is pending, Settings shows the newer status count", async () => {
+  let finish: (keys: object[]) => void = () => {};
+  mocks.keys.mockResolvedValueOnce([{}]).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const view = render(<Settings status={{ ...status, keyCount: 1 }} onLocked={() => {}} />);
+  await act(async () => {});
+  expect(screen.getByText("in this vault").textContent).toBe("1 in this vault");
+  await act(async () => { view.rerender(<Settings status={{ ...status, keyCount: 2 }} onLocked={() => {}} />); });
+  expect(screen.getByText("in this vault").textContent).toBe("2 in this vault");
+  await act(async () => { finish([{}, {}, {}]); });
+  expect(screen.getByText("in this vault").textContent).toBe("3 in this vault");
+});
+
+test("a failed list read falls back to the status count", async () => {
+  mocks.keys.mockResolvedValueOnce([{}]).mockRejectedValueOnce(new Error("fake read failure"));
+  const view = render(<Settings status={{ ...status, keyCount: 1 }} onLocked={() => {}} />);
+  await act(async () => {});
+  await act(async () => { view.rerender(<Settings status={{ ...status, keyCount: 5 }} onLocked={() => {}} />); });
+  await act(async () => {});
+  expect(screen.getByText("in this vault").textContent).toBe("5 in this vault");
+});
+
 test("the setting is off by default, says what it does, and sends nothing by itself", async () => {
   await open();
   expect(toggle().checked).toBe(false);

@@ -32,6 +32,19 @@ function hide() {
   hidden.mockReturnValue(false);
 }
 
+test("a failed list read can be tried again, and its error goes away after success", async () => {
+  mocks.keys.mockRejectedValueOnce({ message: "fake read failure" });
+  await act(async () => { render(<UseKeys />); });
+  await act(async () => {});
+  expect(document.body.textContent).toContain("fake read failure");
+  mocks.keys.mockResolvedValueOnce([{ project: "demo", environment: "dev" }]);
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Try again" })); });
+  await act(async () => {});
+  expect(document.body.textContent).not.toContain("fake read failure");
+  expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  expect(screen.getAllByRole("option", { name: "demo" }).length).toBeGreaterThan(0);
+});
+
 test("export controls stay locked until a specific project and environment are selected", () => {
   render(<UseKeys />);
   for (const name of ["Save .env…", "Preview", "Copy to clipboard"]) {

@@ -38,7 +38,63 @@ afterEach(() => {
   native.invoke.mockReset();
 });
 
-const row = (name: string, description: string) => screen.getByRole("button", { name, description });
+const row = (name: string, description: string, identity = "Project demo, environment dev, variable FAKE_KEY, no issuer, ID fake-id.") =>
+  screen.getByRole("button", { name, description: `${identity} ${description}` });
+
+test("two keys with one title differ in their accessible description", async () => {
+  await show([key({ id: "a", title: "Twin", project: "alpha", environment: "dev", resolvedEnvVar: "TWIN_A" }), key({ id: "b", title: "Twin", project: null, environment: null, resolvedEnvVar: "TWIN_B" })]);
+  row("Open Twin", "No expiry date. No rotation interval.", "Project alpha, environment dev, variable TWIN_A, no issuer, ID a.");
+  row("Open Twin", "No expiry date. No rotation interval.", "No project, no environment, variable TWIN_B, no issuer, ID b.");
+});
+
+test("two keys that differ only by issuer differ in their accessible description", async () => {
+  await show([key({ id: "a", title: "Twin", issuer: "Acme" }), key({ id: "b", title: "Twin", issuer: "Globex" })]);
+  row("Open Twin", "No expiry date. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, issuer Acme, ID a.");
+  row("Open Twin", "No expiry date. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, issuer Globex, ID b.");
+});
+
+test("two key rows that match in every shown fact show their unique IDs", async () => {
+  await show([key({ id: "first-unique-id", title: "Twin" }), key({ id: "second-unique-id", title: "Twin" }), key({ id: "other-unique-id", title: "Single" })]);
+  const shownIds = [...document.querySelectorAll(".key-row .key-sub.mono")].map((node) => node.textContent);
+  expect(shownIds.sort()).toEqual(["ID first-unique-id", "ID second-unique-id"]);
+});
+
+test("a vault with no projects counts zero projects", async () => {
+  await show([]);
+  expect(document.querySelector(".shelf-label")?.textContent).toBe("Projects 0");
+});
+
+test("a key with no project names that when other keys have a project", async () => {
+  await show([key({ id: "a", title: "Alpha", project: "alpha-project" }), key({ id: "b", title: "Loose", project: null })]);
+  await act(async () => { fireEvent.change(screen.getByRole("searchbox"), { target: { value: "Loose" } }); });
+  expect(screen.getByRole("heading", { name: "No project" }).closest("section")?.textContent).toContain("Loose");
+});
+
+test("a key with no expiry date says so, and the shelf counts the projects", async () => {
+  await show([key({ id: "a", title: "Alpha", project: "one" }), key({ id: "b", title: "Beta", project: "two" })]);
+  expect(screen.getAllByRole("button", { name: /^Open / })[0].textContent).toContain("no expiry");
+  expect(document.querySelector(".shelf-label")?.textContent).toBe("Projects 2");
+});
+
+test("a failed read does not say that the vault is empty, and it can be tried again", async () => {
+  let fail = true;
+  native.invoke.mockImplementation(async (command: string) => {
+    if (command !== "keys_list") throw new Error(`unexpected command ${command}`);
+    if (fail) throw { kind: "internal", message: "fake read failure" };
+    return [key({ title: "Back again" })];
+  });
+  await act(async () => { render(<KeysView />); });
+  await act(async () => {});
+  expect(screen.queryByText("No keys yet.")).toBeNull();
+  expect(document.body.textContent).toContain("fake read failure");
+  expect(screen.getByRole("heading", { name: "AKM could not read the keys." })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^All keys/ })).toBeNull();
+  fail = false;
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Try again" })); });
+  await act(async () => {});
+  screen.getByRole("button", { name: "Open Back again" });
+  expect(screen.queryByText("AKM could not read the keys.")).toBeNull();
+});
 
 test("a search that leaves one project still names that project", async () => {
   await show([key({ id: "a", title: "Alpha", project: "alpha-project" }), key({ id: "b", title: "Beta", project: "beta-project" })]);
@@ -47,9 +103,9 @@ test("a search that leaves one project still names that project", async () => {
   expect(screen.queryByRole("heading", { name: "beta-project" })).toBeNull();
 });
 
-test("a vault with no projects shows no project heading", async () => {
+test("a vault with no projects still says that its keys have no project", async () => {
   await show([key({ title: "Loose", project: null })]);
-  expect(screen.queryByRole("heading", { name: "No project" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "No project" }).closest("section")?.textContent).toContain("Loose");
 });
 
 test("an expired key says how long ago it expired", async () => {
@@ -109,6 +165,6 @@ test("every row of a longer list has its own description and no row reuses anoth
     key({ id: "a", title: "Alpha", expiresAt: "2026-05-31T12:00:00Z" }),
     key({ id: "b", title: "Bravo", rotationDays: 10 }),
   ]);
-  row("Open Alpha", "Expired 1 day ago. No rotation interval.");
-  row("Open Bravo", "No expiry date. Rotation unknown, no known secret-change time.");
+  row("Open Alpha", "Expired 1 day ago. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, no issuer, ID a.");
+  row("Open Bravo", "No expiry date. Rotation unknown, no known secret-change time.", "Project demo, environment dev, variable FAKE_KEY, no issuer, ID b.");
 });
