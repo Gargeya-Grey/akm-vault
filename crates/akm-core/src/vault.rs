@@ -148,6 +148,8 @@ impl Vault {
         let key = DatabaseKey::new().with_password(password);
         let bytes = fs::read(&path)?;
         let fingerprint = Some(bytes_fingerprint(&bytes));
+        // FR-28: the header names the cost of the key derivation. Read it first.
+        crate::kdf_guard::check(&bytes)?;
         let db = Database::parse(&bytes, key.clone()).map_err(|e| Error::Open(e.to_string()))?;
 
         Ok(Self {
@@ -201,6 +203,7 @@ impl Vault {
     pub fn reload(&mut self) -> Result<()> {
         let bytes = fs::read(&self.path)?;
         let fingerprint = bytes_fingerprint(&bytes);
+        crate::kdf_guard::check(&bytes)?;
         let db = Database::parse(&bytes, self.key.clone())
             .map_err(|error| Error::Open(error.to_string()))?;
         self.db = db;
@@ -1991,6 +1994,75 @@ mod tests {
             assert_eq!(reopened.get_by_id(&added.id).unwrap().title, "Fake plain");
             drop(dir);
         }
+    }
+
+    /// FR-28: a vault whose header asks for more key derivation than the limits is refused
+    /// before the key is derived, on open and on reload, with the limit in the message. The
+    /// files hold only a header, so the test allocates nothing for the cost they name.
+    #[test]
+    fn a_vault_that_asks_for_too_much_key_derivation_is_refused_before_it_is_derived() {
+        use crate::kdf_guard::crafted;
+        let started = std::time::Instant::now();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("huge.kdbx");
+        let cases = [
+            (crafted::argon2(true, 1 << 40, 3, 4), "4 GiB"),
+            (crafted::argon2(false, 64 << 20, u64::MAX, 4), "100000"),
+            (crafted::argon2(true, 64 << 20, 3, u32::MAX), "256"),
+            (crafted::aes4(u64::MAX), "2000000000"),
+            (crafted::aes3(3_000_000_000), "2000000000"),
+        ];
+        for (bytes, limit) in cases {
+            fs::write(&path, &bytes).unwrap();
+            let text = Vault::open(&path, PASSWORD)
+                .err()
+                .expect("the vault is refused")
+                .to_string();
+            assert!(text.contains(limit), "{limit}: {text}");
+            assert!(!text.contains("wrong password"), "{text}");
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the refusal must come before any key derivation"
+        );
+
+        // The same on reload of a vault that is already open.
+        let (_dir, path, mut vault) = fixture_vault();
+        fs::write(&path, crafted::argon2(true, 1 << 40, 3, 4)).unwrap();
+        let text = vault.reload().unwrap_err().to_string();
+        assert!(text.contains("4 GiB"), "{text}");
+    }
+
+    /// FR-28: a header that is not readable keeps the error that it had before.
+    #[test]
+    fn a_malformed_header_keeps_its_existing_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken.kdbx");
+        let good = crate::kdf_guard::crafted::argon2(false, 64 << 20, 3, 4);
+        for bytes in [
+            Vec::new(),
+            b"not a vault".to_vec(),
+            good[..good.len() / 2].to_vec(),
+            good,
+        ] {
+            fs::write(&path, &bytes).unwrap();
+            let text = Vault::open(&path, PASSWORD)
+                .err()
+                .expect("the file is not a vault")
+                .to_string();
+            assert!(text.starts_with("could not open vault"), "{text}");
+        }
+    }
+
+    /// FR-28: usual settings still open: the KeePassXC-made fixture and AKM's own vaults.
+    #[test]
+    fn vaults_at_usual_key_derivation_settings_still_open() {
+        let (_dir, path, _vault) = fixture_vault();
+        Vault::open(&path, PASSWORD).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let own = dir.path().join("own.kdbx");
+        Vault::create(&own, PASSWORD, None).unwrap();
+        Vault::open(&own, PASSWORD).unwrap();
     }
 
     #[test]
