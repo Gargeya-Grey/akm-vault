@@ -273,9 +273,9 @@ impl Vault {
 
     /// Select one key by its native UUID or by its exact title, in any letter case. Both sides
     /// go through [`crate::model::caseless`], so `Éclair` and `éclair`, or `ΛΌΓΟΣ` and `λόγος`,
-    /// are one title (FR-17). A partial word never selects a key, so a word found in a note or a URL cannot
-    /// reveal, rotate or delete one (L2). Two keys with the same title are refused. Use
-    /// [`Vault::candidates`] to list near matches.
+    /// are one title (FR-17). A partial word never selects a key, so a word found in a note or
+    /// a URL cannot reveal, rotate or delete one (L2). Two keys with the same title are
+    /// refused. Use [`Vault::candidates`] to list near matches.
     pub fn find(&self, query: &str) -> Result<ApiKey> {
         if let Ok(key) = self.get_by_id(query) {
             return Ok(key);
@@ -1417,34 +1417,38 @@ fn hardened_config() -> DatabaseConfig {
     config
 }
 
-/// The lock file of a vault. Two spellings of one file (a junction, a symbolic link, `.` and
-/// `..`, another letter case) must use one lock, so the name comes from the canonical path of
-/// the vault's folder and, when the vault exists, from its canonical file name (P2R2-07).
-/// If a path cannot be made canonical, the lock is named from the path as it was written,
-/// which is what AKM did before.
+/// The lock file of a vault. Two spellings of one file (a junction, a file symbolic link in
+/// another folder, `.` and `..`, another letter case) must use one lock (P2R2-07, core review
+/// 1, finding 9). When the vault exists, the name is its canonical path, so a link and its
+/// target share one lock. When it does not exist yet, the name is the canonical folder and the
+/// written file name. If the folder cannot be made canonical either, the lock is named from
+/// the path as it was written, which is what AKM did before.
 fn lock_path(vault_path: &Path) -> PathBuf {
-    let as_written = || {
-        let mut os = vault_path.as_os_str().to_os_string();
+    lock_name(vault_path, &|path| fs::canonicalize(path))
+}
+
+type Resolve<'a> = &'a dyn Fn(&Path) -> std::io::Result<PathBuf>;
+
+fn lock_name(vault_path: &Path, resolve: Resolve<'_>) -> PathBuf {
+    let with_lock = |path: &Path| {
+        let mut os = path.as_os_str().to_os_string();
         os.push(".lock");
         PathBuf::from(os)
     };
+    if let Ok(real) = resolve(vault_path) {
+        return with_lock(&real);
+    }
     let Some(name) = vault_path.file_name() else {
-        return as_written();
+        return with_lock(vault_path);
     };
     let folder = vault_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let Ok(folder) = fs::canonicalize(folder) else {
-        return as_written();
-    };
-    let name = fs::canonicalize(vault_path)
-        .ok()
-        .and_then(|real| real.file_name().map(std::ffi::OsStr::to_os_string))
-        .unwrap_or_else(|| name.to_os_string());
-    let mut os = folder.join(name).into_os_string();
-    os.push(".lock");
-    PathBuf::from(os)
+    match resolve(folder) {
+        Ok(folder) => with_lock(&folder.join(name)),
+        Err(_) => with_lock(vault_path),
+    }
 }
 
 fn acquire_lock(vault_path: &Path) -> Result<File> {
@@ -2163,6 +2167,115 @@ mod tests {
         drop(held);
         acquire_lock(&spellings[2]).expect("the lock is free again");
         let _ = fs::remove_dir(&link);
+    }
+
+    /// Core review 1, finding 9 (P2R2-07): a file symbolic link in another folder. The lock is
+    /// named from the canonical path of the file when the file exists, so `B\link.kdbx`, which
+    /// points at `A\vault.kdbx`, shares `A\vault.kdbx.lock` with its target. A file that does
+    /// not exist is named from its canonical folder and the written name. The resolver is
+    /// injected, so this test needs no privilege to make a link.
+    #[cfg(windows)]
+    #[test]
+    fn a_file_symlink_and_its_target_get_one_lock_name() {
+        let resolve = |path: &Path| -> std::io::Result<PathBuf> {
+            let real = match path.to_str().unwrap() {
+                r"C:\B\link.kdbx" | r"C:\A\vault.kdbx" | r"C:\J\link.kdbx" => {
+                    r"\\?\C:\A\vault.kdbx"
+                }
+                r"C:\A" => r"\\?\C:\A",
+                r"C:\B" | r"C:\J" => r"\\?\C:\B",
+                _ => return Err(std::io::ErrorKind::NotFound.into()),
+            };
+            Ok(PathBuf::from(real))
+        };
+        let target = PathBuf::from(r"\\?\C:\A\vault.kdbx.lock");
+        for spelling in [r"C:\B\link.kdbx", r"C:\A\vault.kdbx", r"C:\J\link.kdbx"] {
+            assert_eq!(
+                lock_name(Path::new(spelling), &resolve),
+                target,
+                "{spelling}"
+            );
+        }
+        for spelling in [r"C:\B\new.kdbx", r"C:\J\new.kdbx"] {
+            assert_eq!(
+                lock_name(Path::new(spelling), &resolve),
+                PathBuf::from(r"\\?\C:\B\new.kdbx.lock"),
+                "{spelling}"
+            );
+        }
+        assert_eq!(
+            lock_name(Path::new(r"Z:\no\vault.kdbx"), &resolve),
+            PathBuf::from(r"Z:\no\vault.kdbx.lock")
+        );
+    }
+
+    /// Core review 1, finding 9, on the real file system: the lock held through a file symbolic
+    /// link refuses its target, and the other way round. Making a file link needs the
+    /// symbolic-link privilege or Developer Mode; without it Windows returns error 1314, and
+    /// this test prints that it did not run and passes.
+    #[cfg(windows)]
+    #[test]
+    fn a_lock_held_through_a_file_symlink_refuses_its_target_and_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("A"), dir.path().join("B"));
+        fs::create_dir(&a).unwrap();
+        fs::create_dir(&b).unwrap();
+        let target = a.join("vault.kdbx");
+        fs::write(&target, b"fake vault bytes").unwrap();
+        let link = b.join("link.kdbx");
+        match std::os::windows::fs::symlink_file(&target, &link) {
+            Ok(()) => {}
+            Err(error) if error.raw_os_error() == Some(1314) => {
+                eprintln!(
+                    "NOT RUN: a_lock_held_through_a_file_symlink_refuses_its_target_and_back: Windows error 1314, no privilege to make a file symbolic link"
+                );
+                return;
+            }
+            Err(error) => panic!("could not make the file link: {error}"),
+        }
+        let held = acquire_lock(&link).unwrap();
+        assert!(matches!(acquire_lock(&target), Err(Error::Locked)));
+        drop(held);
+        let held = acquire_lock(&target).unwrap();
+        assert!(matches!(acquire_lock(&link), Err(Error::Locked)));
+        drop(held);
+    }
+
+    /// Core review 1, finding 9: a vault that does not exist yet. While one spelling holds the
+    /// lock (a junction to the folder, or another letter case), `create` through another
+    /// spelling is refused and writes nothing.
+    #[cfg(windows)]
+    #[test]
+    fn a_vault_is_not_created_through_one_spelling_while_another_holds_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("Real");
+        fs::create_dir(&real).unwrap();
+        let junction = dir.path().join("junction");
+        let made = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&junction)
+            .arg(&real)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        for (held, created) in [
+            (junction.join("new.kdbx"), real.join("new.kdbx")),
+            (real.join("NEW.KDBX"), junction.join("new.kdbx")),
+        ] {
+            let lock = acquire_lock(&held).unwrap();
+            let refused = Vault::create(&created, PASSWORD, None);
+            assert!(
+                matches!(refused, Err(Error::Locked)),
+                "{} was created while {} held the lock",
+                created.display(),
+                held.display()
+            );
+            assert!(!real.join("new.kdbx").exists(), "nothing was written");
+            drop(lock);
+        }
+        let _ = fs::remove_dir(&junction);
     }
 
     /// P2R2-07: a vault that does not exist yet still gets a lock beside its folder, and a
