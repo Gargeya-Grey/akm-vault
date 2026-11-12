@@ -17,13 +17,16 @@ When the requested version has no x64 zip, it uses the newest published 2.7.x or
 that has one, and says so. -LocalZip and -LocalDigest use local files instead of the download
 (tools/test_fetch_keepassxc.ps1 uses them).
 
+The default destination is the folder in AKM_KEEPASSXC_DIR when that variable is set, else
+%LOCALAPPDATA%\akm-tools\keepassxc. Pass -Destination to choose another folder.
+
 .EXAMPLE
 ./tools/fetch_keepassxc.ps1
 #>
 [CmdletBinding()]
 param(
     [string]$Version = '2.8.0',
-    [string]$Destination = 'W:\AKM-archive\tools\keepassxc\',
+    [string]$Destination = $(if ($env:AKM_KEEPASSXC_DIR) { $env:AKM_KEEPASSXC_DIR } else { Join-Path $env:LOCALAPPDATA 'akm-tools\keepassxc' }),
     [string]$LocalZip,
     [string]$LocalDigest
 )

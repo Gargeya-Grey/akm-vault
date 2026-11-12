@@ -44,9 +44,17 @@ and native expiry. Other groups and unrelated custom fields are not AKM's data.
 
 ## Writes and cloud folders
 
-The vault defaults to `%APPDATA%\akm\vault.kdbx`. Use `--vault` or `AKM_VAULT` to
-choose a different file, including a fully downloaded OneDrive, Dropbox or
-Syncthing folder.
+The CLI's default vault is `%APPDATA%\akm\vault.kdbx`. `%APPDATA%` is the Roaming
+profile, and a domain roaming profile can sync it to a server. To keep the vault on this
+computer, choose another file: pass `--vault <file>` to each command, or set `AKM_VAULT`
+once, for example under `%LOCALAPPDATA%`:
+
+```powershell
+[Environment]::SetEnvironmentVariable('AKM_VAULT', "$env:LOCALAPPDATA\akm-vault\vault.kdbx", 'User')
+```
+
+Open a new terminal afterwards. The same options choose a fully downloaded OneDrive,
+Dropbox or Syncthing folder.
 
 - Readers open independent snapshots. The GUI and CLI can be open together.
 - A sidecar lock serializes cooperating AKM writers only during a write.
@@ -168,10 +176,13 @@ names from the unlocked vault. `akm audit` runs without the password and shows i
 
 The journal belongs to the device, not to the vault. AKM links a vault to its journal
 with a device-local mapping. It never writes to the vault for that. A renamed vault
-keeps its journal. A copy, a different vault at the same path, and a second vault start
-their own journals, and AKM never merges them. When AKM cannot tell which vault it has
-(for example, a locked file it has not seen before), it shows the journal read-only and
-says so. An older `<vault>.audit.jsonl` file is reported and left untouched. AKM does
+keeps its journal. A vault file that changed outside AKM, and that this device has not
+seen, keeps the existing journal. AKM cannot confirm that it is the same vault, and it
+warns about this. So a copy that replaces the vault file can continue the journal of the
+original; AKM does not promise that copies have separate journals. A different vault at
+the same path, and a second vault, start their own journals. AKM never merges journals.
+When AKM cannot tell which vault it has (for example, a locked file it has not seen
+before), it shows the journal read-only and says so. An older `<vault>.audit.jsonl` file is reported and left untouched. AKM does
 not read, move, delete or import it.
 
 The hash chain detects some edits but cannot prove completeness. Truncating the
@@ -219,10 +230,19 @@ delivery is not verified yet.
   key with a rotation interval and no known secret-change time shows "Rotation
   unknown". Native notification delivery is not tested yet.
 - No updater, publisher signing or external professional security audit exists yet.
+- AKM's own code has no network client and no listener. `tools/check_no_network.py`
+  looks for the usual entry points; it cannot prove that no connection exists. This
+  no-network promise covers AKM when it runs. The setup program can download the
+  WebView2 bootstrapper from Microsoft while it installs AKM. The WebView2 runtime is
+  Microsoft software and is outside the promise.
 - This source tree's `.gitignore` is not protection for secrets exported into a
   different repository.
 
 ## Development
+
+AKM is licensed under the MIT licence ([LICENSE](LICENSE)). The dependencies and their
+licences are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). To report a
+vulnerability, follow [SECURITY.md](SECURITY.md).
 
 Agents and contributors start with [AGENTS.md](AGENTS.md). The requirements and
 contracts are in [docs/PROJECT.md](docs/PROJECT.md), open findings in

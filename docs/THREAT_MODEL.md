@@ -50,7 +50,7 @@ Rows 1 to 7 are the attackers named in the security proposals ([ROADMAP.md](ROAD
 - **AKM does:** the file is encrypted and authenticated by the KDBX format. Test: a wrong password does not open it (`crates/akm-core/tests/vault.rs :: rejects_the_wrong_password`). Test: new vaults use KDBX 4.1 and Argon2id with 64 MiB, 3 iterations and parallelism 4 (`creates_vaults_with_a_hardened_kdf`). Test: a new vault needs 12 Unicode characters (`create_requires_twelve_unicode_characters_before_any_files_are_written`).
 - **Limits:**
   - Offline guessing is limited only by the password and the KDF. AKM does not check password strength.
-  - Backups keep old values of rotated secrets. The backups use the same password (read; test: `retains_the_five_latest_encrypted_originals_and_a_legacy_backup`).
+  - Backups keep old values of rotated secrets, and a purged key (FR-06 under "Disclosed limits"). The backups use the same password (read; test: `retains_the_five_latest_encrypted_originals_and_a_legacy_backup`).
   - The vault keeps native KDBX history, so old secret values stay inside the encrypted file until a purge (unit 2; test: `crates/akm-core/tests/lifecycle.rs :: rotate_replaces_the_secret_records_time_history_and_a_secret_free_record`).
   - The journal lives in a private per-device folder (`%LOCALAPPDATA%\akm\journal\`), not beside the vault, so a copied vault folder does not carry it. It is not encrypted. It holds action names, key IDs, counts and timestamps, and no title, project, environment, export path or secret ([design/unit1b.md](design/unit1b.md) D3; test: `crates/akm-cli/tests/journal.rs :: akm_audit_runs_without_a_password_and_shows_key_ids_only`). A legacy sidecar that already synced stays wherever it synced.
   - No second factor exists ([ROADMAP.md](ROADMAP.md) item 12).
@@ -123,7 +123,7 @@ This attacker supplies a `.env` file that the user imports (for example from a c
 ### 9. Clipboard history, cloud clipboard or a clipboard reader
 
 - **AKM does:** a copy sets the Windows formats that exclude the item from clipboard history, from cloud clipboard sync and from monitor processing, in the same open interval as the text (C10; `desktop/src-tauri/src/clipboard.rs :: success_publishes_utf16_and_all_three_zero_exclusions_in_one_interval`). Cleanup clears only AKM's own copy and never a newer identical copy by the user (`identical_user_copy_between_publication_and_capture_is_not_owned_or_cleared`, `a_later_users_clipboard_is_preserved_even_when_its_text_matches`). A lock sends its notice first and then makes one cleanup attempt that never waits for a busy clipboard (`desktop/src-tauri/src/session.rs :: a_lock_delivers_its_notice_while_a_tick_cleanup_is_stalled_and_the_gate_stays_free`, `every_public_entry_sends_its_notice_first_and_makes_exactly_one_attempt`).
-- **Limits:** a program that polls the clipboard reads the secret while it is there. The exclusions rely on other programs to respect them. A busy clipboard at lock or exit can keep the copy; AKM then says so. A real-clipboard test exists but is opt-in and needs the owner ([TESTING.md](TESTING.md)).
+- **Limits:** a program that polls the clipboard reads the secret while it is there. The exclusions rely on other programs to respect them. AKM attempts to clear its copy; it does not promise to. A busy clipboard at lock or exit can keep the copy, and AKM then says so. A copy also stays if AKM stops unexpectedly, because no cleanup runs then. A real-clipboard test exists but is opt-in and needs the owner ([TESTING.md](TESTING.md)).
 
 ### 10. Memory dump, crash dump, page file or hibernation file
 
@@ -158,6 +158,15 @@ This attacker supplies a `.env` file that the user imports (for example from a c
   - The WebView2 runtime is Microsoft software. AKM does not control its own network use.
   - The Windows installer may download the WebView2 bootstrapper at install time (`webviewInstallMode: downloadBootstrapper`). That is an install-time request by the installer, not by AKM at run time. The promise must say "at run time".
   - The Tauri crate declares `reqwest` for Android and iOS builds. AKM does not build for them. The shipped Windows tree does not hold it.
+
+## Disclosed limits
+
+These limits are known and open. Each decision below is a decision to disclose, not a fix. The finding numbers are in [FINDINGS.md](FINDINGS.md).
+
+- **FR-06. A purged key stays in older copies.** A purge removes the key from the live vault. The key stays in older encrypted backups beside the vault and in copies that a sync provider or the user made elsewhere. The user removes those files by hand. AKM does not delete them, because they are the recovery path, and an operation that deletes backups could destroy the only good copy.
+- **FR-07. The journal has no independent anchor.** An anchor kept outside the journal (a signed head, a second file, a service) would not help against the attacker in row 13. A program that runs as the same Windows account could change any anchor too. AKM adds none, and it keeps saying that the journal is not authenticated evidence.
+- **FR-09. `AKM_PASSWORD` stays in the parent's environment.** `akm run` removes it from the child. The shell that set it keeps it, and every program that this shell starts can read it (row 5). The interactive prompt is the safer path, and the README says so.
+- **2-W-01. KeePassXC merge does not apply deleted-object records.** KeePassXC 2.8.0 `merge` ignores the `DeletedObjects` records that AKM writes on purge. When the user reconciles a stale copy with KeePassXC, a key that AKM purged can return. kdbxweb applies the records. After a KeePassXC merge, check the Recycle Bin and the key list, and purge again if needed. Test: `tools/verify_keepassxc.py` compares an AKM purge with a KeePassXC permanent delete ([TESTING.md](TESTING.md)).
 
 ## Out of scope
 

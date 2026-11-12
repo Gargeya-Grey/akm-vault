@@ -42,6 +42,8 @@ jobs:
           python tools/test_check_docs.py
       - name: KeePassXC fetch tool never deletes what it does not own
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_fetch_keepassxc.ps1
+      - name: Verification helper never removes a folder it did not create
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_akm_verify.ps1
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm ci
@@ -87,6 +89,25 @@ jobs:
         run: |
           python tools/check_no_network.py
           python tools/test_check_no_network.py
+      # tools/check_dependencies.ps1 (FINDINGS.md FR-23) needs cargo-audit and cargo-deny, which the
+      # runner does not have. It looks for them in .scratch/cargo-tools/bin first, so install them
+      # there, at pinned versions with --locked (both support Rust 1.90). The checks fetch the
+      # advisory databases (GitHub) and the npm registry, so they need the network. Raise the pins on purpose.
+      - name: Cache the pinned dependency check tools
+        id: cargo-tools
+        uses: actions/cache@v4
+        with:
+          path: .scratch/cargo-tools
+          key: cargo-tools-${{ runner.os }}-cargo-deny-0.20.2-cargo-audit-0.22.2-rust-1.90.0
+      - name: Install the pinned dependency check tools
+        if: steps.cargo-tools.outputs.cache-hit != 'true'
+        run: cargo install --locked --root .scratch/cargo-tools cargo-deny@0.20.2 cargo-audit@0.22.2
+      - name: Dependency checks (cargo audit, cargo deny, npm audit)
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_dependencies.ps1
+      - name: Third-party notices are current (FR-25)
+        run: |
+          python tools/generate_third_party_notices.py --check
+          python tools/test_third_party_notices.py
       - name: Second KDBX reader (kdbxweb)
         working-directory: tools/verify_kdbxweb
         run: |
