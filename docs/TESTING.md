@@ -32,6 +32,33 @@ Leave out `--offline` the first time, when dependencies are not yet fetched. Whi
 
 The setup program goes to `target\release\bundle\nsis`. It is an unsigned development build. Do not install it.
 
+## What CI pins
+
+`.github/workflows/build.yml` runs the checks above on each push to `main` and on each pull request. `.github/workflows/native-proof.yml` runs the native proofs (below). Both pin these inputs:
+
+| Input | Pin | What can still move |
+|---|---|---|
+| Each action | A full commit SHA, with its version in a comment: `actions/checkout` v7.0.1, `actions/setup-node` v7.1.0, `actions/cache` v6.1.0, `actions/upload-artifact` v7.0.2, `actions/download-artifact` v8.0.2, `Swatinem/rust-cache` v2.9.3, `dtolnay/rust-toolchain` at its `master` commit of 2026-11-13. Each declares Node 24; GitHub removed Node 20 from its runners on 2026-09-23. | Nothing in the action's own code. An action can still fetch other code when it runs, for example the Rust toolchain or Node. |
+| Runner image | The label `windows-2025-vs2026`, not `windows-latest`. | GitHub updates the image under a label each week. The log of the step "Set up job" names the image version, and `native-proof.yml` writes it to `build-info.txt`. |
+| Rust | 1.90.0, through `dtolnay/rust-toolchain`. | Nothing in the version. rustup fetches it at each run. |
+| Node | 22.23.4, through `actions/setup-node`. | Nothing in the version. |
+| Dependencies | `Cargo.lock` with `--locked`, and `desktop/package-lock.json` with `npm ci`. | Nothing in the versions. |
+| Check tools | `cargo-deny` 0.20.2 and `cargo-audit` 0.22.2, with `--locked`. KeePassXC 2.8.0 by its SHA-256. | The advisory databases and the npm audit data change every day, by design. |
+| Python | Not pinned: the image's Python 3.12. The tools need 3.11 or later (`tomllib`). | The patch version, with the image. |
+| WebView2 | Not pinned. The native-proof preflight records the version. | With the image, or with Microsoft's current runtime when the preflight installs it. |
+
+## Reproducible builds
+
+AKM does not promise a reproducible build. Two builds of the same commit can differ in bytes. On Windows, the MSVC linker writes a time stamp and the absolute path of the debug file into each `.exe`, and AKM sets no flag that removes them (no `rustflags`, no `[profile]` change, no `/Brepro`). So a user cannot check a published binary by building it again. A user can check a published binary only against its `SHA256SUMS.txt`, and that file only against a signature (see [RELEASING.md](RELEASING.md)).
+
+CI measures the difference without failing. After `Build CLI`, the step "Rebuild the CLI in a second target folder and compare (report only)" builds `akm.exe` again in a new target folder and prints one line:
+
+```text
+REBUILD akm.exe first=<sha256> second=<sha256> same=<True|False>
+```
+
+The step has not run yet. The expected result is `same=False`, for the two reasons above; that is an inference from how the linker works, not a measurement. A change that makes the build reproducible would set the linker flag `/Brepro`, remap the source paths (`--remap-path-prefix`), and then make this step fail on `same=False`.
+
 ## Security checks
 
 These checks add no product code. Run them from the repository root:
@@ -63,7 +90,7 @@ Use the portable KeePassXC 2.8.0. `tools/fetch_keepassxc.ps1` downloads the offi
 ./tools/fetch_keepassxc.ps1
 ```
 
-**kdbxweb second reader.** This test uses a second, independent KDBX library (kdbxweb with hash-wasm for Argon2) and temporary vaults with fake keys only. It reads an AKM vault (KDF, cipher, version, AKM custom fields), then writes a vault with a foreign group, a foreign entry with history and an attachment, lets AKM change keys, and checks that the foreign data is identical. Part C (unit 2) runs rotate, rm, restore and purge and merges stale copies in both directions; kdbxweb applies `DeletedObjects` on merge. It prints one `PASS` or `FAIL` line per check and exits non-zero on any failure:
+**kdbxweb second reader.** This test uses a second, independent KDBX library (kdbxweb with hash-wasm for Argon2) and temporary vaults with fake keys only. It reads an AKM vault (KDF, cipher, version, AKM custom fields), then writes a vault with a foreign group, a foreign entry with history and an attachment, lets AKM change keys, and checks that the compared foreign properties are unchanged: the foreign entry's fields with their protected flags, its tags, its creation and modification times, its attachment bytes and its history, and the foreign group's name, notes, creation time and entries. It does not compare the file bytes, the XML layout, unknown elements or other times (FINDINGS.md FR-24). Part C (unit 2) runs rotate, rm, restore and purge and merges stale copies in both directions; kdbxweb applies `DeletedObjects` on merge. It prints one `PASS` or `FAIL` line per check and exits non-zero on any failure:
 
 ```powershell
 cd tools/verify_kdbxweb

@@ -11,7 +11,9 @@ permissions:
 
 jobs:
   verify:
-    runs-on: windows-latest
+    # A pinned label, not windows-latest. GitHub still updates the image under this label each week;
+    # the log of 'Set up job' names the image version (docs/TESTING.md, "What CI pins").
+    runs-on: windows-2025-vs2026
     steps:
       # The default temp path holds the short name RUNNER~1, and four desktop tests compare
       # raw temp paths with canonical ones (FINDINGS.md P2R2-06). RUNNER_TEMP has no short names.
@@ -20,21 +22,22 @@ jobs:
         run: |
           "TEMP=$env:RUNNER_TEMP" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "TMP=$env:RUNNER_TEMP" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # tools/test_check_docs.py reads two past commits
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 22.23.4
           cache: npm
           cache-dependency-path: desktop/package-lock.json
       # Pinned to the toolchain of the local checks (Cargo.toml rust-version 1.90): a newer
       # Clippy adds lints, which turned a passing branch red on 2026-11-07. Raise it on purpose.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-11-13
         with:
           toolchain: 1.90.0
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Documentation check (stale test names, control characters)
         run: |
@@ -44,6 +47,8 @@ jobs:
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_fetch_keepassxc.ps1
       - name: Verification helper never removes a folder it did not create
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_akm_verify.ps1
+      - name: Native-proof tools refuse a computer that is not a disposable runner
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_native_proof_guards.ps1
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm ci
@@ -72,6 +77,16 @@ jobs:
         run: npm run tauri -- build -- --locked
       - name: Build CLI
         run: cargo build --release --locked -p akm-cli
+      # Report only (docs/TESTING.md, "Reproducible builds"). AKM does not promise a reproducible build.
+      - name: Rebuild the CLI in a second target folder and compare (report only)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $second = Join-Path $env:RUNNER_TEMP 'akm-rebuild'
+          cargo build --release --locked -p akm-cli --target-dir $second
+          $a = (Get-FileHash target/release/akm.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $b = (Get-FileHash (Join-Path $second 'release/akm.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+          "REBUILD akm.exe first=$a second=$b same=$($a -eq $b)"
       - name: Fetch pinned independent KDBX implementation
         shell: pwsh
         run: |
@@ -95,7 +110,7 @@ jobs:
       # advisory databases (GitHub) and the npm registry, so they need the network. Raise the pins on purpose.
       - name: Cache the pinned dependency check tools
         id: cargo-tools
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .scratch/cargo-tools
           key: cargo-tools-${{ runner.os }}-cargo-deny-0.20.2-cargo-audit-0.22.2-rust-1.90.0
@@ -123,7 +138,7 @@ jobs:
             "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
           }
           $lines | Set-Content out/SHA256SUMS.txt -Encoding utf8NoBOM
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: akm-windows-x64-untrusted-development
           path: out/*
