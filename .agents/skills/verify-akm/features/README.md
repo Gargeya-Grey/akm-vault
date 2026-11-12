@@ -4,7 +4,7 @@ This folder is the maintained source for proving AKM's user-facing behaviour. Re
 
 ## Baseline preconditions
 
-- A release build of `akm.exe` (and `akm-desktop.exe` for GUI features) from the commit under test, built with `CARGO_TARGET_DIR` off drive W:.
+- A release build of `akm.exe` (and `akm-desktop.exe` for GUI features) from the commit under test. Set `CARGO_TARGET_DIR` to a drive with about 10 GB free when the repository's drive has less (SKILL.md, Launch).
 - `./.agents/skills/verify-akm/scripts/doctor.ps1` prints no `STOP` line.
 - Every CLI command goes through `scripts/akm-verify.ps1 cli`, which supplies a fresh fake vault, a fake password and a private test journal root.
 - Fake values only. A fake secret starts with `fake-`, so a transcript search for `fake-` finds every leak.

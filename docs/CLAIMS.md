@@ -1,0 +1,102 @@
+# Claims
+
+This page lists each promise that AKM makes to a user about security, privacy or data safety. Each row gives the claim in one sentence, the files that state it, the evidence and the limit. A claim that has no row here is not a promise. AKM is an untrusted development build: read [SECURITY.md](../SECURITY.md) first.
+
+## How to read a row
+
+- **Evidence** names a Rust test `fn` that exists, or a named proof from the list below. A test shows that the code behaves as stated in the test's setup. It does not show that an attacker fails.
+- **Limit** says what the claim does not cover. Read it as part of the claim.
+- `python tools/check_docs.py` fails when an evidence cell names a test that does not exist, a function that is not a test, or an unknown proof, and when a row has no evidence or no limit. `tools/test_check_docs.py` shows that the check fails on each of these mistakes.
+
+## Named proofs
+
+A proof name stands for a script or a workflow job. The check binds each name to its file, and a workflow proof to its job.
+
+| Proof name | What runs | Where it runs |
+|---|---|---|
+| `keepassxc-interchange` | `tools/verify_keepassxc.py`: KeePassXC 2.8.0 reads and writes AKM vaults | CI, each push |
+| `kdbxweb-second-reader` | `tools/verify_kdbxweb/verify.mjs`: kdbxweb reads AKM vaults and compares the properties that its script lists | CI, each push |
+| `no-network-check` | `tools/check_no_network.py`, and `tools/test_check_no_network.py`, which shows that the check fails for a planted network crate | CI, each push |
+| `native-gui-proof` | `tools/verify_windows_app.ps1`: the real desktop window with a fake vault | The owner's computer, with the owner present |
+| `frontend-reveal-timer` | `desktop/src/components/KeyDetail.timer.test.tsx` | CI, each push (`npm test`) |
+| `public-snapshot-scan` | `tools/test_make_public_snapshot.py` | CI, each push |
+| `third-party-notices-check` | `tools/test_third_party_notices.py`, and `generate_third_party_notices.py --check` | CI, each push |
+| `native-proof-real-clipboard` | The `real-clipboard` job of `.github/workflows/native-proof.yml` | A disposable runner, only when the owner starts it. It has never run. |
+| `native-proof-full-gui` | The `full-gui-proof` job of the same workflow | The same. It has never run. |
+| `native-proof-install` | The `install-upgrade-uninstall` job of the same workflow | The same. It has never run. |
+
+## The vault
+
+| Claim | Where stated | Evidence | Limit |
+|---|---|---|---|
+| A new vault uses KDBX 4.1 with Argon2id (64 MiB, 3 iterations, parallelism 4). | README.md, docs/THREAT_MODEL.md | `creates_vaults_with_a_hardened_kdf`, `keepassxc-interchange` | AKM did not design the format. The community `keepass` crate labels its 4.1 writer experimental, and nobody has audited this integration. |
+| A wrong password does not open the vault. | docs/THREAT_MODEL.md | `rejects_the_wrong_password` | Offline guessing is limited only by the password and the KDF. |
+| A new vault needs a password of at least 12 Unicode characters. | README.md, docs/GETTING_STARTED.md | `create_requires_twelve_unicode_characters_before_any_files_are_written`, `new_vault_password_policy_also_applies_to_environment_passwords` | A length rule, not a strength check. Older vaults with shorter passwords still open. The tests cover the core and the CLI. |
+| KDBX 3.x and 4.0 vaults open read-only until an explicit upgrade, and no read or write confirms an upgrade by itself. | README.md, crates/akm-cli/README.md | `older_formats_remain_readable_and_only_upgrade_with_explicit_confirmation`, `older_formats_require_explicit_upgrade_and_preserve_the_database_and_kdf`, `upgrade_requires_explicit_confirmation_before_unlocking` | The upgrade keeps the password and the KDF. It does not make a weak password stronger. |
+| KeePassXC can open an AKM vault, so the keys do not depend on AKM. | docs/GETTING_STARTED.md, docs/FIRST_USE.md | `keepassxc-interchange` | Tested with KeePassXC 2.8.0 only. A KeePassXC merge does not apply AKM's deletion records (2-W-01). |
+| AKM keeps a change in memory only after the encrypted write succeeds. | README.md | `blocked_rename_rolls_back_memory_cleans_temps_and_keeps_known_good_backup`, `failed_upgrade_is_transactional_and_a_postcommit_audit_error_is_a_warning` | A write that completes while a lock overtakes its reply stays saved. The app then shows a receipt, and the user must not repeat the change. |
+| AKM decrypts a candidate file and compares it with the intended database before it replaces the vault. | README.md | `corrupt_temporary_saves_are_refused_without_changing_the_snapshot`, `kdbxweb-second-reader` | The comparison uses the same library as the writer, so it is not an independent validation. kdbxweb checks only the properties that its script compares. |
+| AKM does not overwrite a vault that changed on disk after it was opened. | README.md, docs/THREAT_MODEL.md | `refuses_to_overwrite_a_vault_changed_on_disk`, `two_snapshots_can_open_and_the_stale_writer_is_refused` | This is not a distributed lock. KeePassXC and sync clients ignore AKM's lock, and an external writer can race the final check. |
+| AKM keeps five dated encrypted backups and a `.bak` copy beside the vault. | README.md, docs/GETTING_STARTED.md, docs/FIRST_USE.md | `retains_the_five_latest_encrypted_originals_and_a_legacy_backup`, `pruning_deletes_only_backups_that_prove_they_are_owned` | The backups are in the same folder, with the same password. They hold old secret values and purged keys (FR-06). They are not a separate backup. |
+| `rm` moves a key to the Recycle Bin. Only `purge` deletes for good, and it asks first. | crates/akm-cli/README.md, docs/GETTING_STARTED.md | `rm_moves_the_key_to_the_recycle_bin_and_restore_brings_back_the_same_key`, `purge_asks_for_yes_deletes_for_good_and_leaves_a_deletion_record`, `retention_purge_removes_only_old_recycled_keys_and_nothing_purges_by_itself` | A purged key stays in older backups and in copies elsewhere (FR-06). A KeePassXC merge can bring it back (2-W-01). |
+
+## Showing a secret
+
+| Claim | Where stated | Evidence | Limit |
+|---|---|---|---|
+| `get`, `list` and the candidate lists show no secret and nothing derived from it, unless the user asks with `--reveal` or `--field secret`. | README.md, crates/akm-cli/src/main.rs (help) | `the_default_view_and_metadata_fields_print_nothing_derived_from_the_secret`, `a_partial_word_never_reveals_rotates_or_deletes_and_lists_candidates_without_private_text`, `candidate_lists_and_the_recycle_bin_hold_no_secret_bytes` | `--reveal`, `--field secret` and `export` print secrets on purpose. The CLI cannot tell a person from an agent. |
+| A command selects a key only by its id or its exact title. | README.md, crates/akm-cli/src/main.rs (help) | `find_selects_a_native_uuid_or_an_exact_title_and_never_a_partial_word`, `an_id_or_an_exact_title_in_any_case_still_selects_the_key`, `two_keys_with_the_same_exact_title_are_refused_by_title_and_listed_by_id` | Letter case does not count, so two titles that differ only in case are refused until the user gives the id. |
+| `history` shows times and field names, and no values. | crates/akm-cli/README.md, crates/akm-cli/src/main.rs (help) | `history_names_the_changed_fields_with_literal_times_and_no_values`, `history_lists_versions_newest_first_with_field_names_and_no_values` | The old values stay in the encrypted vault history until a purge. |
+| The CLI takes no password argument. | README.md | `password_argument_is_not_accepted_or_echoed`, `help_does_not_disclose_password_or_vault_environment_values` | `AKM_PASSWORD` still works, and every program in that shell can read it (FR-09). |
+| `rotate` takes the new secret from a prompt or from stdin, and never from an argument. | crates/akm-cli/README.md, crates/akm-cli/src/main.rs (help) | `rotate_takes_no_secret_as_an_argument`, `a_repeated_rotation_with_the_same_value_is_refused_so_a_lost_reply_cannot_rotate_twice` | A rotation in AKM does not change the key at the provider. |
+| The desktop app hides a revealed value after 30 seconds. | README.md, docs/GETTING_STARTED.md | `frontend-reveal-timer` | The test covers the key view. The export preview timer has no test named here. A person or a camera can see the value while it shows. |
+| The window asks Windows to exclude it from screen capture. | README.md, docs/THREAT_MODEL.md | `native_window_configuration_excludes_screenshots`, `native-gui-proof` | It works only against capture software that honours the setting. A camera, a person or malware is not stopped. |
+
+## Clipboard
+
+| Claim | Where stated | Evidence | Limit |
+|---|---|---|---|
+| A copy asks Windows to keep it out of clipboard history, cloud clipboard and monitoring. | README.md, docs/FIRST_USE.md, docs/THREAT_MODEL.md | `success_publishes_utf16_and_all_three_zero_exclusions_in_one_interval`, `native-proof-real-clipboard` | Other programs must respect the flags, and a program that polls the clipboard still reads the copy. The real-clipboard test has never run: it needs the owner, or a run of the native-proof workflow. |
+| AKM tries to clear its own copy after 30 seconds, on lock and on normal exit, and leaves a later copy by the user in place. | README.md, docs/GETTING_STARTED.md, docs/FIRST_USE.md, desktop/src/clipboardText.ts | `locking_clears_only_the_sessions_clipboard`, `window_and_app_exit_events_make_one_attempt_in_all`, `a_later_users_clipboard_is_preserved_even_when_its_text_matches`, `a_busy_clipboard_at_expiry_lock_and_exit_leaves_the_copy_and_one_warning`, `native-proof-full-gui` | This is an attempt, not a promise. A busy clipboard, a crash or a clipboard manager keeps the copy. The tests use a scripted clipboard; the real one needs the owner or the native-proof workflow. |
+
+## Run, export and import
+
+| Claim | Where stated | Evidence | Limit |
+|---|---|---|---|
+| `run`, `export` and the desktop launch need both a project and an environment, or the CLI's `--all`. | README.md | `unscoped_export_is_rejected_before_opening_the_vault`, `scope_is_complete_nonempty_and_exclusive_before_unlock`, `a_scope_needs_both_a_project_and_an_environment` | Scoping is least privilege, not a sandbox. |
+| `run` and the desktop terminal give the child no `AKM_*` variable, so the master password does not pass to it. | README.md, docs/FIRST_USE.md | `run_scrubs_all_akm_variables_preserves_normal_environment_and_child_exit`, `a_real_child_gets_the_folder_and_the_selected_variables_and_no_akm_variable` | The child can read and send away the keys it gets, and its output is not masked. Other parent variables pass through. |
+| Reserved process-control names, for example `PATH`, `NODE_OPTIONS` and `AKM_*`, cannot be injected. | README.md, crates/akm-cli/README.md | `every_listed_name_is_reserved_in_its_class_in_any_case`, `every_reserved_class_is_refused_by_run_and_export_with_the_key_title_and_never_the_value`, `imported_reserved_control_names_cannot_be_injected_or_exported` | The table is a list, not a sandbox. A name outside it that a child program reads can still change that program. |
+| A file export goes to a new local file with an owner-only DACL, and never overwrites a file. | README.md, crates/akm-cli/README.md, crates/akm-cli/src/main.rs (help) | `file_export_rejects_an_ignored_private_dacl_before_writing`, `file_export_never_overwrites_a_target_created_after_validation`, `file_export_is_native_utf8_and_never_overwrites_an_existing_file`, `an_ignored_private_dacl_is_rejected_before_plaintext_is_written` | The file holds plaintext. The same account and an administrator can read it. Stdout export has no protection. |
+| A failed export that cannot confirm the removal of its temporary file says so and names the file. | README.md | `a_failed_file_export_that_cannot_confirm_cleanup_says_so_and_exits_non_zero`, `file_export_that_cannot_confirm_removal_of_its_plaintext_temp_says_so_and_names_the_file`, `failed_export_removes_its_unique_plaintext_temporary_file` | This is not secure erasure. A crash or a power loss leaves the file. |
+| A lock cancels a desktop export that is not yet authorized for publication. | README.md | `export_cancelled_after_preparation_removes_plaintext_without_publishing`, `stalled_export_preparation_does_not_delay_lock_or_clipboard_cleanup` | An operating-system step that was already authorized may finish, and AKM then reports it. |
+| A `.env` import changes only the chosen project and environment. | README.md, desktop/src/components/UseKeys.tsx | `import_never_updates_a_different_project_or_environment`, `empty_import_is_refused_atomically` | A hostile file can still add or change keys in the scope that the user chose. |
+| The import review shows names and the scope, never values, and nothing is written before the user selects Import. | README.md, docs/GETTING_STARTED.md, docs/FIRST_USE.md | `an_import_runs_only_after_the_user_approves_the_names_and_scope_that_were_shown`, `every_change_while_the_dialog_is_open_leaves_the_import_unapplied_and_recorded` | The tests use a scripted confirmation. Nobody has clicked the real native dialog in a recorded proof. |
+| AKM refuses an oversized `.env` file before any dialog. | docs/THREAT_MODEL.md | `the_size_limits_are_exact_and_refuse_with_a_clear_message`, `a_hostile_or_oversized_env_text_is_refused_with_a_clear_message_before_any_dialog` | The limits are 256 KiB per file, 16 KiB per line and 500 entries. |
+
+## Locking
+
+| Claim | Where stated | Evidence | Limit |
+|---|---|---|---|
+| The desktop app locks after 10 minutes without activity, and a status poll does not count as activity. | README.md, docs/GETTING_STARTED.md | `status_checks_do_not_extend_the_ten_minute_deadline`, `only_explicit_activity_in_an_active_session_renews_idle` | A real 10-minute wait has not been tested. Until the lock, a person at the computer has the open vault. |
+| The desktop app locks when Windows locks, suspends or signs out. | README.md, docs/GETTING_STARTED.md | `unobservable_or_locked_windows_session_fails_closed`, `delayed_unlock_cannot_reopen_after_any_lock_signal` | The tests use scripted session events. Real OS lock and suspend delivery is not tested (R4-04 is open). The CLI has no timeout. |
+| The Windows notification shows only a count, and only while AKM is open and unlocked. | README.md, docs/FIRST_USE.md | `an_enabled_unlocked_session_shows_one_count_only_notification`, `review1_7_lock_and_a_new_opening_wait_for_a_notification_that_passed_validation`, `the_webview_has_no_notification_permission_and_no_background_entry_exists` | Windows decides whether to show it. Native delivery is not tested. |
+
+## Activity journal
+
+| Claim | Where stated | Evidence | Limit |
+|---|---|---|---|
+| The journal is in a private folder on this device, and never beside the vault. | README.md, crates/akm-cli/README.md, docs/FIRST_USE.md | `nothing_but_the_vault_and_its_backups_appears_beside_a_synced_vault`, `a_folder_with_an_extra_account_is_refused_and_nothing_is_written`, `an_unusable_root_never_falls_back_to_the_default_or_the_sidecar` | The journal is not encrypted. The same Windows account can read and change it. |
+| A journal record holds no key name, project, environment, path or secret. | README.md, docs/FIRST_USE.md | `akm_audit_runs_without_a_password_and_shows_key_ids_only`, `the_journal_records_ids_and_actions_for_rotate_restore_and_purge_without_titles_or_secrets` | It records which key id was used, and when. That is an access pattern. |
+| A reveal, a copy, an export or a launch does not happen when its record cannot be saved first. | README.md, desktop/src/components/Activity.tsx | `reveals_are_audited_before_any_secret_is_printed`, `unsafe_journal_appends_refuse_disclosure_export_and_launch_without_echo_or_byte_changes`, `case_1_a_journal_failure_before_the_disclosure_starts_nothing_and_hands_out_no_value` | After a committed change, a record that fails is a warning, and the change stays saved. |
+| The hash chain detects some edits, and AKM keeps a damaged journal unchanged. | README.md, desktop/src/components/Activity.tsx | `audit_damage_is_structured_and_display_limit_does_not_skip_verification`, `audit_snapshot_distinguishes_absent_empty_and_consistent_without_modifying_bytes` | The journal is not authenticated evidence. A cut at a record boundary, a deleted log or a rewritten chain is not detected (FR-07). |
+| AKM reports an older `<vault>.audit.jsonl` file and leaves it unchanged. | README.md, crates/akm-cli/README.md | `a_legacy_sidecar_is_reported_and_left_byte_identical`, `a_legacy_sidecar_is_reported_and_stays_byte_identical` | AKM does not remove copies that already synced. |
+| Tests and proof scripts never write the real journal. | README.md | `a_debug_build_under_cargo_without_a_root_never_selects_the_profile_folder` | The test covers debug builds that cargo starts. A release build without `AKM_JOURNAL_ROOT` writes the real journal, so a script must set it. |
+
+## Network, install and release
+
+| Claim | Where stated | Evidence | Limit |
+|---|---|---|---|
+| AKM's own code has no network client and no listener. | README.md, docs/GETTING_STARTED.md, docs/THREAT_MODEL.md | `no-network-check` | The check looks for the usual entry points. It cannot prove that no connection exists. The WebView2 runtime is Microsoft software and is outside the claim. The setup program can download the runtime while it installs. |
+| The setup program installs for the current Windows account only, without administrator approval. | docs/GETTING_STARTED.md, docs/FIRST_USE.md | `native-proof-install` | The job has never run, so no clean computer has proved this. The job also checks that an uninstall keeps the vault, the settings and the journal, but AKM does not promise that: docs/GETTING_STARTED.md tells the user to copy the vault first. The install folder is the journal's parent, so a future uninstaller that removes its folder recursively would delete the journal. |
+| THIRD_PARTY_NOTICES.md holds the licence text of every shipped dependency, and CI fails when it is out of date. | README.md, CONTRIBUTING.md | `third-party-notices-check` | The texts come from each package's own files, or a standard text when a package ships none. Nobody has given legal advice on them. |
+| A public snapshot refuses a path, an e-mail address or a name from this computer that its rules know. | docs/TESTING.md, docs/RELEASING.md | `public-snapshot-scan` | The rules are patterns and the private words that the owner lists. The tool is not a secrets scanner. |

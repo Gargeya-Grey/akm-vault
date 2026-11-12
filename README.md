@@ -91,7 +91,7 @@ and replacements, then confirm; the review does not display secret values.
 
 The native backend enforces idle locking after 10 minutes and Windows session
 lock/suspend handling. Status polling does not count as activity. **Lock now** is
-always available in the navigation bar while unlocked.
+in the navigation bar while the vault is unlocked.
 
 Revealed values and export previews hide after 30 seconds. Windows clipboard
 copies request exclusion from clipboard history, cloud clipboard and monitoring.
@@ -165,8 +165,9 @@ an already-authorized OS operation may finish and must report its completed outc
 ## Activity journal and privacy
 
 The journal lives on this device, in a private folder (`%LOCALAPPDATA%\akm\journal\`).
-Nothing is written beside the vault, so a sync provider sees no journal. Only your
-Windows account can open the folder. AKM checks that on every use and refuses to use a
+AKM writes no journal beside the vault, so a sync provider sees only the vault and its
+backups. The folder's permissions give access to your Windows account only; an
+administrator can still change them. AKM checks that on every use and refuses to use a
 folder that other accounts, links or non-local disks could reach. It does not repair
 the folder and it does not fall back to another place.
 
@@ -212,9 +213,11 @@ npm run tauri -- build -- --locked
 The CLI is `target\release\akm.exe`. The unsigned development installers go to
 `target\release\bundle\nsis`. Do not distribute
 them as trusted software. A checksum identifies a build; it is not a publisher
-signature. The full test commands, the KeePassXC interchange test and the native
+signature. The plan for signed releases is in [docs/RELEASING.md](docs/RELEASING.md).
+The full test commands, the KeePassXC interchange test and the native
 GUI proof are in [docs/TESTING.md](docs/TESTING.md). Actual OS lock/suspend
-delivery is not verified yet.
+delivery is not verified yet. Each promise about security, privacy or data safety, with
+its evidence and its limit, is in [docs/CLAIMS.md](docs/CLAIMS.md).
 
 ## Limits
 
@@ -229,12 +232,14 @@ delivery is not verified yet.
   only while it is open and unlocked, and Windows decides whether to display it. A
   key with a rotation interval and no known secret-change time shows "Rotation
   unknown". Native notification delivery is not tested yet.
-- No updater, publisher signing or external professional security audit exists yet.
+- No updater, publisher signing or external professional security audit exists yet
+  ([docs/RELEASING.md](docs/RELEASING.md)).
 - AKM's own code has no network client and no listener. `tools/check_no_network.py`
   looks for the usual entry points; it cannot prove that no connection exists. This
-  no-network promise covers AKM when it runs. The setup program can download the
-  WebView2 bootstrapper from Microsoft while it installs AKM. The WebView2 runtime is
-  Microsoft software and is outside the promise.
+  no-network promise covers AKM when it runs. The setup program holds Microsoft's
+  WebView2 bootstrapper. When the WebView2 runtime is missing, the bootstrapper downloads
+  it from Microsoft while AKM installs. The WebView2 runtime is Microsoft software and
+  is outside the promise.
 - This source tree's `.gitignore` is not protection for secrets exported into a
   different repository.
 

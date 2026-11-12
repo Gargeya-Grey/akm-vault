@@ -3,7 +3,7 @@
   Drives the AKM CLI against a disposable fake vault and records evidence.
 
 .EXAMPLE
-  $s = ./.agents/skills/verify-akm/scripts/akm-verify.ps1 new -Feature vault-and-keys -Akm C:\build\release\akm.exe
+  $s = ./.agents/skills/verify-akm/scripts/akm-verify.ps1 new -Feature vault-and-keys -Akm target\release\akm.exe
   ./.agents/skills/verify-akm/scripts/akm-verify.ps1 cli -Session $s -- init --name "Fake vault"
   './.agents/skills/verify-akm/scripts/akm-verify.ps1 cli -Session $s -Stdin 'fake-secret-1234' -- add "Fake key" --project demo --env dev --secret-stdin'
   ./.agents/skills/verify-akm/scripts/akm-verify.ps1 clean -Session $s

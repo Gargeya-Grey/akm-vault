@@ -12,6 +12,12 @@ a doc names as part of an API, on a line that does not say "test", is allowed. R
 docs/reviews/ are exempt, because they are kept unchanged. A line that must keep a removed name (a history record) carries
 `<!-- check-docs: historical: <reason> -->`.
 
+Each row of a docs/CLAIMS.md table whose header starts `| Claim |` has four cells: the claim, where it is stated, the evidence and the
+limit. Every name in backticks in the evidence cell must be a test fn as above, or a proof name of
+PROOFS; at least one must be there, and the limit cell must not be empty. A proof name is bound to
+a tracked file and a text in that file (for a workflow, its job), so a renamed job or a removed
+script fails the check.
+
 A control character includes a vertical tab and a form feed. `str.splitlines` treats both as line
 breaks and would drop them before this check, so the lines are split on the newline only.
 Exit 0 when clean, 1 with one line per problem.
@@ -36,6 +42,22 @@ RUST_TEST = re.compile(
 SAYS_TEST = re.compile(r"\btests?\b", re.IGNORECASE)
 HISTORICAL = re.compile(r"<!-- check-docs: historical: \S.*? -->")
 EXEMPT_PREFIXES = ("docs/reviews/",)
+CLAIMS = "docs/CLAIMS.md"
+EVIDENCE = re.compile(r"`([^`]+)`")
+NATIVE_PROOF = ".github/workflows/native-proof.yml"
+# The named proofs that a claim may cite besides a Rust test: the tracked file and a text it must hold.
+PROOFS = {
+    "keepassxc-interchange": ("tools/verify_keepassxc.py", None),
+    "kdbxweb-second-reader": ("tools/verify_kdbxweb/verify.mjs", None),
+    "no-network-check": ("tools/test_check_no_network.py", None),
+    "native-gui-proof": ("tools/verify_windows_app.ps1", None),
+    "frontend-reveal-timer": ("desktop/src/components/KeyDetail.timer.test.tsx", None),
+    "public-snapshot-scan": ("tools/test_make_public_snapshot.py", None),
+    "third-party-notices-check": ("tools/test_third_party_notices.py", None),
+    "native-proof-real-clipboard": (NATIVE_PROOF, "\n  real-clipboard:"),
+    "native-proof-full-gui": (NATIVE_PROOF, "\n  full-gui-proof:"),
+    "native-proof-install": (NATIVE_PROOF, "\n  install-upgrade-uninstall:"),
+}
 
 
 def git(*args):
@@ -72,6 +94,42 @@ def harness_free_tests(names, read):
     return files
 
 
+def claim_problems(text, tests, names, read):
+    """Problems of the docs/CLAIMS.md table rows, and the number of rows checked."""
+    found = []
+    rows = 0
+    tracked = set(names)
+    in_claims = False
+    for number, line in enumerate(lines_of(text), 1):
+        if not line.startswith("|"):
+            in_claims = False
+            continue
+        if line.startswith("| Claim |"):
+            in_claims = True
+            continue
+        if not in_claims or line.startswith("|-"):
+            continue
+        rows += 1
+        where = f"{CLAIMS}:{number}"
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) != 4:
+            found.append(f"{where}: a claim row needs 4 cells (claim, where stated, evidence, limit), not {len(cells)}")
+            continue
+        evidence = EVIDENCE.findall(cells[2])
+        if not evidence:
+            found.append(f"{where}: the evidence cell names no test fn and no proof name")
+        for item in evidence:
+            if item in PROOFS:
+                path, needle = PROOFS[item]
+                if path not in tracked or (needle and needle not in read(path)):
+                    found.append(f"{where}: proof `{item}` needs {path}" + (f" with {needle.strip()!r}" if needle else ""))
+            elif item not in tests:
+                found.append(f"{where}: evidence `{item}` is neither a test fn nor a proof name")
+        if not cells[3]:
+            found.append(f"{where}: the limit cell is empty")
+    return found, rows
+
+
 def problems(rev):
     names, read = source(rev)
     functions = set()
@@ -100,17 +158,21 @@ def problems(rev):
                     found.append(f"{path}:{number}: names `{name}`, which is not a fn in the Rust sources")
                 elif name not in tests and SAYS_TEST.search(line):
                     found.append(f"{path}:{number}: names `{name}`, which is a fn but not a test")
-    return found
+    rows = 0
+    if CLAIMS in names and (rev or Path(CLAIMS).exists()):
+        claim_found, rows = claim_problems(read(CLAIMS), tests, names, read)
+        found.extend(claim_found)
+    return found, rows
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--rev")
     rev = parser.parse_args().rev
-    found = problems(rev)
+    found, rows = problems(rev)
     for line in found:
         print(line)
-    print(f"RESULT: {'FAIL' if found else 'PASS'} ({len(found)} problems at {rev or 'the working tree'})")
+    print(f"RESULT: {'FAIL' if found else 'PASS'} ({len(found)} problems at {rev or 'the working tree'}; {rows} claims checked)")
     return 1 if found else 0
 
 

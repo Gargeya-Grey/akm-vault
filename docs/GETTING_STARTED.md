@@ -8,7 +8,7 @@ AKM keeps your API keys in one encrypted file on your own computer. You need no 
 
 - A Windows 10 or Windows 11 computer.
 - The setup program, `AKM_0.1.0_x64-setup.exe`. There is no public download yet.
-- An internet connection during setup, if your computer does not have Microsoft WebView2. Most Windows 11 computers have it. AKM itself does not use the network.
+- An internet connection during setup, if your computer does not have Microsoft WebView2. Most Windows 11 computers have it. AKM's own code has no network client ([README](../README.md#limits)).
 
 ## Install
 

@@ -32,6 +32,33 @@ Leave out `--offline` the first time, when dependencies are not yet fetched. Whi
 
 The setup program goes to `target\release\bundle\nsis`. It is an unsigned development build. Do not install it.
 
+## What CI pins
+
+`.github/workflows/build.yml` runs the checks above on each push to `main` and on each pull request. `.github/workflows/native-proof.yml` runs the native proofs (below). Both pin these inputs:
+
+| Input | Pin | What can still move |
+|---|---|---|
+| Each action | A full commit SHA, with its version in a comment: `actions/checkout` v7.0.1, `actions/setup-node` v7.1.0, `actions/cache` v6.1.0, `actions/upload-artifact` v7.0.2, `actions/download-artifact` v8.0.2, `Swatinem/rust-cache` v2.9.3, `dtolnay/rust-toolchain` at its `master` commit of 2026-11-13. Each declares Node 24; GitHub removed Node 20 from its runners on 2026-09-23. | Nothing in the action's own code. An action can still fetch other code when it runs, for example the Rust toolchain or Node. |
+| Runner image | The label `windows-2025-vs2026`, not `windows-latest`. | GitHub updates the image under a label each week. The log of the step "Set up job" names the image version, and `native-proof.yml` writes it to `build-info.txt`. |
+| Rust | 1.90.0, through `dtolnay/rust-toolchain`. | Nothing in the version. rustup fetches it at each run. |
+| Node | 22.23.4, through `actions/setup-node`. | Nothing in the version. |
+| Dependencies | `Cargo.lock` with `--locked`, and `desktop/package-lock.json` with `npm ci`. | Nothing in the versions. |
+| Check tools | `cargo-deny` 0.20.2 and `cargo-audit` 0.22.2, with `--locked`. KeePassXC 2.8.0 by its SHA-256. | The advisory databases and the npm audit data change every day, by design. |
+| Python | Not pinned: the image's Python 3.12. The tools need 3.11 or later (`tomllib`). | The patch version, with the image. |
+| WebView2 | Not pinned. The native-proof preflight records the version. | With the image, or with Microsoft's current runtime when the preflight installs it. |
+
+## Reproducible builds
+
+AKM does not promise a reproducible build. Two builds of the same commit can differ in bytes. On Windows, the MSVC linker writes a time stamp and the absolute path of the debug file into each `.exe`, and AKM sets no flag that removes them (no `rustflags`, no `[profile]` change, no `/Brepro`). So a user cannot check a published binary by building it again. A user can check a published binary only against its `SHA256SUMS.txt`, and that file only against a signature (see [RELEASING.md](RELEASING.md)).
+
+CI measures the difference without failing. After `Build CLI`, the step "Rebuild the CLI in a second target folder and compare (report only)" builds `akm.exe` again in a new target folder and prints one line:
+
+```text
+REBUILD akm.exe first=<sha256> second=<sha256> same=<True|False>
+```
+
+The step has not run yet. The expected result is `same=False`, for the two reasons above; that is an inference from how the linker works, not a measurement. A change that makes the build reproducible would set the linker flag `/Brepro`, remap the source paths (`--remap-path-prefix`), and then make this step fail on `same=False`.
+
 ## Security checks
 
 These checks add no product code. Run them from the repository root:
@@ -45,9 +72,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_dependencies.ps1
 - `check_dependencies.ps1` runs `cargo audit`, `cargo deny check` (settings in `deny.toml`) and `npm audit --omit=dev`. It needs network access for the advisory databases. If `cargo-audit` or `cargo-deny` is missing, install them into the ignored scratch folder: `cargo install --locked --root .scratch/cargo-tools cargo-deny cargo-audit`. The script finds them there.
 - A warning from `cargo audit` (an unmaintained or unsound crate) does not fail the script. Read each one and record it in [FINDINGS.md](FINDINGS.md) if AKM reaches the code.
 
+## Private data before a public push
+
+`python tools/make_public_snapshot.py --rev <commit> --scan-only` scans every tracked file of a commit for a user-profile path of this computer, a drive path of this computer, an e-mail address, the git user's name and address, the Windows user name, and the extra patterns in `.scratch/public-snapshot-patterns.txt` (ignored by Git, one pattern per line, so the private words are never tracked). It prints file, line and rule, never the matched text. Without `--scan-only`, and only when the scan is clean, it writes the files of that commit into a new folder as a repository with one commit and no history (`--out <new folder> --author "<name> <address>"`). It never changes the source repository and never pushes. Run the scan on the computer whose paths must not leak, because the path rules ask whether a drive or a folder exists there. Test it with `python tools/test_make_public_snapshot.py`.
+
+**Evidence locations.** Proof evidence stays outside Git, in a folder of the owner's choice. A tracked file names that folder `<archive>`, for example `<archive>\proofs\<UTC time>-r4-04\`, and never its real path. The verification skill writes its transcripts to its evidence root (Real-surface tests, below).
+
 ## Real-surface tests
 
-For a manual proof of one feature, use the verification skill in [.agents/skills/verify-akm/](../.agents/skills/verify-akm/SKILL.md). It runs a doctor check first, uses a temporary fake vault and journal, and writes a transcript to `W:\AKM-archive\proofs\`.
+For a manual proof of one feature, use the verification skill in [.agents/skills/verify-akm/](../.agents/skills/verify-akm/SKILL.md). It runs a doctor check first, uses a temporary fake vault and journal, and writes a transcript under the evidence root: `AKM_EVIDENCE_ROOT` when it is set, else `%LOCALAPPDATA%\akm-verify\proofs\`. Its ownership records go to `AKM_VERIFY_STATE_ROOT`, else `%LOCALAPPDATA%\akm-verify\state\`. No default depends on a drive letter.
 
 **KeePassXC interchange.** This test uses temporary vaults and fake keys only:
 
@@ -57,13 +90,13 @@ python tools/verify_keepassxc.py --akm target/release/akm.exe --keepassxc "C:/pa
 
 Since unit 2 it also covers rotation, native history, the Recycle Bin, restore, purge and stale-copy merges. KeePassXC 2.8.0 `merge` applies no `DeletedObjects` record, so the merge check compares an AKM purge with a KeePassXC permanent delete (finding 2-W-01).
 
-Use the portable KeePassXC 2.8.0. `tools/fetch_keepassxc.ps1` downloads the official x64 zip from the KeePassXC GitHub release, checks its SHA-256 against the `.DIGEST` file of that release, and, after that check, adds one new folder `KeePassXC-<version>-x64-<first 12 digest characters>` under the destination (default `W:\AKM-archive\tools\keepassxc\`). It never deletes or replaces anything: a second fetch of the same release changes nothing, and an unmarked folder of that name is refused. Remove old folders by hand. It refuses a drive root and a destination at or below a junction. Test it with `powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_fetch_keepassxc.ps1` (no network):
+Use the portable KeePassXC 2.8.0. `tools/fetch_keepassxc.ps1` downloads the official x64 zip from the KeePassXC GitHub release, checks its SHA-256 against the `.DIGEST` file of that release, and, after that check, adds one new folder `KeePassXC-<version>-x64-<first 12 digest characters>` under the destination: `-Destination`, else `AKM_KEEPASSXC_DIR` when it is set, else `%LOCALAPPDATA%\akm-tools\keepassxc\`. The destination must be outside the repository. It never deletes or replaces anything: a second fetch of the same release changes nothing, and an unmarked folder of that name is refused. Remove old folders by hand. It refuses a drive root and a destination at or below a junction. Test it with `powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_fetch_keepassxc.ps1` (no network):
 
 ```powershell
 ./tools/fetch_keepassxc.ps1
 ```
 
-**kdbxweb second reader.** This test uses a second, independent KDBX library (kdbxweb with hash-wasm for Argon2) and temporary vaults with fake keys only. It reads an AKM vault (KDF, cipher, version, AKM custom fields), then writes a vault with a foreign group, a foreign entry with history and an attachment, lets AKM change keys, and checks that the foreign data is identical. Part C (unit 2) runs rotate, rm, restore and purge and merges stale copies in both directions; kdbxweb applies `DeletedObjects` on merge. It prints one `PASS` or `FAIL` line per check and exits non-zero on any failure:
+**kdbxweb second reader.** This test uses a second, independent KDBX library (kdbxweb with hash-wasm for Argon2) and temporary vaults with fake keys only. It reads an AKM vault (KDF, cipher, version, AKM custom fields), then writes a vault with a foreign group, a foreign entry with history and an attachment, lets AKM change keys, and checks that the compared foreign properties are unchanged: the foreign entry's fields with their protected flags, its tags, its creation and modification times, its attachment bytes and its history, and the foreign group's name, notes, creation time and entries. It does not compare the file bytes, the XML layout, unknown elements or other times (FINDINGS.md FR-24). Part C (unit 2) runs rotate, rm, restore and purge and merges stale copies in both directions; kdbxweb applies `DeletedObjects` on merge. It prints one `PASS` or `FAIL` line per check and exits non-zero on any failure:
 
 ```powershell
 cd tools/verify_kdbxweb
@@ -96,6 +129,30 @@ cargo test -p akm-desktop --lib --offline --locked clipboard::windows::actual_wi
 
 Remove the variable afterwards.
 
+## Native proofs on a disposable runner
+
+`.github/workflows/native-proof.yml` runs the proofs that need a real desktop, a real clipboard and a real installer on GitHub-hosted Windows runners. GitHub discards each runner after its job, so no proof meets the owner's data. The workflow has a manual start only (`workflow_dispatch`). It has not run yet: it waits for two owner gates, the AGENTS.md rule for disposable runners and GitHub Actions billing.
+
+| Job | What it runs | Evidence (artifact) |
+|---|---|---|
+| `build` | The setup program, `akm-desktop.exe`, `akm.exe` and the desktop library tests, from the lock files, with no cache. `SHA256SUMS.txt` and `build-info.txt` (commit, run, image, `rustc`, `node`). | `native-proof-build` |
+| `real-clipboard` | `clipboard::windows::actual_windows_private_formats_are_present` with `AKM_TEST_REAL_CLIPBOARD=1`, from the built test executable. | `native-proof-real-clipboard-<commit>` |
+| `full-gui-proof` | `tools/verify_windows_app.ps1` with no skip switch, and KeePassXC 2.8.0 pinned by its SHA-256. | `native-proof-full-gui-<commit>` |
+| `r4-04-attempt` | The R4-04 preconditions (recorded, not enforced), then `-OutcomeOnly -OwnerReadyForVisibility`. | `native-proof-r4-04-<commit>` |
+| `install-upgrade-uninstall` | `tools/test_install.ps1`: silent install, a start of the installed app through `-JournalOnly`, a second install of the same version, a silent uninstall, and the check that the vault, the settings and the journal stay byte-identical while the program files go. | `native-proof-install-<commit>` |
+
+Each proof job starts on a new runner. It first runs `tools/ci_native_preflight.ps1`, which checks every file against `SHA256SUMS.txt` and records the session ID, the input desktop, the screen size, the clipboard format count and the WebView2 version in `preflight.json`. Each job uploads its evidence also when the proof fails.
+
+**What a run does not prove.**
+
+- **R4-04.** The proof script failed review twice (FINDINGS.md R4-04-SCRIPT). From outside the app, UI Automation polling cannot show that no outcome returned just before a dismissal click, or that a delayed reveal reply was delivered and discarded. The job keeps the evidence, and its precondition record says that the run does not pass R4-04.
+- **An upgrade from an older version.** The install job installs one version twice.
+- **The owner's computer.** A Windows Server runner image is not a Windows 11 desktop with the owner's settings, theme, screen reader or security software.
+
+**Runner facts.** From the [Windows Server 2025 image readme](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-VS2026-Readme.md) (image `20261103.298.1`, read 2026-11-13): Microsoft Edge 156 and Node 22.23.4 are installed. The readme does not list the WebView2 runtime, and no image build script installs it. The readme says nothing about an interactive session or the clipboard. So the preflight measures all three. It stops a job without an interactive `Default` input desktop, or with a non-empty clipboard. Where a job needs WebView2 and it is missing, the preflight installs Microsoft's bootstrapper after it checks the Authenticode signature. The install job does not, because the setup program must install WebView2 itself on a clean computer.
+
+**Guards (class F).** `tools/test_install.ps1` and `tools/ci_native_preflight.ps1` run only when `GITHUB_ACTIONS` is `true`, `RUNNER_ENVIRONMENT` is `github-hosted` and the switch `-DisposableRunner` is passed (`tools/DisposableRunner.psm1`). The install test also refuses when AKM state exists: the install folder `%LOCALAPPDATA%\AKM`, which is the same folder as the journal's parent `%LOCALAPPDATA%\akm` because Windows ignores case, the settings folder, the WebView2 data folder, the uninstall key or a Start menu entry. Every refusal comes before the first change. Neither tool removes anything itself. Test the refusals with `powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_native_proof_guards.ps1`. It runs each tool against a fake profile with sentinel files, installs nothing, and checks that the fake profile is unchanged.
+
 ## Which checks a change needs
 
 - **Core data or persistence:** core regressions, the CLI security tests, the KeePassXC test, and the GUI flows that use the change. Keep the KDF, cipher, history and attachment checks.
@@ -108,4 +165,4 @@ Remove the variable afterwards.
 
 ## Not tested yet
 
-Real Windows toast delivery of the opt-in notification (unit 4: only a mocked native boundary and fake notifiers ran), real OS lock and suspend delivery, a real 10-minute idle wait, install, upgrade and uninstall, publisher signing, updater security, broad dotenv compatibility, a full rescore after phase one, and a professional audit.
+Real Windows toast delivery of the opt-in notification (unit 4: only a mocked native boundary and fake notifiers ran), real OS lock and suspend delivery, a real 10-minute idle wait, install, upgrade and uninstall (a CI job exists and has not run), publisher signing, updater security, broad dotenv compatibility, a full rescore after phase one, and a professional audit.
