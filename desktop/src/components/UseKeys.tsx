@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "../api";
 import { clipboardCopyText } from "../clipboardText";
+import { nativeReads, useNativeRead } from "../nativeRead";
 import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
 import { plural } from "../format";
-import type { KeyView } from "../types";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
+import { ReadFailure } from "./ReadFailure";
 import { useDialogFocus } from "./useDialogFocus";
 
 interface Message {
@@ -18,10 +19,10 @@ type Scope = { project: string; environment: string };
 type ExportPreview = Scope & { text: string };
 
 export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
-  const [keys, setKeys] = useState<KeyView[]>([]);
-  const [project, setProject] = useState("");
-  const [environment, setEnvironment] = useState("");
-  const scoped = Boolean(project && environment);
+  const read = useNativeRead(nativeReads.keys);
+  const keys = read.state.status === "ready" ? read.state.data : null;
+  const [chosenProject, setProject] = useState("");
+  const [chosenEnvironment, setEnvironment] = useState("");
   const [preview, setPreview] = useState<ExportPreview | null>(null);
   const exportRequest = useRef(0);
   const sideEffectRequest = useRef(0);
@@ -29,7 +30,6 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
   const mounted = useRef(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<Message | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [importing, setImporting] = useState(false);
   const importDialogRef = useDialogFocus<HTMLDivElement>(importing);
@@ -89,21 +89,6 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     };
   }, [hidePreview, closeImport]);
 
-  const refreshKeys = useCallback(async () => {
-    try {
-      const next = await api.keys();
-      if (!mounted.current) return;
-      setKeys(next);
-      setLoadError(null);
-    } catch (cause) {
-      if (mounted.current) setLoadError(errorText(cause));
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshKeys();
-  }, [refreshKeys]);
-
   useEffect(() => {
     if (preview === null) return;
     const timer = window.setTimeout(hidePreview, 30_000);
@@ -120,14 +105,21 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
   }, [importing, importBusy, closeImport]);
 
   const projects = useMemo(
-    () => uniqueOptions(keys.map((key) => key.project)),
+    () => uniqueOptions((keys ?? []).map((key) => key.project)),
     [keys],
   );
+  // A choice counts only while its option is on screen. A refresh that removes it, or a read that
+  // failed, leaves no scope, so no control acts on a scope that the screen does not show.
+  const project = projects.some((option) => option.value === chosenProject) ? chosenProject : "";
   const environments = useMemo(
-    () => uniqueOptions(keys.filter((key) => key.project === project).map((key) => key.environment)),
+    () => uniqueOptions((keys ?? []).filter((key) => key.project === project).map((key) => key.environment)),
     [keys, project],
   );
-  const matchCount = keys.filter((key) => key.project === project && key.environment === environment).length;
+  const environment = environments.some((option) => option.value === chosenEnvironment) ? chosenEnvironment : "";
+  const scoped = Boolean(project && environment);
+  const matchCount = (keys ?? []).filter((key) => key.project === project && key.environment === environment).length;
+  // A preview shows only under the scope that it belongs to (fault class B).
+  const shownPreview = preview !== null && preview.project === project && preview.environment === environment ? preview : null;
 
   function chooseProject(value: string) {
     hidePreview();
@@ -272,7 +264,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
         tone: "ok",
         text: `Imported: ${report.added} added, ${report.updated} updated.`,
       });
-      await refreshKeys();
+      read.reload();
     } catch (cause) {
       if (currentRequest === importRequest.current) {
         setImportError(errorText(cause));
@@ -294,15 +286,14 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
         </div>
       </header>
 
-      {loadError && (
-        <div className="ledger-message">
-          <Notice tone="error">{loadError}</Notice>
-          <div className="empty-actions">
-            <button type="button" className="text-button" onClick={() => void refreshKeys()}>
-              Try again
-            </button>
-          </div>
-        </div>
+      {read.state.status === "failed" && (
+        <ReadFailure
+          heading="AKM could not read the keys."
+          detail="This does not mean that the vault is empty. The project and environment lists need this read. Try again."
+          error={read.state.error}
+          busy={read.busy}
+          onRetry={read.reload}
+        />
       )}
 
       <div className="use-grid">
@@ -322,7 +313,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
               placeholder="Choose a project"
               options={projects}
               onChange={chooseProject}
-              disabled={busy === "save" || busy === "copy" || busy === "launch"}
+              disabled={keys === null || busy === "save" || busy === "copy" || busy === "launch"}
             />
             <FilterSelect
               id="env-environment"
@@ -331,7 +322,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
               placeholder="Choose an environment"
               options={environments}
               onChange={chooseEnvironment}
-              disabled={busy === "save" || busy === "copy" || busy === "launch"}
+              disabled={keys === null || busy === "save" || busy === "copy" || busy === "launch"}
             />
           </div>
 
@@ -376,7 +367,11 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
           </div>
 
           <p className="field-note">
-            {scoped ? `${plural(matchCount, "key")} selected in ${project} / ${environment}.` : "Choose a project and environment to enable export."}
+            {read.state.status === "loading"
+              ? "Reading the projects in this vault…"
+              : read.state.status === "failed"
+              ? "Export needs the project list. Read it again first."
+              : scoped ? `${plural(matchCount, "key")} selected in ${project} / ${environment}.` : "Choose a project and environment to enable export."}
           </p>
           <p className="field-note">
             Open terminal starts a command prompt in a folder that you choose. Every program you run there can read these keys until you close it.
@@ -395,7 +390,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
           )}
 
           <div className="raised env-preview">
-            {preview === null ? (
+            {shownPreview === null ? (
               <div className="empty-state">
                 <h3>No preview yet.</h3>
                 <p>
@@ -406,16 +401,16 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
             ) : (
               <>
                 <div className="preview-head">
-                  <p className="label">Preview: {preview.project} / {preview.environment}</p>
+                  <p className="label">Preview: {shownPreview.project} / {shownPreview.environment}</p>
                   <p className="label">
                     {plural(
-                      preview.text.split("\n").filter((line) => line.trim()).length,
+                      shownPreview.text.split("\n").filter((line) => line.trim()).length,
                       "line",
                     )}
                   </p>
                 </div>
                 <pre className="mono env-lines">
-                  {preview.text.trim() || "# No keys match this project and environment."}
+                  {shownPreview.text.trim() || "# No keys match this project and environment."}
                 </pre>
               </>
             )}

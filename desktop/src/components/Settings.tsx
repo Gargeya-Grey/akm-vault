@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, errorText } from "../api";
 import { CLIPBOARD_LOCK_TEXT } from "../clipboardText";
 import { formatBytes, formatDateTime } from "../format";
+import { nativeReads, useNativeRead } from "../nativeRead";
 import { REMINDER_NOTE, reminderText } from "../reminders";
-import type { BackupInfo, ReminderStatus, Status } from "../types";
+import type { Status } from "../types";
 import { Notice } from "./Notice";
 
 interface Props {
@@ -12,14 +13,15 @@ interface Props {
 }
 
 export function Settings({ status, onLocked }: Props) {
-  const [backup, setBackup] = useState<BackupInfo | null>(null);
-  const [keyCount, setKeyCount] = useState<number | null>(null);
+  const backupRead = useNativeRead(nativeReads.backup);
+  const backup = backupRead.state.status === "ready" ? backupRead.state.data : null;
+  // One source for the count: the key list. A newer polled count only starts a new read; the
+  // view shows a number only from a read that ended, and says that it is counting until then.
+  const countRead = useNativeRead(nativeReads.keys, [status.keyCount]);
   const mounted = useRef(true);
-  const listRead = useRef(0);
-  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [reminder, setReminder] = useState<ReminderStatus | null>(null);
-  const [reminderLoad, setReminderLoad] = useState<"loading" | "ready" | "failed">("loading");
+  const reminderRead = useNativeRead(nativeReads.reminders);
+  const reminder = reminderRead.state.status === "ready" ? reminderRead.state.data : null;
   const [reminderSaving, setReminderSaving] = useState(false);
   const [reminderError, setReminderError] = useState<string | null>(null);
 
@@ -30,52 +32,13 @@ export function Settings({ status, onLocked }: Props) {
     };
   }, []);
 
-  const loadBackup = useCallback(async () => {
-    try {
-      const next = await api.backup();
-      if (mounted.current) setBackup(next);
-    } catch (cause) {
-      if (mounted.current) setLoadError(errorText(cause));
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadBackup();
-  }, [loadBackup]);
-
-  // The status poll can lag a change that just finished, so the list gives the count. A new
-  // polled count starts a new read and shows until that read ends. The latest read wins, and
-  // a failed read leaves the polled count.
-  useEffect(() => {
-    const read = ++listRead.current;
-    setKeyCount(null);
-    const current = () => mounted.current && read === listRead.current;
-    void api.keys().then(
-      (keys) => { if (current()) setKeyCount(keys.length); },
-      () => { if (current()) setKeyCount(null); },
-    );
-  }, [status.keyCount]);
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        const next = await api.remindersStatus();
-        if (!mounted.current) return;
-        setReminder(next);
-        setReminderLoad("ready");
-      } catch {
-        if (mounted.current) setReminderLoad("failed");
-      }
-    })();
-  }, []);
-
   async function changeReminder(enabled: boolean) {
     if (reminderSaving) return;
     setReminderSaving(true);
     setReminderError(null);
     try {
       const next = await api.remindersSet(enabled);
-      if (mounted.current) setReminder(next);
+      if (mounted.current) reminderRead.apply(() => next);
     } catch (cause) {
       if (mounted.current) setReminderError(errorText(cause));
     } finally {
@@ -95,8 +58,6 @@ export function Settings({ status, onLocked }: Props) {
         </div>
       </header>
 
-      {loadError && <Notice tone="error">{loadError}</Notice>}
-
       <section className="settings-section">
         <h2>Vault</h2>
         <div className="fact-list">
@@ -111,13 +72,28 @@ export function Settings({ status, onLocked }: Props) {
           <div className="fact-row">
             <span className="fact-key">Keys</span>
             <span className="fact-value">
-              <span><span className="mono">{keyCount ?? status.keyCount}</span> in this vault</span>
+              {countRead.state.status === "failed" ? (
+                <span className="read-inline">
+                  <span>AKM could not count the keys. {countRead.state.error}</span>
+                  <button type="button" className="text-button" onClick={countRead.reload} disabled={countRead.busy} aria-busy={countRead.busy || undefined}>
+                    {countRead.busy ? "Trying again…" : "Try again"}
+                  </button>
+                </span>
+              ) : countRead.state.status === "ready" && !countRead.busy ? (
+                <span><span className="mono">{countRead.state.data.length}</span> in this vault</span>
+              ) : (
+                <span>Counting…</span>
+              )}
             </span>
           </div>
           <div className="fact-row">
             <span className="fact-key">Backup</span>
             <span className="fact-value">
-              {backup?.exists ? (
+              {backupRead.state.status === "failed" ? (
+                <span>AKM could not read the backup details. {backupRead.state.error}</span>
+              ) : backup === null ? (
+                <span>Reading…</span>
+              ) : backup.exists ? (
                 <>
                   <span className="mono path-text">{backup.path}</span>
                   <span className="key-sub">
@@ -140,9 +116,11 @@ export function Settings({ status, onLocked }: Props) {
           <button
             type="button"
             className="text-button"
-            onClick={() => void loadBackup()}
+            onClick={backupRead.reload}
+            disabled={backupRead.busy}
+            aria-busy={backupRead.busy || undefined}
           >
-            Refresh backup info
+            {backupRead.busy ? "Reading backup info…" : "Refresh backup info"}
           </button>
         </div>
         <p className="field-note">
@@ -159,14 +137,21 @@ export function Settings({ status, onLocked }: Props) {
             id="reminders-toggle"
             type="checkbox"
             checked={reminder?.enabled ?? false}
-            disabled={reminderLoad !== "ready" || reminderSaving}
+            disabled={reminder === null || reminderRead.busy || reminderSaving}
             aria-describedby="reminders-note"
             onChange={(event) => void changeReminder(event.target.checked)}
           />
           <label htmlFor="reminders-toggle">Show a Windows notification when keys need attention</label>
         </div>
         <p className="field-note" id="reminders-note">{REMINDER_NOTE}</p>
-        {reminderLoad === "failed" && <Notice tone="error">AKM could not read the reminder setting.</Notice>}
+        {reminderRead.state.status === "failed" && (
+          <div className="read-inline">
+            <Notice tone="error">AKM could not read the reminder setting.</Notice>
+            <button type="button" className="text-button" onClick={reminderRead.reload} disabled={reminderRead.busy} aria-busy={reminderRead.busy || undefined}>
+              {reminderRead.busy ? "Trying again…" : "Try again"}
+            </button>
+          </div>
+        )}
         {reminder && <p className="reminder-state prose" role="status">{reminderText(reminder)}</p>}
         {reminderError && <Notice tone="error">{reminderError}</Notice>}
       </section>

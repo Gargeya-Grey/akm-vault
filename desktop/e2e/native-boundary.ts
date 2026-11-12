@@ -11,19 +11,28 @@ export interface BoundaryOptions {
   damagedJournal?: boolean;
   /** What the user answers in the native window of `audit_recover`. Default: approve. */
   recovery?: "approve" | "decline";
+  /** Keep a native record store, as the real Session does, even with no retained notice. */
+  nativeStore?: boolean;
+  /** `hold`: a terminal launch never answers, as when the native review is still open. */
+  terminal?: "hold";
+  /** The vault has an older format, so the page offers the format upgrade. */
+  needsUpgrade?: boolean;
 }
 
 export async function installNativeBoundaryMock(page: Page, theme = "light", retainedNotices?: OperationNotice[], retainedWarnings?: ApplicationNotice[], options: BoundaryOptions = {}) {
-  if (retainedNotices || retainedWarnings) {
+  if (retainedNotices || retainedWarnings || options.nativeStore) {
     let operations = retainedNotices ?? [];
     let application = retainedWarnings ?? [];
     // This test-side native store outlives browser reloads, as the real Rust Session does.
-    await page.exposeFunction("__akmWarningIPC", (command: string, ids: string[]) => {
+    await page.exposeFunction("__akmWarningIPC", (command: string, payload: unknown) => {
       if (command === "vault_dismiss_warnings") {
+        const ids = payload as string[];
         operations = operations.filter((notice) => !ids.includes(notice.id));
         application = application.filter((notice) => !ids.includes(notice.id));
         return;
       }
+      // The native outcome record of a dispatched request.
+      if (command === "record") { operations = [...operations, payload as OperationNotice]; return; }
       return { application, operations };
     });
   }
@@ -37,7 +46,7 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
     let owner: string | null = crypto.randomUUID();
     let claimed = false;
     let path = "C:/fake-test/vault.kdbx";
-    const status = () => ({ sessionId: unlocked ? owner : null, path, exists: true, unlocked, keyCount: unlocked ? 1 : 0, vaultName: unlocked ? "UI fixture" : null, needsUpgrade: false });
+    const status = () => ({ sessionId: unlocked ? owner : null, path, exists: true, unlocked, keyCount: unlocked ? 1 : 0, vaultName: unlocked ? "UI fixture" : null, needsUpgrade: options.needsUpgrade ?? false });
     const key = {
       id: "test-entry-uuid", title: "OpenAI", username: null, issuer: "OpenAI",
       project: "demo", environment: "dev", scopes: ["chat"], tags: [],
@@ -99,6 +108,16 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
               const bridge = (window as unknown as { __akmWarningIPC?: (command: string, ids: unknown) => Promise<unknown> }).__akmWarningIPC;
               return bridge ? bridge(command, args?.ids ?? []) : { application: [], operations: [] };
             }
+            case "env_launch_terminal": {
+              // The contract with native: every launch carries a fresh UUID, and native keeps a record under it.
+              if (typeof args.operationId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(args.operationId)) {
+                throw new Error("env_launch_terminal needs a UUID operationId");
+              }
+              if (options.terminal === "hold") return new Promise(() => {});
+              const bridge = (window as unknown as { __akmWarningIPC?: (command: string, payload: unknown) => Promise<unknown> }).__akmWarningIPC;
+              if (bridge) await bridge("record", { id: args.operationId, originSession: owner ?? "", kind: "terminalStarted" });
+              return keys.filter((candidate) => candidate.project === args.project && candidate.environment === args.environment).length;
+            }
             case "vault_activity": return;
             case "view_discard": return;
             case "vault_lock": {
@@ -128,7 +147,6 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
             case "backup_info": return { path: "C:/fake-test/vault.kdbx.bak", exists: false, bytes: 0, modified: null };
             case "env_import": return { added: 0, updated: 1 };
             case "key_history": return [{ index: 0, modifiedAt: "2026-10-30T12:00:00Z", changed: ["Password"], secretChanged: true }];
-            case "env_launch_terminal": return keys.filter((candidate) => candidate.project === args.project && candidate.environment === args.environment).length;
             case "env_export": return "OPENAI_API_KEY=fake-browser-test-value\n";
             default: throw new Error(`Unexpected test IPC: ${command}`);
           }

@@ -114,7 +114,10 @@ export interface JournalRecovery {
 export interface OperationNotice {
   id: string;
   originSession: string;
-  kind: "journal" | "backupRefresh" | "backupPrune" | "backupRetention" | "exportJournal" | "preference" | "importApplied" | "importSessionEnded" | "importFailed" | "importDeclined";
+  kind:
+    | "journal" | "backupRefresh" | "backupPrune" | "backupRetention" | "exportJournal" | "preference" | "filePermissions" | "journalLineageUnconfirmed"
+    | "importApplied" | "importSessionEnded" | "importFailed" | "importDeclined"
+    | "terminalStarted" | "terminalSessionEnded" | "terminalFailed" | "terminalDeclined";
 }
 
 export interface WarningReport {

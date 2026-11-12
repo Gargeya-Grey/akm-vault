@@ -37,7 +37,7 @@ for (const theme of ["light", "dark"]) {
     for (const [title, description] of expectations) {
       const row = page.getByRole("button", { name: `Open ${title}`, exact: true });
       await expect(row).toHaveAccessibleName(`Open ${title}`);
-      await expect(row).toHaveAccessibleDescription(new RegExp(`^Project demo, environment dev, variable OPENAI_API_KEY, issuer [^,]+, ID [^.]+\\. ${description.replace(/[.]/g, "\\.")}$`));
+      await expect(row).toHaveAccessibleDescription(new RegExp(`^Project demo, environment dev, variable OPENAI_API_KEY, issuer [^,]+, 1 scope\\. ${description.replace(/[.]/g, "\\.")}$`));
     }
     expect(errors).toEqual([]);
   });

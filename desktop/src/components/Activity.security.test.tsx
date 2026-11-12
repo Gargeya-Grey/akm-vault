@@ -162,6 +162,12 @@ test("a recovery the user approved reloads the journal and names the kept file a
   expect(screen.getByText(KEPT.sha256)).toBeTruthy();
   expect(document.body.textContent).toContain("213 bytes");
   expect(screen.getByText("New journal started after damage")).toBeTruthy();
+  // The new journal is consistent. Nothing on screen says that the old history was verified.
+  const result = screen.getByText(KEPT.keptName).closest(".notice")!;
+  expect(result.className).toContain("notice-ok");
+  expect(result.textContent).toContain("History before the damage cannot be proved complete.");
+  expect(document.body.textContent).not.toMatch(/(?<!not )verified/i);
+  expect(document.body.textContent).not.toMatch(/(?<!(?:cannot be proved|cannot prove a) )\bcomplete\b/i);
 });
 
 test("a recovery the user declined leaves the damaged journal on screen and still offers it", async () => {
@@ -171,9 +177,11 @@ test("a recovery the user declined leaves the damaged journal on screen and stil
   await screen.findByRole("button", { name: "Start a new journal…" });
   await act(async () => { fireEvent.click(startButton()!); });
   expect(await screen.findByText(/Cancelled\. The journal is unchanged/)).toBeTruthy();
+  expect(screen.getByText(/Cancelled\. The journal is unchanged/).closest(".notice")!.className).toContain("notice-info");
   expect(screen.getByText("Journal data is damaged")).toBeTruthy();
   expect(startButton()!.disabled).toBe(false);
   expect(screen.queryByText(KEPT.keptName)).toBeNull();
+  expect(screen.queryByText(/A new journal started/)).toBeNull();
 });
 
 test("a recovery that failed shows the error, keeps the damaged journal and can be tried again", async () => {
@@ -183,6 +191,8 @@ test("a recovery that failed shows the error, keeps the damaged journal and can 
   await screen.findByRole("button", { name: "Start a new journal…" });
   await act(async () => { fireEvent.click(startButton()!); });
   expect(await screen.findByText(/could not be set aside/)).toBeTruthy();
+  expect(screen.getByText(/could not be set aside/).closest(".notice")!.className).toContain("notice-error");
+  expect(screen.queryByText(/Cancelled/)).toBeNull();
   expect(screen.queryByText(KEPT.keptName)).toBeNull();
   expect(startButton()!.disabled).toBe(false);
   await act(async () => { fireEvent.click(startButton()!); });

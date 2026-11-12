@@ -191,6 +191,32 @@ test("the Recycle Bin confirmation from Key Detail contains focus; Escape and En
   expect(focused()).toBe(screen.getByRole("searchbox", { name: "Search keys" }));
 }, 30_000);
 
+// Cancel is the default of every destructive confirmation, so an Enter typed by habit deletes nothing.
+for (const [name, open, request] of [
+  ["Delete for good", async (user: User) => {
+    await act(async () => { render(<App />); });
+    await user.click(await screen.findByRole("button", { name: "Recycle Bin" }));
+    (await screen.findByRole("button", { name: "Delete Keyboard proof for good" })).focus();
+    await user.keyboard("{Enter}");
+  }, "key_purge"],
+  ["Move to Recycle Bin", async (user: User) => {
+    await start(user);
+    await tabTo(user, "Move to Recycle Bin");
+    await user.keyboard("{Enter}");
+  }, "key_remove"],
+] as const) {
+  test(`${name}: the first Enter in its confirmation cancels, and sends nothing`, async () => {
+    boot({ recycled_list: () => [{ key: key(), deletedAt: null }], key_purge: () => {}, key_remove: () => {} }, () => [key()]);
+    const user = userEvent.setup({ delay: null });
+    await open(user);
+    expect(dialog()).toBeTruthy();
+    expect(focused()).toBe(buttonNamed(dialog(), "Cancel"));
+    await user.keyboard("{Enter}");
+    expect(native.invoke.mock.calls.map(([command]) => command)).not.toContain(request);
+    expect(screen.queryByRole("heading", { name: /for good\?|to the Recycle Bin\?/ })).toBeNull();
+  }, 30_000);
+}
+
 test("Delete for good contains focus, Escape returns to its button, and success lands on the Recycle Bin heading", async () => {
   let bin = [{ key: key(), deletedAt: null as string | null }];
   boot({ recycled_list: () => bin, key_purge: () => { bin = []; } }, () => []);

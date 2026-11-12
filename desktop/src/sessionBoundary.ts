@@ -54,10 +54,16 @@ export function settleOutcome(id: number, outcome: Exclude<Outcome, "pending">) 
   if (outcome === "completedWhileLocked") signalSessionLoss(pending.generation);
 }
 
-// A native outcome record settles only a receipt that is still waiting for its reply.
-export function settleNativeOutcome(nativeOperation: string, outcome: Exclude<Outcome, "pending">): boolean {
+export interface NativeOutcome {
+  operation: "import" | "terminal";
+  outcome: Exclude<Outcome, "pending">;
+}
+
+// A native outcome record settles only a receipt of its own operation that is still waiting for its reply.
+export function settleNativeOutcome(nativeOperation: string, { operation, outcome }: NativeOutcome): boolean {
   const id = nativeOperations.get(nativeOperation);
-  if (id === undefined || receipts.get(id)?.outcome !== "pending") return false;
+  const receipt = id === undefined ? undefined : receipts.get(id);
+  if (id === undefined || receipt?.outcome !== "pending" || receipt.operation !== operation) return false;
   settleOutcome(id, outcome);
   return true;
 }
