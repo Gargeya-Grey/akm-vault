@@ -14,6 +14,7 @@ AKM is a Windows API-key manager: a Rust CLI (`akm.exe`) and a Tauri desktop app
 - Never change `%APPDATA%\com.akm.desktop\settings.json`. The GUI proof saves and restores it; check its hash before and after.
 - Owner present, and the owner's yes in chat for each attempt: anything that uses the clipboard, minimizes or hides a window, locks or suspends Windows, or shows a native dialog or a Windows notification that must be clicked or seen. That covers `-OutcomeOnly` (R4-04), the full GUI proof, and the real clipboard test.
 - Never drive an `akm-desktop` process that this run did not start. Never kill a process by name.
+- The owner-present proofs above also exist as `.github/workflows/native-proof.yml`, for a disposable GitHub-hosted runner (docs/TESTING.md, "Native proofs on a disposable runner"). Never start that workflow, and never run `tools/test_install.ps1` or `tools/ci_native_preflight.ps1` on a computer: they refuse outside a GitHub-hosted runner, and starting the workflow is the owner's decision.
 
 ## Launch
 

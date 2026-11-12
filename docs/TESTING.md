@@ -96,6 +96,30 @@ cargo test -p akm-desktop --lib --offline --locked clipboard::windows::actual_wi
 
 Remove the variable afterwards.
 
+## Native proofs on a disposable runner
+
+`.github/workflows/native-proof.yml` runs the proofs that need a real desktop, a real clipboard and a real installer on GitHub-hosted Windows runners. GitHub discards each runner after its job, so no proof meets the owner's data. The workflow has a manual start only (`workflow_dispatch`). It has not run yet: it waits for two owner gates, the AGENTS.md rule for disposable runners and GitHub Actions billing.
+
+| Job | What it runs | Evidence (artifact) |
+|---|---|---|
+| `build` | The setup program, `akm-desktop.exe`, `akm.exe` and the desktop library tests, from the lock files, with no cache. `SHA256SUMS.txt` and `build-info.txt` (commit, run, image, `rustc`, `node`). | `native-proof-build` |
+| `real-clipboard` | `clipboard::windows::actual_windows_private_formats_are_present` with `AKM_TEST_REAL_CLIPBOARD=1`, from the built test executable. | `native-proof-real-clipboard-<commit>` |
+| `full-gui-proof` | `tools/verify_windows_app.ps1` with no skip switch, and KeePassXC 2.8.0 pinned by its SHA-256. | `native-proof-full-gui-<commit>` |
+| `r4-04-attempt` | The R4-04 preconditions (recorded, not enforced), then `-OutcomeOnly -OwnerReadyForVisibility`. | `native-proof-r4-04-<commit>` |
+| `install-upgrade-uninstall` | `tools/test_install.ps1`: silent install, a start of the installed app through `-JournalOnly`, a second install of the same version, a silent uninstall, and the check that the vault, the settings and the journal stay byte-identical while the program files go. | `native-proof-install-<commit>` |
+
+Each proof job starts on a new runner. It first runs `tools/ci_native_preflight.ps1`, which checks every file against `SHA256SUMS.txt` and records the session ID, the input desktop, the screen size, the clipboard format count and the WebView2 version in `preflight.json`. Each job uploads its evidence also when the proof fails.
+
+**What a run does not prove.**
+
+- **R4-04.** The proof script failed review twice (FINDINGS.md R4-04-SCRIPT). From outside the app, UI Automation polling cannot show that no outcome returned just before a dismissal click, or that a delayed reveal reply was delivered and discarded. The job keeps the evidence, and its precondition record says that the run does not pass R4-04.
+- **An upgrade from an older version.** The install job installs one version twice.
+- **The owner's computer.** A Windows Server runner image is not a Windows 11 desktop with the owner's settings, theme, screen reader or security software.
+
+**Runner facts.** From the [Windows Server 2025 image readme](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-VS2026-Readme.md) (image `20261103.298.1`, read 2026-11-13): Microsoft Edge 156 and Node 22.23.4 are installed. The readme does not list the WebView2 runtime, and no image build script installs it. The readme says nothing about an interactive session or the clipboard. So the preflight measures all three. It stops a job without an interactive `Default` input desktop, or with a non-empty clipboard. Where a job needs WebView2 and it is missing, the preflight installs Microsoft's bootstrapper after it checks the Authenticode signature. The install job does not, because the setup program must install WebView2 itself on a clean computer.
+
+**Guards (class F).** `tools/test_install.ps1` and `tools/ci_native_preflight.ps1` run only when `GITHUB_ACTIONS` is `true`, `RUNNER_ENVIRONMENT` is `github-hosted` and the switch `-DisposableRunner` is passed (`tools/DisposableRunner.psm1`). The install test also refuses when AKM state exists: the install folder `%LOCALAPPDATA%\AKM`, which is the same folder as the journal's parent `%LOCALAPPDATA%\akm` because Windows ignores case, the settings folder, the WebView2 data folder, the uninstall key or a Start menu entry. Every refusal comes before the first change. Neither tool removes anything itself. Test the refusals with `powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_native_proof_guards.ps1`. It runs each tool against a fake profile with sentinel files, installs nothing, and checks that the fake profile is unchanged.
+
 ## Which checks a change needs
 
 - **Core data or persistence:** core regressions, the CLI security tests, the KeePassXC test, and the GUI flows that use the change. Keep the KDF, cipher, history and attachment checks.
@@ -108,4 +132,4 @@ Remove the variable afterwards.
 
 ## Not tested yet
 
-Real Windows toast delivery of the opt-in notification (unit 4: only a mocked native boundary and fake notifiers ran), real OS lock and suspend delivery, a real 10-minute idle wait, install, upgrade and uninstall, publisher signing, updater security, broad dotenv compatibility, a full rescore after phase one, and a professional audit.
+Real Windows toast delivery of the opt-in notification (unit 4: only a mocked native boundary and fake notifiers ran), real OS lock and suspend delivery, a real 10-minute idle wait, install, upgrade and uninstall (a CI job exists and has not run), publisher signing, updater security, broad dotenv compatibility, a full rescore after phase one, and a professional audit.
