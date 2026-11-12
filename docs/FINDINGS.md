@@ -219,18 +219,18 @@ From [new look review 2](reviews/2026-11-09-look-review2.md), on `c0a7d3b`. This
 |---|---|---|---|---|---|
 | LOOK-R2-01 | P2 | Open | New look | Stale value | `FilterSelect` stores the active option as an index. A refresh of the options while the list is open can move the highlight, so Enter selects a different option, or nothing. |
 | LOOK-R2-02 | P2 | Open | New look | Stale value | Wheel scrolling in the open list is pulled back to the active option, so a long list cannot be scrolled with the mouse. |
-| LOOK-R2-03 | P3 | Open | New look | H | A 1,000-character project name moves Add key below the window. It stays reachable by scrolling. |
-| LOOK-R2-04 | P3 | Open | New look | J | In forced colours, set and unset lock pins have one fill. The count still shows progress. |
-| LOOK-R3-01 | P2 | Open (stop rule) | UI rebuild | H | Two Recycle Bin entries or two key rows that differ only by issuer look the same, in the row, in the delete confirmation and in the accessibility tree. |
-| LOOK-R3-02 | P3 | Open | UI rebuild | Stale value | Settings keeps the old count while the replacement list read is pending. |
-| LOOK-R3-03 | P3 | Open | UI rebuild | H | An all-unfiled vault shows no "No project" context, and an empty vault shows no project total. |
-| LOOK-R3-04 | P3 | Open | New look | H | A 1,000-character unbroken project name makes a shelf button taller than the shelf, and a long unbroken title overflows the delete confirmation. |
-| LOOK-R3-05 | P3 | Open | UI rebuild | Failure shown as empty | Use keys offers no retry after its list read fails, and an old error stays after a later successful refresh. |
-| LOOK-R3-06 | P3 | Open | New look | I | The stacking guard does not include the Recycle Bin permanent-delete confirmation. |
-| LOOK-R4-01 | P2 | Open (stop rule) | UI rebuild | H | The check for look-alike key rows compares raw issuers, so an unset issuer and the literal issuer "No issuer" look the same and show no ID. |
-| LOOK-R4-02 | P2 | Open (stop rule) | UI rebuild | Stale value | Use keys has no request identity on its list read, so an older retry or a late failure can replace a newer result. |
-| LOOK-R4-03 | P3 | Open | UI rebuild | H | The look-alike check ignores the scope count and renewal facts, so IDs show on rows that differ in those. |
-| LOOK-R4-04 | P3 | Open | UI rebuild | Weak test | The permanent-delete test uses different issuers and reads confirmation text from the DOM. It does not guard entries that differ only by ID. |
+| LOOK-R2-03 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | New look | H | A 1,000-character project name moves Add key below the window. It stays reachable by scrolling. |
+| LOOK-R2-04 | P3 | Fixed, not accepted (guard and mutant, campaign unit 2, `cbb4606`) | New look | J | In forced colours, set and unset lock pins have one fill. The count still shows progress. |
+| LOOK-R3-01 | P2 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | H | Two Recycle Bin entries or two key rows that differ only by issuer look the same, in the row, in the delete confirmation and in the accessibility tree. |
+| LOOK-R3-02 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | Stale value | Settings keeps the old count while the replacement list read is pending. |
+| LOOK-R3-03 | P3 | Fixed, not accepted (guard and mutant, campaign unit 2, `cbb4606`) | UI rebuild | H | An all-unfiled vault shows no "No project" context, and an empty vault shows no project total. |
+| LOOK-R3-04 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | New look | H | A 1,000-character unbroken project name makes a shelf button taller than the shelf, and a long unbroken title overflows the delete confirmation. |
+| LOOK-R3-05 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | Failure shown as empty | Use keys offers no retry after its list read fails, and an old error stays after a later successful refresh. |
+| LOOK-R3-06 | P3 | Fixed, not accepted (guard and mutant, campaign unit 2, `cbb4606`) | New look | I | The stacking guard does not include the Recycle Bin permanent-delete confirmation. |
+| LOOK-R4-01 | P2 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | H | The check for look-alike key rows compares raw issuers, so an unset issuer and the literal issuer "No issuer" look the same and show no ID. |
+| LOOK-R4-02 | P2 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | Stale value | Use keys has no request identity on its list read, so an older retry or a late failure can replace a newer result. |
+| LOOK-R4-03 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | H | The look-alike check ignores the scope count and renewal facts, so IDs show on rows that differ in those. |
+| LOOK-R4-04 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | Weak test | The permanent-delete test uses different issuers and reads confirmation text from the DOM. It does not guard entries that differ only by ID. |
 
 ## Full rescore (2026-11-09)
 
@@ -248,7 +248,7 @@ From the [full rescore](reviews/2026-11-09-full-rescore.md), on `c0a7d3b`: 66.25
 | FR-08 | Medium, inspection | Open | D | Memory hygiene | Some secret strings are not zeroized, for example on the `--secret-stdin` path. |
 | FR-09 | Low, inspection | Open | D | Disclosed limit | `AKM_PASSWORD` stays in the parent process environment. |
 | FR-10 | Medium, inspection | Open | A | D | FIRST_USE.md says a clipboard copy "is cleared"; cleanup is best effort. |
-| FR-11 | Low, inspection | Open | A | D | The unlock screen states KDBX 4.1 with AES-256 and Argon2id for every vault, including older vaults that it opens. |
+| FR-11 | Low, inspection | Fixed, not accepted (campaign unit 2, `cbb4606`) | A | D | The unlock screen states KDBX 4.1 with AES-256 and Argon2id for every vault, including older vaults that it opens. |
 | FR-12 | Medium, reproduced | Open | B | B | An unseen clone that replaces a bound vault joins the original's journal through the shared root ID. Same premise as P2R2-04. |
 | FR-13 | Medium, inspection | Open (PR 10 is unreviewed) | G | Missing workflow | The app cannot launch a program with scoped keys. Deducted once, in G. |
 | FR-14 | Medium, reproduced in the CLI | Open | B | Missing workflow | After journal damage, a GUI user has no way to keep the old bytes and resume. |
@@ -256,7 +256,7 @@ From the [full rescore](reviews/2026-11-09-full-rescore.md), on `c0a7d3b`: 66.25
 | FR-16 | Medium, reproduced | Open | F | Validation at use only | Add and rotate accept a secret with a NUL, which AKM cannot inject or export. |
 | FR-17 | Low, reproduced | Open | F | Unicode | Title matching folds ASCII case only. |
 | FR-18 | Low, reproduced | Open | F | Lost precision | Fractional seconds of an expiry are dropped. |
-| FR-19 | Medium, reproduced in the accessibility tree | Open | G | H | Same-title keys have identical accessible names and descriptions. |
+| FR-19 | Medium, reproduced in the accessibility tree | Fixed, not accepted (campaign unit 2, `cbb4606`) | G | H | Same-title keys have identical accessible names and descriptions. |
 | FR-20 | Medium, inspection | Open (PR 10 is unreviewed) | G | Missing workflow | Detailed key history exists only in the CLI. |
 | FR-21 | Low, reproduced | Open | G | Failure shown as empty | A failed first read shows an error and also "No keys yet". |
 | FR-22 | Medium, inspection | Open | H | Weak test | The import-isolation and failed-rename tests compare metadata, which excludes secrets. The `akm run` test has one scope. |
@@ -325,11 +325,11 @@ From [UI rebuild review 2](reviews/2026-11-08-ui-rebuild-review2.md), on `d63c2a
 
 | ID | Severity | Status | Unit | Class | Problem |
 |---|---|---|---|---|---|
-| UI-R2-01 | P2 | Open | UI rebuild | H | The Recycle Bin clips project, environment and history to one line, and its delete confirmation names only the title. Two entries with one title cannot be told apart before a permanent delete. |
-| UI-R2-02 | P3 | Open | UI rebuild | Stale value | Settings keeps the first list count and prefers it over every later status. The count can stay old. |
-| UI-R2-03 | P3 | Open | UI rebuild | H | A result that holds only keys with no project shows no "No project" heading, so its rows name no project. |
-| UI-R2-04 | P3 | Open | UI rebuild | H | The key list clips a long variable name. |
-| UI-R2-05 | P3 | Open | UI rebuild | H | The key list dropped the project total and the dash for a key with no expiry date. |
+| UI-R2-01 | P2 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | H | The Recycle Bin clips project, environment and history to one line, and its delete confirmation names only the title. Two entries with one title cannot be told apart before a permanent delete. |
+| UI-R2-02 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | Stale value | Settings keeps the first list count and prefers it over every later status. The count can stay old. |
+| UI-R2-03 | P3 | Fixed, not accepted (guard and mutant, campaign unit 2, `cbb4606`) | UI rebuild | H | A result that holds only keys with no project shows no "No project" heading, so its rows name no project. |
+| UI-R2-04 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | H | The key list clips a long variable name. |
+| UI-R2-05 | P3 | Fixed, not accepted (guard and mutant, campaign unit 2, `cbb4606`) | UI rebuild | H | The key list dropped the project total and the dash for a key with no expiry date. |
 
 ## UI rebuild review 1 (2026-11-08)
 
