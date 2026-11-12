@@ -2,7 +2,16 @@
 
 ## Which model
 
-Owner instruction, 2026-11-01:
+Owner instruction, 2026-11-13, for the [campaign to the release gate](design/gate-campaign.md): compare GPT-6.1 Terra at max effort with GPT-6.1 Sol on the first review, then keep the model that gives the better reviews.
+
+**Result of the comparison (2026-11-13, [core review 1](reviews/2026-11-13-core-review1.md)).** Both models got the same commit and the same scope.
+
+- Sol at max effort finished. It gave 11 findings, 7 of them reproduced with fake-data probes, each with a closing test.
+- Terra at max effort did not finish. The provider's safeguard for security content stopped it twice, after about 8 minutes and after about 6 minutes, the second time with a brief in neutral words. Its last status line named four broken fixes. Sol's findings 1 to 4 cover all four.
+- So the campaign's reviews and probes run on **GPT-6.1 Sol at max effort** (`delegate_task`, provider `codex`, model `gpt-6.1-sol`, option `reasoningEffort: max`, role `review`). A Sol run can meet the same safeguard. After two stopped runs on one commit, the review falls back to the harness's read-only reviewer on Claude, and the review header says so.
+- The comparison is not a quality ranking: Terra never produced a complete review of this code. Run it again if the owner's account gets the provider's access for security work.
+
+Owner instruction, 2026-11-01, for work outside the campaign:
 
 - **Every review** runs on GPT-6.1 Terra at **max** effort: bug reviews, acceptance reviews, design reviews and analysis. In T3 Code, use `delegate_task` with provider `codex`, model `gpt-6.1-terra`, option `reasoningEffort: max` and role `review`. If Codex is not available, use provider `opencode`, model `openai/gpt-6.1-terra`, variant `max`. Check availability before you dispatch. If neither is available, tell the owner. Do not switch models yourself.
 - **Simpler side jobs** run on GPT-6.1 Terra at an effort that fits the job: `low` for a mechanical job with a clear check, `medium` for a bounded job, `high` for a job that needs judgment. Side jobs include fixture generation, link checks, log triage and small research.

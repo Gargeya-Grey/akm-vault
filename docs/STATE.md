@@ -61,6 +61,7 @@ The owner asked for the cause of the stall and for a plan to pass the bar, and g
 - Branch `gate/integration` holds all five open branches (`fix/score-findings`, `fix/terminal-rework`, `fix/core-findings`, `fix/tools-docs`, `ui/key-cabinet`). One conflict, in `docs/FIRST_USE.md`, was resolved by hand. The branch is local and not pushed.
 - Checks on the merged tree: `cargo fmt --check` and Clippy (`-D warnings`) clean; `npm run build` passed; `npm test` 443 passed in 32 files; `npm run test:ui` 104 passed; `check_docs` passed. `cargo test --workspace --offline --locked --no-fail-fast` exited 0 with no failed test (the desktop library alone: 288 passed, 1 ignored). The "Last full check run" section below is older; the collect step replaces it.
 - Three workers started, each in its own worktree from `955e3c5`: unit 1 (native session and launch), unit 2 (frontend), unit 4 (tools, CI and release package). Unit 3 (core and CLI) gets its first review before any new fix.
+- [Core review 1](reviews/2026-11-13-core-review1.md) of unit 3 failed: 2 P1, 7 P2, 2 P3 (rows CORE-R1-01 to CORE-R1-11 in FINDINGS.md). The fixes for FR-01, FR-02, FR-12, FR-28 and P2R2-07 do not hold. The unit 3 fix worker started from `5a449de` in its own worktree, on `crates/**` only, with one design direction for each fault class. It started before unit 1 landed, to save time: it must keep the core items that the desktop uses compatible, and the collector resolves any overlap at the merge.
 
 **Decisions taken by the planner, for the owner's veto.**
 
@@ -69,7 +70,9 @@ The owner asked for the cause of the stall and for a plan to pass the bar, and g
 | Terminal launch: a prompt lock, or no terminal after a lock | Both. The process starts suspended outside the session gate. Under the gate, AKM checks the session and the vault revision, then resumes the process or ends it. |
 | Rows: option (a), (b) or (c) | Fix LOOK-R4-01 and LOOK-R4-02 by class (one function builds the facts that a row shows; one read mechanism owns the request identity), then review them with the frontend unit. |
 | Stop rule | A unit gets at most 4 review rounds. A class that fails two rounds gets a redesign that removes its premise. A question goes to the owner only for money, an account, an irreversible step or a contract change. |
-| Review model | The first review runs on GPT-6.1 Terra and GPT-6.1 Sol, both at max effort, with one brief. The better one reviews the rest. |
+| Review model | GPT-6.1 Sol at max effort reviews the rest. On the first review, Sol finished with 11 findings. The provider's safeguard for security content stopped Terra twice before a result ([REVIEWING.md](REVIEWING.md)). |
+| Reserved variable names (FR-02, second failure of the class) | A deny list cannot be complete, so the design changes. Names have three classes: reserved (refused everywhere, by family), credential (a narrow shape) and other. `akm import` refuses a file with other names until the user allows each name or skips them. A name that the user types in `akm add` is the user's decision. The desktop import confirmation marks the other names in a later round. The documents state the limit: the table is finite. |
+| Backup pruning (FR-01) | AKM deletes a backup only when a record that only its save code writes says that AKM made it. A backup with no record, from an older version too, is never deleted. |
 
 **Gates that need the owner.**
 
@@ -81,7 +84,7 @@ The owner asked for the cause of the stall and for a plan to pass the bar, and g
 ## Next action
 
 1. Collect units 1, 2 and 4: check each against its brief and the contract in the plan, merge, run the full checks, build, and run the real-surface proofs that need no owner.
-2. Record the two first reviews of unit 3, choose the review model, and start the unit 3 fixes after unit 1 has landed.
+2. Collect unit 3 the same way, and rerun the KeePassXC and kdbxweb suites if its backup record is inside the vault. Then its second review, on Sol.
 3. One review for each of units 1, 2 and 4, with fix rounds by class.
 4. Area probes, then the owner's gates above, then the full review.
 

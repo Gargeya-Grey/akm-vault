@@ -72,7 +72,14 @@ The routing file of the owner's harness names the models. Each node states its s
 | Collector and planner | The main session | It holds the context of every unit. |
 | Units 1 and 2, and unit 3 fixes | The strongest build setting | Each of these units failed two or more reviews at the default build setting. |
 | Unit 4 | One step above the default build setting | Its earlier unit failed two reviews; the work is bounded. |
-| Reviews and probes | Codex, at max effort | The owner's rule. The first review runs on two models with one brief, and the better one reviews the rest. |
+| Reviews and probes | Codex, at max effort | The owner's rule. The first review ran on two models with one brief. Only one of them finished, and it reviews the rest ([REVIEWING.md](../REVIEWING.md)). |
+
+## Changes after the first review (2026-11-13)
+
+- **Unit 3 runs beside unit 1.** [Core review 1](../reviews/2026-11-13-core-review1.md) failed with 2 P1 and 7 P2. Its fix worker started at once on `crates/**`, and must keep the core items that the desktop uses compatible. The collector resolves any overlap with unit 1's one core hook at the merge.
+- **Reserved names (FR-02).** The deny list failed twice, so its premise goes: AKM cannot know every variable by which a program chooses a program to run. One function gives a name one of three classes: reserved (refused everywhere, by family shape), credential (a narrow shape) or other. The path where names come from a file, `akm import`, refuses other names until the user allows each one or skips them. The desktop import confirmation marks the other names in unit 1's fix round. The contract and [CLAIMS.md](../CLAIMS.md) state the limit.
+- **Backup pruning (FR-01).** A file's own name and bytes prove nothing. AKM deletes a backup only when a record that only its save code writes says that AKM made it.
+- **Three more fault classes** for the AGENTS.md table, when their guards exist: a guard that reads input differently from its consumer and fails open (FR-28); arithmetic on a time value from the user without a check (FR-15); a destination chosen by an absence check, then written with a replacing rename (FR-14, core).
 
 ## Gates that need the owner
 

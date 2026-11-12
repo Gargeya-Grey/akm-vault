@@ -267,6 +267,24 @@ From the [full rescore](reviews/2026-11-09-full-rescore.md), on `c0a7d3b`: 66.25
 | FR-27 | High, inspection, not scored | Open | Tools | F | `akm-verify.ps1` treats a matching temporary folder with a readable `session.json` as its own and removes it. |
 | FR-28 | Inspection, not scored | Open | E | Resource bound | Opening a vault applies its KDF parameters with no AKM limit, so a malicious vault may exhaust memory. |
 
+## Core and CLI review 1 (2026-11-13)
+
+From [core review 1](reviews/2026-11-13-core-review1.md), on `8366f31`: fail. It reviewed the fixes for FR-01, FR-02, FR-05, FR-08, FR-12, FR-14 (core), FR-15 to FR-18, FR-22, FR-28 and P2R2-07. The reviewer's checks support the fixes for FR-05, FR-08 and FR-16; those rows stay Open until the unit passes a review. The campaign's unit 3 ([plan](design/gate-campaign.md)) owns every row below.
+
+| ID | Severity | Status | Unit | Class | Problem |
+|---|---|---|---|---|---|
+| CORE-R1-01 | P1, reproduced | Open | Campaign unit 3 | F | FR-01 is not fixed. Pruning accepts any file whose bytes match the hash in its name, so a foreign file of that shape is deleted after five saves (`vault.rs`, backup pruning). |
+| CORE-R1-02 | P1, injection reproduced | Open | Campaign unit 3 | Incomplete deny list | FR-02 is not fixed. `HOST_CC` and `TARGET_CC` pass add, export and `akm run`, and a build that uses cc-rs then runs the named compiler with the scope's secrets. Second failure of this class: the design changes (plan, unit 3). |
+| CORE-R1-03 | P2, reproduced | Open | Campaign unit 3 | Guard fails open | FR-28 is not fixed. A KDF number with one padding byte fails the guard's parse, AKM continues, and the reader uses the first eight bytes (`kdf_guard.rs`). |
+| CORE-R1-04 | P2, reproduced | Open | Campaign unit 3 | C | FR-12 is not fixed. The new fingerprint is stored before the journal append succeeds, so a failed append uses up the lineage warning and the retry discloses with no warning (`journal.rs`). |
+| CORE-R1-05 | P2, inspection | Open | Campaign unit 3 | B | An Activity read after an unseen replacement shows the original journal as confirmed, with no notice (`journal.rs`, the snapshot path; the desktop Activity view reads through it). |
+| CORE-R1-06 | P2, reproduced | Open | Campaign unit 3 | Unchecked arithmetic | FR-15 has siblings. `list --expiring` and `purge --older-than-days` panic on very large day counts, in the CLI and in the core cutoff. |
+| CORE-R1-07 | P2, one path reproduced | Open | Campaign unit 3 | O | FR-18 has siblings. Core add and update accept a sub-second expiry and drop the fraction, so the desktop draft bypasses the CLI check. A fraction beyond nine digits passes the CLI check. |
+| CORE-R1-08 | P2, inspection | Open | Campaign unit 3 | F | Journal recovery chooses a free name, then publishes with a replacing rename. A file made at that name in between is overwritten (`audit.rs`). |
+| CORE-R1-09 | P2, inspection | Open | Campaign unit 3 | B | P2R2-07 is not fixed for a file symbolic link. The lock name joins the canonical file name to the folder of the spelling, so the link and its target get two lock files. The reviewer could not create a link (WinError 1314). |
+| CORE-R1-10 | P3, reproduced | Open | Campaign unit 3 | Unicode | FR-17 is incomplete. A key titled with a Greek final sigma is not found by its capital letter, in live and recycled selection. |
+| CORE-R1-11 | P3, inspection | Open | Campaign unit 3 | Weak test | FR-22: the import-isolation test changes project and environment together, so it passes when only one of the two is compared. |
+
 ## New look review 1 (2026-11-08)
 
 From [new look review 1](reviews/2026-11-08-look-review1.md), on `f2f66d0`. The tests are in `desktop/e2e/look-guards.spec.ts`. Each failed before its fix, and each fix has a mutant that the test catches.
