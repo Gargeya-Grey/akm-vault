@@ -149,10 +149,33 @@ pub(crate) fn fail_recovery_at(step: RecoveryStep) {
     FAIL_RECOVERY_AT.with(|fail| fail.borrow_mut().push(step));
 }
 
+#[cfg(test)]
+type Barrier = (RecoveryStep, Box<dyn FnOnce()>);
+
+#[cfg(test)]
+thread_local! {
+    static AT_RECOVERY_STEP: std::cell::RefCell<Vec<Barrier>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Runs `action` at the next arrival at `step`, once, before the step: a barrier where a test
+/// acts as another writer.
+#[cfg(test)]
+pub(crate) fn at_recovery_step(step: RecoveryStep, action: impl FnOnce() + 'static) {
+    AT_RECOVERY_STEP.with(|barriers| barriers.borrow_mut().push((step, Box::new(action))));
+}
+
 /// Production does nothing here. A test makes a step fail.
 fn reach(step: RecoveryStep) -> Result<()> {
     #[cfg(test)]
     {
+        let barrier = AT_RECOVERY_STEP.with(|barriers| {
+            let mut barriers = barriers.borrow_mut();
+            let position = barriers.iter().position(|(planned, _)| *planned == step)?;
+            Some(barriers.remove(position).1)
+        });
+        if let Some(action) = barrier {
+            action();
+        }
         let injected = FAIL_RECOVERY_AT.with(|fail| {
             let mut fail = fail.borrow_mut();
             let position = fail.iter().position(|planned| *planned == step)?;
@@ -520,21 +543,25 @@ impl ChainFile {
             return Err(with_leftover(error, &pending));
         }
 
+        // Every move below refuses a taken destination (`move_new`): the kept name was chosen
+        // by an absence check, and the journal name is free only because the damaged journal
+        // moved away, so another writer can take either name in between (core review 1,
+        // finding 8). The new chain already names the kept file, so a taken name refuses.
         let aside = reach(RecoveryStep::RenameAside)
-            .and_then(|()| fs::rename(&self.path, &kept).map_err(Error::from));
+            .and_then(|()| private_fs::move_new(&self.path, &kept).map_err(Error::from));
         if let Err(error) = aside {
             return Err(with_leftover(
                 Error::Journal(format!(
-                    "the damaged journal could not be kept aside, so nothing was changed ({error})"
+                    "the damaged journal could not be kept aside as {kept_name}, so nothing was changed; try again ({error})"
                 )),
                 &pending,
             ));
         }
         let installed = reach(RecoveryStep::Install)
-            .and_then(|()| fs::rename(&pending, &self.path).map_err(Error::from));
+            .and_then(|()| private_fs::move_new(&pending, &self.path).map_err(Error::from));
         if let Err(error) = installed {
             let restored = reach(RecoveryStep::Restore)
-                .and_then(|()| fs::rename(&kept, &self.path).map_err(Error::from));
+                .and_then(|()| private_fs::move_new(&kept, &self.path).map_err(Error::from));
             return Err(match restored {
                 Ok(()) => with_leftover(
                     Error::Journal(format!(
@@ -1054,6 +1081,76 @@ mod recovery_tests {
             .expect("the damaged journal is kept");
         let kept_bytes = fs::read(fixture.directory.path().join("journal").join(kept)).unwrap();
         assert_eq!(kept_bytes, damaged, "the evidence is intact");
+    }
+
+    /// Core review 1, finding 8: another writer creates a file at the kept name after
+    /// recovery chose it. The file survives byte for byte, recovery refuses and changes
+    /// nothing, and a retry keeps the damaged journal under the next free name.
+    #[test]
+    fn fr14_a_file_made_at_the_kept_name_after_it_was_chosen_survives() {
+        let fixture = Fixture::new();
+        let damaged = fixture.damaged();
+        let path = fixture.journal();
+        let taken = PathBuf::from(format!("{}.damaged-20261109T101500Z", path.display()));
+        let sentinel = taken.clone();
+        at_recovery_step(RecoveryStep::RenameAside, move || {
+            fs::write(&sentinel, b"another writer's file").unwrap();
+        });
+
+        let refused = fixture.log.recover_damaged_at(then());
+
+        assert_eq!(fs::read(&taken).unwrap(), b"another writer's file");
+        let error = refused
+            .expect_err("recovery must not replace the file")
+            .to_string();
+        assert!(error.contains("nothing was changed"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), damaged, "the journal is in place");
+        assert!(fixture.log.append("reveal-requested", None, None).is_err());
+        assert!(
+            !fixture
+                .folder()
+                .iter()
+                .any(|(name, _)| name.contains(".recovering-")),
+            "no pending file is left"
+        );
+
+        let recovery = fixture.log.recover_damaged_at(then()).unwrap();
+        assert!(
+            recovery
+                .kept
+                .to_string_lossy()
+                .ends_with("damaged-20261109T101500Z-2"),
+            "{}",
+            recovery.kept.display()
+        );
+        assert_eq!(fs::read(&recovery.kept).unwrap(), damaged);
+        assert_eq!(fs::read(&taken).unwrap(), b"another writer's file");
+    }
+
+    /// Core review 1, finding 8: another writer creates a file at the journal name in the
+    /// moment after the damaged journal moved aside. The file survives, the new chain does
+    /// not replace it, and the error names the kept journal and the new one.
+    #[test]
+    fn fr14_a_file_made_at_the_journal_name_during_install_survives() {
+        let fixture = Fixture::new();
+        let damaged = fixture.damaged();
+        let path = fixture.journal();
+        let sentinel = path.clone();
+        at_recovery_step(RecoveryStep::Install, move || {
+            fs::write(&sentinel, b"another writer's file").unwrap();
+        });
+
+        let error = fixture
+            .log
+            .recover_damaged_at(then())
+            .expect_err("recovery must not replace the file")
+            .to_string();
+
+        assert_eq!(fs::read(&path).unwrap(), b"another writer's file");
+        assert!(error.contains(".damaged-20261109T101500Z"), "{error}");
+        assert!(error.contains(".recovering-"), "{error}");
+        let kept = PathBuf::from(format!("{}.damaged-20261109T101500Z", path.display()));
+        assert_eq!(fs::read(&kept).unwrap(), damaged, "the evidence is intact");
     }
 
     #[test]

@@ -121,10 +121,10 @@ pub(crate) fn check_private(path: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-pub(crate) use imp::{create_private_dir, file_id, open_dir, open_file, reject_links};
+pub(crate) use imp::{create_private_dir, file_id, move_new, open_dir, open_file, reject_links};
 
 #[cfg(not(windows))]
-pub(crate) use other::{create_private_dir, file_id, open_dir, open_file, reject_links};
+pub(crate) use other::{create_private_dir, file_id, move_new, open_dir, open_file, reject_links};
 
 #[cfg(not(windows))]
 mod other {
@@ -153,6 +153,12 @@ mod other {
     pub(crate) fn reject_links(_: &Path) -> Result<()> {
         Err(unsupported())
     }
+
+    /// See the Windows `move_new`. A hard link fails when `to` exists, so the same rule holds.
+    pub(crate) fn move_new(from: &Path, to: &Path) -> std::io::Result<()> {
+        std::fs::hard_link(from, to)?;
+        std::fs::remove_file(from)
+    }
 }
 
 #[cfg(windows)]
@@ -180,12 +186,12 @@ mod imp {
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateDirectoryW, CreateFileW, GetDriveTypeW, GetFileInformationByHandle,
-        GetVolumeInformationByHandleW, GetVolumePathNameW, BY_HANDLE_FILE_INFORMATION, CREATE_NEW,
-        FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+        GetVolumeInformationByHandleW, GetVolumePathNameW, MoveFileExW, BY_HANDLE_FILE_INFORMATION,
+        CREATE_NEW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
         FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
-        FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
-        READ_CONTROL,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_DATA, MOVEFILE_WRITE_THROUGH, OPEN_ALWAYS,
+        OPEN_EXISTING, READ_CONTROL,
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -219,6 +225,23 @@ mod imp {
 
     fn os_error(context: &str) -> Error {
         refuse(format!("{context}: {}", io::Error::last_os_error()))
+    }
+
+    /// Moves `from` to `to` only when no file is at `to` (core review 1, finding 8). The check
+    /// and the move are one step of the file system, so a file that appears at `to` after AKM
+    /// chose the name is never replaced: the move fails with `AlreadyExists`. This is
+    /// `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`; `std::fs::rename` replaces.
+    pub(crate) fn move_new(from: &Path, to: &Path) -> io::Result<()> {
+        let encode = |path: &Path| -> io::Result<Vec<u16>> {
+            wide(path)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))
+        };
+        let (from, to) = (encode(from)?, encode(to)?);
+        // SAFETY: both buffers are NUL-terminated wide strings that live across the call.
+        if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     fn wide(path: &Path) -> Result<Vec<u16>> {
