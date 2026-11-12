@@ -984,6 +984,13 @@ impl Vault {
         #[cfg(test)]
         tests::run_save_hook(tests::SaveStage::Serialized, &tmp.path, &self.path);
         let encrypted = fs::read(&tmp.path)?;
+        // The temporary file is read back from disk, so it gets the same header guard as an
+        // opened vault (FR-28): a file swapped in under its name cannot choose the cost.
+        crate::kdf_guard::check(&encrypted).map_err(|error| {
+            Error::Save(format!(
+                "encrypted temporary vault could not be reopened: {error}"
+            ))
+        })?;
         let verified = Database::parse(&encrypted, self.key.clone()).map_err(|error| {
             Error::Save(format!(
                 "encrypted temporary vault could not be reopened: {error}"
@@ -2058,6 +2065,26 @@ mod tests {
         fs::write(&path, crafted::argon2(true, 1 << 40, 3, 4)).unwrap();
         let text = vault.reload().unwrap_err().to_string();
         assert!(text.contains("4 GiB"), "{text}");
+    }
+
+    /// FR-28 sweep (core review 1, finding 3): the save reads its temporary vault back from
+    /// disk. A file swapped in under that name gets the same header guard as an opened vault:
+    /// here a field one byte short, which the reader would panic on, is a save error.
+    #[test]
+    fn a_swapped_temporary_vault_gets_the_header_guard_before_it_is_read_back() {
+        let (_dir, path, mut vault) = fixture_vault();
+        let before = fs::read(&path).unwrap();
+        on_save(SaveStage::Serialized, |temp, _| {
+            let bytes = fs::read(temp).unwrap();
+            let short = crate::kdf_guard::rewrite::kdf_field(&bytes, "R", 7);
+            fs::write(temp, short).unwrap();
+        });
+        let error = vault
+            .add(ApiKeyInput::new("Fake swapped", "fake-swapped-value"))
+            .unwrap_err();
+        assert!(matches!(error, Error::Save(_)), "{error}");
+        assert!(error.to_string().contains("stops before"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), before, "the vault is unchanged");
     }
 
     /// FR-28: a header that is not readable keeps the error that it had before.
