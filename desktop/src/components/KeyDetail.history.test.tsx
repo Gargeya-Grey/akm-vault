@@ -119,11 +119,35 @@ test("a history that belongs to one key is gone when the drawer shows another ke
   expect(screen.queryByRole("list", { name: "Earlier versions" })).toBeNull();
 });
 
-test("a failed history request shows the error and offers the button again", async () => {
-  native.invoke.mockRejectedValueOnce({ kind: "locked", message: "The session is locked or expired." });
+test("a failed history request shows the error, and a retry that succeeds replaces it with the list", async () => {
+  native.invoke.mockRejectedValueOnce({ kind: "internal", message: "fake history failure" });
   open();
   fireEvent.click(screen.getByRole("button", { name: SHOW }));
   await act(async () => {});
-  expect(screen.getByText("The session is locked or expired.")).toBeTruthy();
-  expect(screen.getByRole("button", { name: SHOW })).toBeTruthy();
+  expect(screen.getByText("fake history failure")).toBeTruthy();
+  expect(screen.queryByRole("list", { name: "Earlier versions" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await act(async () => {});
+  expect(screen.queryByText("fake history failure")).toBeNull();
+  expect(screen.getByRole("list", { name: "Earlier versions" })).toBeTruthy();
+});
+
+test("while the history is read, the drawer says so and shows no list", async () => {
+  native.invoke.mockReturnValueOnce(new Promise(() => {}));
+  open();
+  fireEvent.click(screen.getByRole("button", { name: SHOW }));
+  expect(screen.getByRole("status").textContent).toBe("Reading the earlier versions…");
+  expect(screen.queryByRole("list", { name: "Earlier versions" })).toBeNull();
+});
+
+test("a reply to a history list that was closed never shows in the list opened after it", async () => {
+  let older!: (value: unknown) => void;
+  native.invoke.mockReturnValueOnce(new Promise((done) => { older = done; }));
+  open();
+  fireEvent.click(screen.getByRole("button", { name: SHOW }));
+  fireEvent.click(screen.getByRole("button", { name: "Hide earlier versions" }));
+  fireEvent.click(screen.getByRole("button", { name: SHOW }));
+  await act(async () => {});
+  await act(async () => { older([{ index: 9, modifiedAt: null, changed: [], secretChanged: false }]); });
+  expect(screen.getByRole("list", { name: "Earlier versions" }).querySelectorAll("li")).toHaveLength(2);
 });

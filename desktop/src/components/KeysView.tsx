@@ -1,5 +1,6 @@
-import { Fragment, useCallback, useEffect, useId, useMemo, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useState } from "react";
 import { api, errorText } from "../api";
+import { nativeReads, useNativeRead } from "../nativeRead";
 import {
   expiryLabel,
   keyState,
@@ -20,6 +21,7 @@ import { Icon } from "./Icon";
 import { KeyForm } from "./KeyForm";
 import { RotateDialog } from "./RotateDialog";
 import { ConfirmDialog, Notice } from "./Notice";
+import { ReadFailure } from "./ReadFailure";
 
 interface SummaryControl {
   dismissed: boolean;
@@ -32,6 +34,7 @@ type Shelf =
   | { kind: "project"; name: string | null };
 
 const ALL_KEYS: Shelf = { kind: "all" };
+const NO_KEYS: KeyView[] = [];
 
 function identityDescription(key: KeyView): string {
   const project = key.project === null ? "No project" : `Project ${key.project}`;
@@ -52,42 +55,25 @@ function shelfTitle(shelf: Shelf): string {
  */
 export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; summary?: SummaryControl }) {
   const [summaryDismissed, setSummaryDismissed] = useState(false);
-  const [keys, setKeys] = useState<KeyView[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [readFailed, setReadFailed] = useState(false);
+  const read = useNativeRead(nativeReads.keys);
+  // Only a read that succeeded gives keys. Every count and every "empty" text comes from here.
+  const keys = read.state.status === "ready" ? read.state.data : null;
+  const all = keys ?? NO_KEYS;
   const [flash, setFlash] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [chosenShelf, setChosenShelf] = useState<Shelf>(ALL_KEYS);
   const [environment, setEnvironment] = useState("");
+  // Identities, never copies: each dialog draws the key as the newest read gives it.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [formItem, setFormItem] = useState<KeyView | null | undefined>(
     undefined,
   );
-  const [deleting, setDeleting] = useState<KeyView | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletingBusy, setDeletingBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [rotating, setRotating] = useState<KeyView | null>(null);
-  const now = useNow(keys);
+  const [rotatingId, setRotatingId] = useState<string | null>(null);
+  const now = useNow(all);
   const statusId = useId();
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      setKeys(await api.keys());
-      setError(null);
-      setReadFailed(false);
-    } catch (cause) {
-      setError(errorText(cause));
-      setReadFailed(true);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   useEffect(() => {
     if (!flash) return;
@@ -95,27 +81,27 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     return () => window.clearTimeout(id);
   }, [flash]);
 
-  const attention = attentionOf(keys, now);
+  const attention = attentionOf(all, now);
   // A shelf empties when its last key leaves. The view then falls back, so nobody is stranded on it.
   const shelf: Shelf =
     (chosenShelf.kind === "attention" && attention.total === 0) ||
-    (chosenShelf.kind === "project" && !keys.some((key) => key.project === chosenShelf.name))
+    (chosenShelf.kind === "project" && !all.some((key) => key.project === chosenShelf.name))
       ? ALL_KEYS
       : chosenShelf;
 
   const projects = useMemo(
-    () => uniqueOptions(keys.map((key) => key.project)),
-    [keys],
+    () => uniqueOptions(all.map((key) => key.project)),
+    [all],
   );
   const environments = useMemo(
-    () => uniqueOptions(keys.map((key) => key.environment)),
-    [keys],
+    () => uniqueOptions(all.map((key) => key.environment)),
+    [all],
   );
-  const unfiled = keys.filter((key) => key.project === null).length;
+  const unfiled = all.filter((key) => key.project === null).length;
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return keys
+    return all
       .filter((key) => {
         if (shelf.kind === "attention" && !needsAttention(key, now)) return false;
         if (shelf.kind === "project" && key.project !== shelf.name) return false;
@@ -138,7 +124,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           .includes(needle);
       })
       .sort((a, b) => a.title.localeCompare(b.title));
-  }, [keys, query, shelf, environment, now]);
+  }, [all, query, shelf, environment, now]);
 
   const groups = useMemo(() => {
     const byProject = new Map<string | null, KeyView[]>();
@@ -154,15 +140,18 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
   // Two rows that match in every shown fact need the one fact that is unique.
   const lookalikes = useMemo(() => {
     const seen = new Map<string, string[]>();
-    for (const key of keys) {
+    for (const key of all) {
       const shown = JSON.stringify([key.title, key.issuer, key.project, key.environment, key.resolvedEnvVar]);
       seen.set(shown, [...(seen.get(shown) ?? []), key.id]);
     }
     return new Set([...seen.values()].filter((ids) => ids.length > 1).flat());
-  }, [keys]);
+  }, [all]);
 
-  const selected = keys.find((key) => key.id === selectedId) ?? null;
-  const showSummary = !loading && attention.total > 0 && !(summary?.dismissed ?? summaryDismissed);
+  const find = (id: string | null) => (id === null ? null : all.find((key) => key.id === id) ?? null);
+  const selected = find(selectedId);
+  const deleting = find(deletingId);
+  const rotating = find(rotatingId);
+  const showSummary = keys !== null && attention.total > 0 && !(summary?.dismissed ?? summaryDismissed);
 
   function clearFilters() {
     setQuery("");
@@ -171,21 +160,16 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
   }
 
   function saved(item: KeyView) {
-    setKeys((current) => {
-      const next = current.filter((key) => key.id !== item.id);
-      return [...next, item].sort((a, b) => a.title.localeCompare(b.title));
-    });
+    read.apply((current) => [...current.filter((key) => key.id !== item.id), item]);
     setSelectedId(item.id);
     setFormItem(undefined);
     setFlash(`Saved “${item.title}”. The vault file has been rewritten.`);
   }
 
   function rotated(receipt: RotationReceipt) {
-    setKeys((current) =>
-      current.map((key) => (key.id === receipt.key.id ? receipt.key : key)),
-    );
+    read.apply((current) => current.map((key) => (key.id === receipt.key.id ? receipt.key : key)));
     setSelectedId(receipt.key.id);
-    setRotating(null);
+    setRotatingId(null);
     setFlash(
       `Rotated “${receipt.key.title}”. The old secret stays in the vault history. Rotating here does not change the secret at the provider.`,
     );
@@ -193,14 +177,15 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
 
   async function remove() {
     if (!deleting) return;
+    const target = deleting;
     setDeletingBusy(true);
     setDeleteError(null);
     try {
-      await api.remove(deleting.id);
-      setKeys((current) => current.filter((key) => key.id !== deleting.id));
-      if (selectedId === deleting.id) setSelectedId(null);
-      setFlash(`Moved “${deleting.title}” to the Recycle Bin. Restore it there, or delete it for good. Check backup notices before you rely on encrypted backups.`);
-      setDeleting(null);
+      await api.remove(target.id);
+      read.apply((current) => current.filter((key) => key.id !== target.id));
+      if (selectedId === target.id) setSelectedId(null);
+      setFlash(`Moved “${target.title}” to the Recycle Bin. Restore it there, or delete it for good. Check backup notices before you rely on encrypted backups.`);
+      setDeletingId(null);
     } catch (cause) {
       setDeleteError(errorText(cause));
     } finally {
@@ -273,7 +258,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
       <div className="ledger-pane">
         <header className="list-head">
           <h1>
-            {shelfTitle(shelf)} {!readFailed && <em className="num">{visible.length}</em>}
+            {shelfTitle(shelf)} {keys !== null && <em className="num">{visible.length}</em>}
           </h1>
           <button
             type="button"
@@ -286,7 +271,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           </button>
         </header>
 
-        {!readFailed && <nav className="shelf" aria-label="Projects">
+        {keys !== null && <nav className="shelf" aria-label="Projects">
           {shelfButton(ALL_KEYS, "All keys", keys.length)}
           <button
             type="button"
@@ -340,11 +325,6 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           />
         </div>
 
-        {error && (
-          <div className="ledger-message">
-            <Notice tone="error">{error}</Notice>
-          </div>
-        )}
         {flash && (
           <div className="ledger-message">
             <Notice tone="ok">{flash}</Notice>
@@ -352,7 +332,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
         )}
 
         <section aria-label="API keys">
-          {!loading && visible.length > 0 && (
+          {keys !== null && visible.length > 0 && (
             <div className="key-head" aria-hidden="true">
               <span />
               <span>Key</span>
@@ -363,22 +343,20 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
             </div>
           )}
 
-          {loading ? (
+          {read.state.status === "loading" ? (
             <div className="empty-state">
               <h2>Opening the index…</h2>
               <p>The vault is already unlocked. Keys appear here in a moment.</p>
             </div>
-          ) : readFailed ? (
-            <div className="empty-state">
-              <h2>AKM could not read the keys.</h2>
-              <p>This does not mean that the vault is empty. Try again, or lock the vault and open it again.</p>
-              <div className="empty-actions">
-                <button type="button" className="text-button" onClick={() => void load()}>
-                  Try again
-                </button>
-              </div>
-            </div>
-          ) : keys.length === 0 ? (
+          ) : read.state.status === "failed" ? (
+            <ReadFailure
+              heading="AKM could not read the keys."
+              detail="This does not mean that the vault is empty. Try again, or lock the vault and open it again."
+              error={read.state.error}
+              busy={read.busy}
+              onRetry={read.reload}
+            />
+          ) : read.state.data.length === 0 ? (
             <div className="empty-state">
               <EmptyHooks />
               <h2>No keys yet.</h2>
@@ -402,7 +380,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
             <div className="empty-state">
               <NoMatch />
               <h2>Nothing matches those filters.</h2>
-              <p>{plural(keys.length, "key")} in the vault, none shown here.</p>
+              <p>{plural(read.state.data.length, "key")} in the vault, none shown here.</p>
               <div className="empty-actions">
                 <button type="button" className="text-button" onClick={clearFilters}>
                   Clear search and filters
@@ -435,12 +413,12 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           }}
           onRotate={() => {
             setSelectedId(null);
-            setRotating(selected);
+            setRotatingId(selected.id);
           }}
           onDelete={() => {
             setDeleteError(null);
             setSelectedId(null);
-            setDeleting(selected);
+            setDeletingId(selected.id);
           }}
         />
       )}
@@ -457,7 +435,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
         <RotateDialog
           item={rotating}
           onRotated={rotated}
-          onClose={() => { setSelectedId(rotating.id); setRotating(null); }}
+          onClose={() => { setSelectedId(rotating.id); setRotatingId(null); }}
         />
       )}
 
@@ -468,7 +446,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           busy={deletingBusy}
           destructive={false}
           onConfirm={remove}
-          onCancel={() => { setSelectedId(deleting.id); setDeleting(null); }}
+          onCancel={() => { setSelectedId(deleting.id); setDeletingId(null); }}
         >
           <p>
             <strong>{deleting.title}</strong> leaves the key list and moves to the Recycle Bin

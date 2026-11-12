@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { api, errorText } from "../api";
+import { nativeReads, useNativeRead } from "../nativeRead";
 import { formatDateTime } from "../format";
 import type { AuditReport, JournalRecovery } from "../types";
 import { EmptyPage } from "./glyphs";
 import { Notice } from "./Notice";
+import { ReadFailure } from "./ReadFailure";
 
 const ACTIONS: Record<string, string> = {
   "add-completed": "Added",
@@ -42,42 +44,26 @@ function keyLabel(keyTitle: string | null, keyId: string | null): string {
 }
 
 export function Activity() {
-  const [report, setReport] = useState<AuditReport | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const read = useNativeRead(nativeReads.journal);
+  // A failed read drops the snapshot, so no state badge outlives the read that gave it.
+  const report: AuditReport | null = read.state.status === "ready" ? read.state.data : null;
   const [recovering, setRecovering] = useState(false);
-  const [recovery, setRecovery] = useState<{ kind: "done"; result: JournalRecovery } | { kind: "declined" } | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      setReport(await api.audit(500));
-      setError(null);
-    } catch (cause) {
-      setReport(null);
-      setError(errorText(cause));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const [recovery, setRecovery] = useState<{ kind: "done"; result: JournalRecovery } | { kind: "declined" } | { kind: "failed"; error: string } | null>(null);
 
   // Native asks first, in its own window. The page only asks; it cannot approve for the user.
+  // A decline and a failure are separate outcomes: a decline changed nothing, and a failure
+  // reports what native said.
   async function recover() {
     setRecovering(true);
     setRecovery(null);
-    setError(null);
     try {
       const result = await api.recoverJournal();
       setRecovery(result === null ? { kind: "declined" } : { kind: "done", result });
-      await load();
     } catch (cause) {
-      setError(errorText(cause));
+      setRecovery({ kind: "failed", error: errorText(cause) });
     } finally {
       setRecovering(false);
+      read.reload();
     }
   }
 
@@ -99,11 +85,11 @@ export function Activity() {
         <button
           type="button"
           className="btn-secondary"
-          onClick={() => void load()}
-          disabled={loading}
-          aria-busy={loading || undefined}
+          onClick={read.reload}
+          disabled={read.busy}
+          aria-busy={read.busy || undefined}
         >
-          {loading ? "Reading…" : "Refresh"}
+          {read.busy ? "Reading…" : "Refresh"}
         </button>
       </header>
 
@@ -111,7 +97,7 @@ export function Activity() {
         <div className="audit-tools">
           <div>
             <p className="label">Journal file</p>
-            <p className="mono path-text">{report?.path ?? "Reading…"}</p>
+            <p className="mono path-text">{report?.path ?? (read.state.status === "failed" ? "Not read" : "Reading…")}</p>
           </div>
           {report && (
             <div className="audit-status">
@@ -121,10 +107,13 @@ export function Activity() {
           )}
         </div>
 
-        {error && (
-          <div className="ledger-message">
-            <Notice tone="error">{error}</Notice>
-          </div>
+        {read.state.status === "failed" && (
+          <ReadFailure
+            heading="AKM could not read the journal."
+            detail="This does not mean that nothing was recorded. Select Refresh to try again."
+            error={read.state.error}
+            busy={read.busy}
+          />
         )}
 
         {report?.notices.map((notice) => (
@@ -149,7 +138,7 @@ export function Activity() {
               You can start a new journal. A window will ask you first. The damaged file is kept unchanged beside it, and the new journal records the gap.
               History before the damage cannot be proved complete.
             </Notice>
-            <button type="button" className="btn-secondary" onClick={() => void recover()} disabled={recovering} aria-busy={recovering || undefined}>
+            <button type="button" className="btn-secondary" onClick={() => void recover()} disabled={recovering || read.busy} aria-busy={recovering || undefined}>
               {recovering ? "Waiting for your answer…" : "Start a new journal…"}
             </button>
           </div>
@@ -169,6 +158,12 @@ export function Activity() {
           </div>
         )}
 
+        {recovery?.kind === "failed" && (
+          <div className="ledger-message">
+            <Notice tone="error">{recovery.error}</Notice>
+          </div>
+        )}
+
         {report && (
           <div className="audit-head" aria-hidden="true">
             <span>#</span>
@@ -179,12 +174,12 @@ export function Activity() {
           </div>
         )}
 
-        {loading && !report ? (
+        {read.state.status === "loading" ? (
           <div className="empty-state">
             <h2>Reading the journal…</h2>
             <p>Entries appear newest first.</p>
           </div>
-        ) : entries.length === 0 ? (
+        ) : read.state.status === "failed" ? null : entries.length === 0 ? (
           <div className="empty-state">
             <EmptyPage />
             <h2>No records displayed.</h2>

@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { api, errorText } from "../api";
+import { nativeReads, useNativeRead } from "../nativeRead";
 import { formatDateTime, plural } from "../format";
 import type { RecycledKey } from "../types";
 import { EmptyBin, KeyCut } from "./glyphs";
 import { Icon } from "./Icon";
 import { ConfirmDialog, Notice } from "./Notice";
+import { ReadFailure } from "./ReadFailure";
 
 /**
  * Keys that were removed from the key list. Nothing here is deleted until the user asks:
@@ -12,43 +14,26 @@ import { ConfirmDialog, Notice } from "./Notice";
  * only action that removes a key from the vault.
  */
 export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
-  const [items, setItems] = useState<RecycledKey[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [readFailed, setReadFailed] = useState(false);
+  const read = useNativeRead(nativeReads.recycled);
+  const items = read.state.status === "ready" ? read.state.data : null;
+  const [actionError, setActionError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [purging, setPurging] = useState<RecycledKey | null>(null);
+  // An identity, never a copy: the confirmation draws the entry as the newest read gives it.
+  const [purgingId, setPurgingId] = useState<string | null>(null);
+  const purging = items?.find((entry) => entry.key.id === purgingId) ?? null;
   const [purgeError, setPurgeError] = useState<string | null>(null);
   const factsId = useId();
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      setItems(await api.recycled());
-      setError(null);
-      setReadFailed(false);
-    } catch (cause) {
-      setError(errorText(cause));
-      setReadFailed(true);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
   async function restore(item: RecycledKey) {
     setBusyId(item.key.id);
-    setError(null);
+    setActionError(null);
     try {
       const key = await api.restore(item.key.id);
-      setItems((current) => current.filter((entry) => entry.key.id !== item.key.id));
+      read.apply((current) => current.filter((entry) => entry.key.id !== item.key.id));
       setFlash(`Restored “${key.title}” to the key list.`);
     } catch (cause) {
-      setError(errorText(cause));
+      setActionError(errorText(cause));
     } finally {
       setBusyId(null);
     }
@@ -61,9 +46,9 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
     setPurgeError(null);
     try {
       await api.purge(target.key.id);
-      setItems((current) => current.filter((entry) => entry.key.id !== target.key.id));
+      read.apply((current) => current.filter((entry) => entry.key.id !== target.key.id));
       setFlash(`Deleted “${target.key.title}” for good.`);
-      setPurging(null);
+      setPurgingId(null);
     } catch (cause) {
       setPurgeError(errorText(cause));
     } finally {
@@ -86,9 +71,9 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
       </header>
 
       <section aria-label="Recycled keys">
-        {error && (
+        {actionError && (
           <div className="ledger-message">
-            <Notice tone="error">{error}</Notice>
+            <Notice tone="error">{actionError}</Notice>
           </div>
         )}
         {flash && (
@@ -97,22 +82,20 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
           </div>
         )}
 
-        {loading ? (
+        {read.state.status === "loading" ? (
           <div className="empty-state">
             <h2>Opening the Recycle Bin…</h2>
             <p>The vault is already unlocked. Removed keys appear here in a moment.</p>
           </div>
-        ) : readFailed ? (
-          <div className="empty-state">
-            <h2>AKM could not read the Recycle Bin.</h2>
-            <p>This does not mean that the Recycle Bin is empty.</p>
-            <div className="empty-actions">
-              <button type="button" className="text-button" onClick={() => void load()}>
-                Try again
-              </button>
-            </div>
-          </div>
-        ) : items.length === 0 ? (
+        ) : read.state.status === "failed" ? (
+          <ReadFailure
+            heading="AKM could not read the Recycle Bin."
+            detail="This does not mean that the Recycle Bin is empty."
+            error={read.state.error}
+            busy={read.busy}
+            onRetry={read.reload}
+          />
+        ) : read.state.data.length === 0 ? (
           <div className="empty-state">
             <EmptyBin />
             <h2>The Recycle Bin is empty.</h2>
@@ -120,7 +103,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
           </div>
         ) : (
           <ul className="key-rows">
-            {items.map((item) => (
+            {read.state.data.map((item) => (
               <li className="bin-row" key={item.key.id}>
                 <KeyCut id={item.key.id} />
                 <span className="key-ident" id={`${factsId}-${item.key.id}`}>
@@ -150,7 +133,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
                   <button
                     type="button"
                     className="text-button danger-text"
-                    onClick={() => { setPurgeError(null); setPurging(item); }}
+                    onClick={() => { setPurgeError(null); setPurgingId(item.key.id); }}
                     disabled={readOnly || busyId !== null}
                     aria-label={`Delete ${item.key.title} for good`}
                     aria-describedby={`${factsId}-${item.key.id}`}
@@ -171,7 +154,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
           confirmLabel="Delete for good"
           busy={busyId !== null}
           onConfirm={() => void purge()}
-          onCancel={() => setPurging(null)}
+          onCancel={() => setPurgingId(null)}
         >
           <p>
             <strong>{purging.key.title}</strong> will be removed from the vault, with its history.

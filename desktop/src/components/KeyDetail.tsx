@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, errorText } from "../api";
 import { clipboardCopyText } from "../clipboardText";
 import { formatDate, formatDateTime, isExpired, keyState, plural, rotationLabel, secretChangeLabel } from "../format";
+import { nativeReads, useNativeRead } from "../nativeRead";
 import type { HistoryVersion, KeyView } from "../types";
 import { KeyCut } from "./glyphs";
 import { Icon } from "./Icon";
@@ -36,6 +37,33 @@ function changedText(version: HistoryVersion): string {
   return all.length > 0 ? `Changed: ${all.join(", ")}` : "No field changed";
 }
 
+/** The earlier versions of one key. It reads when it mounts, so closing the list drops the read. */
+function EarlierVersions({ id }: { id: string }) {
+  const read = useNativeRead(nativeReads.history(id), [id]);
+  if (read.state.status === "loading") return <p className="history-note" role="status">Reading the earlier versions…</p>;
+  if (read.state.status === "failed") {
+    return (
+      <div className="history-note">
+        <Notice tone="error">{read.state.error}</Notice>
+        <button type="button" className="text-button" onClick={read.reload} disabled={read.busy} aria-busy={read.busy || undefined}>
+          {read.busy ? "Trying again…" : "Try again"}
+        </button>
+      </div>
+    );
+  }
+  if (read.state.data.length === 0) return <p className="history-note">AKM read the vault history and found no versions of this key.</p>;
+  return (
+    <ol className="history-list" aria-label="Earlier versions">
+      {read.state.data.map((version) => (
+        <li key={version.index}>
+          {version.modifiedAt ? <span className="mono">{formatDateTime(version.modifiedAt)}</span> : <span>Time unknown</span>}
+          <span className="history-change">{changedText(version)}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly = false }: Props) {
   const dialogRef = useDialogFocus<HTMLDivElement>();
   const [secret, setSecret] = useState<string | null>(null);
@@ -43,8 +71,8 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
-  const [history, setHistory] = useState<HistoryVersion[] | null>(null);
-  const [historyBusy, setHistoryBusy] = useState(false);
+  // The key whose earlier versions are open. Bound to the key, so another key never shows them.
+  const [historyFor, setHistoryFor] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
   const presentation = useRef(0);
 
@@ -52,7 +80,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
     const expire = () => {
       presentation.current += 1;
       setSecret(null); setBusy(false); setError(null); setCopied(null);
-      setHistory(null); setHistoryBusy(false);
+      setHistoryFor(null);
     };
     expire();
     const hidden = () => { if (document.hidden) expire(); };
@@ -121,20 +149,6 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
 
   function hide() {
     setSecret(null);
-  }
-
-  async function showHistory() {
-    const view = presentation.current;
-    setHistoryBusy(true);
-    setError(null);
-    try {
-      const versions = await api.history(item.id);
-      if (view === presentation.current) setHistory(versions);
-    } catch (cause) {
-      if (view === presentation.current) setError(errorText(cause));
-    } finally {
-      if (view === presentation.current) setHistoryBusy(false);
-    }
   }
 
   async function copy() {
@@ -226,23 +240,16 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
         : `${plural(item.historyCount, "earlier version")} in the vault history`,
     below: item.historyCount > 0 && (
       <div className="history-fact">
-        {history === null ? (
-          <button type="button" className="text-button history-toggle" onClick={() => void showHistory()} disabled={historyBusy} aria-busy={historyBusy || undefined}>
+        {historyFor !== item.id ? (
+          <button type="button" className="text-button history-toggle" onClick={() => setHistoryFor(item.id)}>
             Show earlier versions
           </button>
         ) : (
           <>
-            <button type="button" className="text-button history-toggle" onClick={() => setHistory(null)}>
+            <button type="button" className="text-button history-toggle" onClick={() => setHistoryFor(null)}>
               Hide earlier versions
             </button>
-            <ol className="history-list" aria-label="Earlier versions">
-              {history.map((version) => (
-                <li key={version.index}>
-                  {version.modifiedAt ? <span className="mono">{formatDateTime(version.modifiedAt)}</span> : <span>Time unknown</span>}
-                  <span className="history-change">{changedText(version)}</span>
-                </li>
-              ))}
-            </ol>
+            <EarlierVersions id={item.id} />
           </>
         )}
       </div>
