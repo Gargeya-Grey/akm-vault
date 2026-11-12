@@ -423,3 +423,71 @@ fn date_arithmetic_lives_only_in_the_schedule_module() {
         found.join("\n")
     );
 }
+
+// ---------------------------------------------- core review 1, finding 7: whole seconds only
+
+/// Finding 7 (class O, validate where input comes in): the rule lives in `ApiKeyInput`, so
+/// core `add` and `update` refuse a sub-second expiry from any caller, the desktop draft
+/// included. Nothing is stored, and the stored key keeps its expiry.
+#[test]
+fn core_add_and_update_refuse_a_sub_second_expiry_and_change_nothing() {
+    let (directory, mut vault, _) = vault_at("2026-01-01T00:00:00Z");
+    let fractional = [
+        utc("2030-01-02T00:00:45.900Z"),
+        utc("2030-01-02T00:00:45.000000001Z"),
+        utc("2030-01-02T00:00:45.999999999Z"),
+    ];
+    for expires in fractional {
+        let mut input = ApiKeyInput::new("Fractional", "fake-secret");
+        input.expires_at = Some(expires);
+        let message = vault.add(input).unwrap_err().to_string();
+        assert!(
+            message.contains("fraction of a second"),
+            "{expires}: {message}"
+        );
+    }
+    assert!(vault.list().is_empty(), "nothing was stored");
+
+    let mut whole = ApiKeyInput::new("Whole", "fake-secret");
+    whole.expires_at = Some(utc("2030-01-02T00:00:45Z"));
+    let key = vault.add(whole).unwrap();
+    let path = directory.path().join("vault.kdbx");
+    let before = std::fs::read(&path).unwrap();
+    for expires in fractional {
+        let mut edit = vault.edit_input(&key.id).unwrap();
+        edit.expires_at = Some(expires);
+        let message = vault.update(&key.id, edit).unwrap_err().to_string();
+        assert!(
+            message.contains("fraction of a second"),
+            "{expires}: {message}"
+        );
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), before, "nothing was written");
+    assert_eq!(
+        vault.get_by_id(&key.id).unwrap().expires_at,
+        Some(utc("2030-01-02T00:00:45Z"))
+    );
+}
+
+/// Finding 7, the text path: chrono keeps nine fraction digits and drops the rest, so the check
+/// reads the text that the person wrote. Any nonzero fraction digit refuses, at any position.
+#[test]
+fn an_expiry_fraction_beyond_nine_digits_is_refused_from_the_text() {
+    for input in [
+        "2030-01-02T00:00:45.0000000001Z",
+        "2030-01-02T00:00:45.000000000000000009Z",
+        "2030-01-02T00:00:45.0000000001+02:00",
+    ] {
+        let message = parse_expiry(input)
+            .expect_err(&format!("{input} was accepted"))
+            .to_string();
+        assert!(
+            message.contains("fraction of a second"),
+            "{input}: {message}"
+        );
+    }
+    assert_eq!(
+        parse_expiry("2030-01-02T00:00:45.000000000000Z").unwrap(),
+        utc("2030-01-02T00:00:45Z")
+    );
+}

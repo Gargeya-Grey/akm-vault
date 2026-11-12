@@ -355,3 +355,30 @@ fn extreme_day_counts_in_list_and_purge_exit_cleanly_and_change_nothing() {
     }
     assert_eq!(fs::read(&fixture.vault).unwrap(), before, "vault unchanged");
 }
+
+// ------------------------------------------- core review 1, finding 7: whole seconds only
+
+/// Finding 7, through the binary: a fraction with 1, 9 or 10 digits is refused, also when
+/// chrono would drop the digits beyond nine. Nothing is stored.
+#[test]
+fn an_expiry_fraction_of_any_length_is_refused_by_add_and_changes_nothing() {
+    let fixture = Fixture::new();
+    let before = fs::read(&fixture.vault).unwrap();
+    for expires in [
+        "2030-01-02T00:00:45.9Z",
+        "2030-01-02T00:00:45.000000001Z",
+        "2030-01-02T00:00:45.0000000001Z",
+    ] {
+        let refused = fixture.try_add(
+            "2026-01-01T00:00:00Z",
+            &["Fractional", "--expires", expires],
+        );
+        assert!(!refused.status.success(), "{expires} was accepted");
+        let message = text(&refused.stderr);
+        assert!(
+            message.contains("fraction of a second"),
+            "{expires}: {message}"
+        );
+    }
+    assert_eq!(fs::read(&fixture.vault).unwrap(), before, "vault unchanged");
+}

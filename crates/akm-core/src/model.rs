@@ -253,6 +253,9 @@ impl ApiKeyInput {
                 class.reason()
             )));
         }
+        if let Some(expires) = self.expires_at {
+            crate::schedule::require_whole_second(expires)?;
+        }
         if let Some(days) = self.rotation_days {
             if days == 0 {
                 return Err(crate::Error::Invalid(

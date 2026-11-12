@@ -10,7 +10,7 @@
 //! fails when other code computes with dates.
 #![deny(clippy::arithmetic_side_effects)]
 
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, SecondsFormat, Utc};
 use serde::Serialize;
 
 use crate::error::{Error, Result};
@@ -29,22 +29,46 @@ pub fn end_of_day(date: NaiveDate) -> DateTime<Utc> {
 ///
 /// A vault keeps whole seconds. An instant with a fraction of a second is refused, so a
 /// stored expiry is always the instant that the person wrote (FR-18). A fraction of zero
-/// (`.000`) loses nothing and is accepted.
+/// (`.000`) loses nothing and is accepted. The check reads the text, because chrono keeps
+/// nine fraction digits and drops the rest (core review 1, finding 7).
 pub fn parse_expiry(raw: &str) -> Result<DateTime<Utc>> {
     if let Ok(date) = NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
         return Ok(end_of_day(date));
     }
     if let Ok(instant) = DateTime::parse_from_rfc3339(raw) {
-        if instant.timestamp_subsec_nanos() != 0 {
-            return Err(Error::Invalid(format!(
-                "expiry {raw:?} has a fraction of a second, and a vault keeps whole seconds; write it without the fraction, for example 2026-11-10T12:00:00Z"
-            )));
+        let fraction = raw.split_once('.').map_or("", |(_, rest)| rest);
+        if fraction
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .any(|digit| digit != '0')
+        {
+            return Err(fraction_refused(raw));
         }
         return Ok(instant.with_timezone(&Utc));
     }
     Err(Error::Invalid(format!(
         "could not parse expiry {raw:?}; use YYYY-MM-DD"
     )))
+}
+
+/// Refuses an expiry with a fraction of a second, from any caller. [`ApiKeyInput`] calls it, so
+/// core `add` and `update` hold the rule for the CLI and the desktop alike (FR-18, core review 1,
+/// finding 7).
+///
+/// [`ApiKeyInput`]: crate::model::ApiKeyInput
+pub fn require_whole_second(expires: DateTime<Utc>) -> Result<()> {
+    if expires.timestamp_subsec_nanos() == 0 {
+        return Ok(());
+    }
+    Err(fraction_refused(
+        &expires.to_rfc3339_opts(SecondsFormat::AutoSi, true),
+    ))
+}
+
+fn fraction_refused(shown: &str) -> Error {
+    Error::Invalid(format!(
+        "expiry {shown:?} has a fraction of a second, and a vault keeps whole seconds; write it without the fraction, for example 2026-11-10T12:00:00Z"
+    ))
 }
 
 /// How far a due instant is from now.
