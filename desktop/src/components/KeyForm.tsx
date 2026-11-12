@@ -185,7 +185,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
                   <p className="field-note">
                     {editing
                       ? "Leave it blank to keep the stored value. A new value counts as a rotation, and the old value stays in the vault history. To rotate a key, use Rotate secret in its detail view."
-                      : "Encrypted inside the KDBX entry. It is never written to settings or logs."}
+                      : "Encrypted inside the KDBX entry."}
                   </p>
                 </div>
               </div>

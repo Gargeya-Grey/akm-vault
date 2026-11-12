@@ -122,7 +122,13 @@ export function Unlock({ status, onUnlocked }: Props) {
         <ul className="lock-promises">
           <li>
             <strong>A real KeePass file</strong>
-            <span>A new vault uses KDBX 4.1 with AES-256 and Argon2id. A vault you open keeps its own settings. Open it in KeePassXC at any time, with no dependency on this app.</span>
+            {/* FR-11: the format and the ciphers are named only for a vault that AKM creates. */}
+            <span>
+              {mode === "create"
+                ? "This new vault uses KDBX 4.1 with AES-256 and Argon2id."
+                : "A vault you open keeps its own encryption settings. AKM changes an older format only when you upgrade it to KDBX 4.1."}
+              {" "}Open it in KeePassXC at any time, with no dependency on this app.
+            </span>
           </li>
           <li>
             <strong>No recovery path</strong>
@@ -138,7 +144,7 @@ export function Unlock({ status, onUnlocked }: Props) {
       <div className="unlock-pane">
         <div className="unlock-copy">
           {mode === "unlock" ? (
-            <h1>Your keys, <em>one safe place.</em></h1>
+            <h1>Your keys, <em>one place.</em></h1>
           ) : (
             <h1>Start a vault. <em>Keep the only key.</em></h1>
           )}

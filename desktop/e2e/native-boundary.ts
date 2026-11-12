@@ -15,6 +15,8 @@ export interface BoundaryOptions {
   nativeStore?: boolean;
   /** `hold`: a terminal launch never answers, as when the native review is still open. */
   terminal?: "hold";
+  /** The vault has an older format, so the page offers the format upgrade. */
+  needsUpgrade?: boolean;
 }
 
 export async function installNativeBoundaryMock(page: Page, theme = "light", retainedNotices?: OperationNotice[], retainedWarnings?: ApplicationNotice[], options: BoundaryOptions = {}) {
@@ -44,7 +46,7 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
     let owner: string | null = crypto.randomUUID();
     let claimed = false;
     let path = "C:/fake-test/vault.kdbx";
-    const status = () => ({ sessionId: unlocked ? owner : null, path, exists: true, unlocked, keyCount: unlocked ? 1 : 0, vaultName: unlocked ? "UI fixture" : null, needsUpgrade: false });
+    const status = () => ({ sessionId: unlocked ? owner : null, path, exists: true, unlocked, keyCount: unlocked ? 1 : 0, vaultName: unlocked ? "UI fixture" : null, needsUpgrade: options.needsUpgrade ?? false });
     const key = {
       id: "test-entry-uuid", title: "OpenAI", username: null, issuer: "OpenAI",
       project: "demo", environment: "dev", scopes: ["chat"], tags: [],

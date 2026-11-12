@@ -127,6 +127,37 @@ The contract is in `docs/design/gate-campaign.md`, under "Contract between units
 - Each terminal receipt says only what is known. A pending launch may already hold keys. An error
   does not confirm that no terminal runs.
 
+## Smaller findings and their guards
+
+- FR-11: the unlock screen names KDBX 4.1, AES-256 and Argon2id only in create mode. In unlock
+  mode it says that a vault you open keeps its own encryption settings, and that AKM changes an
+  older format only when you upgrade it. The core test
+  `older_formats_require_explicit_upgrade_and_preserve_the_database_and_kdf` proves the second
+  claim. `Unlock.promises.test.tsx` checks both modes, also after a switch.
+- UI-R2-03, UI-R2-05 and LOOK-R3-03 had unit tests. `row-identity.spec.ts` adds their closing
+  tests at 900 px in both themes: an all-unfiled vault, an empty vault, a search that leaves only
+  unfiled keys, and the project total with a key that has no expiry date.
+- LOOK-R2-04 and LOOK-R3-06 had Edge tests. A mutant of each now proves that the test fails when
+  the guarded rule breaks.
+- FR-14: the recovery tests now check that the result after an approved recovery still says that
+  history before the damage cannot be proved complete, and that nothing on the screen says that
+  the old history was verified. A decline and a failure each have their own tone and words.
+
+## Class sweeps
+
+- Class I: the stacking guard in `look-guards.spec.ts` lists every dialog in the app. The
+  rotation dialog and the format upgrade confirmation were missing.
+- Class J: the marks added in this unit are text or layout. None is drawn with a fill or a shadow
+  alone, so none needs a forced-colours rule.
+- Class D on the screen: `promiseWords.test.ts` scans the text of the page for always, never,
+  verify, verified, complete, secure, safe, guarantee and "is cleared". Each use names its
+  evidence. Two uses had none and changed (decisions 14 and 15).
+- Destructive dialogs: Cancel takes the first focus in the move to the Recycle Bin and in the
+  permanent delete, so the first Enter cancels and sends nothing (`Modals.keyboard.test.tsx`).
+- Stale values: every view handler that awaits native code acts on the identity it captured (an
+  ID or the target item), never on an index. The Recycle Bin disables all its row actions while
+  one runs, so one finally block cannot free a newer action.
+
 ## Decisions for the owner's veto
 
 Each decision takes the option that removes state or removes a promise.
@@ -160,6 +191,11 @@ Each decision takes the option that removes state or removes a promise.
     The record notice for `terminalFailed` keeps the contract's claim.
 13. The section and its button keep the name "saved-operation notices", which
     `tools/verify_windows_app.ps1` uses. Terminal notices appear there too.
+14. The unlock headline reads "Your keys, one place." Before, it read "one safe place". The threat
+    model names attacks that AKM does not stop, so "safe" was a promise with no evidence. This is
+    wording, and the owner may want other words.
+15. The secret field of the Add key form says "Encrypted inside the KDBX entry." Before, it also
+    said "It is never written to settings or logs." No test proves that sentence.
 
 ## Limits
 
@@ -175,3 +211,6 @@ Each decision takes the option that removes state or removes a promise.
   `backupRetention` and `journal`, and the page shows those texts.
 - The Edge tests use a mocked native boundary. They prove the page side of the contract. The
   native record of a terminal launch needs the native tests of unit 1 and the owner-present proof.
+- The promise-word scan reads double-quoted strings, template literals and JSX text in
+  `desktop/src`. It does not read single-quoted strings, text built from parts at run time, or the
+  texts of the native windows in `desktop/src-tauri`.

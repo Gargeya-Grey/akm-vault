@@ -96,6 +96,49 @@ for (const theme of ["light", "dark"]) {
   });
 }
 
+// UI-R2-03, UI-R2-05 and LOOK-R3-03: the project context, the project total and the no-expiry
+// mark stay on screen in the zero-project cases, at the minimum width.
+const shelfTotal = (page: Page) => page.getByRole("navigation", { name: "Projects" }).locator(".shelf-label");
+const groupOf = (page: Page, project: string) => page.locator(".key-group").filter({ has: page.getByRole("heading", { name: project, exact: true }) });
+
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: at 900 px an all-unfiled vault names "No project" on its shelf and its heading, and counts zero projects`, async ({ page }) => {
+    await open(page, theme, { keys: [{ id: "loose-entry-0001", title: "Loose A", project: null }, { id: "loose-entry-0002", title: "Loose B", project: null }] });
+    await expect(shelfTotal(page)).toHaveText("Projects 0");
+    await expect(shelfTotal(page)).toBeInViewport();
+    const unfiled = page.getByRole("navigation", { name: "Projects" }).getByRole("button", { name: "No project", exact: true });
+    await expect(unfiled).toBeInViewport();
+    await expect(unfiled.locator(".num")).toHaveText("2");
+    await expect(page.getByRole("heading", { name: "No project", exact: true })).toBeInViewport();
+    for (const title of ["Loose A", "Loose B"]) await expect(groupOf(page, "No project").getByRole("button", { name: `Open ${title}`, exact: true })).toBeVisible();
+  });
+
+  test(`${theme}: at 900 px an empty vault counts zero projects`, async ({ page }) => {
+    await open(page, theme, { keys: [] });
+    await expect(page.getByRole("heading", { name: "No keys yet." })).toBeVisible();
+    await expect(shelfTotal(page)).toHaveText("Projects 0");
+    await expect(shelfTotal(page)).toBeInViewport();
+  });
+
+  test(`${theme}: at 900 px a search that leaves only unfiled keys still names "No project"`, async ({ page }) => {
+    await open(page, theme, { keys: [{ id: "filed-entry-0001", title: "Alpha", project: "alpha-project" }, { id: "loose-entry-0001", title: "Loose", project: null }] });
+    await page.locator("#key-search").fill("Loose");
+    await expect(page.getByRole("button", { name: "Open Alpha", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "No project", exact: true })).toBeInViewport();
+    await expect(groupOf(page, "No project").getByRole("button", { name: "Open Loose", exact: true })).toBeVisible();
+  });
+
+  test(`${theme}: at 900 px the shelf shows the project total and a key with no expiry date says so`, async ({ page }) => {
+    await open(page, theme, { keys: [{ id: "first-entry-0001", title: "Alpha", project: "one", expiresAt: null }, { id: "second-entry-0002", title: "Beta", project: "two", expiresAt: "2031-01-15T00:00:00Z" }] });
+    await expect(shelfTotal(page)).toHaveText("Projects 2");
+    await expect(shelfTotal(page)).toBeInViewport();
+    const noExpiry = page.getByRole("button", { name: "Open Alpha", exact: true }).locator(".key-when-line .key-sub");
+    await expect(noExpiry).toHaveText("no expiry");
+    expect(await readable(noExpiry)).toBe(true);
+    await expect(noExpiry).toBeInViewport();
+  });
+}
+
 const LONG = "Q".repeat(1000);
 const LONG_FIELDS: [string, Record<string, unknown>][] = [
   ["title", { title: LONG }],

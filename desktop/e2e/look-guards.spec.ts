@@ -34,7 +34,10 @@ function tokenColour(page: Page, name: string) {
   }, name);
 }
 
-const openers: { name: string; open: (page: Page) => Promise<void> }[] = [
+// Class I: every dialog in the app. The inventory is `grep -rn "role=\"dialog\"" desktop/src`:
+// KeyDetail, KeyForm, RotateDialog, ConfirmDialog (move to the Recycle Bin, delete for good,
+// format upgrade) and the Use keys import drawer.
+const openers: { name: string; open: (page: Page) => Promise<void>; options?: Parameters<typeof installNativeBoundaryMock>[4] }[] = [
   { name: "the Add key drawer", open: (page) => page.getByRole("button", { name: "Add key", exact: true }).click() },
   { name: "the key drawer", open: (page) => page.locator(".key-row").first().click() },
   {
@@ -60,12 +63,28 @@ const openers: { name: string; open: (page: Page) => Promise<void> }[] = [
       await page.getByRole("button", { name: "Import .env…" }).click();
     },
   },
+  {
+    name: "the rotation dialog",
+    open: async (page) => {
+      await page.locator(".key-row").first().click();
+      await page.getByRole("button", { name: "Rotate secret" }).click();
+      await expect(page.getByRole("dialog", { name: "Rotate secret" })).toBeVisible();
+    },
+  },
+  {
+    name: "the format upgrade confirmation",
+    options: { needsUpgrade: true },
+    open: async (page) => {
+      await page.getByRole("button", { name: "Review format upgrade" }).click();
+      await expect(page.getByRole("heading", { name: "Upgrade this vault to KDBX 4.1?" })).toBeVisible();
+    },
+  },
 ];
 
 for (const theme of ["light", "dark"]) {
-  for (const { name, open: openDialog } of openers) {
+  for (const { name, open: openDialog, options } of openers) {
     test(`${theme}: ${name} covers the rail and has an opaque surface`, async ({ page }) => {
-      await open(page, theme, { recycled: [{ key: { title: "Twin" }, deletedAt: null }] });
+      await open(page, theme, { recycled: [{ key: { title: "Twin" }, deletedAt: null }], ...options });
       await openDialog(page);
       const surface = page.locator(".overlay").last().locator(".raised");
       await expect(surface).toBeVisible();
