@@ -72,6 +72,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_dependencies.ps1
 - `check_dependencies.ps1` runs `cargo audit`, `cargo deny check` (settings in `deny.toml`) and `npm audit --omit=dev`. It needs network access for the advisory databases. If `cargo-audit` or `cargo-deny` is missing, install them into the ignored scratch folder: `cargo install --locked --root .scratch/cargo-tools cargo-deny cargo-audit`. The script finds them there.
 - A warning from `cargo audit` (an unmaintained or unsound crate) does not fail the script. Read each one and record it in [FINDINGS.md](FINDINGS.md) if AKM reaches the code.
 
+## Private data before a public push
+
+`python tools/make_public_snapshot.py --rev <commit> --scan-only` scans every tracked file of a commit for a user-profile path of this computer, a drive path of this computer, an e-mail address, the git user's name and address, the Windows user name, and the extra patterns in `.scratch/public-snapshot-patterns.txt` (ignored by Git, one pattern per line, so the private words are never tracked). It prints file, line and rule, never the matched text. Without `--scan-only`, and only when the scan is clean, it writes the files of that commit into a new folder as a repository with one commit and no history (`--out <new folder> --author "<name> <address>"`). It never changes the source repository and never pushes. Run the scan on the computer whose paths must not leak, because the path rules ask whether a drive or a folder exists there. Test it with `python tools/test_make_public_snapshot.py`.
+
+**Evidence locations.** Proof evidence stays outside Git, in a folder of the owner's choice. A tracked file names that folder `<archive>`, for example `<archive>\proofs\<UTC time>-r4-04\`, and never its real path. The verification skill writes its transcripts to its evidence root (Real-surface tests, below).
+
 ## Real-surface tests
 
 For a manual proof of one feature, use the verification skill in [.agents/skills/verify-akm/](../.agents/skills/verify-akm/SKILL.md). It runs a doctor check first, uses a temporary fake vault and journal, and writes a transcript under the evidence root: `AKM_EVIDENCE_ROOT` when it is set, else `%LOCALAPPDATA%\akm-verify\proofs\`. Its ownership records go to `AKM_VERIFY_STATE_ROOT`, else `%LOCALAPPDATA%\akm-verify\state\`. No default depends on a drive letter.

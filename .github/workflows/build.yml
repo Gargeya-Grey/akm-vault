@@ -49,6 +49,8 @@ jobs:
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_akm_verify.ps1
       - name: Native-proof tools refuse a computer that is not a disposable runner
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_native_proof_guards.ps1
+      - name: Public-snapshot tool refuses private data and writes only its own new folder
+        run: python tools/test_make_public_snapshot.py
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm ci
