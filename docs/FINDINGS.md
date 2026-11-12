@@ -382,7 +382,7 @@ Found by `tools/check_dependencies.ps1`, `tools/check_no_network.py` and the thr
 | SEC-02 | P3 | Open (owner decision) | Release | The CLI default vault path is `%APPDATA%\akm\vault.kdbx`, in the Roaming profile. A domain roaming profile can sync it to a server. Decide whether the default moves to `%LOCALAPPDATA%` (a path change for existing users) or stays with a documented note. |
 | SEC-03 | P3 | Open (design) | Release | AKM sets no ACL on the vault file or its backups and relies on the folder's permissions. Decide whether new vaults get a private DACL like exports and the journal ([design/unit1b.md](design/unit1b.md) D4), and what happens in a shared sync folder. |
 | SEC-04 | P3 | Open (owner decision) | Release | MPL-2.0 crates (`cssparser`, `cssparser-macros`, `selectors`, `dtoa-short`, `option-ext`) are in the shipped tree. A release must offer their source. Noted in `deny.toml`. |
-| SEC-05 | P3 | Open (docs) | Release | The installer uses `webviewInstallMode: downloadBootstrapper`, so installation can download the WebView2 bootstrapper. The no-network promise covers AKM at run time only, and the release notes must say so. |
+| SEC-05 | P3 | Open (docs) | Release | The installer uses `webviewInstallMode: embedBootstrapper` (`tauri.conf.json`; an earlier text of this row said `downloadBootstrapper`). Setup runs the embedded bootstrapper only when WebView2 is missing, and the bootstrapper then downloads the runtime. The no-network promise covers AKM at run time only, and the release notes must say so. |
 
 ## Closed
 
