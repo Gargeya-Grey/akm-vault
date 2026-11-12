@@ -3,6 +3,7 @@ pub mod disclosure;
 pub mod dotenv;
 pub mod error;
 pub mod journal;
+mod kdf_guard;
 pub mod lifecycle;
 pub mod model;
 mod private_fs;

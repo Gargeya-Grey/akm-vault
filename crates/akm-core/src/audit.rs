@@ -658,6 +658,18 @@ impl AuditLog {
     /// Appends one record. Creates the private folder, the binding and the journal when
     /// they do not exist. Refuses when the identity of the vault cannot be confirmed.
     pub fn append(&self, action: &str, key_id: Option<&str>, detail: Option<&str>) -> Result<()> {
+        self.append_reporting(action, key_id, detail).map(|_| ())
+    }
+
+    /// Like [`AuditLog::append`]. The answer is `true` when the record went into a journal
+    /// that continues, but whose link to this vault file is not confirmed: the file holds a
+    /// version that the journal never saw (FR-12).
+    pub(crate) fn append_reporting(
+        &self,
+        action: &str,
+        key_id: Option<&str>,
+        detail: Option<&str>,
+    ) -> Result<bool> {
         let folder = self.root.open_or_create()?;
         journal::record(&folder, &self.evidence, |placement| {
             let chain = ChainFile::private(folder.journal_file(&placement.id), &placement.id);
@@ -674,7 +686,8 @@ impl AuditLog {
                 key_id,
                 detail,
             });
-            chain.append_all(&records)
+            chain.append_all(&records)?;
+            Ok(placement.lineage_unconfirmed)
         })
     }
 

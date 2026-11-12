@@ -1334,3 +1334,101 @@ fn a_renamed_replacement_is_not_moved_onto_the_journal_of_the_file_it_replaced()
         strings(&["renamed-marker"])
     );
 }
+
+// ---------------------------------------------- FR-12: an unseen clone at a bound path warns
+
+fn lineage_warnings(vault: &mut akm_core::Vault) -> usize {
+    vault
+        .take_warning_records()
+        .iter()
+        .filter(|warning| {
+            warning.kind == akm_core::vault::VaultWarningKind::JournalLineageUnconfirmed
+        })
+        .count()
+}
+
+/// FR-12 and P2R2-04, the reviewer's probe: copy A to B, change B where A's journal cannot
+/// see it, then replace A with B. The vault ID is the same, so the journal of A continues
+/// (that fallback stays), but the vault says that the continuity is not confirmed. It says
+/// so once; the version is then known to the journal.
+#[test]
+fn an_unseen_clone_that_replaces_a_bound_vault_continues_its_journal_with_a_warning() {
+    use clones::*;
+    let w = World::new();
+    let original = w.create("a.kdbx");
+    mark(&original, "original-marker").unwrap();
+    drop(original);
+    w.copy("a.kdbx", "b.kdbx");
+    let elsewhere = w.directory.path().join("other-journal");
+    let mut clone =
+        akm_core::Vault::open_in(w.path("b.kdbx"), PASSWORD, JournalRoot::at(&elsewhere)).unwrap();
+    change(&mut clone, "Beta");
+    drop(clone);
+
+    w.copy("b.kdbx", "a.kdbx");
+    let mut replacement = w.open("a.kdbx");
+    assert_eq!(
+        lineage_warnings(&mut replacement),
+        0,
+        "opening records nothing"
+    );
+    replacement.log("replacement-marker", None, None).unwrap();
+    assert_eq!(lineage_warnings(&mut replacement), 1);
+    let warning_text = {
+        replacement.log("again-marker", None, None).unwrap();
+        replacement.take_warnings()
+    };
+    assert!(
+        warning_text.is_empty(),
+        "the warning is given once: {warning_text:?}"
+    );
+
+    assert_eq!(
+        w.actions_with("original-marker"),
+        strings(&[
+            "add-completed",
+            "original-marker",
+            "replacement-marker",
+            "again-marker"
+        ]),
+        "the history continues in the existing journal"
+    );
+    // The message says what happened and does not claim a cause it cannot know.
+    let mut fresh = w.open("a.kdbx");
+    fresh.log("third-marker", None, None).unwrap();
+    assert_eq!(
+        lineage_warnings(&mut fresh),
+        0,
+        "a later session sees a known version"
+    );
+}
+
+/// FR-12: the warning is for an unseen file only. Ordinary saves, a second session on the
+/// version the first one saved, and a rename give none.
+#[test]
+fn ordinary_saves_and_reopens_give_no_lineage_warning() {
+    use clones::*;
+    let w = World::new();
+    let mut vault = w.create("a.kdbx");
+    change(&mut vault, "Beta");
+    vault.log("one", None, None).unwrap();
+    assert_eq!(lineage_warnings(&mut vault), 0);
+    change(&mut vault, "Gamma");
+    vault.log("two", None, None).unwrap();
+    assert_eq!(lineage_warnings(&mut vault), 0);
+    drop(vault);
+
+    let mut again = w.open("a.kdbx");
+    again.log("three", None, None).unwrap();
+    assert_eq!(lineage_warnings(&mut again), 0);
+    drop(again);
+
+    w.copy("a.kdbx", "b.kdbx");
+    let mut copy = w.open("b.kdbx");
+    copy.log("copy-marker", None, None).unwrap();
+    assert_eq!(
+        lineage_warnings(&mut copy),
+        0,
+        "a copy starts its own journal"
+    );
+}

@@ -1195,6 +1195,12 @@ fn core_notices(gate: &mut Gate, ticket: Ticket, warnings: Vec<VaultWarning>) {
             VaultWarningKind::BackupRefresh => OperationWarningKind::BackupRefresh,
             VaultWarningKind::BackupPrune => OperationWarningKind::BackupPrune,
             VaultWarningKind::BackupRetention => OperationWarningKind::BackupRetention,
+            // FR-05: the desktop has no notice of its own for this yet. The nearest existing
+            // one tells the person to inspect the backups. A notice with its own text needs a
+            // new kind here, in `types.ts` and in `App.tsx`.
+            VaultWarningKind::FilePermissions => OperationWarningKind::BackupRetention,
+            // FR-12: shown as the generic journal notice until the desktop has its own text.
+            VaultWarningKind::JournalLineageUnconfirmed => OperationWarningKind::Journal,
         };
         operation_notice(gate, ticket, kind);
     }
@@ -2515,13 +2521,28 @@ mod tests {
                 if backup_fails {
                     std::fs::create_dir(f._directory.path().join("vault.kdbx.bak")).unwrap();
                 }
+                // Six old backups in the format that AKM writes (FR-01: the name holds the
+                // SHA-256 of the bytes, and pruning touches only such files). Each is held open
+                // without delete sharing, so removing it fails and the save reports it.
+                let mut held = Vec::new();
                 if prune_fails {
-                    for _ in 0..6 {
-                        std::fs::create_dir(f._directory.path().join(format!(
-                            "vault.kdbx.bak.20000101T000000000000000Z_{}.kdbx",
-                            uuid::Uuid::new_v4()
-                        )))
-                        .unwrap();
+                    use sha2::{Digest, Sha256};
+                    use std::os::windows::fs::OpenOptionsExt;
+                    for index in 0..6 {
+                        let bytes = format!("fake old backup {index}").into_bytes();
+                        let path = f._directory.path().join(format!(
+                            "vault.kdbx.bak.20000101T000000000000000Z_{}_{:x}.kdbx",
+                            uuid::Uuid::new_v4(),
+                            Sha256::digest(&bytes)
+                        ));
+                        std::fs::write(&path, &bytes).unwrap();
+                        held.push(
+                            std::fs::OpenOptions::new()
+                                .read(true)
+                                .share_mode(1)
+                                .open(&path)
+                                .unwrap(),
+                        );
                     }
                 }
                 let journal =

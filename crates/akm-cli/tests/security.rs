@@ -326,13 +326,58 @@ fn existing_short_password_vaults_still_unlock() {
     assert_eq!(output.stdout, b"no keys\n");
 }
 
+/// The environment that a command gives its child, as the test builds it: the test process's
+/// own variables with the command's explicit changes applied. Names are upper-cased (Windows
+/// ignores case) and the hidden `=C:` drive entries are left out.
+fn effective_environment(command: &Command) -> std::collections::BTreeMap<String, String> {
+    let mut environment: std::collections::BTreeMap<String, String> = std::env::vars_os()
+        .map(|(name, value)| {
+            (
+                name.to_string_lossy().to_ascii_uppercase(),
+                value.to_string_lossy().into_owned(),
+            )
+        })
+        .filter(|(name, _)| !name.starts_with('='))
+        .collect();
+    for (name, value) in command.get_envs() {
+        let name = name.to_string_lossy().to_ascii_uppercase();
+        match value {
+            Some(value) => {
+                environment.insert(name, value.to_string_lossy().into_owned());
+            }
+            None => {
+                environment.remove(&name);
+            }
+        }
+    }
+    environment
+}
+
 #[test]
 fn run_scrubs_all_akm_variables_preserves_normal_environment_and_child_exit() {
-    let fixture = Fixture::new();
+    // FR-22: three scopes. Only `demo`/`dev` may reach the child, and the child's whole
+    // environment must be exactly the inherited one plus that scope's key.
+    let fixture = Fixture::with_keys(&[
+        ("Demo", "DEMO_SECRET", "fake-intended-secret", "demo", "dev"),
+        (
+            "Other project",
+            "OTHER_SECRET",
+            "fake-other-project-secret",
+            "other",
+            "dev",
+        ),
+        (
+            "Other environment",
+            "PROD_SECRET",
+            "fake-other-environment-secret",
+            "demo",
+            "prod",
+        ),
+    ]);
     let path = fixture.report("child.json");
     let audit = fixture.log();
-    let output = fixture
-        .probe_command(&path)
+    let mut command = fixture.probe_command(&path);
+    command
         .env("AKM_VAULT", &fixture.vault)
         .env("aKm_ToKeN", "fake-mixed-case-private-token")
         .env("AkM_Another", "fake-private-token")
@@ -340,16 +385,26 @@ fn run_scrubs_all_akm_variables_preserves_normal_environment_and_child_exit() {
         .env("CLI_TEST_AUDIT", audit.path())
         .env("CLI_TEST_BLOCK_AUDIT", "1")
         .env("CLI_TEST_EXIT", "7")
-        .env("DEMO_SECRET", "wrong-inherited-secret")
-        .output()
-        .unwrap();
+        .env("DEMO_SECRET", "wrong-inherited-secret");
+    let mut expected = effective_environment(&command);
+    expected.retain(|name, _| !name.starts_with("AKM_"));
+    expected.insert("DEMO_SECRET".into(), "fake-intended-secret".into());
+    let output = command.output().unwrap();
     assert_eq!(output.status.code(), Some(7), "{}", stderr(&output));
     let child = report(&path);
     assert_eq!(child["akm_names"], json!([]));
     assert_eq!(child["secret"], "fake-intended-secret");
+    assert_eq!(child["other_secret"], Value::Null);
+    assert_eq!(child["prod_secret"], Value::Null);
     assert_eq!(child["normal"], "ordinary-inherited-value");
     assert_eq!(child["path"], std::env::var("PATH").unwrap());
     assert_eq!(child["last_audit_action"], "run-requested");
+    let actual: std::collections::BTreeMap<String, String> =
+        serde_json::from_value(child["environment"].clone()).unwrap();
+    assert_eq!(
+        actual, expected,
+        "the child's complete environment is the inherited one, without AKM_*, plus the selected scope"
+    );
     assert!(audit.path().is_dir());
     assert!(stderr(&output).is_empty(), "{}", stderr(&output));
 }
@@ -495,6 +550,66 @@ fn imported_reserved_control_names_cannot_be_injected_or_exported() {
             assert!(output.stdout.is_empty());
             assert!(!path.exists());
         }
+    }
+}
+
+/// FR-02: `RUSTC_WRAPPER` and the other Cargo and Rust execution controls. A key that is
+/// already stored under such a name must be refused by `run` and `export` with a clear
+/// message, but it must stay viewable. The same holds in lower and mixed case.
+#[test]
+fn a_stored_key_named_like_a_cargo_execution_control_is_refused_for_use_and_still_viewable() {
+    for name in [
+        "RUSTC_WRAPPER",
+        "rustc_wrapper",
+        "RustC_Wrapper",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "RUSTFLAGS",
+    ] {
+        let fixture = Fixture::with_keys(&[
+            ("Wrapper", name, "fake-wrapper-secret", "demo", "dev"),
+            ("Plain", "PLAIN_KEY", "fake-plain-secret", "demo", "dev"),
+        ]);
+        let path = fixture.report("must-not-exist.json");
+        for verb in ["run", "export"] {
+            // `probe_command` starts only the probe test, never the whole test binary.
+            let mut command = if verb == "run" {
+                fixture.probe_command(&path)
+            } else {
+                let mut command = fixture.cli();
+                command.args(["export", "--project", "demo", "--env", "dev"]);
+                command
+            };
+            let output = command.output().unwrap();
+            let text = stderr(&output);
+            assert!(!output.status.success(), "{verb} accepted {name}");
+            assert!(text.contains("Wrapper"), "{name} {verb}: {text}");
+            assert!(
+                text.contains("reserved") || text.contains("not a valid"),
+                "{name} {verb}: {text}"
+            );
+            assert!(
+                !text.contains("fake-wrapper-secret") && !text.contains("fake-plain-secret"),
+                "{name} {verb}: {text}"
+            );
+            assert!(output.stdout.is_empty(), "{name} {verb}");
+            assert!(!path.exists(), "{name}: the child must not start");
+        }
+        // The key can still be listed and read, so its owner can find it and rename it.
+        let listing = fixture.cli().arg("list").output().unwrap();
+        assert_success(&listing);
+        assert!(String::from_utf8_lossy(&listing.stdout).contains("Wrapper"));
+        let shown = fixture
+            .cli()
+            .args(["get", "Wrapper", "--field", "secret"])
+            .output()
+            .unwrap();
+        assert_success(&shown);
+        assert_eq!(
+            String::from_utf8_lossy(&shown.stdout).trim(),
+            "fake-wrapper-secret"
+        );
     }
 }
 
@@ -1171,9 +1286,14 @@ fn check_protected_original_in_actual_cli(relative: bool) {
     let empty_path = fixture.report("empty.kdbx");
     write_database(&empty_path, PASSWORD, &[]);
     let empty = fs::read(&empty_path).unwrap();
+    // Backups that AKM owns by its own rule: the name holds the SHA-256 of the bytes (FR-01).
+    let empty_hash = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(&empty))
+    };
     for index in 0..5 {
         let name = format!(
-            "vault.kdbx.bak.29990101T00000{index}000000000Z_00000000-0000-4000-8000-{:012}.kdbx",
+            "vault.kdbx.bak.29990101T00000{index}000000000Z_00000000-0000-4000-8000-{:012}_{empty_hash}.kdbx",
             index + 1
         );
         fs::write(fixture.report(&name), &empty).unwrap();
@@ -1974,6 +2094,11 @@ fn child_probe() {
             "akm_names": akm_names,
             "secret": std::env::var("DEMO_SECRET").ok(),
             "other_secret": std::env::var("OTHER_SECRET").ok(),
+            "prod_secret": std::env::var("PROD_SECRET").ok(),
+            "environment": std::env::vars_os()
+                .map(|(name, value)| (name.to_string_lossy().to_ascii_uppercase(), value.to_string_lossy().into_owned()))
+                .filter(|(name, _)| !name.starts_with('='))
+                .collect::<std::collections::BTreeMap<_, _>>(),
             "normal": std::env::var("CLI_TEST_NORMAL").ok(),
             "path": std::env::var("PATH").ok(),
             "arguments": forwarded,
@@ -2180,5 +2305,48 @@ fn the_readme_names_the_recorded_audit_actions_in_their_order() {
     assert!(
         at("export-requested") < at("export-completed"),
         "the README lists the request before the completion"
+    );
+}
+
+/// FR-16: a NUL byte in the secret is refused where the secret comes in, for add and for
+/// rotate. The vault file is byte for byte what it was, and the old secret still reads.
+#[test]
+fn a_secret_with_a_nul_byte_is_refused_by_add_and_rotate_and_changes_nothing() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let fixture = Fixture::new();
+    let before = fs::read(&fixture.vault).unwrap();
+    for args in [
+        &["add", "Nul key", "--env-var", "NUL_KEY", "--secret-stdin"][..],
+        &["rotate", "Demo", "--secret-stdin"][..],
+    ] {
+        let mut child = fixture
+            .cli()
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"fake\0secret\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(!output.status.success(), "{args:?}");
+        let text = stderr(&output);
+        assert!(text.contains("NUL"), "{args:?}: {text}");
+        assert!(!text.contains("fake"), "{args:?}: {text}");
+        assert_eq!(
+            fs::read(&fixture.vault).unwrap(),
+            before,
+            "{args:?}: the vault changed"
+        );
+    }
+    assert_eq!(
+        stored_secret(&fixture.vault, "Demo"),
+        "fake-intended-secret"
     );
 }

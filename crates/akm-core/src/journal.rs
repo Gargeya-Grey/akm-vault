@@ -342,6 +342,15 @@ pub(crate) enum Resolution {
         rolled_back: bool,
         adopt_root: bool,
     },
+    /// An unseen version at the path of a binding, with no record that links it to this
+    /// binding (no evidence of a save made from a recorded version), and vault IDs that do
+    /// not contradict each other. A clone of the vault has the same vault ID, so the ID
+    /// cannot say that the file is the same vault (FR-12, P2R2-04). The journal continues
+    /// in this binding, and the caller must warn that the continuity is not confirmed.
+    Continued {
+        index: usize,
+        adopt_root: bool,
+    },
     Replaced {
         index: usize,
     },
@@ -473,18 +482,23 @@ pub(crate) fn resolve(bindings: &[Binding], observation: &Observation) -> Resolu
             }
         }
     }
+    // A save made from a version that the binding recorded is the vault itself. Anything
+    // else that carries an unseen version is a file that changed outside AKM.
+    let continued = |adopt_root: bool| {
+        if continues_here {
+            Resolution::Same {
+                index,
+                rolled_back: false,
+                adopt_root,
+            }
+        } else {
+            Resolution::Continued { index, adopt_root }
+        }
+    };
     match (&binding.root, &observation.root) {
-        (Some(known), Some(now)) if known == now => Resolution::Same {
-            index,
-            rolled_back: false,
-            adopt_root: false,
-        },
+        (Some(known), Some(now)) if known == now => continued(false),
         (Some(_), Some(_)) => Resolution::Replaced { index },
-        (None, Some(_)) => Resolution::Same {
-            index,
-            rolled_back: false,
-            adopt_root: true,
-        },
+        (None, Some(_)) => continued(true),
         (_, None) => Resolution::Unconfirmed { index },
     }
 }
@@ -777,6 +791,10 @@ fn note_elsewhere(binding: &mut Binding, observation: &Observation) -> bool {
 /// The journal that a record about this vault goes to.
 pub(crate) struct Placement {
     pub id: String,
+    /// The vault file at a bound path holds a version that this journal never saw and that
+    /// no earlier record links to it. The journal continues, but the caller must say that
+    /// the continuity is not confirmed (FR-12).
+    pub lineage_unconfirmed: bool,
     /// The vault went back to a version that this device saw. The record of that is owed
     /// before the requested record.
     pub owes_rollback: bool,
@@ -814,7 +832,13 @@ struct Decision {
 fn decide(mut mapping: Mapping, observation: &Observation) -> Result<Decision> {
     let mut changed = true;
     let mut owes_rollback = false;
+    let mut lineage_unconfirmed = false;
     let id = match resolve(&mapping.journals, observation) {
+        Resolution::Continued { index, adopt_root } => {
+            lineage_unconfirmed = true;
+            changed = note(&mut mapping.journals[index], observation, adopt_root);
+            mapping.journals[index].id.clone()
+        }
         Resolution::Same {
             index,
             rolled_back,
@@ -872,7 +896,11 @@ fn decide(mut mapping: Mapping, observation: &Observation) -> Result<Decision> {
     Ok(Decision {
         mapping,
         changed,
-        placement: Placement { id, owes_rollback },
+        placement: Placement {
+            id,
+            lineage_unconfirmed,
+            owes_rollback,
+        },
     })
 }
 
@@ -945,9 +973,9 @@ pub(crate) fn locate(root: &JournalRoot, evidence: &VaultEvidence) -> Result<Loc
     let observation = evidence.observe();
     let resolution = resolve(&mapping.journals, &observation);
     let (found, identity) = match resolution.clone() {
-        Resolution::Same { index, .. } | Resolution::Moved { index } => {
-            (Some(index), Identity::Confirmed)
-        }
+        Resolution::Same { index, .. }
+        | Resolution::Continued { index, .. }
+        | Resolution::Moved { index } => (Some(index), Identity::Confirmed),
         Resolution::Unconfirmed { index } => {
             notices.push(unconfirmed_notice());
             (Some(index), Identity::Unconfirmed)
@@ -1092,11 +1120,10 @@ mod tests {
                 },
             ),
             (
-                "R2 changed elsewhere, same vault",
+                "R2 changed elsewhere, same vault ID: the journal continues, unconfirmed",
                 seen(r"C:\V\a.kdbx", None, Some("x"), Some("r1")),
-                Resolution::Same {
+                Resolution::Continued {
                     index: 0,
-                    rolled_back: false,
                     adopt_root: false,
                 },
             ),
@@ -1289,9 +1316,12 @@ mod tests {
                 Resolution::Claimed { index: 1 },
             ),
             (
-                "a version that nobody recorded falls back to the vault ID",
+                "a version that nobody recorded falls back to the vault ID, unconfirmed (FR-12)",
                 at(r"C:\V\a.kdbx", "z", Some("r1")),
-                same(0, false),
+                Resolution::Continued {
+                    index: 0,
+                    adopt_root: false,
+                },
             ),
             (
                 "a version that nobody recorded, in a locked read, stays unconfirmed",
@@ -1365,9 +1395,12 @@ mod tests {
                 Resolution::Claimed { index: 1 },
             ),
             (
-                "a lineage nobody recorded falls back to the vault ID",
+                "a lineage nobody recorded falls back to the vault ID, unconfirmed (FR-12)",
                 with_lineage(at(r"C:\V\a.kdbx", "z", Some("r1")), &["q", "p"]),
-                same(0, false),
+                Resolution::Continued {
+                    index: 0,
+                    adopt_root: false,
+                },
             ),
         ];
         for (name, observation, expected) in cases {
@@ -1510,9 +1543,8 @@ mod tests {
         let mut bound = [binding(r"C:\V\a.kdbx", None, None, &["old"])];
         assert_eq!(
             resolve(&bound, &seen(r"C:\V\a.kdbx", None, Some("x"), Some("r1"))),
-            Resolution::Same {
+            Resolution::Continued {
                 index: 0,
-                rolled_back: false,
                 adopt_root: true
             }
         );

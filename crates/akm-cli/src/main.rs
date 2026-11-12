@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use akm_core::audit::AuditLog;
 use akm_core::schedule::{parse_expiry, Remaining};
-use akm_core::{ApiKey, ApiKeyInput, EnvDisclosure, EnvPlan, Error, KeyDisclosure, Result, Vault};
+use akm_core::{
+    ApiKey, ApiKeyInput, EnvDisclosure, EnvPlan, Error, KeyDisclosure, Result, Secret, Vault,
+};
 use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand};
 use zeroize::Zeroizing;
@@ -112,8 +114,8 @@ struct AddArgs {
     secret_stdin: bool,
 
     /// Pass the secret as an argument. Visible in the process list; avoid.
-    #[arg(long)]
-    secret: Option<String>,
+    #[arg(long, value_parser = parse_secret)]
+    secret: Option<Secret>,
 }
 
 #[derive(Subcommand)]
@@ -350,7 +352,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
 
             let input = ApiKeyInput {
                 title,
-                secret: secret.into(),
+                secret,
                 username,
                 issuer,
                 project,
@@ -413,7 +415,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             reveal,
         } => {
             let password = master_password(false)?;
-            let vault = open_vault(&path, &password)?;
+            let mut vault = open_vault(&path, &password)?;
             drop(password);
             let key = select(&vault, &query)?;
 
@@ -434,6 +436,8 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             } else {
                 None
             };
+            // FR-12: a disclosure writes a journal record, and that can warn.
+            print_warnings(io, &mut vault);
 
             // 1A-R8-01: the default view and every other field receive `KeyMetadata`.
             let metadata = KeyMetadata::new(&key, vault.now());
@@ -497,7 +501,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             drop(password);
             let key = select(&vault, &query)?;
             let secret = secret_value(None, secret_stdin)?;
-            let rotation = vault.rotate(&key.id, secret.into())?;
+            let rotation = vault.rotate(&key.id, secret)?;
             print_warnings(io, &mut vault);
             status!(
                 io,
@@ -678,7 +682,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             let mut command = child::prepare(program, &command[1..])?;
             {
                 let password = master_password(false)?;
-                let vault = open_vault(&path, &password)?;
+                let mut vault = open_vault(&path, &password)?;
                 drop(password);
                 let plan = planned_envs(&vault, &selection)?;
                 let envs = disclosed_envs(
@@ -687,6 +691,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                     &plan,
                     &format!("launch requested; {} keys selected", plan.len()),
                 )?;
+                print_warnings(io, &mut vault);
                 child::inject(&mut command, &envs)?;
             }
 
@@ -698,7 +703,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
         Commands::Export { selection, output } => {
             let output = output.as_deref().map(export::destination).transpose()?;
             let password = master_password(false)?;
-            let vault = open_vault(&path, &password)?;
+            let mut vault = open_vault(&path, &password)?;
             drop(password);
             let plan = planned_envs(&vault, &selection)?;
             // Pairs the two records; the destination stays out of the journal.
@@ -713,6 +718,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                     plan.len()
                 ),
             )?;
+            print_warnings(io, &mut vault);
             drop(vault);
 
             match output {
@@ -1019,30 +1025,71 @@ fn master_password(confirm: bool) -> Result<Zeroizing<String>> {
     Ok(password)
 }
 
-fn secret_value(given: Option<String>, from_stdin: bool) -> Result<String> {
+/// The most bytes of a secret that `--secret-stdin` reads. The buffer is allocated once at
+/// this size, so no growth leaves an unzeroed copy of a partial secret behind.
+const SECRET_STDIN_LIMIT: usize = 1024 * 1024;
+
+/// `--secret`: the value is held in a `Secret` (zeroized on drop, never printed) from the
+/// moment it leaves the parser (FR-08).
+fn parse_secret(value: &str) -> std::result::Result<Secret, String> {
+    Ok(Secret::new(value))
+}
+
+/// Every secret string in this program is a `Secret` or a `Zeroizing` buffer from its first
+/// read. Nothing here keeps a plain `String` or `Vec<u8>` copy of it (FR-08).
+fn secret_value(given: Option<Secret>, from_stdin: bool) -> Result<Secret> {
     if let Some(secret) = given {
         return Ok(secret);
     }
 
     if from_stdin {
-        let mut secret = String::new();
-        std::io::stdin().read_to_string(&mut secret)?;
-        let secret = secret
-            .strip_prefix('\u{feff}')
-            .unwrap_or(&secret)
-            .trim_end_matches(['\r', '\n'])
-            .to_string();
-        if secret.is_empty() {
-            return Err(Error::Invalid("secret read from stdin was empty".into()));
-        }
-        return Ok(secret);
+        return Ok(read_secret(std::io::stdin())?.into_secret());
     }
 
-    let secret = rpassword::prompt_password("Secret value: ")?;
+    // The prompt returns its text as a `String`; it moves into the `Secret` at once.
+    let secret = Secret::new(rpassword::prompt_password("Secret value: ")?);
     if secret.is_empty() {
         return Err(Error::Invalid("secret must not be empty".into()));
     }
     Ok(secret)
+}
+
+/// A secret that was read from a stream. The text is in a `Zeroizing` string.
+struct SecretText(Zeroizing<String>);
+
+impl SecretText {
+    /// Moves the text into a `Secret` without a copy.
+    fn into_secret(mut self) -> Secret {
+        Secret::from(std::mem::take(&mut *self.0))
+    }
+}
+
+/// Reads a secret from a stream: one line, with a leading byte order mark and the trailing
+/// line break removed. The bytes live in a `Zeroizing` buffer that never grows.
+fn read_secret(input: impl Read) -> Result<SecretText> {
+    let mut bytes = Zeroizing::new(Vec::with_capacity(SECRET_STDIN_LIMIT + 1));
+    input
+        .take(SECRET_STDIN_LIMIT as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > SECRET_STDIN_LIMIT {
+        return Err(Error::Invalid(format!(
+            "secret read from stdin is longer than {SECRET_STDIN_LIMIT} bytes"
+        )));
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        ))
+    })?;
+    let text = text
+        .strip_prefix('\u{feff}')
+        .unwrap_or(text)
+        .trim_end_matches(['\r', '\n']);
+    if text.is_empty() {
+        return Err(Error::Invalid("secret read from stdin was empty".into()));
+    }
+    Ok(SecretText(Zeroizing::new(text.to_owned())))
 }
 
 /// Whole days round up while time is left, and count full days once it is late. A key that is
@@ -1198,6 +1245,10 @@ fn print_key(
             "Rotation:    {interval} days ({})",
             remaining_text(remaining)
         )?,
+        (Some(interval), None) if key.secret_changed_at.is_some() => writeln!(
+            out,
+            "Rotation:    {interval} days (due date unknown: the interval is longer than the dates AKM can show)"
+        )?,
         (Some(interval), None) => writeln!(
             out,
             "Rotation:    {interval} days (due date unknown: no secret-change time is recorded)"
@@ -1290,6 +1341,76 @@ fn record_export_completed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FR-08: the secret paths hold their text in `Secret` and `Zeroizing` types from the
+    /// first read. These lines stop compiling if a path returns a plain `String` again.
+    #[test]
+    fn secret_paths_return_zeroizing_types_not_plain_strings() {
+        let _: fn(Option<Secret>, bool) -> Result<Secret> = secret_value;
+        let _: fn(&str) -> std::result::Result<Secret, String> = parse_secret;
+        let _: fn(&[u8]) -> Result<SecretText> = |bytes| read_secret(bytes);
+        let _: fn(bool) -> Result<Zeroizing<String>> = master_password;
+        // The parsed `--secret` value is a `Secret`: it prints as redacted text.
+        let Ok(cli) = Cli::try_parse_from(["akm", "add", "Fake title", "--secret", "fake-arg"])
+        else {
+            panic!("the add command does not parse");
+        };
+        let Commands::Add(args) = cli.command else {
+            panic!("not an add command");
+        };
+        let shown = format!("{:?}", args.secret);
+        assert!(
+            shown.contains("redacted") && !shown.contains("fake-arg"),
+            "{shown}"
+        );
+    }
+
+    /// FR-08: the production code reads no secret with a plain `String` buffer.
+    #[test]
+    fn no_production_code_reads_stdin_into_a_plain_string() {
+        let source = include_str!("main.rs");
+        let production = &source[..source.find("\nmod tests {").unwrap()];
+        assert!(
+            !production.contains("read_to_string"),
+            "use read_secret, which keeps the bytes in a Zeroizing buffer"
+        );
+    }
+
+    #[test]
+    fn a_secret_read_from_a_stream_drops_one_bom_and_the_line_break_only() {
+        for (input, expected) in [
+            (&b"fake-secret\n"[..], "fake-secret"),
+            (b"fake-secret\r\n", "fake-secret"),
+            (b"\xEF\xBB\xBFfake-secret\r\n", "fake-secret"),
+            (b"fake-secret", "fake-secret"),
+            (b"  fake secret  \n", "  fake secret  "),
+            (b"\xEF\xBB\xBF\xEF\xBB\xBFx", "\u{feff}x"),
+            (b"\xC3\x89clair\n", "\u{c9}clair"),
+        ] {
+            let text = read_secret(input).unwrap();
+            assert_eq!(text.0.as_str(), expected, "{input:?}");
+        }
+        for empty in [&b""[..], b"\n", b"\r\n", b"\xEF\xBB\xBF\n"] {
+            let text = read_secret(empty).err().unwrap().to_string();
+            assert!(text.contains("empty"), "{text}");
+        }
+        let text = read_secret(&b"\xFF\xFEbad"[..]).err().unwrap().to_string();
+        assert!(text.contains("UTF-8"), "{text}");
+        assert!(!text.contains("bad"), "{text}");
+    }
+
+    #[test]
+    fn a_secret_longer_than_the_limit_is_refused_and_one_at_the_limit_is_read() {
+        let at_limit = vec![b'a'; SECRET_STDIN_LIMIT];
+        assert_eq!(
+            read_secret(&at_limit[..]).unwrap().0.len(),
+            SECRET_STDIN_LIMIT
+        );
+        let over = vec![b'a'; SECRET_STDIN_LIMIT + 1];
+        let text = read_secret(&over[..]).err().unwrap().to_string();
+        assert!(text.contains("longer than"), "{text}");
+        assert!(!text.contains("aaaa"), "{text}");
+    }
 
     struct FailingWriter {
         accept: usize,
