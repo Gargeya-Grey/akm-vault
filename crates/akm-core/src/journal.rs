@@ -625,6 +625,15 @@ pub(crate) fn legacy_notice(vault: &Path) -> Option<Notice> {
     })
 }
 
+/// The notice of a read at a bound path whose file holds a version that the journal never
+/// recorded, with no record that links the two (FR-12, core review 1, finding 5).
+fn continued_notice() -> Notice {
+    Notice {
+        kind: NoticeKind::IdentityUnconfirmed,
+        message: "The vault file at this path holds a version that this journal never recorded, and no record links the two. It can be a copy that was changed somewhere else. This journal cannot be confirmed as the journal of this file. The next change or disclosure records the version, with a warning. Nothing was changed.".into(),
+    }
+}
+
 fn unconfirmed_notice() -> Notice {
     Notice {
         kind: NoticeKind::IdentityUnconfirmed,
@@ -907,21 +916,29 @@ fn decide(mut mapping: Mapping, observation: &Observation) -> Result<Decision> {
 /// Runs `write` for the journal that a record about this vault goes to, with the mapping
 /// locked. The only place that stores a mapping for a record.
 ///
-/// A mapping change that consumes an owed record (the rollback indication moves the
-/// observed version to the front of `seen`) is stored only after `write` succeeded. If
-/// `write` fails, the mapping is as it was and a retry owes the record again. Every other
-/// change is stored first: a binding without a journal file yet is harmless, a record
-/// without a binding is not.
+/// The mapping changes in two phases: `decide` observes, and this function stores. A change
+/// that settles something the person must learn is stored only after `write` succeeded, and
+/// only when the record carries it. Two changes settle something: the rollback indication
+/// (the observed version moves to the front of `seen`) and an unconfirmed lineage (the
+/// unseen version joins `seen`, so it is never reported again). `carries_lineage` says that
+/// the caller passes `Placement::lineage_unconfirmed` on to the person. If `write` fails,
+/// or the record does not carry the lineage, the mapping is as it was, and the next record
+/// owes the same again (FR-12, core review 1, finding 4). Every other change is stored
+/// first: a binding without a journal file yet is harmless, a record without a binding is
+/// not.
 pub(crate) fn record<T>(
     folder: &Folder,
     evidence: &VaultEvidence,
+    carries_lineage: bool,
     write: impl FnOnce(&Placement) -> Result<T>,
 ) -> Result<T> {
     let lock = lock_mapping(folder, true)?;
     let decision = decide(load(folder)?, &evidence.observe())?;
-    if decision.placement.owes_rollback {
-        let written = write(&decision.placement)?;
-        if decision.changed {
+    let placement = &decision.placement;
+    if placement.owes_rollback || placement.lineage_unconfirmed {
+        let written = write(placement)?;
+        let settled = placement.owes_rollback || carries_lineage;
+        if decision.changed && settled {
             store(folder, &decision.mapping)?;
         }
         return Ok(written);
@@ -933,12 +950,13 @@ pub(crate) fn record<T>(
     write(&decision.placement)
 }
 
-/// The journal ID for a vault, creating the binding if there is none. It consumes no owed
-/// record: when one is owed, the mapping is left as it is.
+/// The journal ID for a vault, creating the binding if there is none. It settles nothing:
+/// when a rollback record or a lineage warning is owed, the mapping is left as it is.
 pub(crate) fn place(folder: &Folder, evidence: &VaultEvidence) -> Result<String> {
     let _lock = lock_mapping(folder, true)?;
     let decision = decide(load(folder)?, &evidence.observe())?;
-    if decision.changed && !decision.placement.owes_rollback {
+    let placement = &decision.placement;
+    if decision.changed && !placement.owes_rollback && !placement.lineage_unconfirmed {
         store(folder, &decision.mapping)?;
     }
     Ok(decision.placement.id)
@@ -973,9 +991,14 @@ pub(crate) fn locate(root: &JournalRoot, evidence: &VaultEvidence) -> Result<Loc
     let observation = evidence.observe();
     let resolution = resolve(&mapping.journals, &observation);
     let (found, identity) = match resolution.clone() {
-        Resolution::Same { index, .. }
-        | Resolution::Continued { index, .. }
-        | Resolution::Moved { index } => (Some(index), Identity::Confirmed),
+        Resolution::Same { index, .. } | Resolution::Moved { index } => {
+            (Some(index), Identity::Confirmed)
+        }
+        // A read never confirms an unseen version, and never settles its warning.
+        Resolution::Continued { index, .. } => {
+            notices.push(continued_notice());
+            (Some(index), Identity::Unconfirmed)
+        }
         Resolution::Unconfirmed { index } => {
             notices.push(unconfirmed_notice());
             (Some(index), Identity::Unconfirmed)

@@ -698,7 +698,8 @@ impl AuditLog {
         detail: Option<&str>,
     ) -> Result<bool> {
         let folder = self.root.open_or_create()?;
-        journal::record(&folder, &self.evidence, |placement| {
+        // The answer reaches the person through `Vault::log`, so this record carries it.
+        journal::record(&folder, &self.evidence, true, |placement| {
             let chain = ChainFile::private(folder.journal_file(&placement.id), &placement.id);
             let mut records = Vec::new();
             if placement.owes_rollback {
@@ -740,7 +741,9 @@ impl AuditLog {
         let Some(folder) = self.root.open()? else {
             return Err(Error::Journal("there is no journal to recover".into()));
         };
-        journal::record(&folder, &self.evidence, |placement| {
+        // A recovery reports no lineage warning, so it leaves an unseen version unsettled
+        // for the next record.
+        journal::record(&folder, &self.evidence, false, |placement| {
             let chain = ChainFile::private(folder.journal_file(&placement.id), &placement.id);
             let owed = placement.owes_rollback.then_some(NewRecord {
                 action: "vault-rolled-back",

@@ -1432,3 +1432,220 @@ fn ordinary_saves_and_reopens_give_no_lineage_warning() {
         "a copy starts its own journal"
     );
 }
+
+// ------------------------- core review 1, findings 4 and 5: the lineage table, row by row
+//
+// | File at the bound path | Read            | Append succeeds | Append fails, retry  | Lock between |
+// | Bound vault            | confirmed       | no warning      | no change; no warning | no warning   |
+// | Unseen clone           | unconfirmed +   | one warning,    | no change; the retry  | the first    |
+// |                        | notice          | then known      | warns                 | append warns |
+// | Seen clone (earlier)   | confirmed       | rollback record | no change; rollback   | rollback     |
+//
+// "No change" means that the mapping bytes are as they were. A read never changes them.
+
+/// The reviewer's probe: the file at `a.kdbx` is a copy of the bound vault that was changed
+/// where the bound journal could not see it.
+fn bound_with_unseen_clone() -> clones::World {
+    use clones::*;
+    let w = World::new();
+    let original = w.create("a.kdbx");
+    mark(&original, "original-marker").unwrap();
+    drop(original);
+    w.copy("a.kdbx", "b.kdbx");
+    let elsewhere = w.directory.path().join("other-journal");
+    let mut clone =
+        akm_core::Vault::open_in(w.path("b.kdbx"), PASSWORD, JournalRoot::at(&elsewhere)).unwrap();
+    change(&mut clone, "Beta");
+    drop(clone);
+    w.copy("b.kdbx", "a.kdbx");
+    w
+}
+
+/// Holds a journal file open with no sharing, so an append cannot open it: the reviewer's
+/// way to make an append fail.
+#[cfg(windows)]
+fn hold(path: &Path) -> fs::File {
+    use std::os::windows::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(path)
+        .unwrap()
+}
+
+fn unconfirmed_notices(snapshot: &akm_core::audit::AuditSnapshot) -> usize {
+    snapshot
+        .notices
+        .iter()
+        .filter(|notice| notice.kind == NoticeKind::IdentityUnconfirmed)
+        .count()
+}
+
+/// Finding 5, the read column: an Activity read of an unseen clone, with the password-less
+/// evidence and with the unlocked evidence that the desktop's `audit_read` uses, is
+/// unconfirmed with a notice. It changes no mapping byte. After the first successful append
+/// (which warns), the version is known and a read is confirmed.
+#[test]
+fn a_read_of_an_unseen_clone_is_unconfirmed_with_a_notice_and_changes_nothing() {
+    let w = bound_with_unseen_clone();
+    let mapping = w.mapping_text();
+    let locked = w.view("a.kdbx");
+    assert_eq!(locked.identity, Identity::Unconfirmed);
+    assert_eq!(unconfirmed_notices(&locked), 1, "{:?}", locked.notices);
+    let mut vault = w.open("a.kdbx");
+    let unlocked = vault.audit_log().snapshot(100).unwrap();
+    assert_eq!(
+        unlocked.identity,
+        Identity::Unconfirmed,
+        "{:?}",
+        unlocked.notices
+    );
+    assert_eq!(unconfirmed_notices(&unlocked), 1, "{:?}", unlocked.notices);
+    assert_eq!(w.mapping_text(), mapping, "a read changes nothing");
+    assert_eq!(
+        lineage_warnings(&mut vault),
+        0,
+        "a read consumes no warning"
+    );
+
+    vault.log("first-marker", None, None).unwrap();
+    assert_eq!(lineage_warnings(&mut vault), 1);
+    let after = vault.audit_log().snapshot(100).unwrap();
+    assert_eq!(after.identity, Identity::Confirmed);
+    assert_eq!(unconfirmed_notices(&after), 0);
+}
+
+/// Finding 4, the failure column: an append that fails under an unseen clone leaves the
+/// mapping as it was, so the retry still warns. The same holds when the vault is locked and
+/// opened again between the failure and the retry.
+#[cfg(windows)]
+#[test]
+fn a_failed_append_under_an_unseen_clone_keeps_the_lineage_warning_for_the_retry() {
+    for lock_between in [false, true] {
+        let w = bound_with_unseen_clone();
+        let mapping = w.mapping_text();
+        let journal = w.journal_with("original-marker");
+        let mut vault = w.open("a.kdbx");
+        {
+            let _held = hold(&journal);
+            assert!(
+                vault.log("failed-marker", None, None).is_err(),
+                "the append fails while the journal is held"
+            );
+        }
+        assert_eq!(
+            w.mapping_text(),
+            mapping,
+            "lock between: {lock_between}: a failed append changes no mapping"
+        );
+        assert_eq!(lineage_warnings(&mut vault), 0);
+        if lock_between {
+            drop(vault);
+            vault = w.open("a.kdbx");
+        }
+        vault.log("retry-marker", None, None).unwrap();
+        assert_eq!(
+            lineage_warnings(&mut vault),
+            1,
+            "lock between: {lock_between}: the retry warns"
+        );
+        vault.log("next-marker", None, None).unwrap();
+        assert_eq!(lineage_warnings(&mut vault), 0, "the warning is given once");
+        assert_eq!(
+            w.actions_with("original-marker"),
+            clones::strings(&[
+                "add-completed",
+                "original-marker",
+                "retry-marker",
+                "next-marker"
+            ])
+        );
+    }
+}
+
+/// The other rows: a bound vault and a seen clone (an earlier version that the journal saw).
+/// Reads are confirmed and change nothing, a failed append changes nothing, and the retry
+/// gives no lineage warning. For the seen clone the retry records the rollback first.
+#[cfg(windows)]
+#[test]
+fn the_lineage_table_rows_for_a_bound_vault_and_a_seen_clone() {
+    use clones::*;
+    for seen_clone in [false, true] {
+        let w = World::new();
+        let mut vault = w.create("a.kdbx");
+        mark(&vault, "original-marker").unwrap();
+        w.copy("a.kdbx", "earlier.kdbx");
+        change(&mut vault, "Beta");
+        drop(vault);
+        if seen_clone {
+            let earlier = w.bytes("earlier.kdbx");
+            w.put("a.kdbx", &earlier);
+        }
+        let mapping = w.mapping_text();
+        let view = w.view("a.kdbx");
+        assert_eq!(
+            view.identity,
+            Identity::Confirmed,
+            "seen clone: {seen_clone}"
+        );
+        let mut vault = w.open("a.kdbx");
+        let unlocked = vault.audit_log().snapshot(100).unwrap();
+        assert_eq!(
+            unlocked.identity,
+            Identity::Confirmed,
+            "seen clone: {seen_clone}"
+        );
+        assert_eq!(
+            w.mapping_text(),
+            mapping,
+            "seen clone: {seen_clone}: a read"
+        );
+
+        let journal = w.journal_with("original-marker");
+        {
+            let _held = hold(&journal);
+            assert!(vault.log("failed-marker", None, None).is_err());
+        }
+        assert_eq!(
+            w.mapping_text(),
+            mapping,
+            "seen clone: {seen_clone}: a failure"
+        );
+        vault.log("retry-marker", None, None).unwrap();
+        assert_eq!(lineage_warnings(&mut vault), 0, "seen clone: {seen_clone}");
+        let actions = w.actions_with("original-marker");
+        let tail: Vec<&str> = actions.iter().rev().take(2).map(String::as_str).collect();
+        if seen_clone {
+            assert_eq!(tail, ["retry-marker", "vault-rolled-back"], "{actions:?}");
+        } else {
+            assert_eq!(tail[0], "retry-marker", "{actions:?}");
+            assert!(!actions.iter().any(|action| action == "vault-rolled-back"));
+        }
+    }
+}
+
+/// Findings 4 and 5, the sweep of the class: every other path that reaches the mapping under
+/// an unseen clone. Creating the journal path and recovering a damaged journal report no
+/// lineage warning, so neither settles it: the next append still warns.
+#[test]
+fn neither_recovery_nor_placing_the_journal_settles_an_unseen_lineage() {
+    for recover in [false, true] {
+        let w = bound_with_unseen_clone();
+        let mut vault = w.open("a.kdbx");
+        let log = vault.audit_log();
+        let journal = log.create_journal_path().unwrap();
+        if recover {
+            let mut file = fs::OpenOptions::new().append(true).open(&journal).unwrap();
+            std::io::Write::write_all(&mut file, b"{this is not a record}").unwrap();
+            drop(file);
+            log.recover_damaged().unwrap();
+        }
+        assert_eq!(lineage_warnings(&mut vault), 0, "recover: {recover}");
+        vault.log("after-marker", None, None).unwrap();
+        assert_eq!(
+            lineage_warnings(&mut vault),
+            1,
+            "recover: {recover}: the next append still warns"
+        );
+    }
+}
