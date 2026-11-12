@@ -99,6 +99,34 @@ An unset value draws its fallback: "No project", "No environment" or "No issuer"
   the permanent-delete confirmation are described by the same facts.
 - Every `.label` wraps. A 1,000-character issuer made the key drawer 9,879 px wide before.
 
+## The terminal outcome and the two new notices (contract with unit 1)
+
+The contract is in `docs/design/gate-campaign.md`, under "Contract between units 1 and 2".
+
+- `OperationNotice.kind` has six new values: `filePermissions`, `journalLineageUnconfirmed`,
+  `terminalStarted`, `terminalSessionEnded`, `terminalFailed` and `terminalDeclined`. Each has
+  its own text in `App.tsx`.
+- The file-permission notice says that anyone who can read the vault folder can copy the
+  encrypted vault and its backups. It says nothing about backup retention.
+- The lineage notice says that the vault file changed outside AKM and that its activity continues
+  in the existing journal. It does not say that a change was saved: the core sets this warning on
+  any journal entry, and a reveal or a copy writes one too.
+- `api.launchTerminal` sends a fresh UUID as `operationId`, as `api.importEnv` does. The terminal
+  receipt starts before the request leaves, with that ID.
+- A reply acknowledges the native record: a count, a decline and a native error alike. A
+  transport failure keeps the record, because it may be the only truth.
+- When the reply is lost and the page is still open, the next warning poll folds the record into
+  the waiting receipt: started is completed, session ended is completed while locked, failed is an
+  error, and declined is a cancellation. A record settles only a receipt of its own operation.
+- After a reload no receipt waits, so the record stays a notice. The notice names the terminal.
+  For started and session ended it says that the terminal keeps the keys until it is closed. For
+  failed and declined it says that no terminal from that request runs. The notices are dismissed by
+  their IDs and do not come back.
+- A record from session A settles the receipt of session A. The loss signal names the generation
+  of session A, so a newer session B stays open (contract 5).
+- Each terminal receipt says only what is known. A pending launch may already hold keys. An error
+  does not confirm that no terminal runs.
+
 ## Decisions for the owner's veto
 
 Each decision takes the option that removes state or removes a promise.
@@ -123,6 +151,15 @@ Each decision takes the option that removes state or removes a promise.
 9. The environment filter offers "No environment" when a key has none. It finds the rows that
    draw that text.
 10. The key glyph is not a fact. Two keys can share a glyph, so the check never relies on it.
+11. A terminal launch that the user declined leaves a cancellation receipt, as an import and a
+    file export do. Before, it left no receipt. The brief folds a declined record like an import,
+    so the reply and the record give the same outcome.
+12. A terminal launch that answers with an error says "This does not confirm that no terminal
+    runs." The contract says that a failed record means that no terminal runs, but it says nothing
+    about an error reply. The receipt keeps the weaker claim until unit 1 confirms the stronger one.
+    The record notice for `terminalFailed` keeps the contract's claim.
+13. The section and its button keep the name "saved-operation notices", which
+    `tools/verify_windows_app.ps1` uses. Terminal notices appear there too.
 
 ## Limits
 
@@ -134,3 +171,7 @@ Each decision takes the option that removes state or removes a promise.
   the renewal, which are varied.
 - A project named "All keys" or "Needs attention" gives its shelf the same page title as that
   shelf. The shelf buttons stay apart by their place under "Projects". This is not fixed here.
+- Until unit 1 maps the two core warnings to their own kinds, native still sends them as
+  `backupRetention` and `journal`, and the page shows those texts.
+- The Edge tests use a mocked native boundary. They prove the page side of the contract. The
+  native record of a terminal launch needs the native tests of unit 1 and the owner-present proof.

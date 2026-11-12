@@ -29,14 +29,29 @@ const OPERATION_MESSAGES: Record<OperationNotice["kind"], string> = {
   backupRetention: "A vault change was saved, but retention of its pre-change encrypted backup could not be confirmed. Do not repeat the saved operation. Inspect its backups before relying on recovery.",
   backupPrune: "A vault change was saved, but old backups could not be pruned. Do not repeat the saved operation. Check its retained backups.",
   preference: "A vault was opened, but its path preference was not saved. Check the vault path the next time you open AKM.",
+  filePermissions: "A vault was saved, but AKM could not make its files private to your account. Anyone who can read its folder can copy the encrypted vault and its backups. Do not repeat the saved operation. Check who can read that folder.",
+  journalLineageUnconfirmed: "A vault file changed outside AKM, so AKM cannot confirm that it is the same vault as before. Its activity continues in the existing journal. Check that you opened the vault you meant to before you rely on its journal.",
+  terminalStarted: "A terminal opened with keys, but this window did not receive its result. That terminal keeps the keys until you close it, even after AKM locks. Close it when you are done, and open another one only if you need it.",
+  terminalSessionEnded: "A terminal opened with keys, but its session ended before the result arrived. That terminal keeps the keys until you close it, even after AKM locks. Close it when you are done, and open another one only if you need it.",
+  terminalFailed: "A terminal launch failed. No terminal from that request runs.",
+  terminalDeclined: "A terminal launch was cancelled in a native window. No terminal from that request runs.",
   importApplied: "An import was applied to the vault, but this window did not receive its result. Do not repeat it. Check the keys in the relevant vault.",
   importSessionEnded: "An import was saved, but its session ended before the result arrived. Do not repeat it. Open the vault and check the keys.",
   importFailed: "An import reported an error. This does not confirm that nothing was saved. Check the vault before you try again.",
   importDeclined: "An import was declined in the confirmation window. Nothing was saved.",
 };
 
+const TERMINAL_OUTCOMES: Record<OperationOutcome["outcome"], string> = {
+  pending: "A terminal launch is awaiting an outcome. A terminal may already hold keys. Do not start another one while it is pending.",
+  completed: "A terminal opened with keys. It keeps them until you close it, even after AKM locks. Open another one only if you need it.",
+  completedWhileLocked: "A terminal opened with keys. It keeps them until you close it, even after AKM locks. Its session ended before the result arrived. Open another one only if you need it.",
+  cancelled: "A terminal launch was cancelled in a native window. No terminal from that request runs.",
+  reportedError: "A terminal launch reported an error. This does not confirm that no terminal runs. Check for an open terminal before you try again.",
+  unconfirmed: "A terminal launch could not be confirmed after the session changed. A terminal may hold keys. Check for an open terminal before you try again.",
+};
+
 function outcomeMessage({ operation, outcome }: OperationOutcome) {
-  if (operation === "terminal") return "A terminal opened with keys. It keeps them until you close it, even after AKM locks. Open another one only if you need it.";
+  if (operation === "terminal") return TERMINAL_OUTCOMES[outcome];
   const name = operation === "import" ? "Import" : operation === "export" ? "File export" : "Operation";
   switch (outcome) {
     case "pending": return `${name} is awaiting an outcome. Do not repeat it while it is pending.`;

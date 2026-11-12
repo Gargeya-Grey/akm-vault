@@ -69,8 +69,8 @@ test("native known-commit errors are normalized and retain only four fixed class
   }
 });
 
-function dispatchedOperation(): string {
-  const call = native.invoke.mock.calls.find(([command]) => command === "env_import");
+function dispatchedOperation(command = "env_import"): string {
+  const call = native.invoke.mock.calls.find(([name]) => name === command);
   return (call?.[1] as { operationId: string }).operationId;
 }
 function recordFor(operation: string, kind: string) {
@@ -212,12 +212,22 @@ test.each(SCOPED_REQUESTS)("%s sends no usable session when the page has none", 
   expect(call?.[1]).toMatchObject({ sessionId: "" });
 });
 
-// The terminal launch starts a program and cannot be taken back, so the page sends a scope and
-// nothing else, and a late reply is a completion, never a failure to retry.
-test("a terminal launch sends the session and the scope and no program, folder or argument", async () => {
-  native.invoke.mockResolvedValueOnce(2);
+// The terminal launch starts a program and cannot be taken back, so the page sends a scope and a
+// fresh operation ID and nothing else, and a late reply is a completion, never a failure to retry.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+test("a terminal launch sends the session, the scope and a fresh operation ID, and no program, folder or argument", async () => {
+  native.invoke.mockResolvedValue(2);
   expect(await api.launchTerminal("fake-project", "fake-env")).toBe(2);
-  expect(native.invoke).toHaveBeenCalledExactlyOnceWith("env_launch_terminal", { project: "fake-project", environment: "fake-env", sessionId: nativeOwner() });
+  const first = dispatchedOperation("env_launch_terminal");
+  expect(first).toMatch(UUID);
+  expect(native.invoke.mock.calls).toEqual([
+    ["env_launch_terminal", { project: "fake-project", environment: "fake-env", operationId: first, sessionId: nativeOwner() }],
+    ["vault_dismiss_warnings", { ids: [first] }],
+  ]);
+  native.invoke.mockClear();
+  await api.launchTerminal("fake-project", "fake-env");
+  expect(dispatchedOperation("env_launch_terminal")).not.toBe(first);
 });
 
 test("a terminal launch leaves a record that survives the page dropping its reply", async () => {
@@ -226,10 +236,108 @@ test("a terminal launch leaves a record that survives the page dropping its repl
   expect(retainedCompletions()).toMatchObject([{ operation: "terminal", outcome: "completed" }]);
 });
 
-test("a cancelled terminal launch answers null and leaves no completion record", async () => {
+test("a cancelled terminal launch answers null and leaves a cancellation, never a completion", async () => {
   native.invoke.mockResolvedValueOnce(null);
   expect(await api.launchTerminal("fake-project", "fake-env")).toBeNull();
-  expect(retainedCompletions()).toEqual([]);
+  expect(retainedCompletions()).toMatchObject([{ operation: "terminal", outcome: "cancelled" }]);
+  expect(retainedCompletions()).toHaveLength(1);
+});
+
+test("a terminal launch is on record as pending before its reply arrives", async () => {
+  native.invoke.mockReturnValueOnce(new Promise(() => {}));
+  void api.launchTerminal("fake-project", "fake-env").catch(() => {});
+  expect(retainedCompletions()).toMatchObject([{ operation: "terminal", outcome: "pending" }]);
+  native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(dispatchedOperation("env_launch_terminal"), "terminalStarted") : undefined);
+  await api.warnings();
+});
+
+for (const [kind, outcome] of [["terminalStarted", "completed"], ["terminalSessionEnded", "completedWhileLocked"], ["terminalFailed", "reportedError"], ["terminalDeclined", "cancelled"]] as const) {
+  test(`a lost terminal reply is settled from the native ${kind} record and the record is acknowledged`, async () => {
+    native.invoke.mockReturnValueOnce(new Promise(() => {}));
+    void api.launchTerminal("fake-project", "fake-env").catch(() => {});
+    const operation = dispatchedOperation("env_launch_terminal");
+    native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, kind) : undefined);
+    await api.warnings();
+    expect(retainedCompletions()).toMatchObject([{ operation: "terminal", outcome }]);
+    expect(retainedOperationNotices()).toEqual([]);
+    expect(native.invoke).toHaveBeenCalledWith("vault_dismiss_warnings", { ids: [operation] });
+    await api.warnings();
+    expect(retainedCompletions()).toHaveLength(1);
+  });
+}
+
+for (const [reply, settle] of [["a count", (value: unknown) => Promise.resolve(value ?? 1)], ["a decline", () => Promise.resolve(null)], ["a native error", () => Promise.reject({ kind: "launch", message: "fake launch failure" })]] as const) {
+  test(`a terminal reply of ${reply} acknowledges its own native record`, async () => {
+    native.invoke.mockImplementation(async (command: string) => command === "env_launch_terminal" ? settle(undefined) : undefined);
+    await api.launchTerminal("fake-project", "fake-env").catch(() => {});
+    expect(native.invoke).toHaveBeenCalledWith("vault_dismiss_warnings", { ids: [dispatchedOperation("env_launch_terminal")] });
+  });
+}
+
+test("a terminal transport failure keeps the native record because it may be the only truth", async () => {
+  native.invoke.mockRejectedValueOnce(new Error("channel closed"));
+  await api.launchTerminal("fake-project", "fake-env").catch(() => {});
+  expect(native.invoke).not.toHaveBeenCalledWith("vault_dismiss_warnings", expect.anything());
+  const operation = dispatchedOperation("env_launch_terminal");
+  native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, "terminalStarted") : undefined);
+  await api.warnings();
+  expect(retainedOperationNotices()).toMatchObject([{ id: operation, kind: "terminalStarted" }]);
+  acknowledgeNotices([operation]);
+});
+
+// Class B: a native record settles only a receipt of its own operation.
+for (const [request, command, kind] of [
+  [() => api.importEnv(...IMPORT), "env_import", "terminalStarted"],
+  [() => api.launchTerminal("fake-project", "fake-env"), "env_launch_terminal", "importApplied"],
+] as const) {
+  test(`a ${kind} record never settles the receipt of ${command}, and stays a notice`, async () => {
+    let reply!: (value: unknown) => void;
+    native.invoke.mockReturnValueOnce(new Promise((done) => { reply = done; }));
+    const settled = request().catch(() => {});
+    const operation = dispatchedOperation(command);
+    native.invoke.mockImplementation(async (name: string) => name === "vault_warnings" ? recordFor(operation, kind) : undefined);
+    await api.warnings();
+    expect(retainedCompletions()).toMatchObject([{ outcome: "pending" }]);
+    expect(retainedOperationNotices()).toMatchObject([{ id: operation, kind }]);
+    expect(native.invoke).not.toHaveBeenCalledWith("vault_dismiss_warnings", expect.anything());
+    reply(command === "env_import" ? { added: 0, updated: 0 } : 1);
+    await settled;
+    expect(retainedCompletions()).toMatchObject([{ outcome: "completed" }]);
+  });
+}
+
+test("after a reload while the native review is open, the terminal record is the only truth and stays a notice", async () => {
+  native.invoke.mockReturnValueOnce(new Promise(() => {}));
+  void api.launchTerminal("fake-project", "fake-env").catch(() => {});
+  const operation = dispatchedOperation("env_launch_terminal");
+  vi.resetModules();
+  const reloaded = { api: (await import("./api")).api, notices: await import("./operationNotices"), boundary: await import("./sessionBoundary") };
+  native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, "terminalStarted") : undefined);
+  await reloaded.api.warnings();
+  expect(reloaded.boundary.retainedCompletions()).toEqual([]);
+  expect(reloaded.notices.retainedOperationNotices()).toMatchObject([{ id: operation, kind: "terminalStarted" }]);
+  expect(native.invoke).not.toHaveBeenCalledWith("vault_dismiss_warnings", expect.anything());
+  await api.warnings(); // The page before the reload settles its own receipt, so later tests start clean.
+});
+
+// Contract 5: a record from session A settles A's receipt and never changes session B.
+test("a terminal record from an older session settles that session's receipt and leaves the newer session current", async () => {
+  native.invoke.mockReturnValueOnce(new Promise(() => {}));
+  const origin = sessionGeneration();
+  void api.launchTerminal("fake-project", "fake-env").catch(() => {});
+  const operation = dispatchedOperation("env_launch_terminal");
+  invalidateSession();
+  const newer = sessionGeneration();
+  const lost = vi.fn();
+  window.addEventListener(SESSION_LOSS_EVENT, lost);
+  try {
+    native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, "terminalSessionEnded") : undefined);
+    await api.warnings();
+    expect(retainedCompletions()).toMatchObject([{ operation: "terminal", outcome: "completedWhileLocked", generation: origin }]);
+    expect(lost.mock.calls.map(([event]) => (event as CustomEvent<{ generation: number }>).detail.generation)).toEqual([origin]);
+    expect(sessionGeneration()).toBe(newer);
+    expect(native.invoke.mock.calls.map(([command]) => command)).not.toContain("vault_lock");
+  } finally { window.removeEventListener(SESSION_LOSS_EVENT, lost); }
 });
 
 test("a terminal launch overtaken by a session change reports a completion, not a retryable failure", async () => {

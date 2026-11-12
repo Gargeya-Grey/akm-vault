@@ -44,7 +44,9 @@ async function invoke<T>(command: string, args?: Record<string, unknown>, expect
   const generation = sessionGeneration();
   const bootstrap = command === "vault_status" && nativeOwner() === null;
   const notices = nativeNoticeStamp();
+  // A terminal that opened cannot be taken back, so its receipt exists before the request leaves.
   const outcome = command === "env_import" ? beginOutcome("import", generation, operation)
+    : command === "env_launch_terminal" ? beginOutcome("terminal", generation, operation)
     : command === "env_save" ? beginOutcome("export", generation) : undefined;
   const cancelled = () => ({ kind: "locked", message: "The session changed. Unlock the vault again." });
   let knownSuccess = false;
@@ -53,22 +55,18 @@ async function invoke<T>(command: string, args?: Record<string, unknown>, expect
     const declined = declinable.has(command) && result === null;
     knownSuccess = !declined;
     if (declined && outcome !== undefined) settleOutcome(outcome, "cancelled");
-    if (operation !== undefined) acknowledgeImportRecord(operation);
+    if (operation !== undefined) acknowledgeRecord(operation);
     if (generation !== sessionGeneration()) {
       if (mutations.has(command) && !declined) throw completedWhileLocked();
       throw cancelled();
     }
     if (statusReplies.has(command)) acceptNativeStatus(result as Status, expectedOwner);
     if (outcome !== undefined) settleOutcome(outcome, "completed");
-    // The page can expire and drop this reply, and a window that holds keys must still be on record.
-    if (command === "env_launch_terminal" && !declined) settleOutcome(beginOutcome("terminal", generation), "completed");
     return result;
   } catch (error) {
-    if (operation !== undefined && errorKind(error) !== "unknown") acknowledgeImportRecord(operation);
+    if (operation !== undefined && errorKind(error) !== "unknown") acknowledgeRecord(operation);
     if (errorKind(error) === "completedWhileLocked" || (knownSuccess && mutations.has(command))) {
       if (outcome !== undefined) settleOutcome(outcome, "completedWhileLocked");
-      // A terminal that opened cannot be taken back, so its notice must say that it holds keys.
-      else if (command === "env_launch_terminal") settleOutcome(beginOutcome("terminal", generation), "completedWhileLocked");
       else reportCompletion(generation);
       throw completedWhileLocked(); // Do not forward native details, even in a known-commit error.
     }
@@ -85,7 +83,7 @@ async function invoke<T>(command: string, args?: Record<string, unknown>, expect
 
 // A reply that came from the native command is the outcome, so its native record is redundant.
 // A transport failure leaves the record in place: it may be the only truth about the request.
-function acknowledgeImportRecord(operation: string) {
+function acknowledgeRecord(operation: string) {
   acknowledgeNotices([operation]);
   void dismissNatively([operation]);
 }
@@ -195,8 +193,11 @@ export const api = {
   ) => invoke<string | null>("env_save", { project, environment, all: false }),
   // The page names a scope. Native code asks for the folder, shows the names, and starts the system command
   // prompt. The reply is the number of keys the terminal holds, or null when the user cancelled there.
-  launchTerminal: (project: string, environment: string) =>
-    invoke<number | null>("env_launch_terminal", { project, environment }),
+  // Native keeps a record under `operationId` until the page acknowledges it, so a lost reply still has an outcome.
+  launchTerminal: (project: string, environment: string) => {
+    const operationId = crypto.randomUUID();
+    return invoke<number | null>("env_launch_terminal", { project, environment, operationId }, undefined, operationId);
+  },
   // One request. A native window lists the names and the scope; null means that the user declined there.
   importEnv: (
     text: string,
