@@ -993,7 +993,11 @@ fn newly_reserved_names_are_refused_by_add_update_import_and_planning_with_the_v
             );
             assert!(!text.contains("fake-hostile-value"), "{name}: {text}");
         }
-        assert_eq!(vault_bytes(&vault), before, "{name}: the vault file changed");
+        assert_eq!(
+            vault_bytes(&vault),
+            before,
+            "{name}: the vault file changed"
+        );
     }
     assert_eq!(vault.list().len(), 1);
     assert_eq!(
@@ -1022,6 +1026,10 @@ fn newly_reserved_names_are_refused_by_add_update_import_and_planning_with_the_v
             );
             assert!(!text.contains("fake-legacy-secret"), "{name}: {text}");
         }
-        assert_eq!(vault_bytes(&vault), before, "{name}: the vault file changed");
+        assert_eq!(
+            vault_bytes(&vault),
+            before,
+            "{name}: the vault file changed"
+        );
     }
 }

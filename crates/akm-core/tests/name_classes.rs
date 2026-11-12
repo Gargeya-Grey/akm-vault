@@ -13,7 +13,10 @@ const PASSWORD: &str = "correct horse battery staple";
 const TABLE: &[(&str, NameClass)] = &[
     // Reserved: the cc forms of core review 1, finding 2.
     ("HOST_CC", NameClass::Reserved(ReservedClass::HelperProgram)),
-    ("TARGET_CC", NameClass::Reserved(ReservedClass::HelperProgram)),
+    (
+        "TARGET_CC",
+        NameClass::Reserved(ReservedClass::HelperProgram),
+    ),
     (
         "CC_x86_64-unknown-linux-gnu",
         NameClass::Reserved(ReservedClass::HelperProgram),
@@ -27,16 +30,31 @@ const TABLE: &[(&str, NameClass)] = &[
         NameClass::Reserved(ReservedClass::HelperProgram),
     ),
     // Reserved first: a credential word does not take a reserved name out of its class.
-    ("CC_API_KEY", NameClass::Reserved(ReservedClass::HelperProgram)),
-    ("GIT_SSL_KEY", NameClass::Reserved(ReservedClass::TrafficRedirect)),
-    ("SSH_KEY_PATH", NameClass::Reserved(ReservedClass::ProcessControl)),
-    ("PRIVATE_KEY_DIR", NameClass::Reserved(ReservedClass::UserLocation)),
+    (
+        "CC_API_KEY",
+        NameClass::Reserved(ReservedClass::HelperProgram),
+    ),
+    (
+        "GIT_SSL_KEY",
+        NameClass::Reserved(ReservedClass::TrafficRedirect),
+    ),
+    (
+        "SSH_KEY_PATH",
+        NameClass::Reserved(ReservedClass::ProcessControl),
+    ),
+    (
+        "PRIVATE_KEY_DIR",
+        NameClass::Reserved(ReservedClass::UserLocation),
+    ),
     ("AKM_TOKEN", NameClass::Reserved(ReservedClass::AkmInternal)),
     (
         "CARGO_REGISTRY_TOKEN_FILE",
         NameClass::Reserved(ReservedClass::HelperProgram),
     ),
-    ("GIT_ASKPASS", NameClass::Reserved(ReservedClass::HelperProgram)),
+    (
+        "GIT_ASKPASS",
+        NameClass::Reserved(ReservedClass::HelperProgram),
+    ),
     // Credential: a whole token is a credential word.
     ("OPENAI_API_KEY", NameClass::Credential),
     ("STRIPE_SECRET_KEY", NameClass::Credential),
@@ -197,5 +215,8 @@ fn each_change_of_an_import_preview_gives_the_class_of_its_name() {
         .preview_import_env(&hostile, Some("demo"), Some("dev"))
         .unwrap_err()
         .to_string();
-    assert!(text.contains("HOST_CC") && text.contains("reserved"), "{text}");
+    assert!(
+        text.contains("HOST_CC") && text.contains("reserved"),
+        "{text}"
+    );
 }

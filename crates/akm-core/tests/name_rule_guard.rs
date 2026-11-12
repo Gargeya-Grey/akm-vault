@@ -105,7 +105,8 @@ fn pieces(source: &str) -> Vec<Piece> {
     let chars: Vec<char> = source.chars().collect();
     let mut out = Vec::new();
     let mut at = 0;
-    let word_before = |at: usize| at > 0 && (chars[at - 1].is_alphanumeric() || chars[at - 1] == '_');
+    let word_before =
+        |at: usize| at > 0 && (chars[at - 1].is_alphanumeric() || chars[at - 1] == '_');
     while at < chars.len() {
         match chars[at] {
             '/' if chars.get(at + 1) == Some(&'/') => {
@@ -218,7 +219,10 @@ fn production_pieces(source: &str) -> Vec<Piece> {
             continue;
         }
         let item_at = code.len() - item.len();
-        let Some(open) = code[item_at..].find(['{', ';']).map(|offset| item_at + offset) else {
+        let Some(open) = code[item_at..]
+            .find(['{', ';'])
+            .map(|offset| item_at + offset)
+        else {
             continue;
         };
         if code.as_bytes()[open] == b';' {
@@ -324,8 +328,7 @@ fn scan() -> Vec<(String, String, String)> {
         let production = production_pieces(&std::fs::read_to_string(&file).unwrap());
         for (literal, before) in literals_in_context(&production) {
             let read = ENVIRONMENT_READS.iter().any(|read| before.ends_with(read));
-            if read || !shaped_like_a_name(&literal) || name_class(&literal) == NameClass::Other
-            {
+            if read || !shaped_like_a_name(&literal) || name_class(&literal) == NameClass::Other {
                 continue;
             }
             let finding = format!("{literal:?} is {:?}", name_class(&literal));
@@ -366,9 +369,9 @@ fn every_row_of_the_allow_list_is_still_needed() {
     for (path, literal, reason) in ALLOWED {
         assert!(!reason.is_empty());
         assert!(
-            found
-                .iter()
-                .any(|(found_path, found_literal, _)| found_path == path && found_literal == literal),
+            found.iter().any(
+                |(found_path, found_literal, _)| found_path == path && found_literal == literal
+            ),
             "{path} no longer has {literal:?} as a finding; remove its row from ALLOWED"
         );
     }
@@ -395,7 +398,14 @@ fn the_guard_reads_literals_and_skips_comments_char_literals_reads_and_test_modu
     let texts: Vec<&str> = literals.iter().map(|(text, _)| text.as_str()).collect();
     assert_eq!(
         texts,
-        ["LOCALAPPDATA", "RUSTC_WRAPPER", "_TOKEN", "HOST_CC", "PORT", "GIT_SSH"]
+        [
+            "LOCALAPPDATA",
+            "RUSTC_WRAPPER",
+            "_TOKEN",
+            "HOST_CC",
+            "PORT",
+            "GIT_SSH"
+        ]
     );
     assert!(ENVIRONMENT_READS
         .iter()

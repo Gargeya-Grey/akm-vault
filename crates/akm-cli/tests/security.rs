@@ -756,10 +756,7 @@ fn newly_reserved_names_are_refused_by_add_export_and_run_with_the_vault_bytes_u
         }
 
         let path = fixture.report("must-not-exist.json");
-        for selection in [
-            vec!["--project", "demo", "--env", "dev"],
-            vec!["--all"],
-        ] {
+        for selection in [vec!["--project", "demo", "--env", "dev"], vec!["--all"]] {
             for verb in ["export", "run"] {
                 let mut command = fixture.cli();
                 command
@@ -774,7 +771,10 @@ fn newly_reserved_names_are_refused_by_add_export_and_run_with_the_vault_bytes_u
                 }
                 let output = command.output().unwrap();
                 let text = stderr(&output);
-                assert!(!output.status.success(), "{verb} {selection:?} accepted {name}");
+                assert!(
+                    !output.status.success(),
+                    "{verb} {selection:?} accepted {name}"
+                );
                 assert!(text.contains("Stored build key"), "{name} {verb}: {text}");
                 assert!(text.contains(name), "{name} {verb}: {text}");
                 assert!(text.contains("reserved"), "{name} {verb}: {text}");
@@ -809,12 +809,15 @@ fn a_child_started_by_run_never_receives_a_reserved_name_that_an_older_vault_sto
     ] {
         let fixture = Fixture::with_keys(&[
             ("Stored compiler", name, "fake-compiler-path", "demo", "dev"),
-            ("Demo", "DEMO_SECRET", "fake-intended-secret", "demo", "prod"),
+            (
+                "Demo",
+                "DEMO_SECRET",
+                "fake-intended-secret",
+                "demo",
+                "prod",
+            ),
         ]);
-        for selection in [
-            vec!["--project", "demo", "--env", "dev"],
-            vec!["--all"],
-        ] {
+        for selection in [vec!["--project", "demo", "--env", "dev"], vec!["--all"]] {
             let path = fixture.report("refused.json");
             let output = fixture
                 .cli()

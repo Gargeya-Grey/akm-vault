@@ -3,7 +3,7 @@ use std::ops::Deref;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-use akm_core::model::reserved_class;
+use akm_core::model::{name_class, NameClass, ReservedClass};
 use akm_core::{Error, Result};
 use zeroize::Zeroize;
 
@@ -42,7 +42,7 @@ pub fn validate(envs: &[(String, String)]) -> Result<()> {
 
 pub fn validate_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<()> {
     for name in names {
-        if let Some(class) = reserved_class(name) {
+        if let NameClass::Reserved(class) = name_class(name) {
             return Err(Error::Invalid(format!(
                 "a selected key uses the reserved variable {name:?}: {}",
                 class.reason()
@@ -59,9 +59,7 @@ pub fn inject(command: &mut Command, envs: &[(String, String)]) -> Result<()> {
 }
 
 fn is_akm_name(name: &OsStr) -> bool {
-    name.to_string_lossy()
-        .get(..4)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("AKM_"))
+    name_class(&name.to_string_lossy()) == NameClass::Reserved(ReservedClass::AkmInternal)
 }
 
 fn resolve(program: &str) -> Result<PathBuf> {

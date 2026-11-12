@@ -245,7 +245,7 @@ impl ApiKeyInput {
             .env_var
             .clone()
             .unwrap_or_else(|| derive_env_var(&self.title));
-        if let Some(class) = reserved_class(&resolved) {
+        if let NameClass::Reserved(class) = name_class(&resolved) {
             return Err(crate::Error::Invalid(format!(
                 "{resolved:?} is reserved: {}; set a different env var name for this key",
                 class.reason()
@@ -321,15 +321,9 @@ pub enum NameClass {
     Other,
 }
 
-/// SCAFFOLD: the rule before CORE-R1-02, so that the new tests run against it.
-pub fn name_class(name: &str) -> NameClass {
-    match reserved_class(name) {
-        Some(class) => NameClass::Reserved(class),
-        None => NameClass::Other,
-    }
-}
-
 impl ImportChange {
+    /// The class of the variable name of this change. The import confirmation shows the
+    /// names that are not credential names apart.
     pub fn name_class(&self) -> NameClass {
         name_class(&self.name)
     }
@@ -355,240 +349,71 @@ impl ReservedClass {
 }
 
 struct Rule {
+    /// The documentation of the tool that reads these names. The tests check that each
+    /// family names one.
+    #[cfg_attr(not(test), allow(dead_code, reason = "only the tests read it"))]
+    doc: &'static str,
     class: ReservedClass,
-    /// Whole names. An exact match beats a prefix match, so a name can sit in a narrower
+    /// Whole names. An exact match beats every other rule, so a name can sit in a narrower
     /// class than the prefix family around it (`CARGO_HOME` against `CARGO_`).
     exact: &'static [&'static str],
+    /// Names that start with one of these. The longest matching prefix decides.
     prefixes: &'static [&'static str],
 }
 
-/// Names that look like part of a reserved family and carry a secret that a person stores
-/// on purpose: a registry token. They are not reserved (FR-02).
-fn is_credential_name(upper: &str) -> bool {
+/// Names inside a reserved prefix family that the tool itself documents as a credential.
+/// They are not reserved; their credential word makes them credential names.
+fn is_registry_credential(upper: &str) -> bool {
     const REGISTRIES: &str = "CARGO_REGISTRIES_";
     const TOKEN: &str = "_TOKEN";
+    // https://doc.rust-lang.org/cargo/reference/environment-variables.html
     upper == "CARGO_REGISTRY_TOKEN"
         || (upper.len() > REGISTRIES.len() + TOKEN.len()
             && upper.starts_with(REGISTRIES)
             && upper.ends_with(TOKEN))
+        // https://yarnpkg.com/configuration/yarnrc (npmAuthToken, npmAuthIdent)
+        || upper == "YARN_NPM_AUTH_TOKEN"
+        || upper == "YARN_NPM_AUTH_IDENT"
 }
 
+/// The reserved table, by tool family. Each family was checked against the documentation
+/// in its `doc`. The table is finite: a name that no rule and no shape below covers is
+/// handed over as stored.
 const RESERVED: &[Rule] = &[
     Rule {
+        doc: "docs/PROJECT.md",
         class: ReservedClass::AkmInternal,
         exact: &[],
         prefixes: &["AKM_"],
     },
+    // Not re-checked in this unit: Windows, cmd, PowerShell, the XDG folders and ld.so.
     Rule {
+        doc: "https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/cmd",
         class: ReservedClass::ProcessControl,
-        exact: &[
-            "PATH",
-            "PATHEXT",
-            "COMSPEC",
-            "SYSTEMROOT",
-            "WINDIR",
-            "PSMODULEPATH",
-            // Which toolchain, interpreter or runtime a tool picks.
-            "GOROOT",
-            "GOTOOLCHAIN",
-            "JAVA_HOME",
-            "GEM_HOME",
-            "GEM_PATH",
-            "UV_PYTHON",
-        ],
-        // Every `RUSTUP_` variable but the few below: rustup picks the toolchain it runs.
-        prefixes: &["LD_", "DYLD_", "RUSTUP_"],
-    },
-    Rule {
-        class: ReservedClass::StartupHook,
-        exact: &[
-            "NODE_OPTIONS",
-            "NODE_PATH",
-            "PYTHONPATH",
-            "PYTHONHOME",
-            "PYTHONSTARTUP",
-            "PYTHONINSPECT",
-            "PYTHONBREAKPOINT",
-            "PYTHONUSERBASE",
-            "PYTHONEXECUTABLE",
-            "PYTHONPLATLIBDIR",
-            "PYTHONPYCACHEPREFIX",
-            "PERL5OPT",
-            "PERL5LIB",
-            "PERLLIB",
-            "PERL5DB",
-            "RUBYOPT",
-            "RUBYLIB",
-            "JAVA_TOOL_OPTIONS",
-            "_JAVA_OPTIONS",
-            "JDK_JAVA_OPTIONS",
-            "JAVA_OPTS",
-            "MAVEN_OPTS",
-            "GRADLE_OPTS",
-            "ANT_OPTS",
-            "SBT_OPTS",
-            "CATALINA_OPTS",
-            "CLASSPATH",
-            "DOTNET_STARTUP_HOOKS",
-            "DOTNET_ADDITIONAL_DEPS",
-            "ELECTRON_RUN_AS_NODE",
-            "PHPRC",
-            "PHP_INI_SCAN_DIR",
-            "LUA_INIT",
-            "LUA_PATH",
-            "LUA_CPATH",
-            "R_PROFILE",
-            "R_PROFILE_USER",
-            "R_ENVIRON",
-            "R_ENVIRON_USER",
-        ],
-        prefixes: &["COR_PROFILER", "COR_ENABLE_PROFILING", "CORECLR_"],
-    },
-    Rule {
-        class: ReservedClass::HelperProgram,
-        exact: &[
-            "GIT_SSH_COMMAND",
-            "GIT_SSH",
-            "GIT_ASKPASS",
-            "SSH_ASKPASS",
-            "SUDO_ASKPASS",
-            "GIT_EXEC_PATH",
-            "GIT_PROXY_COMMAND",
-            "GIT_EXTERNAL_DIFF",
-            "GIT_TEMPLATE_DIR",
-            // Rust: the compiler, its wrappers and flags.
-            "RUSTC",
-            "RUSTDOC",
-            "RUSTFLAGS",
-            "RUSTDOCFLAGS",
-            // Compilers and build tools.
-            "CC",
-            "CXX",
-            "CPP",
-            "AS",
-            "LD",
-            "AR",
-            "NM",
-            "RANLIB",
-            "STRIP",
-            "OBJCOPY",
-            "OBJDUMP",
-            "MAKE",
-            "MAKEFLAGS",
-            "MFLAGS",
-            "CFLAGS",
-            "CXXFLAGS",
-            "CPPFLAGS",
-            "LDFLAGS",
-            "GOFLAGS",
-            "GOAUTH",
-            "MAVEN_ARGS",
-            // Editors, pagers and shells that tools run.
-            "EDITOR",
-            "VISUAL",
-            "PAGER",
-            "MANPAGER",
-            "LESSOPEN",
-            "LESSCLOSE",
-            "GIT_PAGER",
-            "GIT_EDITOR",
-            "GIT_SEQUENCE_EDITOR",
-            "BROWSER",
-            "SHELL",
-            // Other tools that run a configured program.
-            "AWS_CONFIG_FILE",
-            "DOCKER_CONFIG",
-            "TF_CLI_ARGS",
-            "TF_CLI_CONFIG_FILE",
-            "YARN_YARN_PATH",
-        ],
-        // `RUSTC_`: RUSTC_WRAPPER, RUSTC_WORKSPACE_WRAPPER, RUSTC_BOOTSTRAP and the rest.
-        // `CARGO_`: Cargo reads every such variable as a configuration key. Together they
-        // cover CARGO_BUILD_RUSTC*, CARGO_ENCODED_RUSTFLAGS and every
-        // CARGO_TARGET_<triple>_RUNNER, _LINKER and _RUSTFLAGS. `is_credential_name` takes
-        // the registry tokens out again.
-        prefixes: &[
-            "GIT_CONFIG_",
-            "RUSTC_",
-            "CARGO_",
-            "CMAKE_",
-            "CGO_",
-            "TF_CLI_ARGS_",
-        ],
-    },
-    Rule {
-        class: ReservedClass::ShellStartup,
-        exact: &[
-            "BASH_ENV",
-            "ENV",
-            "PROMPT_COMMAND",
-            "PS1",
-            "PS4",
-            "SHELLOPTS",
-            // PowerShell and cmd.
-            "PSEXECUTIONPOLICYPREFERENCE",
-            "__PSLOCKDOWNPOLICY",
-            "PROMPT",
-            "DIRCMD",
-            "COPYCMD",
-        ],
+        exact: &["PATH", "PATHEXT", "COMSPEC", "SYSTEMROOT", "WINDIR"],
         prefixes: &[],
     },
     Rule {
-        class: ReservedClass::TrafficRedirect,
-        exact: &[
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "ALL_PROXY",
-            "NO_PROXY",
-            "FTP_PROXY",
-            "SSL_CERT_FILE",
-            "SSL_CERT_DIR",
-            "SSLKEYLOGFILE",
-            "REQUESTS_CA_BUNDLE",
-            "CURL_CA_BUNDLE",
-            "AWS_CA_BUNDLE",
-            "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH",
-            "NODE_EXTRA_CA_CERTS",
-            "NODE_TLS_REJECT_UNAUTHORIZED",
-            "GIT_SSL_NO_VERIFY",
-            "GIT_SSL_CAINFO",
-            "GIT_SSL_CAPATH",
-            "AWS_ENDPOINT_URL",
-            "DOCKER_HOST",
-            // Package registries and indexes.
-            "GOPROXY",
-            "GONOPROXY",
-            "GOSUMDB",
-            "GONOSUMDB",
-            "GOINSECURE",
-            "UV_INDEX_URL",
-            "UV_DEFAULT_INDEX",
-            "UV_EXTRA_INDEX_URL",
-            "UV_INDEX",
-            "UV_FIND_LINKS",
-            "UV_PUBLISH_URL",
-            "UV_PYTHON_INSTALL_MIRROR",
-            "UV_INSECURE_HOST",
-            "YARN_NPM_REGISTRY_SERVER",
-            "YARN_HTTP_PROXY",
-            "YARN_HTTPS_PROXY",
-            "BUN_CONFIG_REGISTRY",
-            "COREPACK_NPM_REGISTRY",
-            "RUSTUP_DIST_SERVER",
-            "RUSTUP_UPDATE_ROOT",
-        ],
-        prefixes: &[
-            "NPM_CONFIG_",
-            "PIP_",
-            "OPENSSL_",
-            "AWS_ENDPOINT_URL_",
-            "CARGO_HTTP_",
-            "CARGO_NET_",
-            "CARGO_SOURCE_",
-        ],
+        doc: "https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/prompt",
+        class: ReservedClass::ShellStartup,
+        // `PROMPT` is printed on every line; `DIRCMD` and `COPYCMD` are read by dir and copy.
+        exact: &["PROMPT", "DIRCMD", "COPYCMD"],
+        prefixes: &[],
     },
     Rule {
+        doc: "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables",
+        class: ReservedClass::ShellStartup,
+        exact: &["PSEXECUTIONPOLICYPREFERENCE", "__PSLOCKDOWNPOLICY"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables",
+        class: ReservedClass::ProcessControl,
+        exact: &["PSMODULEPATH"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://learn.microsoft.com/en-us/windows/deployment/usmt/usmt-recognized-environment-variables",
         class: ReservedClass::UserLocation,
         exact: &[
             "TEMP",
@@ -600,47 +425,842 @@ const RESERVED: &[Rule] = &[
             "HOMEPATH",
             "APPDATA",
             "LOCALAPPDATA",
-            "XDG_CONFIG_HOME",
-            "XDG_DATA_HOME",
-            "XDG_CACHE_HOME",
-            // Where toolchains and package managers keep their settings and files.
-            "CARGO_HOME",
-            "CARGO_TARGET_DIR",
-            "RUSTUP_HOME",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://specifications.freedesktop.org/basedir-spec/latest/",
+        class: ReservedClass::UserLocation,
+        exact: &["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://man7.org/linux/man-pages/man8/ld.so.8.html",
+        class: ReservedClass::ProcessControl,
+        exact: &[],
+        prefixes: &["LD_", "DYLD_"],
+    },
+    // Rust and Cargo. `RUSTC_` covers RUSTC_WRAPPER, RUSTC_WORKSPACE_WRAPPER and
+    // RUSTC_BOOTSTRAP. Cargo reads every `CARGO_` variable as a configuration key, which
+    // covers CARGO_BUILD_RUSTC*, CARGO_ENCODED_RUSTFLAGS and CARGO_TARGET_<triple>_RUNNER,
+    // _LINKER and _RUSTFLAGS. `is_registry_credential` takes the registry tokens out again.
+    Rule {
+        doc: "https://doc.rust-lang.org/cargo/reference/environment-variables.html",
+        class: ReservedClass::HelperProgram,
+        exact: &[
+            "CARGO",
+            "RUSTC",
+            "RUSTDOC",
+            "RUSTFMT",
+            "RUSTFLAGS",
+            "RUSTDOCFLAGS",
+        ],
+        prefixes: &["RUSTC_", "CARGO_"],
+    },
+    Rule {
+        doc: "https://doc.rust-lang.org/cargo/reference/environment-variables.html",
+        class: ReservedClass::TrafficRedirect,
+        exact: &[],
+        prefixes: &["CARGO_HTTP_", "CARGO_NET_", "CARGO_SOURCE_"],
+    },
+    Rule {
+        doc: "https://doc.rust-lang.org/cargo/reference/environment-variables.html",
+        class: ReservedClass::UserLocation,
+        exact: &["CARGO_HOME", "CARGO_TARGET_DIR"],
+        prefixes: &[],
+    },
+    // rustup picks the toolchain it runs from every `RUSTUP_` variable but the few below.
+    Rule {
+        doc: "https://rust-lang.github.io/rustup/environment-variables.html",
+        class: ReservedClass::ProcessControl,
+        exact: &[],
+        prefixes: &["RUSTUP_"],
+    },
+    Rule {
+        doc: "https://rust-lang.github.io/rustup/environment-variables.html",
+        class: ReservedClass::TrafficRedirect,
+        exact: &["RUSTUP_DIST_SERVER", "RUSTUP_DIST_ROOT", "RUSTUP_UPDATE_ROOT"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://rust-lang.github.io/rustup/environment-variables.html",
+        class: ReservedClass::UserLocation,
+        exact: &["RUSTUP_HOME"],
+        prefixes: &[],
+    },
+    // The cc crate, besides the build-variable shape in `is_build_variable`.
+    Rule {
+        doc: "https://docs.rs/cc/latest/cc/#external-configuration-via-environment-variables",
+        class: ReservedClass::HelperProgram,
+        exact: &["CROSS_COMPILE"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://docs.rs/cc/latest/cc/#external-configuration-via-environment-variables",
+        class: ReservedClass::ProcessControl,
+        // Where the compiler finds its tools, headers and libraries.
+        exact: &[
+            "SDKROOT",
+            "WASI_SYSROOT",
+            "WASM_MUSL_SYSROOT",
+            "PAUTHTEST_SYSROOT",
+            "VCINSTALLDIR",
+            "VSINSTALLDIR",
+            "CPATH",
+        ],
+        prefixes: &[],
+    },
+    // The MSVC compiler and linker, which cc runs on Windows.
+    Rule {
+        doc: "https://learn.microsoft.com/en-us/cpp/build/reference/cl-environment-variables",
+        class: ReservedClass::HelperProgram,
+        // Options and files that cl and link add to every command line.
+        exact: &["CL", "_CL_", "LINK", "_LINK_"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://learn.microsoft.com/en-us/cpp/build/reference/linking",
+        class: ReservedClass::ProcessControl,
+        exact: &["INCLUDE", "LIB", "LIBPATH"],
+        prefixes: &[],
+    },
+    // Git.
+    Rule {
+        doc: "https://git-scm.com/docs/git#_environment_variables",
+        class: ReservedClass::HelperProgram,
+        exact: &[
+            "GIT_SSH_COMMAND",
+            "GIT_SSH",
+            "GIT_SSH_VARIANT",
+            "GIT_ASKPASS",
+            "GIT_EXEC_PATH",
+            "GIT_PROXY_COMMAND",
+            "GIT_EXTERNAL_DIFF",
+            "GIT_TEMPLATE_DIR",
+            "GIT_PAGER",
+            "GIT_EDITOR",
+            "GIT_SEQUENCE_EDITOR",
+            "GIT_CONFIG",
+            "GIT_ALLOW_PROTOCOL",
+            "GIT_PROTOCOL_FROM_USER",
+            "GIT_ATTR_SOURCE",
+        ],
+        // GIT_CONFIG_GLOBAL, _SYSTEM, _NOSYSTEM, _COUNT, _KEY_<n>, _VALUE_<n>, _PARAMETERS.
+        prefixes: &["GIT_CONFIG_"],
+    },
+    Rule {
+        doc: "https://git-scm.com/docs/git#_environment_variables",
+        class: ReservedClass::UserLocation,
+        exact: &[
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_COMMON_DIR",
+            "GIT_NAMESPACE",
+            "GIT_CEILING_DIRECTORIES",
+            "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+            "GIT_REFERENCE_BACKEND",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        // http.ssl* and http.proxySSL* in git-config: GIT_SSL_NO_VERIFY, _CAINFO, _CAPATH,
+        // _CERT, _KEY, _VERSION, _CIPHER_LIST and GIT_PROXY_SSL_CERT, _KEY, _CAINFO.
+        doc: "https://git-scm.com/docs/git-config",
+        class: ReservedClass::TrafficRedirect,
+        exact: &[],
+        prefixes: &["GIT_SSL_", "GIT_PROXY_"],
+    },
+    Rule {
+        doc: "https://git-scm.com/docs/git#_environment_variables",
+        class: ReservedClass::OutputCapture,
+        exact: &["GIT_TRACE", "GIT_TRACE2"],
+        // Every trace target, and the Windows redirections of the standard streams.
+        prefixes: &["GIT_TRACE_", "GIT_TRACE2_", "GIT_REDIRECT_"],
+    },
+    // Go.
+    Rule {
+        doc: "https://pkg.go.dev/cmd/go#hdr-Environment_variables",
+        class: ReservedClass::ProcessControl,
+        exact: &["GOROOT", "GOTOOLCHAIN", "GCCGOTOOLDIR"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://pkg.go.dev/cmd/go#hdr-Environment_variables",
+        class: ReservedClass::HelperProgram,
+        exact: &[
+            "GOFLAGS",
+            "GOAUTH",
+            "GCCGO",
+            "GOCACHEPROG",
+            "GOVCS",
+            "GO_EXTLINK_ENABLED",
+        ],
+        prefixes: &["CGO_"],
+    },
+    Rule {
+        doc: "https://pkg.go.dev/cmd/go#hdr-Environment_variables",
+        class: ReservedClass::UserLocation,
+        exact: &[
             "GOPATH",
             "GOBIN",
             "GOENV",
             "GOMODCACHE",
             "GOCACHE",
-            "BUN_INSTALL",
-            "DENO_DIR",
-            "PNPM_HOME",
-            "GRADLE_USER_HOME",
+            "GOWORK",
+            "GOTMPDIR",
         ],
         prefixes: &[],
     },
+    Rule {
+        doc: "https://pkg.go.dev/cmd/go#hdr-Environment_variables",
+        class: ReservedClass::TrafficRedirect,
+        exact: &[
+            "GOPROXY",
+            "GONOPROXY",
+            "GOSUMDB",
+            "GONOSUMDB",
+            "GOINSECURE",
+            "GOPRIVATE",
+            "GODEBUG",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://pkg.go.dev/cmd/go#hdr-Environment_variables",
+        class: ReservedClass::OutputCapture,
+        exact: &["GOCOVERDIR"],
+        prefixes: &[],
+    },
+    // Node, npm and Yarn.
+    Rule {
+        doc: "https://nodejs.org/api/cli.html#environment-variables",
+        class: ReservedClass::StartupHook,
+        exact: &[
+            "NODE_OPTIONS",
+            "NODE_PATH",
+            "NODE_REPL_EXTERNAL_MODULE",
+            "NODE_COMPILE_CACHE",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://nodejs.org/api/cli.html#environment-variables",
+        class: ReservedClass::TrafficRedirect,
+        exact: &[
+            "NODE_EXTRA_CA_CERTS",
+            "NODE_TLS_REJECT_UNAUTHORIZED",
+            "NODE_USE_ENV_PROXY",
+            "NODE_USE_SYSTEM_CA",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://nodejs.org/api/cli.html#environment-variables",
+        class: ReservedClass::OutputCapture,
+        exact: &["NODE_REDIRECT_WARNINGS", "NODE_V8_COVERAGE", "NODE_REPL_HISTORY"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://www.electronjs.org/docs/latest/api/environment-variables",
+        class: ReservedClass::StartupHook,
+        exact: &["ELECTRON_RUN_AS_NODE"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://docs.npmjs.com/cli/using-npm/config#environment-variables",
+        class: ReservedClass::TrafficRedirect,
+        exact: &[],
+        prefixes: &["NPM_CONFIG_"],
+    },
+    // Yarn reads every setting from `YARN_` and its name in snake case. The two credential
+    // settings come out again in `is_registry_credential`.
+    Rule {
+        doc: "https://yarnpkg.com/configuration/yarnrc",
+        class: ReservedClass::HelperProgram,
+        exact: &["YARN_YARN_PATH"],
+        prefixes: &["YARN_"],
+    },
+    Rule {
+        doc: "https://yarnpkg.com/configuration/yarnrc",
+        class: ReservedClass::TrafficRedirect,
+        exact: &["YARN_NPM_REGISTRY_SERVER", "YARN_HTTP_PROXY", "YARN_HTTPS_PROXY"],
+        prefixes: &[],
+    },
+    // Not re-checked in this unit: Bun, Corepack, Deno and pnpm.
+    Rule {
+        doc: "https://bun.sh/docs/runtime/env",
+        class: ReservedClass::TrafficRedirect,
+        exact: &["BUN_CONFIG_REGISTRY", "COREPACK_NPM_REGISTRY"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://bun.sh/docs/runtime/env",
+        class: ReservedClass::UserLocation,
+        exact: &["BUN_INSTALL", "DENO_DIR", "PNPM_HOME"],
+        prefixes: &[],
+    },
+    // Python, pip and uv.
+    Rule {
+        doc: "https://docs.python.org/3/using/cmdline.html#environment-variables",
+        class: ReservedClass::StartupHook,
+        exact: &[
+            "PYTHONPATH",
+            "PYTHONHOME",
+            "PYTHONSTARTUP",
+            "PYTHONINSPECT",
+            "PYTHONBREAKPOINT",
+            "PYTHONUSERBASE",
+            "PYTHONEXECUTABLE",
+            "PYTHONPLATLIBDIR",
+            "PYTHONPYCACHEPREFIX",
+            // A warning filter names a category class, and Python imports its module.
+            "PYTHONWARNINGS",
+            "PYTHON_PRESITE",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://docs.python.org/3/using/cmdline.html#environment-variables",
+        class: ReservedClass::OutputCapture,
+        exact: &["PYTHON_HISTORY", "PYTHONDUMPREFSFILE"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://pip.pypa.io/en/stable/topics/configuration/#environment-variables",
+        class: ReservedClass::TrafficRedirect,
+        exact: &[],
+        prefixes: &["PIP_"],
+    },
+    Rule {
+        doc: "https://docs.astral.sh/uv/reference/environment/",
+        class: ReservedClass::ProcessControl,
+        exact: &[
+            "UV_PYTHON",
+            "UV_PROJECT_ENVIRONMENT",
+            "UV_SYSTEM_PYTHON",
+            "VIRTUAL_ENV",
+            "CONDA_PREFIX",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://docs.astral.sh/uv/reference/environment/",
+        class: ReservedClass::HelperProgram,
+        exact: &["UV", "RUFF", "TY", "UV_CONFIG_FILE", "UV_ENV_FILE"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://docs.astral.sh/uv/reference/environment/",
+        class: ReservedClass::TrafficRedirect,
+        exact: &[
+            "UV_INDEX_URL",
+            "UV_DEFAULT_INDEX",
+            "UV_EXTRA_INDEX_URL",
+            "UV_INDEX",
+            "UV_FIND_LINKS",
+            "UV_PUBLISH_URL",
+            "UV_PUBLISH_CHECK_URL",
+            "UV_PUBLISH_INDEX",
+            "UV_PYTHON_INSTALL_MIRROR",
+            "UV_PYPY_INSTALL_MIRROR",
+            "UV_PYODIDE_INSTALL_MIRROR",
+            "UV_GRAALPY_INSTALL_MIRROR",
+            "UV_ASTRAL_MIRROR_URL",
+            "UV_PYTHON_DOWNLOADS_JSON_URL",
+            "UV_INSTALLER_GITHUB_BASE_URL",
+            "UV_INSTALLER_GHE_BASE_URL",
+            "UV_DOWNLOAD_URL",
+            "UV_S3_ENDPOINT_URL",
+            "UV_GCS_ENDPOINT_URL",
+            "UV_AZURE_ENDPOINT_URL",
+            "UV_INSECURE_HOST",
+            "UV_SYSTEM_CERTS",
+            "UV_NATIVE_TLS",
+            "SSL_CLIENT_CERT",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://docs.astral.sh/uv/reference/environment/",
+        class: ReservedClass::UserLocation,
+        exact: &["NETRC"],
+        prefixes: &[],
+    },
+    // Not re-checked in this unit: Perl, Ruby, PHP, Lua and R.
+    Rule {
+        doc: "https://perldoc.perl.org/perlrun#ENVIRONMENT",
+        class: ReservedClass::StartupHook,
+        exact: &[
+            "PERL5OPT",
+            "PERL5LIB",
+            "PERLLIB",
+            "PERL5DB",
+            "RUBYOPT",
+            "RUBYLIB",
+            "PHPRC",
+            "PHP_INI_SCAN_DIR",
+            "LUA_INIT",
+            "LUA_PATH",
+            "LUA_CPATH",
+            "R_PROFILE",
+            "R_PROFILE_USER",
+            "R_ENVIRON",
+            "R_ENVIRON_USER",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://guides.rubygems.org/command-reference/",
+        class: ReservedClass::ProcessControl,
+        exact: &["GEM_HOME", "GEM_PATH"],
+        prefixes: &[],
+    },
+    // Java, its build tools and servers.
+    Rule {
+        doc: "https://docs.oracle.com/en/java/javase/21/docs/specs/man/java.html",
+        class: ReservedClass::StartupHook,
+        exact: &[
+            "JAVA_TOOL_OPTIONS",
+            "_JAVA_OPTIONS",
+            "JDK_JAVA_OPTIONS",
+            "CLASSPATH",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://docs.oracle.com/en/java/javase/21/docs/specs/man/javac.html",
+        class: ReservedClass::StartupHook,
+        exact: &["JDK_JAVAC_OPTIONS"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://docs.oracle.com/en/java/javase/21/docs/specs/man/java.html",
+        class: ReservedClass::ProcessControl,
+        exact: &["JAVA_HOME"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://ant.apache.org/manual/running.html",
+        class: ReservedClass::StartupHook,
+        exact: &["ANT_OPTS", "ANT_ARGS"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://ant.apache.org/manual/running.html",
+        class: ReservedClass::ProcessControl,
+        exact: &["JAVACMD"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://maven.apache.org/configure.html",
+        class: ReservedClass::StartupHook,
+        exact: &["MAVEN_OPTS"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://maven.apache.org/configure.html",
+        class: ReservedClass::HelperProgram,
+        exact: &["MAVEN_ARGS"],
+        prefixes: &[],
+    },
+    // Not re-checked in this unit: Gradle, sbt and Tomcat.
+    Rule {
+        doc: "https://docs.gradle.org/current/userguide/build_environment.html",
+        class: ReservedClass::StartupHook,
+        exact: &["GRADLE_OPTS", "SBT_OPTS", "JAVA_OPTS", "CATALINA_OPTS"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://docs.gradle.org/current/userguide/build_environment.html",
+        class: ReservedClass::UserLocation,
+        exact: &["GRADLE_USER_HOME"],
+        prefixes: &[],
+    },
+    // .NET.
+    Rule {
+        doc: "https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-environment-variables",
+        class: ReservedClass::ProcessControl,
+        exact: &[
+            "DOTNET_HOST_PATH",
+            "DOTNET_SERVICING",
+            "DOTNET_SHARED_STORE",
+            "DOTNET_MULTILEVEL_LOOKUP",
+        ],
+        // DOTNET_ROOT, DOTNET_ROOT_<ARCH> and DOTNET_ROOT(x86).
+        prefixes: &["DOTNET_ROOT"],
+    },
+    Rule {
+        doc: "https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-environment-variables",
+        class: ReservedClass::StartupHook,
+        exact: &[
+            "DOTNET_STARTUP_HOOKS",
+            "DOTNET_ADDITIONAL_DEPS",
+            // An endpoint that diagnostic tools connect to; one can load a profiler.
+            "DOTNET_DIAGNOSTICPORTS",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        // The runtime reads each setting as DOTNET_<name> and, before .NET 5, COMPlus_<name>.
+        doc: "https://learn.microsoft.com/en-us/dotnet/core/runtime-config/debugging-profiling",
+        class: ReservedClass::StartupHook,
+        exact: &[],
+        prefixes: &["COR_PROFILER", "COR_ENABLE_PROFILING", "CORECLR_", "COMPLUS_"],
+    },
+    Rule {
+        doc: "https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-environment-variables",
+        class: ReservedClass::HelperProgram,
+        exact: &["DOTNET_DBGCREATEDUMPTOOLPATH"],
+        prefixes: &["DOTNET_MSBUILD_SDK_RESOLVER_"],
+    },
+    Rule {
+        doc: "https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-environment-variables",
+        class: ReservedClass::UserLocation,
+        exact: &["NUGET_PACKAGES"],
+        prefixes: &[],
+    },
+    Rule {
+        // Host traces, EventPipe traces, and the dumps of process memory on a crash.
+        doc: "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/collect-dumps-crash",
+        class: ReservedClass::OutputCapture,
+        exact: &["DOTNET_ENABLEEVENTPIPE"],
+        prefixes: &[
+            "DOTNET_HOST_TRACE",
+            "COREHOST_",
+            "DOTNET_DBG",
+            "DOTNET_CREATEDUMP",
+            "DOTNET_ENABLECRASHREPORT",
+            "DOTNET_EVENTPIPE",
+        ],
+    },
+    // make. GNU make turns every environment variable into a make variable; these are the
+    // programs and flags of its implicit rules, and the files and shell it reads.
+    Rule {
+        doc: "https://www.gnu.org/software/make/manual/html_node/Implicit-Variables.html",
+        class: ReservedClass::HelperProgram,
+        exact: &[
+            "MAKE",
+            "MAKEFLAGS",
+            "MFLAGS",
+            "MAKEFILES",
+            "MAKESHELL",
+            "AS",
+            "CO",
+            "CPP",
+            "CTANGLE",
+            "CWEAVE",
+            "FC",
+            "GET",
+            "LEX",
+            "LINT",
+            "M2C",
+            "MAKEINFO",
+            "PC",
+            "RM",
+            "TANGLE",
+            "TEX",
+            "TEXI2DVI",
+            "WEAVE",
+            "YACC",
+            "CPPFLAGS",
+            "LDFLAGS",
+            "LDLIBS",
+            "LOADLIBES",
+            // binutils that build scripts and makefiles run.
+            "LD",
+            "NM",
+            "STRIP",
+            "OBJCOPY",
+            "OBJDUMP",
+        ],
+        prefixes: &[],
+    },
+    // CMake: the compiler of each language and its flags, ASM<DIALECT> and
+    // ASM<DIALECT>FLAGS. CMAKE_* is the build-variable shape; <PackageName>_ROOT is a shape.
+    Rule {
+        doc: "https://cmake.org/cmake/help/latest/manual/cmake-env-variables.7.html",
+        class: ReservedClass::HelperProgram,
+        exact: &[
+            "OBJC",
+            "OBJCXX",
+            "CUDACXX",
+            "CUDAHOSTCXX",
+            "HIPCXX",
+            "HIPHOSTCXX",
+            "ISPC",
+            "RC",
+            "SWIFTC",
+            "SYCLCXX",
+            "ASM",
+        ],
+        prefixes: &["ASM_"],
+    },
+    Rule {
+        doc: "https://cmake.org/cmake/help/latest/manual/cmake-env-variables.7.html",
+        class: ReservedClass::UserLocation,
+        exact: &["DESTDIR"],
+        prefixes: &[],
+    },
+    // Shells.
+    Rule {
+        doc: "https://www.gnu.org/software/bash/manual/html_node/Bash-Variables.html",
+        class: ReservedClass::ShellStartup,
+        exact: &[
+            "BASH_ENV",
+            "ENV",
+            "PROMPT_COMMAND",
+            "PS0",
+            "PS1",
+            "PS2",
+            "PS3",
+            "PS4",
+            "SHELLOPTS",
+            "BASHOPTS",
+            "BASH_LOADABLES_PATH",
+            "MAILPATH",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://www.gnu.org/software/bash/manual/html_node/Bash-Variables.html",
+        class: ReservedClass::ProcessControl,
+        // Both change which file a command name or a `cd` reaches.
+        exact: &["EXECIGNORE", "CDPATH"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://www.gnu.org/software/bash/manual/html_node/Bash-Variables.html",
+        class: ReservedClass::OutputCapture,
+        exact: &["HISTFILE"],
+        prefixes: &[],
+    },
+    // Pagers, editors, browsers and password helpers that many tools run. The shapes in
+    // `ENDINGS` cover the `<TOOL>_PAGER` and `<TOOL>_EDITOR` forms.
+    Rule {
+        doc: "https://man7.org/linux/man-pages/man1/less.1.html",
+        class: ReservedClass::HelperProgram,
+        exact: &[
+            "EDITOR",
+            "VISUAL",
+            "PAGER",
+            "MANPAGER",
+            "BROWSER",
+            "SHELL",
+            "FCEDIT",
+            "SSH_ASKPASS",
+            "SUDO_ASKPASS",
+            "LESS",
+            "LESSOPEN",
+            "LESSCLOSE",
+            "LESSKEY",
+            "LESSKEYIN",
+            "LESSKEY_SYSTEM",
+            "LESSKEYIN_SYSTEM",
+            "LESSEDIT",
+            "LESSGLOBALTAGS",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://man7.org/linux/man-pages/man1/less.1.html",
+        class: ReservedClass::OutputCapture,
+        exact: &["LESSHISTFILE"],
+        prefixes: &[],
+    },
+    // Proxies and trusted certificates. curl documents the `<scheme>_PROXY` form, which the
+    // shape in `ENDINGS` covers; OpenSSL reads every `OPENSSL_` variable.
+    Rule {
+        doc: "https://curl.se/docs/manpage.html#ENVIRONMENT",
+        class: ReservedClass::TrafficRedirect,
+        exact: &[
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "FTP_PROXY",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "SSLKEYLOGFILE",
+            "CURL_CA_BUNDLE",
+            "REQUESTS_CA_BUNDLE",
+            "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH",
+        ],
+        prefixes: &["OPENSSL_"],
+    },
+    // Not re-checked in this unit: the AWS SDKs, Docker and Terraform.
+    Rule {
+        doc: "https://docs.aws.amazon.com/sdkref/latest/guide/settings-reference.html",
+        class: ReservedClass::TrafficRedirect,
+        exact: &["AWS_CA_BUNDLE", "AWS_ENDPOINT_URL", "DOCKER_HOST"],
+        prefixes: &["AWS_ENDPOINT_URL_"],
+    },
+    Rule {
+        doc: "https://developer.hashicorp.com/terraform/cli/config/environment-variables",
+        class: ReservedClass::HelperProgram,
+        exact: &[
+            "AWS_CONFIG_FILE",
+            "DOCKER_CONFIG",
+            "TF_CLI_ARGS",
+            "TF_CLI_CONFIG_FILE",
+        ],
+        prefixes: &["TF_CLI_ARGS_"],
+    },
 ];
 
-/// The reserved class of a name, or `None`. Windows compares variable names without regard
-/// to case, so this does too. A whole-name match decides first. Then the longest matching
-/// prefix decides (`CARGO_HTTP_` before `CARGO_`), unless the name is a registry token.
-pub fn reserved_class(name: &str) -> Option<ReservedClass> {
-    let upper = name.to_ascii_uppercase();
-    if let Some(rule) = RESERVED
-        .iter()
-        .find(|rule| rule.exact.contains(&upper.as_str()))
-    {
+const BUILD_VARIABLE_BASES: &[&str] = &[
+    // https://docs.rs/cc/latest/cc/#external-configuration-via-environment-variables
+    // (CC also covers CC_MASM_ASM and the CC_* settings of cc itself).
+    "CC",
+    "CXX",
+    "AR",
+    "RANLIB",
+    "NVCC",
+    "CXXSTDLIB",
+    "CFLAGS",
+    "CXXFLAGS",
+    "ARFLAGS",
+    "RANLIBFLAGS",
+    // https://github.com/rust-lang/cmake-rs/blob/master/src/lib.rs (getenv_target_os);
+    // CMAKE also covers CMAKE_TOOLCHAIN_FILE, CMAKE_GENERATOR and every CMake setting.
+    "CMAKE",
+    "EMCMAKE",
+    "EMMAKE",
+    // https://docs.rs/pkg-config/latest/pkg_config/
+    "PKG_CONFIG",
+];
+
+/// The build-variable shape of the cc, cmake and pkg-config crates:
+/// `[HOST_|TARGET_]<base>[_<target>]`, where the target is in the hyphen or the underscore
+/// spelling (`CC_x86_64-unknown-linux-gnu`, `CC_x86_64_unknown_linux_gnu`). Any text after
+/// `<base>_` counts as a target, because a custom target can have any name. The cc crate
+/// documents the shape; the cmake and pkg-config crates read their variables the same way.
+fn is_build_variable(upper: &str) -> bool {
+    let rest = upper
+        .strip_prefix("HOST_")
+        .or_else(|| upper.strip_prefix("TARGET_"))
+        .unwrap_or(upper);
+    BUILD_VARIABLE_BASES.iter().any(|base| {
+        rest == *base
+            || rest
+                .strip_prefix(base)
+                .and_then(|tail| tail.strip_prefix('_'))
+                .is_some_and(|target| !target.is_empty())
+    })
+}
+
+/// The shapes that the documented names of the families share: the last `_`-separated
+/// token of a name says that its value is a program, its options, a location or a proxy.
+/// For example GIT_PAGER and GH_PAGER, RUSTC_WRAPPER, CMAKE_<LANG>_COMPILER_LAUNCHER,
+/// CARGO_TARGET_<triple>_RUNNER and _LINKER, GIT_SSH_COMMAND, TF_CLI_ARGS, JAVA_OPTS,
+/// NODE_OPTIONS, DOTNET_STARTUP_HOOKS, NODE_PATH, NUGET_PLUGIN_PATHS, CARGO_HOME, CMake's
+/// <PackageName>_ROOT, DENO_DIR, XDG_CONFIG_DIRS and curl's <scheme>_PROXY.
+const ENDINGS: &[(&str, ReservedClass)] = &[
+    ("PAGER", ReservedClass::HelperProgram),
+    ("EDITOR", ReservedClass::HelperProgram),
+    ("BROWSER", ReservedClass::HelperProgram),
+    ("ASKPASS", ReservedClass::HelperProgram),
+    ("COMMAND", ReservedClass::HelperProgram),
+    ("WRAPPER", ReservedClass::HelperProgram),
+    ("LAUNCHER", ReservedClass::HelperProgram),
+    ("RUNNER", ReservedClass::HelperProgram),
+    ("LINKER", ReservedClass::HelperProgram),
+    ("ARGS", ReservedClass::HelperProgram),
+    ("OPTS", ReservedClass::StartupHook),
+    ("OPTIONS", ReservedClass::StartupHook),
+    ("HOOKS", ReservedClass::StartupHook),
+    ("PATH", ReservedClass::ProcessControl),
+    ("PATHS", ReservedClass::ProcessControl),
+    ("HOME", ReservedClass::UserLocation),
+    ("ROOT", ReservedClass::UserLocation),
+    ("DIR", ReservedClass::UserLocation),
+    ("DIRS", ReservedClass::UserLocation),
+    ("PROXY", ReservedClass::TrafficRedirect),
+];
+
+/// The flags of a tool: a last token that ends in FLAGS and is longer, as in CFLAGS,
+/// LDFLAGS, RUSTFLAGS, GOFLAGS, CGO_LDFLAGS and every <LANG>FLAGS of make and CMake.
+/// `FEATURE_FLAGS` is no tool's flags.
+fn is_tool_flags(last: &str) -> bool {
+    last.len() > "FLAGS".len() && last.ends_with("FLAGS")
+}
+
+fn reserved_rule(upper: &str) -> Option<ReservedClass> {
+    if let Some(rule) = RESERVED.iter().find(|rule| rule.exact.contains(&upper)) {
         return Some(rule.class);
     }
-    if is_credential_name(&upper) {
+    if is_registry_credential(upper) {
         return None;
     }
-    RESERVED
+    if let Some(class) = RESERVED
         .iter()
         .flat_map(|rule| rule.prefixes.iter().map(move |prefix| (rule.class, prefix)))
         .filter(|(_, prefix)| upper.starts_with(*prefix))
         .max_by_key(|(_, prefix)| prefix.len())
         .map(|(class, _)| class)
+    {
+        return Some(class);
+    }
+    if is_build_variable(upper) {
+        return Some(ReservedClass::HelperProgram);
+    }
+    let last = upper.rsplit('_').next().unwrap_or(upper);
+    if is_tool_flags(last) {
+        return Some(ReservedClass::HelperProgram);
+    }
+    ENDINGS
+        .iter()
+        .find(|(word, _)| *word == last)
+        .map(|(_, class)| *class)
+}
+
+/// The credential words. A name is a credential name when one of its `_`-separated tokens
+/// is one of these words, whole: `ASKPASS`, `KEYBOARD` and `MONKEY` are not.
+const CREDENTIAL_WORDS: &[&str] = &[
+    "KEY",
+    "KEYS",
+    "APIKEY",
+    "TOKEN",
+    "TOKENS",
+    "SECRET",
+    "SECRETS",
+    "PASSWORD",
+    "PASSWD",
+    "PASSPHRASE",
+    "PASS",
+    "CREDENTIAL",
+    "CREDENTIALS",
+];
+
+/// The class of a variable name: the one rule for every path that stores, imports, plans or
+/// hands over a variable (FR-02, CORE-R1-02). Windows compares variable names without regard
+/// to case, so this does too. The reserved rules decide first, in this order: a whole name
+/// of the table, a registry credential, the longest prefix of the table, the build-variable
+/// shape, and the shape of the last token. A name that no rule reserves is a credential name
+/// when a whole token is a credential word, and another name when none is.
+pub fn name_class(name: &str) -> NameClass {
+    let upper = name.to_ascii_uppercase();
+    if let Some(class) = reserved_rule(&upper) {
+        return NameClass::Reserved(class);
+    }
+    if upper
+        .split('_')
+        .any(|token| CREDENTIAL_WORDS.contains(&token))
+    {
+        NameClass::Credential
+    } else {
+        NameClass::Other
+    }
+}
+
+/// The reserved class of a name, or `None`: the reserved part of [`name_class`].
+pub fn reserved_class(name: &str) -> Option<ReservedClass> {
+    match name_class(name) {
+        NameClass::Reserved(class) => Some(class),
+        NameClass::Credential | NameClass::Other => None,
+    }
 }
 
 pub(crate) fn validate_process_var(name: &str, value: &str) -> crate::Result<()> {
@@ -649,7 +1269,7 @@ pub(crate) fn validate_process_var(name: &str, value: &str) -> crate::Result<()>
             "{name:?} is not a valid environment variable name"
         )));
     }
-    if let Some(class) = reserved_class(name) {
+    if let NameClass::Reserved(class) = name_class(name) {
         return Err(crate::Error::Invalid(format!(
             "{name:?} is reserved: {}",
             class.reason()
@@ -687,5 +1307,70 @@ pub fn derive_env_var(title: &str) -> String {
         format!("KEY_{out}")
     } else {
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn upper_name_part(text: &str) -> bool {
+        !text.is_empty()
+            && text.chars().all(|letter| {
+                letter.is_ascii_uppercase() || letter.is_ascii_digit() || letter == '_'
+            })
+    }
+
+    /// Each family names the documentation that its names come from, and holds only names
+    /// and prefixes in the upper-case form that `name_class` compares against.
+    #[test]
+    fn every_rule_names_its_documentation_and_holds_upper_case_names() {
+        for rule in RESERVED {
+            assert!(
+                rule.doc.starts_with("https://") || rule.doc == "docs/PROJECT.md",
+                "{:?}",
+                rule.doc
+            );
+            assert!(!rule.exact.is_empty() || !rule.prefixes.is_empty());
+            for name in rule.exact {
+                assert!(is_valid_env_var(name), "{name}");
+            }
+            for prefix in rule.prefixes {
+                assert!(upper_name_part(prefix), "{prefix}");
+            }
+        }
+        for word in BUILD_VARIABLE_BASES
+            .iter()
+            .chain(ENDINGS.iter().map(|(word, _)| word))
+            .chain(CREDENTIAL_WORDS)
+        {
+            assert!(upper_name_part(word), "{word}");
+        }
+    }
+
+    /// A name or a prefix sits in one rule only, so its class has one source.
+    #[test]
+    fn no_name_or_prefix_sits_in_two_rules() {
+        let mut names = std::collections::HashSet::new();
+        let mut prefixes = std::collections::HashSet::new();
+        for rule in RESERVED {
+            for name in rule.exact {
+                assert!(names.insert(*name), "{name} is in two rules");
+            }
+            for prefix in rule.prefixes {
+                assert!(prefixes.insert(*prefix), "{prefix} is in two rules");
+            }
+        }
+    }
+
+    /// Every whole name of the table has the class of its own rule: no other rule or shape
+    /// takes it away.
+    #[test]
+    fn every_whole_name_of_the_table_has_the_class_of_its_rule() {
+        for rule in RESERVED {
+            for name in rule.exact {
+                assert_eq!(name_class(name), NameClass::Reserved(rule.class), "{name}");
+            }
+        }
     }
 }
