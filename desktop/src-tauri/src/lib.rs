@@ -7,6 +7,7 @@ mod disclosure;
 pub mod error;
 mod import_review;
 mod launch;
+mod outcome;
 mod policy;
 mod private_export;
 #[cfg(windows)]

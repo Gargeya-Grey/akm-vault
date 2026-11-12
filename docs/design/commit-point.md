@@ -2,7 +2,7 @@
 
 - Status: unit 1 of the campaign to the release gate ([gate-campaign.md](gate-campaign.md)). Not yet reviewed. The owner may veto any decision under "Decisions for the owner's veto".
 - Scope: fault classes A and P in `desktop/src-tauri`, finding T-R3-04 (a vault write that finishes after a lock), the terminal start of T-R3-01, and the sweep of every other session-scoped effect.
-- Public API change: one hook in `akm-core` (`CommitGate`, section 3.3). The command line does not install it, so its behaviour does not change. No IPC shape changes in this stage.
+- Public API change: one hook in `akm-core` (`CommitGate`, section 3.3). The command line does not install it, so its behaviour does not change. Stage B adds the required argument `operationId` to `env_launch_terminal` and four record kinds (section 9). The reply of each command does not change.
 
 ## 1. The rule
 
@@ -29,7 +29,7 @@ Every effect in `desktop/src-tauri/src` that acts for a session. "Before" is the
 | 7 | Publish an exported file | `session.rs` `publish`, `commands.rs` `env_save` | Session and revision | Check, prepare, check, publish outside the gate. Contract 9: publication may finish after a lock and reports it. | Not changed. See decision 4. |
 | 8 | Reveal a value to the page | `session.rs` `reveal` | Session and presentation | The check and the hand-back of the value share one gate hold. | Not changed. It has no outside effect: the value goes back in the reply. |
 | 9 | Journal records (`run-requested`, export, recovery) | core `disclose_env`, `AuditLog` | Session, checked before | Outside the gate, because the journal takes a blocking file lock. | Not changed. Owner's option (a): a lock during the record is prompt, and the record can exist for an act that never happened. |
-| 10 | Recover a damaged journal | `commands.rs` `run_recovery` | Session and revision | A read access. A lock after the recovery answered `locked`. | Not changed by the commit point. The rename of the journal runs with no gate. See limit 4. |
+| 10 | Recover a damaged journal | `commands.rs` `run_recovery` | Session and revision | A read access. A lock after the recovery answered `locked`. | Not changed by the commit point. The rename of the journal runs with no gate. A lock after the rename answers `completedWhileLocked` (section 9.2). See limit 4. |
 
 Effects that are not session-scoped, and so stay out of this mechanism: the reminder preference (`reminders.json`, `Reminders::set_enabled`), which is an application preference; vault creation, which happens before a session exists and keeps its `completedWhileLocked` receipt; and the lock notice, which the lock itself sends.
 
@@ -84,10 +84,10 @@ Events: **lock** (an explicit lock, idle expiry, a Windows lock, suspend); **new
 
 | Moment | Lock or new session | Vault change | Hide or reload | Lost reply |
 |---|---|---|---|---|
-| Before the review, during the review | As `launch-with-keys.md` section 1.1. | `stalePreview` at the access after the approval. | No effect after the review is open (P2R2-02). | The page has no record before stage B of this unit. |
+| Before the review, during the review | As `launch-with-keys.md` section 1.1. | `stalePreview` at the access after the approval. | No effect after the review is open (P2R2-02). | The outcome record (section 9) says what happened. |
 | Values copied, vault released | `locked`. The record exists. No process. | | | |
 | Prepared (process exists, suspended) | The commit refuses. `locked`. The process is terminated before it ran one instruction of the shell. | The commit refuses. `stalePreview`. The process is terminated. | No effect. | |
-| Committed (resumed) | The terminal runs. The answer is the count: the start happened. | The terminal runs with the values of the reviewed revision. A later write does not reach it. | No effect. | The terminal runs. Stage B adds the record that the page reads. |
+| Committed (resumed) | The terminal runs. The answer is the count: the start happened. The outcome record says `terminalSessionEnded`. | The terminal runs with the values of the reviewed revision. A later write does not reach it. | No effect. | The terminal runs. The outcome record says `terminalStarted`, or `terminalSessionEnded` after a lock. |
 | Stall in prepare (`CreateProcessW` is slow) | A lock is prompt: no gate is held. The commit then refuses, and the process is terminated. | Same: the commit refuses. | | |
 | Stall in commit (`ResumeThread` is slow) | The lock waits for this one call. See limit 2. | | | |
 
@@ -114,7 +114,7 @@ Gone with this unit: the copies in `std::process::Command` (its environment map 
 1. A lock waits for one vault file replacement that is in progress. The replacement is one `rename` (or one hard link for a new vault). An antivirus or a cloud client can make it slow.
 2. A lock waits for one `ResumeThread` that is in progress.
 3. A lock waits for one notification hand-over to Windows that is in progress.
-4. The recovery of a damaged journal renames files in the journal folder with no gate. The core hook in this unit is in the vault save path only. A lock during the rename is prompt. At this stage the answer after it is `locked`, though the journal moved.
+4. The recovery of a damaged journal renames files in the journal folder with no gate. The core hook in this unit is in the vault save path only. A lock during the rename is prompt. The answer after it is `completedWhileLocked`, because the journal moved.
 5. Not verified: whether Windows shows the new console window of a suspended process before it is resumed. If it does, a refused start shows a console that closes at once. It needs the owner present to watch.
 
 ## 7. Tests
@@ -178,3 +178,63 @@ Each mutant is one change to the code. The named test must fail on it. All of th
 4. **File export stays outside this mechanism.** Contract 9 lets a publication finish after a lock and report it truthfully. Moving the rename under the gate would change that contract, which this unit may not do.
 5. **A write that returns success but replaced nothing answers `locked` when the session ended during it.** Before this unit, it answered `completedWhileLocked`. Nothing was written, so `locked` is the true answer.
 6. **The terminal no longer inherits handles.** `CreateProcessW` runs with `bInheritHandles` false. The console gets its own standard handles.
+7. **The outcome record starts at the session check.** A malformed operation ID or a stale session leaves no record: nothing ran, and the reply says so. Otherwise the record would have to name a session that is not the one of the request.
+8. **No dedupe of operation IDs.** Each dispatch leaves its own record. A page that reuses an ID gets two records with that ID. Native code keeps no list of used IDs.
+9. **The launch reply stays the count after a late lock.** The start happened, so the reply says so. The record says `terminalSessionEnded`. The reply shape does not change, as the contract with unit 2 requires.
+10. **A recovery that moved the journal answers `completedWhileLocked` after a lock.** Before, it answered `locked`, which said that nothing moved.
+
+## 9. An outcome for every dispatched request
+
+Fault class N: a request whose effect outlives the page must leave a true record on every way out. The page can lose a reply: a page load, a crash of the webview, or a lock that the page handles first. The record is then the only truth about the request.
+
+### 9.1 The rule
+
+- `outcome::dispatched` runs `env_import` and `env_launch_terminal`. The page makes the operation ID, a UUID, for each request.
+- A malformed operation ID is refused with `invalid`, and a session that is not the current one with `locked`. Both leave no record: nothing ran, and the reply says so.
+- From the session check on, one guard (`Outcome`) records exactly once, in its drop. So a reply, an early return through `?` and a panic that unwinds all leave one record. The default is "failed".
+- The reply decides the kind. A value: applied or started. `null`: declined. `completedWhileLocked`: session ended. Any other error: failed.
+- `Outcome::done` marks an effect that happened. The launch calls it right after the resume. A fault after that point records the start, and no later error turns the record into "failed".
+- "Session ended" means that the effect happened and that the session of the request was no longer the current one when the record was written. The check is the same as a status read: it does not count as activity, and it changes nothing in the session that is current. The record holds the session of the request, so a record of session A never names session B.
+- `vault_warnings` returns the record until `vault_dismiss_warnings` acknowledges it. The reply of each command does not change.
+
+| Request | Effect happened | Session ended after it | User declined | Anything else |
+|---|---|---|---|---|
+| `env_import` | `importApplied` | `importSessionEnded` | `importDeclined` | `importFailed` |
+| `env_launch_terminal` | `terminalStarted` | `terminalSessionEnded` | `terminalDeclined` | `terminalFailed` |
+
+### 9.2 The other commands
+
+- `env_save` has no operation ID, so it cannot leave a record. Its answers are true: `null` for a cancel, the path for a publication, `completedWhileLocked` for a publication that finished after a lock (contract 9), and an error that names any remnant. A lost reply loses only the answer: the file and the journal record exist. Proposal for unit 2: add `operationId` to `env_save` and give it the same guard.
+- `audit_recover` moves the damaged journal outside the gate (limit 4). A lock after the move used to answer `locked`, which said that nothing moved. Now an error after the move answers `completedWhileLocked`.
+
+### 9.3 Limits
+
+6. A panic inside the core after the vault replacement and before the import returns records `importFailed`, though the file holds the import. The vault file and the journal show the truth. No code in that path is known to panic.
+7. Records live in memory until the page acknowledges them or AKM quits. A record does not survive a restart.
+
+### 9.4 Tests
+
+| Rule | Test |
+|---|---|
+| One record on each way out, for both operations: a value, `null`, an error, `?`, `completedWhileLocked`, a panic before and after `done`, an error after `done`, a lock after `done` | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` |
+| No record before the session check | `class_n_a_malformed_operation_or_another_session_runs_nothing_and_leaves_no_record` |
+| A record of session A changes nothing in session B | `class_n_a_record_of_session_a_changes_nothing_in_session_b` |
+| A hidden window at the import check leaves a failed record (T-R3-05) | `t_r3_05_a_window_that_is_not_shown_gets_no_dialog_and_leaves_a_failed_record` |
+| A recovery that moved the journal answers `completedWhileLocked` after a lock | `fr14_a_lock_after_the_journal_moved_answers_completed_while_locked` |
+| Through the production handlers: each way out of a launch with the reply dropped, a page load while the review is open and then an approval, a hidden window at the window check, a lock at three steps, sessions A and B, and a hidden window at the import check | the outcome section of `desktop/src-tauri/tests/ipc_dispatch.rs` |
+
+### 9.5 Mutants
+
+Each mutant is one change to the code. The named test must fail on it. All of them failed.
+
+| Mutant | Test that fails |
+|---|---|
+| The drop of the guard records nothing | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` |
+| An error records "done" | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` |
+| The launch does not mark the start after the resume | the outcome section of `ipc_dispatch.rs` (a panic at `Started`) |
+| A late lock never gives "session ended" | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` |
+| A failure leaves no record (the premise of T-R3-05) | `t_r3_05_a_window_that_is_not_shown_gets_no_dialog_and_leaves_a_failed_record` |
+| The recovery answers the plain error after the journal moved | `fr14_a_lock_after_the_journal_moved_answers_completed_while_locked` |
+| A malformed operation ID is accepted | `class_n_a_malformed_operation_or_another_session_runs_nothing_and_leaves_no_record` |
+| The record names the current session, not the session of the request | `class_n_a_record_of_session_a_changes_nothing_in_session_b` |
+| An error after the start turns the record into "failed" | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` |

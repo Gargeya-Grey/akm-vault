@@ -91,6 +91,10 @@ pub enum OperationWarningKind {
     ImportSessionEnded,
     ImportFailed,
     ImportDeclined,
+    TerminalStarted,
+    TerminalSessionEnded,
+    TerminalFailed,
+    TerminalDeclined,
 }
 
 #[derive(Clone, Serialize)]
@@ -1286,9 +1290,10 @@ impl Session {
         Ok(current)
     }
 
-    /// The record belongs to the application, not to a session: it must survive a
-    /// lock and a lost reply. It holds an opaque operation id and a fixed kind only.
-    pub fn record_import(&self, ticket: Ticket, operation_id: &str, kind: OperationWarningKind) {
+    /// The outcome record of a dispatched request (`outcome.rs`). It belongs to the
+    /// application, not to a session: it must survive a lock and a lost reply. It holds the
+    /// opaque operation ID of the page, the session of the request and a fixed kind only.
+    pub fn record_operation(&self, ticket: Ticket, operation_id: &str, kind: OperationWarningKind) {
         if let Ok(mut gate) = self.gate() {
             gate.notices.push(OperationNotice {
                 id: operation_id.to_string(),

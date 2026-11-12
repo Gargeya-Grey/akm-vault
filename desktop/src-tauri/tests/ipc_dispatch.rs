@@ -20,6 +20,8 @@ mod import_review;
 #[path = "../src/launch.rs"]
 #[allow(unused_imports)]
 mod launch;
+#[path = "../src/outcome.rs"]
+mod outcome;
 #[path = "../src/policy.rs"]
 mod policy;
 #[path = "../src/private_export.rs"]
@@ -152,27 +154,75 @@ impl review_window::ReviewDialog for &Dialog {
 }
 
 /// The native terminal, scripted. It opens no window and starts no process: it records what
-/// native code would have started.
+/// native code would have started. `arm` makes the next review wait until the test answers it,
+/// and `at` runs a test step (a lock, a page load, a fault) when the launch reaches a step.
 type Started = Vec<(std::path::PathBuf, Vec<(String, String)>)>;
+type Step = (launch::LaunchStep, Box<dyn FnOnce() + Send>);
 struct Terminal {
-    folder: std::path::PathBuf,
+    /// The folder that the picker answers. `None` is a cancel.
+    folder: Mutex<Option<std::path::PathBuf>>,
     approve: AtomicBool,
+    live: AtomicBool,
+    fail_prepare: AtomicBool,
+    reviews: AtomicUsize,
+    hold: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    step: Mutex<Option<Step>>,
     started: Mutex<Started>,
+}
+impl Terminal {
+    fn new(folder: &std::path::Path) -> Arc<Self> {
+        Arc::new(Self {
+            folder: Mutex::new(Some(folder.to_path_buf())),
+            approve: AtomicBool::new(true),
+            live: AtomicBool::new(true),
+            fail_prepare: AtomicBool::new(false),
+            reviews: AtomicUsize::new(0),
+            hold: Mutex::default(),
+            step: Mutex::default(),
+            started: Mutex::default(),
+        })
+    }
+
+    /// `entered` fires when the review opens. Send on `release` to answer it.
+    fn arm(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *self.hold.lock().unwrap() = Some((entered_tx, release_rx));
+        (entered_rx, release_tx)
+    }
+
+    fn at(&self, step: launch::LaunchStep, run: impl FnOnce() + Send + 'static) {
+        *self.step.lock().unwrap() = Some((step, Box::new(run)));
+    }
 }
 impl launch::TerminalHost for Terminal {
     fn window_live(&self) -> bool {
-        true
+        self.live.load(Ordering::SeqCst)
     }
     fn choose_folder(&self) -> Result<Option<std::path::PathBuf>, error::CommandError> {
-        Ok(Some(self.folder.clone()))
+        Ok(self.folder.lock().unwrap().clone())
     }
     fn review_dialog(&self) -> Box<dyn review_window::ReviewDialog + '_> {
         Box::new(self)
+    }
+    fn reached(&self, step: launch::LaunchStep) {
+        let mut slot = self.step.lock().unwrap();
+        if slot.as_ref().is_some_and(|(at, _)| *at == step) {
+            let (_, run) = slot.take().unwrap();
+            drop(slot);
+            run();
+        }
     }
     fn prepare_terminal(
         &self,
         request: &launch::LaunchRequest,
     ) -> Result<Box<dyn session::Effect<Output = ()> + '_>, error::CommandError> {
+        if self.fail_prepare.load(Ordering::SeqCst) {
+            return Err(error::CommandError::new(
+                "terminal",
+                "The fake terminal could not be made.",
+            ));
+        }
         Ok(Box::new(FakeStart {
             started: &self.started,
             request: Some((request.folder.clone(), request.secrets.to_vec())),
@@ -199,6 +249,14 @@ impl session::Effect for FakeStart<'_> {
 
 impl review_window::ReviewDialog for &Terminal {
     fn show(&self, _: &review_window::ReviewText) -> Result<i32, review_window::ReviewFailure> {
+        self.reviews.fetch_add(1, Ordering::SeqCst);
+        let held = self.hold.lock().unwrap().take();
+        if let Some((entered, release)) = held {
+            entered.send(()).unwrap();
+            release
+                .recv_timeout(Duration::from_secs(60))
+                .expect("the test answers the review");
+        }
         Ok(if self.approve.load(Ordering::SeqCst) {
             review_window::CONFIRM_BUTTON
         } else {
@@ -300,11 +358,7 @@ fn main() {
     );
     session.observe(policy::Signal::Available);
     let dialog = Dialog::new();
-    let terminal = Arc::new(Terminal {
-        folder: directory.path().to_path_buf(),
-        approve: AtomicBool::new(true),
-        started: Mutex::default(),
-    });
+    let terminal = Terminal::new(directory.path());
     let owner = session.prepare_open().unwrap();
     *PAGE_SESSION.lock().unwrap() = Some(owner.clone());
     let ticket = session.claim_open(&owner).unwrap();
@@ -713,6 +767,8 @@ fn main() {
     the_dialog_is_the_review(&app, webview, &session, &dialog, directory.path());
     a_discard_names_its_session(&app, webview, &session, &dialog, directory.path());
     the_launch_command_takes_a_scope_and_no_program(webview, &terminal, directory.path());
+    every_dispatched_launch_leaves_one_record(webview, &session, &terminal, directory.path());
+    a_hidden_window_at_the_import_check_leaves_a_failed_record(webview, &dialog, directory.path());
     the_history_command_answers_times_and_field_names(webview, directory.path());
     a_page_that_holds_the_session_id_cannot_disclose_without_the_user(
         webview,
@@ -1037,7 +1093,10 @@ fn a_stale_request_never_acts_on_the_session_that_replaced_its_own(
         ("env_export", scope.clone()),
         ("env_copy", scope.clone()),
         ("env_save", scope.clone()),
-        ("env_launch_terminal", scope),
+        (
+            "env_launch_terminal",
+            serde_json::json!({"project": "demo", "environment": "dev", "operationId": uuid::Uuid::new_v4().to_string()}),
+        ),
         ("key_history", serde_json::json!({"id": id})),
         ("backup_info", serde_json::json!({})),
     ];
@@ -1105,6 +1164,7 @@ fn the_launch_command_takes_a_scope_and_no_program(
     )
     .unwrap();
     let hostile = serde_json::json!({
+        "operationId": uuid::Uuid::new_v4().to_string(),
         "project": "demo", "environment": "dev",
         "program": "calc.exe", "command": "calc.exe", "path": "C:/evil", "cwd": "C:/evil",
         "folder": "C:/evil", "workingDirectory": "C:/evil", "args": ["/c", "calc"],
@@ -1125,6 +1185,8 @@ fn the_launch_command_takes_a_scope_and_no_program(
     );
 
     terminal.approve.store(false, Ordering::SeqCst);
+    let mut hostile = hostile;
+    hostile["operationId"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
     assert_eq!(
         call(webview, "env_launch_terminal", hostile.clone()).unwrap(),
         serde_json::Value::Null,
@@ -1139,7 +1201,8 @@ fn the_launch_command_takes_a_scope_and_no_program(
         call(webview, "env_launch_terminal", stale).unwrap_err()["kind"],
         "locked"
     );
-    let mut unscoped = serde_json::json!({"project": "demo"});
+    let mut unscoped =
+        serde_json::json!({"project": "demo", "operationId": uuid::Uuid::new_v4().to_string()});
     unscoped["sessionId"] = serde_json::json!(owner);
     assert_eq!(
         call(webview, "env_launch_terminal", unscoped).unwrap_err()["kind"],
@@ -1148,6 +1211,296 @@ fn the_launch_command_takes_a_scope_and_no_program(
     );
     assert_eq!(terminal.started.lock().unwrap().len(), 1);
     println!("PASS: env_launch_terminal is registered, answers a count or null, ignores every program, path and argument that a page adds, and refuses a stale session.");
+}
+
+/// Class N, through the production handlers. Every launch that passes its session check leaves
+/// exactly one outcome record, on every way out, and the record does not depend on the reply:
+/// the test reads each reply as a page that lost it would, and then reads the record. A request
+/// with a malformed operation ID, or of a session that is not the current one, is refused with
+/// no record. A record of session A changes nothing in session B.
+fn every_dispatched_launch_leaves_one_record(
+    webview: &tauri::Webview<MockRuntime>,
+    session: &Arc<Session>,
+    terminal: &Arc<Terminal>,
+    directory: &std::path::Path,
+) {
+    use launch::LaunchStep;
+    let scope = |operation: &str| serde_json::json!({"operationId": operation, "project": "demo", "environment": "dev"});
+    let fresh = |name: &str| {
+        let (owner, _) = open_new(webview, directory, name);
+        call(
+            webview,
+            "key_add",
+            serde_json::json!({"draft": {"title": "Fake outcome", "secret": "fake-outcome-secret", "project": "demo", "environment": "dev", "envVar": "OUTCOME_TOKEN"}}),
+        )
+        .unwrap();
+        owner
+    };
+    let started = || terminal.started.lock().unwrap().len();
+    let only_record = |operation: &str, kind: &str, case: &str| {
+        assert_eq!(record_kinds(webview, operation), [kind], "{case}");
+        call(
+            webview,
+            "vault_dismiss_warnings",
+            serde_json::json!({"ids": [operation]}),
+        )
+        .unwrap();
+        assert!(
+            record_kinds(webview, operation).is_empty(),
+            "{case}: acknowledged"
+        );
+    };
+    let lock = {
+        let session = session.clone();
+        move || {
+            let _ = session.lock();
+        }
+    };
+    let mut owner = fresh("outcome-0.kdbx");
+
+    let malformed = call(webview, "env_launch_terminal", scope("not-a-uuid")).unwrap_err();
+    assert_eq!(malformed["kind"], "invalid");
+    let stale_operation = uuid::Uuid::new_v4().to_string();
+    let mut stale = scope(&stale_operation);
+    stale["sessionId"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
+    assert_eq!(
+        call(webview, "env_launch_terminal", stale).unwrap_err()["kind"],
+        "locked"
+    );
+    assert!(record_kinds(webview, &stale_operation).is_empty());
+    let report = call(webview, "vault_warnings", serde_json::json!({})).unwrap();
+    assert!(!report.to_string().contains("not-a-uuid"));
+
+    // The ways out before the start. None of them starts a terminal.
+    let before = started();
+    type Case<'a> = (
+        &'a str,
+        &'a str,
+        &'a str,
+        Box<dyn Fn() + 'a>,
+        Box<dyn Fn() + 'a>,
+    );
+    let cases: Vec<Case> = vec![
+        (
+            "a request without an environment",
+            "invalid",
+            "terminalFailed",
+            Box::new(|| {}),
+            Box::new(|| {}),
+        ),
+        (
+            "a hidden window at the window check",
+            "viewChanged",
+            "terminalFailed",
+            Box::new(|| terminal.live.store(false, Ordering::SeqCst)),
+            Box::new(|| terminal.live.store(true, Ordering::SeqCst)),
+        ),
+        (
+            "a cancelled folder picker",
+            "null",
+            "terminalDeclined",
+            Box::new(|| *terminal.folder.lock().unwrap() = None),
+            Box::new(|| *terminal.folder.lock().unwrap() = Some(directory.to_path_buf())),
+        ),
+        (
+            "a folder that does not exist",
+            "invalidPath",
+            "terminalFailed",
+            Box::new(|| *terminal.folder.lock().unwrap() = Some(directory.join("missing-folder"))),
+            Box::new(|| *terminal.folder.lock().unwrap() = Some(directory.to_path_buf())),
+        ),
+        (
+            "a declined review",
+            "null",
+            "terminalDeclined",
+            Box::new(|| terminal.approve.store(false, Ordering::SeqCst)),
+            Box::new(|| terminal.approve.store(true, Ordering::SeqCst)),
+        ),
+        (
+            "a terminal that could not be made",
+            "terminal",
+            "terminalFailed",
+            Box::new(|| terminal.fail_prepare.store(true, Ordering::SeqCst)),
+            Box::new(|| terminal.fail_prepare.store(false, Ordering::SeqCst)),
+        ),
+        (
+            "a fault after the approval",
+            "internal",
+            "terminalFailed",
+            Box::new(|| {
+                terminal.at(LaunchStep::Approved, || {
+                    panic!("a fake fault in the launch")
+                })
+            }),
+            Box::new(|| {}),
+        ),
+    ];
+    for (case, reply, kind, arrange, restore) in &cases {
+        let operation = uuid::Uuid::new_v4().to_string();
+        arrange();
+        let mut args = scope(&operation);
+        if *case == "a request without an environment" {
+            args["environment"] = serde_json::Value::Null;
+        }
+        let lost = call(webview, "env_launch_terminal", args);
+        restore();
+        match lost {
+            Ok(value) => assert_eq!(value.to_string(), *reply, "{case}"),
+            Err(error) => assert_eq!(error["kind"], *reply, "{case}"),
+        }
+        only_record(&operation, kind, case);
+        assert_eq!(started(), before, "{case}: nothing started");
+    }
+
+    // A start, and a fault after it: the record says that the terminal started.
+    for case in ["a start", "a fault after the start"] {
+        let operation = uuid::Uuid::new_v4().to_string();
+        if case == "a fault after the start" {
+            terminal.at(LaunchStep::Started, || {
+                panic!("a fake fault after the start")
+            });
+        }
+        let before = started();
+        let lost = call(webview, "env_launch_terminal", scope(&operation));
+        assert_eq!(lost.is_ok(), case == "a start", "{case}");
+        only_record(&operation, "terminalStarted", case);
+        assert_eq!(started(), before + 1, "{case}");
+    }
+
+    // A page load while the review is open, then the approval: the page that replaced the one
+    // that sent the request finds the start in the record.
+    let operation = uuid::Uuid::new_v4().to_string();
+    let (entered, release) = terminal.arm();
+    let pending = send(webview, "env_launch_terminal", scope(&operation));
+    entered.recv_timeout(Duration::from_secs(20)).unwrap();
+    session.document_started();
+    release.send(()).unwrap();
+    let _lost = reply(&pending);
+    only_record(
+        &operation,
+        "terminalStarted",
+        "a page load during the review",
+    );
+
+    // A lock at each step around the start.
+    for (case, step, reply_kind, kind, starts) in [
+        (
+            "a lock during the review",
+            None,
+            "locked",
+            "terminalFailed",
+            false,
+        ),
+        (
+            "a lock at the prepared step",
+            Some(LaunchStep::Prepared),
+            "locked",
+            "terminalFailed",
+            false,
+        ),
+        (
+            "a lock after the start",
+            Some(LaunchStep::Started),
+            "1",
+            "terminalSessionEnded",
+            true,
+        ),
+    ] {
+        let operation = uuid::Uuid::new_v4().to_string();
+        let before = started();
+        let lost = match step {
+            None => {
+                let (entered, release) = terminal.arm();
+                let pending = send(webview, "env_launch_terminal", scope(&operation));
+                entered.recv_timeout(Duration::from_secs(20)).unwrap();
+                lock();
+                release.send(()).unwrap();
+                reply(&pending)
+            }
+            Some(step) => {
+                terminal.at(step, lock.clone());
+                call(webview, "env_launch_terminal", scope(&operation))
+            }
+        };
+        match lost {
+            Ok(value) => assert_eq!(value.to_string(), reply_kind, "{case}"),
+            Err(error) => assert_eq!(error["kind"], reply_kind, "{case}"),
+        }
+        only_record(&operation, kind, case);
+        assert_eq!(started(), before + usize::from(starts), "{case}");
+        owner = fresh(&format!("outcome-{}.kdbx", case.len()));
+    }
+
+    // Session A asks; session B opens while A's review is open; A is refused. A's record names
+    // A, and B's own launch, record and acknowledgement are B's alone.
+    let a_operation = uuid::Uuid::new_v4().to_string();
+    let (entered, release) = terminal.arm();
+    let pending = send(webview, "env_launch_terminal", scope(&a_operation));
+    entered.recv_timeout(Duration::from_secs(20)).unwrap();
+    let b_owner = fresh("outcome-b.kdbx");
+    assert_ne!(b_owner, owner);
+    let b_before = session.snapshot().unwrap();
+    release.send(()).unwrap();
+    // The access after the review finds another session current.
+    assert_eq!(reply(&pending).unwrap_err()["kind"], "stalePreview");
+    assert_eq!(record_kinds(webview, &a_operation), ["terminalFailed"]);
+    let b_after = session.snapshot().unwrap();
+    assert_eq!(
+        (b_after.ticket, b_after.revision, b_after.presentation),
+        (b_before.ticket, b_before.revision, b_before.presentation),
+        "A's record changed nothing in B"
+    );
+    let b_operation = uuid::Uuid::new_v4().to_string();
+    let before = started();
+    assert_eq!(
+        call(webview, "env_launch_terminal", scope(&b_operation)).unwrap(),
+        serde_json::json!(1)
+    );
+    assert_eq!(started(), before + 1);
+    let report = call(webview, "vault_warnings", serde_json::json!({})).unwrap();
+    let origin = |operation: &str| {
+        report["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| record["id"] == operation)
+            .unwrap()["originSession"]
+            .clone()
+    };
+    assert_ne!(origin(&a_operation), origin(&b_operation));
+    only_record(&a_operation, "terminalFailed", "session A");
+    only_record(&b_operation, "terminalStarted", "session B");
+    println!("PASS: every env_launch_terminal that passed its session check left exactly one outcome record (started, session ended, failed or declined) on each way out, including a hidden window, a fault before and after the start and a lost reply; a malformed ID or a stale session left none; A's record changed nothing in B.");
+}
+
+/// T-R3-05, through the production handlers. A hidden window at the window check refuses the
+/// import before any dialog, and the request still leaves its failed record.
+fn a_hidden_window_at_the_import_check_leaves_a_failed_record(
+    webview: &tauri::Webview<MockRuntime>,
+    dialog: &Arc<Dialog>,
+    directory: &std::path::Path,
+) {
+    let (owner, path) = open_new(webview, directory, "hidden-import.kdbx");
+    let operation = uuid::Uuid::new_v4().to_string();
+    let opened = dialog.opened.load(Ordering::SeqCst);
+    dialog.window_live.store(false, Ordering::SeqCst);
+    let lost = call(
+        webview,
+        "env_import",
+        import_args(&owner, &operation, "TOKEN=fake-hidden\n"),
+    );
+    dialog.window_live.store(true, Ordering::SeqCst);
+    assert_eq!(lost.unwrap_err()["kind"], "viewChanged");
+    assert_eq!(dialog.opened.load(Ordering::SeqCst), opened, "no dialog");
+    assert_eq!(record_kinds(webview, &operation), ["importFailed"]);
+    assert!(demo_dev_is_empty(&path), "nothing was written");
+    call(
+        webview,
+        "vault_dismiss_warnings",
+        serde_json::json!({"ids": [operation]}),
+    )
+    .unwrap();
+    println!("PASS: env_import with a hidden window opened no dialog, wrote nothing and left one importFailed record.");
 }
 
 /// The history command answers times and field names, with the camelCase shape of api.ts.

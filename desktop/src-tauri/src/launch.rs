@@ -13,6 +13,7 @@ use zeroize::Zeroize;
 use crate::{
     error::CommandError,
     import_review::MAX_REVIEWED_CHANGES,
+    outcome::{self, Operation},
     review_window::{
         check_shown_in_full, review_name, review_names, review_path, show_exactly,
         NativeReviewDialog, ReviewAnswer, ReviewDialog,
@@ -401,78 +402,93 @@ fn checked_folder(folder: PathBuf) -> Result<PathBuf, CommandError> {
 /// and copy what is needed. Blocking work runs outside it. An effect that discloses or starts
 /// is a commit (`docs/design/commit-point.md`): the gate is taken again, and the session and
 /// the revision are checked, in the same hold as the act.
+///
+/// Every launch that passes its session check leaves one outcome record (`outcome.rs`).
 pub fn run_launch(
     session: &Session,
     host: &dyn TerminalHost,
     session_id: &str,
+    operation_id: &str,
     project: Option<String>,
     environment: Option<String>,
 ) -> Result<Option<usize>, CommandError> {
-    let expected = session.snapshot_for(session_id)?;
-    let (Some(project), Some(environment)) = (clean(project), clean(environment)) else {
-        return Err(CommandError::new(
-            "invalid",
-            "Choose both a project and an environment before opening a terminal.",
-        ));
-    };
-    let planned = session.access_reviewed(Access::Read, expected, |vault| {
-        planned_names(vault, &project, &environment)
-    })?;
-    let (names, reviewed) = (planned.value, planned.snapshot);
-    let ticket = reviewed.ticket;
+    outcome::dispatched(
+        session,
+        Operation::Terminal,
+        operation_id,
+        session_id,
+        |outcome, expected| {
+            let (Some(project), Some(environment)) = (clean(project), clean(environment)) else {
+                return Err(CommandError::new(
+                    "invalid",
+                    "Choose both a project and an environment before opening a terminal.",
+                ));
+            };
+            let planned = session.access_reviewed(Access::Read, expected, |vault| {
+                planned_names(vault, &project, &environment)
+            })?;
+            let (names, reviewed) = (planned.value, planned.snapshot);
+            let ticket = reviewed.ticket;
 
-    host.reached(LaunchStep::Planned);
-    if !host.window_live() {
-        return Err(CommandError::new(
-            "viewChanged",
-            "The AKM window is not shown, so no window was opened. Nothing was started. Start it again.",
-        ));
-    }
-    session.ensure(ticket)?;
-    let picked = host.choose_folder()?;
-    session.ensure(ticket)?;
-    let Some(folder) = picked else {
-        return Ok(None);
-    };
-    let folder = checked_folder(folder)?;
-    host.reached(LaunchStep::FolderChecked);
+            host.reached(LaunchStep::Planned);
+            if !host.window_live() {
+                return Err(CommandError::new(
+                    "viewChanged",
+                    "The AKM window is not shown, so no window was opened. Nothing was started. Start it again.",
+                ));
+            }
+            session.ensure(ticket)?;
+            let picked = host.choose_folder()?;
+            session.ensure(ticket)?;
+            let Some(folder) = picked else {
+                return Ok(None);
+            };
+            let folder = checked_folder(folder)?;
+            host.reached(LaunchStep::FolderChecked);
 
-    let review = LaunchReview::new(project.clone(), environment.clone(), folder.clone(), names);
-    let dialog = host.review_dialog();
-    // The last check before the window. It is not atomic with the window, and it cannot be: a
-    // modal window cannot wait under the gate. A names-only review can appear just after a lock,
-    // and it starts nothing, because the access below refuses (owner's option (a)).
-    session.ensure(ticket)?;
-    host.reached(LaunchStep::LastCheckPassed);
-    match review.ask(dialog.as_ref()) {
-        ReviewAnswer::Approved => {}
-        ReviewAnswer::Declined => return Ok(None),
-        ReviewAnswer::Failed(failure) => return Err(failure.into()),
-    }
-    host.reached(LaunchStep::Approved);
+            let review =
+                LaunchReview::new(project.clone(), environment.clone(), folder.clone(), names);
+            let dialog = host.review_dialog();
+            // The last check before the window. It is not atomic with the window, and it cannot
+            // be: a modal window cannot wait under the gate. A names-only review can appear just
+            // after a lock, and it starts nothing, because the access below refuses (owner's
+            // option (a)).
+            session.ensure(ticket)?;
+            host.reached(LaunchStep::LastCheckPassed);
+            match review.ask(dialog.as_ref()) {
+                ReviewAnswer::Approved => {}
+                ReviewAnswer::Declined => return Ok(None),
+                ReviewAnswer::Failed(failure) => return Err(failure.into()),
+            }
+            host.reached(LaunchStep::Approved);
 
-    // The access binds the request to the session and the revision again. A lock, another
-    // session or any write since the plan was read refuses it, so the plan here is the one the
-    // user was shown.
-    let secrets = session
-        .access_reviewed(Access::Read, reviewed, |vault| {
-            disclose_for_launch(session, host, reviewed, vault, &project, &environment)
-        })?
-        .value;
-    let count = secrets.len();
-    host.reached(LaunchStep::BeforeStart);
-    // No terminal is made for a session that already ended.
-    session.ensure(ticket)?;
-    let mut terminal = {
-        let request = LaunchRequest { folder, secrets };
-        host.prepare_terminal(&request)?
-        // The request drops here: AKM's copy of the values is zeroed before the commit.
-    };
-    host.reached(LaunchStep::Prepared);
-    // A write since the review moved the revision at its own commit, so it refuses this one.
-    session.commit(Binding::Revision(reviewed), terminal.as_mut())?;
-    host.reached(LaunchStep::Started);
-    Ok(Some(count))
+            // The access binds the request to the session and the revision again. A lock,
+            // another session or any write since the plan was read refuses it, so the plan here
+            // is the one the user was shown.
+            let secrets = session
+                .access_reviewed(Access::Read, reviewed, |vault| {
+                    disclose_for_launch(session, host, reviewed, vault, &project, &environment)
+                })?
+                .value;
+            let count = secrets.len();
+            host.reached(LaunchStep::BeforeStart);
+            // No terminal is made for a session that already ended.
+            session.ensure(ticket)?;
+            let mut terminal = {
+                let request = LaunchRequest { folder, secrets };
+                host.prepare_terminal(&request)?
+                // The request drops here: AKM's copy of the values is zeroed before the commit.
+            };
+            host.reached(LaunchStep::Prepared);
+            // A write since the review moved the revision at its own commit, so it refuses this
+            // one.
+            session.commit(Binding::Revision(reviewed), terminal.as_mut())?;
+            // The terminal runs from here on, so the record says so, whatever comes after.
+            outcome.done();
+            host.reached(LaunchStep::Started);
+            Ok(Some(count))
+        },
+    )
 }
 
 /// The record, then the values. The session is checked before each one: a lock that came first
@@ -507,6 +523,10 @@ fn disclose_for_launch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn operation() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
     use crate::{
         clipboard::tests::{FakeClipboard, FakeData},
         policy::Signal,
@@ -755,6 +775,7 @@ mod tests {
             &fixture.session,
             host,
             &fixture.session_id(),
+            &operation(),
             Some("app".into()),
             Some("dev".into()),
         )
@@ -814,6 +835,7 @@ mod tests {
                     &worker,
                     worker_host.as_ref(),
                     &id,
+                    &operation(),
                     Some("app".into()),
                     Some("dev".into()),
                 )
@@ -1273,6 +1295,7 @@ mod tests {
             &fixture.session,
             &host,
             &fixture.session_id(),
+            &operation(),
             Some(long.into()),
             Some("dev".into()),
         )
@@ -1466,6 +1489,7 @@ mod tests {
             &fixture.session,
             &host,
             &fixture.session_id(),
+            &operation(),
             Some("app".into()),
             Some("prod".into()),
         )
@@ -1510,6 +1534,7 @@ mod tests {
                 &fixture.session,
                 &host,
                 &fixture.session_id(),
+                &operation(),
                 project.map(Into::into),
                 environment.map(Into::into),
             )
@@ -1543,6 +1568,7 @@ mod tests {
                 &fixture.session,
                 &host,
                 &id,
+                &operation(),
                 Some("app".into()),
                 Some("dev".into()),
             )
@@ -1556,6 +1582,7 @@ mod tests {
             &fixture.session,
             &host,
             &current,
+            &operation(),
             Some("app".into()),
             Some("dev".into()),
         )

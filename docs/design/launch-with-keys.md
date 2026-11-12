@@ -3,7 +3,7 @@
 - Status: reworked on `fix/terminal-rework` after two failed reviews ([review 1](../reviews/2026-11-08-terminal-review1.md), [review 2](../reviews/2026-11-08-terminal-review2.md)). The owner chose option (a) of the stop-rule question on 2026-11-09. Section 1.1 is that design.
 - Tier: `Tier 2: 3 units, risk: privacy, token, public API`. The units: the native launch, the history read, and the page.
 - Goal: a user can open a terminal that already holds one project's keys, and can see a key's earlier versions, with no command line.
-- Public API change: two new desktop IPC commands, `env_launch_terminal` and `key_history`. No change to `akm-core`, the vault, the journal format or the CLI.
+- Public API change: two new desktop IPC commands, `env_launch_terminal` and `key_history`. Unit 1 of the campaign to the release gate added the required argument `operationId` to `env_launch_terminal`, and one hook in `akm-core` ([commit-point.md](commit-point.md), section 3.3). No change to the vault format, the journal format or the CLI.
 
 ## 1. The launch
 
@@ -11,8 +11,8 @@ The page names a session, a project and an environment. It cannot name a program
 
 ### Data flow
 
-1. The page calls `env_launch_terminal` with `sessionId`, `project` and `environment`. The command has no other parameter, and a test holds that.
-2. On a blocking thread, native code takes `snapshot_for(session_id)`. A stale or malformed id is refused here.
+1. The page calls `env_launch_terminal` with `sessionId`, `operationId`, `project` and `environment`. The operation ID is a UUID that the page makes for each launch. The command has no other parameter, and a test holds that.
+2. On a blocking thread, native code checks the operation ID and takes `snapshot_for(session_id)`. A malformed operation ID, or a stale or malformed session ID, is refused here and leaves no record. From here on, the launch leaves one outcome record on every way out (section 1.3).
 3. It plans the scope under the vault access of the request. The plan holds names only. It refuses, before any dialog:
    - a scope without both a project and an environment;
    - an empty scope;
@@ -20,11 +20,11 @@ The page names a session, a project and an environment. It cannot name a program
    - a variable that the command prompt reads and can print: `PROMPT`, `DIRCMD`, `COPYCMD`;
    - more names than the review window lists (`MAX_REVIEWED_CHANGES`, 25). It never cuts the list short.
 4. It checks that the main window is shown. A hidden window gets no dialog.
-5. A native folder picker. Cancel returns `null`, with no record. A network folder (UNC) is refused, because a console cannot start there and would show a folder it is not in.
-6. The native review window lists the project, the environment, the folder and every variable name, in full and character-exact (section 1.2). It says that the terminal keeps the keys until the user closes it, even after AKM locks, that it gets the environment AKM started with, and that a program in the folder can run by name. Its default button is Cancel. Decline, Escape and close return `null`, with no record. A window that could not be shown is an error, never a decline.
+5. A native folder picker. Cancel returns `null`. Nothing is journaled, and the outcome record says `terminalDeclined`. A network folder (UNC) is refused, because a console cannot start there and would show a folder it is not in.
+6. The native review window lists the project, the environment, the folder and every variable name, in full and character-exact (section 1.2). It says that the terminal keeps the keys until the user closes it, even after AKM locks, that it gets the environment AKM started with, and that a program in the folder can run by name. Its default button is Cancel. Decline, Escape and close return `null`. Nothing is journaled, and the outcome record says `terminalDeclined`. A window that could not be shown is an error, never a decline.
 7. One more vault access, bound to the session and the revision of step 2. A lock, another session or any write since then refuses it. Inside it, in this order: a last session check; `disclose_env` with `EnvDisclosure::Run`, which journals `run-requested` ("launch requested; N keys selected"), outside the gate; then a commit (`docs/design/commit-point.md`): under the gate, a check of the session and the revision, and `env_vars`, which copies the values into a buffer that is zeroed on drop. A journal failure ends the launch. No value has left the vault.
 8. The vault access ends, so the vault is released. A last session check. The launcher makes the system command prompt, suspended, in a new console window, outside the gate (`process.rs`). AKM's copy of the values is zeroed when the process exists.
-9. `Session::commit` checks the session and the revision of step 2 under the gate, and resumes the process. The resume takes the `Held` witness, so a start after the gate is released does not compile. A refusal terminates the process before it ran. AKM does not wait for a started terminal and does not track it. The reply is the number of keys, or `null`. The page also keeps a notice that a terminal holds keys, because a hidden view drops the reply.
+9. `Session::commit` checks the session and the revision of step 2 under the gate, and resumes the process. The resume takes the `Held` witness, so a start after the gate is released does not compile. A refusal terminates the process before it ran. AKM does not wait for a started terminal and does not track it. The reply is the number of keys, or `null`. The page also keeps a notice that a terminal holds keys, because a hidden view drops the reply. A page that lost the reply reads the outcome record.
 
 ### 1.1 Locks and the session gate (owner's option (a))
 
@@ -51,7 +51,7 @@ The rule that every step follows: **take the gate only to check the session and 
 | `ValuesCopied` | The vault access ends: exit check | The check | `locked`. The values are zeroed. No start. |
 | `BeforeStart` | `ensure`, then `CreateProcessW`, suspended | The check. Not the process creation | `locked`. No process is made. |
 | `Prepared` | A commit: session and revision check, then `ResumeThread` | The check and the resume | `locked`. The suspended process is terminated before it ran. A write of the same session since step 2 gives `stalePreview`, with the same revoke. |
-| `Started` | The reply | Nothing | The terminal is open and stays open. The reply is the count. The page keeps the terminal notice (section 3). |
+| `Started` | The reply | Nothing | The terminal is open and stays open. The reply is the count. The outcome record says `terminalSessionEnded`. The page keeps the terminal notice (section 3). |
 
 The test `a_lock_at_each_step_of_the_launch_has_the_outcome_of_the_state_table` walks the rows that have a `LaunchStep`, once with a lock and once with a lock and a new opening. It uses the hook `TerminalHost::reached`, which runs at that exact point of the production path. The import uses the same pattern: its review is presented by the same function, and an approval after a lock is refused by the write access.
 
@@ -71,6 +71,19 @@ Limits that stay:
 - A space at the start or end of a name, or next to another space, is shown as `\u{20}`.
 - A folder is shown with its backslashes as they are, because a Windows path is full of them. A path that holds the literal text `\u{` or that is not valid Unicode is refused before the review, so that a shown escape can only mean a real hidden character.
 - One limit remains: a look-alike letter from another script is shown as that letter. AKM does not detect look-alikes.
+
+### 1.3 The outcome record
+
+Each launch that passes the checks of step 2 leaves exactly one record. `vault_warnings` returns it until `vault_dismiss_warnings` acknowledges it. The record holds the operation ID, the session of the request and one kind. It holds no name, folder or value. [commit-point.md](commit-point.md), section 9, gives the rule.
+
+| Way out | Kind |
+|---|---|
+| The terminal started, and the session of the request is still the current one | `terminalStarted` |
+| The terminal started, and the session ended before the record | `terminalSessionEnded` |
+| The user cancelled the picker or declined the review | `terminalDeclined` |
+| Any refusal or error after step 2, and a panic before the start | `terminalFailed` |
+
+A fault after the start still records the start.
 
 ### The process
 
@@ -98,6 +111,7 @@ The tests are in `desktop/src-tauri/src/launch.rs` and `process.rs`, apart from 
 | 9 | Review text | `case_9_the_review_lists_the_scope_the_folder_and_each_name_but_no_value`, `hostile_scope_text_cannot_pass_for_a_line_of_the_review`, `names_that_differ_only_after_80_characters_read_differently_in_both_reviews`, `a_real_control_character_and_its_literal_text_read_differently_in_both_reviews`, `two_different_names_never_give_the_same_review_text`, `a_name_too_long_to_show_in_full_is_refused_before_any_dialog`, `a_folder_that_a_review_could_not_show_exactly_is_refused_before_the_review` |
 | 9a | The review window fails | `a_failed_review_window_is_an_error_and_starts_nothing`, `only_the_confirm_button_approves_and_escape_cancel_and_close_decline`, `the_real_window_config_has_cancel_as_its_default_button` |
 | 10 | IPC | `the_launch_command_takes_a_session_and_a_scope_and_nothing_that_names_a_program` and the launch section of `desktop/src-tauri/tests/ipc_dispatch.rs` |
+| 11 | An outcome record on every way out | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` and the outcome section of `desktop/src-tauri/tests/ipc_dispatch.rs` |
 
 The vault is released before the start: `the_vault_is_released_before_the_terminal_starts`. No step can fail after the start, so a start is never reported as a failure.
 

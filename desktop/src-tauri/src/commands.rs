@@ -19,6 +19,7 @@ use crate::{
     error::CommandError,
     import_review::{ConfirmState, ImportConfirm, ImportReview},
     launch::{self, TerminalState},
+    outcome::{self, Operation},
     private_export,
     reminders::{ReminderState, ReminderStatus},
     review_window::ReviewAnswer,
@@ -701,11 +702,23 @@ fn run_recovery(
     if disclosure::ask(session, host, expected.ticket, &review)? == Approval::Declined {
         return Ok(None);
     }
-    let recovery = session
-        .access_reviewed(Access::Read, expected, |vault| {
-            Ok(vault.audit_log().recover_damaged()?)
-        })?
-        .value;
+    // The recovery moves the journal outside the session gate (limit 4 of
+    // `docs/design/commit-point.md`). Once it moved, the answer must not say that nothing moved:
+    // an access that then refuses means that the session ended during the move.
+    let mut recovered = None;
+    let finished = session.access_reviewed(Access::Read, expected, |vault| {
+        recovered = Some(vault.audit_log().recover_damaged()?);
+        host.journal_moved();
+        Ok(())
+    });
+    let Some(recovery) = recovered else {
+        return Err(finished
+            .err()
+            .unwrap_or_else(|| CommandError::internal("The recovery gave no result.")));
+    };
+    if finished.is_err() {
+        return Err(CommandError::completed_while_locked());
+    }
     Ok(Some(JournalRecoveryView {
         kept_name: recovery
             .kept
@@ -1092,22 +1105,34 @@ fn publish_and_record(
     Ok(saved)
 }
 
-/// Opens a terminal that holds one project's keys. The page names the session and the scope.
-/// It cannot name a program, a folder or an argument: native code shows the folder picker
-/// and the review, and starts the system command prompt. `None` means that the user
-/// cancelled in one of those windows. The number is how many keys the terminal holds.
+/// Opens a terminal that holds one project's keys. The page names the session, the scope and
+/// an operation ID that it made. It cannot name a program, a folder or an argument: native
+/// code shows the folder picker and the review, and starts the system command prompt. `None`
+/// means that the user cancelled in one of those windows. The number is how many keys the
+/// terminal holds. The outcome record under the operation ID tells a page that lost this
+/// reply what happened (`outcome.rs`).
 #[tauri::command]
 pub async fn env_launch_terminal(
     state: State<'_, VaultState>,
     terminal: State<'_, TerminalState>,
     session_id: String,
+    operation_id: String,
     project: Option<String>,
     environment: Option<String>,
 ) -> Result<Option<usize>, CommandError> {
     let session = state.0.clone();
     let host = terminal.0.clone();
-    blocking(move || launch::run_launch(&session, host.as_ref(), &session_id, project, environment))
-        .await
+    blocking(move || {
+        launch::run_launch(
+            &session,
+            host.as_ref(),
+            &session_id,
+            &operation_id,
+            project,
+            environment,
+        )
+    })
+    .await
 }
 
 fn ensure_window_shown(confirm: &dyn ImportConfirm) -> Result<(), CommandError> {
@@ -1167,85 +1192,69 @@ fn run_import(
     project: Option<String>,
     environment: Option<String>,
 ) -> Result<Option<ImportReport>, CommandError> {
-    let operation = uuid::Uuid::parse_str(operation_id)
-        .map_err(|_| CommandError::new("invalid", "The import request is malformed."))?
-        .to_string();
-    let expected = session.snapshot_for(session_id)?;
-    let (project, environment) = (clean(project), clean(environment));
-    let entries = SecretEntries(dotenv::parse(&text)?);
-    let reviewed = session.access_reviewed(Access::Read, expected, |vault| {
-        vault
-            .preview_import_env(&entries.0, project.as_deref(), environment.as_deref())
-            .map_err(Into::into)
-    })?;
-    let review = ImportReview::new(
-        project.clone().unwrap_or_default(),
-        environment.clone().unwrap_or_default(),
-        reviewed.value,
-    )?;
-    let ticket = reviewed.snapshot.ticket;
-    // From here on the import is dispatched, so every stop leaves an outcome record (contract 7).
-    // The page can lose this reply, and the record is then the only truth about the request.
-    let refused = |error: CommandError| {
-        session.record_import(ticket, &operation, OperationWarningKind::ImportFailed);
-        error
-    };
-    if review.changes_anything() {
-        // No dialog for a window nobody sees, or for a vault that is no longer what was read.
-        // A modal dialog cannot be shown under the session gate, so the write below checks
-        // the session and the revision again, under the gate.
-        ensure_window_shown(confirm)?;
-        if !session
-            .snapshot()
-            .map_err(refused)?
-            .same_vault(&reviewed.snapshot)
-        {
-            return Err(refused(CommandError::new(
-                "stalePreview",
-                "The vault changed before the confirmation could be shown. Start it again.",
-            )));
-        }
-        let dialog = confirm.review_dialog();
-        session.ensure(ticket).map_err(refused)?;
-        match review.ask(dialog.as_ref()) {
-            ReviewAnswer::Approved => {}
-            ReviewAnswer::Declined => {
-                session.record_import(ticket, &operation, OperationWarningKind::ImportDeclined);
-                return Ok(None);
+    // Every way out after the session check leaves one outcome record (contract 7). The page can
+    // lose this reply, and the record is then the only truth about the request.
+    outcome::dispatched(
+        session,
+        Operation::Import,
+        operation_id,
+        session_id,
+        |_, expected| {
+            let (project, environment) = (clean(project), clean(environment));
+            let entries = SecretEntries(dotenv::parse(&text)?);
+            let reviewed = session.access_reviewed(Access::Read, expected, |vault| {
+                vault
+                    .preview_import_env(&entries.0, project.as_deref(), environment.as_deref())
+                    .map_err(Into::into)
+            })?;
+            let review = ImportReview::new(
+                project.clone().unwrap_or_default(),
+                environment.clone().unwrap_or_default(),
+                reviewed.value,
+            )?;
+            if review.changes_anything() {
+                // No dialog for a window nobody sees, or for a vault that is no longer what was
+                // read. A modal dialog cannot be shown under the session gate, so the write below
+                // checks the session and the revision again, under the gate.
+                ensure_window_shown(confirm)?;
+                if !session.snapshot()?.same_vault(&reviewed.snapshot) {
+                    return Err(CommandError::new(
+                        "stalePreview",
+                        "The vault changed before the confirmation could be shown. Start it again.",
+                    ));
+                }
+                let dialog = confirm.review_dialog();
+                session.ensure(reviewed.snapshot.ticket)?;
+                match review.ask(dialog.as_ref()) {
+                    ReviewAnswer::Approved => {}
+                    ReviewAnswer::Declined => return Ok(None),
+                    ReviewAnswer::Failed(failure) => return Err(failure.into()),
+                }
             }
-            ReviewAnswer::Failed(failure) => return Err(refused(failure.into())),
-        }
-    }
-    // The write is bound to the session and the revision of the request: a lock, another
-    // session or another write since then makes it stale. The presentation is not part of the
-    // binding. The plan must also still equal what the user was shown.
-    let applied = session
-        .access_reviewed(Access::Write, reviewed.snapshot, |vault| {
-            let current =
-                vault.preview_import_env(&entries.0, project.as_deref(), environment.as_deref())?;
-            if &current != review.preview() {
-                return Err(CommandError::new(
-                    "stalePreview",
-                    "The vault changed while the import waited for confirmation. Start it again.",
-                ));
-            }
-            let (added, updated) =
-                vault.import_env(&entries.0, project.as_deref(), environment.as_deref())?;
-            Ok(ImportReport { added, updated })
-        })
-        .and_then(|stamped| session.finish(Access::Write, stamped));
-    session.record_import(
-        ticket,
-        &operation,
-        match &applied {
-            Ok(_) => OperationWarningKind::ImportApplied,
-            Err(error) if error.kind == "completedWhileLocked" => {
-                OperationWarningKind::ImportSessionEnded
-            }
-            Err(_) => OperationWarningKind::ImportFailed,
+            // The write is bound to the session and the revision of the request: a lock, another
+            // session or another write since then makes it stale. The presentation is not part of
+            // the binding. The plan must also still equal what the user was shown.
+            session
+                .access_reviewed(Access::Write, reviewed.snapshot, |vault| {
+                    let current = vault.preview_import_env(
+                        &entries.0,
+                        project.as_deref(),
+                        environment.as_deref(),
+                    )?;
+                    if &current != review.preview() {
+                        return Err(CommandError::new(
+                            "stalePreview",
+                            "The vault changed while the import waited for confirmation. Start it again.",
+                        ));
+                    }
+                    let (added, updated) =
+                        vault.import_env(&entries.0, project.as_deref(), environment.as_deref())?;
+                    Ok(ImportReport { added, updated })
+                })
+                .and_then(|stamped| session.finish(Access::Write, stamped))
+                .map(Some)
         },
-    );
-    applied.map(Some)
+    )
 }
 
 /// The page tells native that it discarded its protected views (the document was hidden), and
@@ -1785,7 +1794,14 @@ mod tests {
             .collect();
         assert_eq!(
             parameters,
-            ["state", "terminal", "session_id", "project", "environment"]
+            [
+                "state",
+                "terminal",
+                "session_id",
+                "operation_id",
+                "project",
+                "environment"
+            ]
         );
     }
 
@@ -2260,6 +2276,7 @@ mod tests {
         probe: Box<dyn Fn() + Send + Sync>,
         preparing: Box<dyn Fn() + Send + Sync>,
         before_window: Box<dyn Fn() + Send + Sync>,
+        moved: Box<dyn Fn() + Send + Sync>,
         failure: Mutex<Option<crate::review_window::ReviewFailure>>,
     }
     impl ScriptedConfirm {
@@ -2275,6 +2292,7 @@ mod tests {
                 probe: Box::new(|| {}),
                 preparing: Box::new(|| {}),
                 before_window: Box::new(|| {}),
+                moved: Box::new(|| {}),
                 failure: Mutex::new(None),
             }
         }
@@ -2303,11 +2321,19 @@ mod tests {
             self.probe = Box::new(probe);
             self
         }
+        /// Runs right after a recovery moved the damaged journal.
+        fn on_journal_moved(mut self, moved: impl Fn() + Send + Sync + 'static) -> Self {
+            self.moved = Box::new(moved);
+            self
+        }
         fn shown(&self) -> Vec<String> {
             self.shown.lock().unwrap().clone()
         }
     }
     impl ImportConfirm for ScriptedConfirm {
+        fn journal_moved(&self) {
+            (self.moved)();
+        }
         fn review_dialog(&self) -> Box<dyn crate::review_window::ReviewDialog + '_> {
             (self.preparing)();
             Box::new(self)
@@ -2459,7 +2485,13 @@ mod tests {
             "no dialog for a refused request"
         );
         assert_eq!(exported(&session, "app", "dev"), "");
-        assert!(notices(&session).is_empty());
+        // Each refused request passed its session check, so each left one failed record. The
+        // malformed operation ID left none.
+        let kinds: Vec<serde_json::Value> = notices(&session)
+            .iter()
+            .map(|record| record["kind"].clone())
+            .collect();
+        assert_eq!(kinds, vec![serde_json::json!("importFailed"); 6]);
     }
 
     #[test]
@@ -2492,7 +2524,16 @@ mod tests {
         }
         assert!(confirm.shown().is_empty());
         assert_eq!(exported(&session, "app", "dev"), "");
-        assert!(notices(&session).is_empty());
+        let records = notices(&session);
+        assert_eq!(
+            records.len(),
+            6,
+            "one failed record for each refused request"
+        );
+        for record in &records {
+            assert_eq!(record["kind"], "importFailed");
+            assert!(!record.to_string().contains("attacker.example"), "{record}");
+        }
     }
 
     #[test]
@@ -2740,7 +2781,7 @@ mod tests {
     }
 
     #[test]
-    fn review1_1_a_window_that_is_not_shown_gets_no_dialog_and_leaves_no_record() {
+    fn t_r3_05_a_window_that_is_not_shown_gets_no_dialog_and_leaves_a_failed_record() {
         let (session, _directory) = test_session();
         let confirm = ScriptedConfirm::new(true)
             .on_window(Arc::new(std::sync::atomic::AtomicBool::new(false)));
@@ -2757,7 +2798,9 @@ mod tests {
         .expect("a dialog for a window nobody sees");
         assert_eq!(error.kind, "viewChanged");
         assert!(confirm.shown().is_empty());
-        assert!(notices(&session).is_empty());
+        let records = notices(&session);
+        assert_eq!(records.len(), 1, "a lost reply still has its outcome");
+        assert_eq!(records[0]["kind"], "importFailed");
         assert_eq!(exported(&session, "app", "dev"), "");
     }
 
@@ -4019,6 +4062,29 @@ mod tests {
             before,
             "nothing was kept, nothing was started"
         );
+    }
+
+    #[test]
+    fn fr14_a_lock_after_the_journal_moved_answers_completed_while_locked() {
+        let f = disclosing();
+        let (journal, damaged) = damage_journal(&f);
+        let own = journal.file_name().unwrap().to_string_lossy().into_owned();
+        let session = f.session.clone();
+        let locking = ScriptedConfirm::new(true).on_journal_moved(move || {
+            session.lock().unwrap();
+        });
+
+        let error = recover(&f, &locking).unwrap_err();
+
+        assert_eq!(
+            error.kind, "completedWhileLocked",
+            "the journal moved, so the answer must not say that nothing changed"
+        );
+        let kept = folder_files(&journal)
+            .into_iter()
+            .filter(|name| name != &own)
+            .any(|name| fs::read(journal.with_file_name(name)).ok().as_ref() == Some(&damaged));
+        assert!(kept, "the old bytes are kept under a dated name");
     }
 
     #[test]
