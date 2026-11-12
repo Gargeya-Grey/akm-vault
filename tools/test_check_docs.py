@@ -1,8 +1,13 @@
 """The doc check fails on real past mistakes and on synthetic ones, and passes on the working tree.
 
 Usage: python tools/test_check_docs.py (from the repository root)
+
+The past mistakes are copies of the exact lines in tools/fixtures/check_docs_past_mistakes.json, so the
+test needs no Git history and runs in a one-commit public snapshot too (finding U4-R1-05). When the
+commit that a fixture came from is in the history, the test also checks that the copy is exact.
 """
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -12,12 +17,7 @@ CHECK_PATH = Path(__file__).resolve().parent / "check_docs.py"
 sys.path.insert(0, str(CHECK_PATH.parent))
 import git_child  # noqa: E402
 CHECK = [sys.executable, "tools/check_docs.py"]
-PAST = {
-    # The threat model as the security branch first wrote it: "%APPDATA%\akm" lost its backslashes to escapes.
-    "cfce854": "docs/THREAT_MODEL.md:60: control character 0x07",
-    # Review 1 finding 9: the threat model named a test that unit 1h had removed.
-    "e9e5fb9": "names `locking_clears_only_the_sessions_clipboard_and_invalidates_imports`",
-}
+PAST = json.loads((CHECK_PATH.parent / "fixtures" / "check_docs_past_mistakes.json").read_text(encoding="utf-8"))
 
 RUST = """\
 #[test]
@@ -147,11 +147,33 @@ def run_synthetic(markdown, extra=None):
         return subprocess.run([sys.executable, str(CHECK_PATH)], cwd=root, capture_output=True, text=True)
 
 
+def run_past(fixture):
+    """Run the real script on the past line, at its past line number, with the Rust tests of that commit."""
+    with tempfile.TemporaryDirectory(prefix="akm-check-docs-test-") as folder:
+        root = Path(folder)
+        files = {fixture["path"]: "\n" * (fixture["line_number"] - 1) + fixture["line"] + "\n", **fixture["rust"]}
+        for name, text in files.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_bytes(text.encode("utf-8"))
+        repository = git_child.create(root)
+        repository.run("add", *files)
+        return subprocess.run([sys.executable, str(CHECK_PATH)], cwd=root, capture_output=True, text=True)
+
+
 failures = 0
-for rev, expected in PAST.items():
-    run = subprocess.run(CHECK + ["--rev", rev], capture_output=True, text=True)
-    ok = run.returncode == 1 and expected in run.stdout
-    print(f"{'ok  ' if ok else 'FAIL'} the check fails at {rev} with: {expected}")
+here = git_child.existing(Path.cwd())
+for fixture in PAST:
+    run = run_past(fixture)
+    ok = run.returncode == 1 and fixture["expected"] in run.stdout
+    print(f"{'ok  ' if ok else 'FAIL'} the check fails on {fixture['origin']} ({fixture['name']}) with: {fixture['expected']}")
+    failures += not ok
+    commit, path, number = fixture["origin"].split(":")
+    if here.completed("cat-file", "-e", f"{commit}^{{commit}}").returncode != 0:
+        print(f"skip the copy of {fixture['origin']} is not compared: commit {commit} is not in this history (for example a public snapshot)")
+        continue
+    past_line = here.run("show", f"{commit}:{path}").decode("utf-8").split("\n")[int(number) - 1].removesuffix("\r")
+    ok = past_line == fixture["line"]
+    print(f"{'ok  ' if ok else 'FAIL'} the fixture is an exact copy of {fixture['origin']}")
     failures += not ok
 
 for name, markdown, expected, *rest in SYNTHETIC:

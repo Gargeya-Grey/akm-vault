@@ -1,0 +1,22 @@
+[
+  {
+    "name": "the threat model as the security branch first wrote it: %APPDATA%\\akm lost its backslashes to escapes",
+    "origin": "cfce854:docs/THREAT_MODEL.md:60",
+    "path": "docs/THREAT_MODEL.md",
+    "line_number": 60,
+    "line": "- **AKM does:** the vault content is encrypted as in row 1. AKM detects a vault that changed on disk since it was opened and refuses to overwrite it (test: `crates/akm-core/tests/vault.rs :: refuses_to_overwrite_a_vault_changed_on_disk`, `two_snapshots_can_open_and_the_stale_writer_is_refused`; `crates/akm-core/src/vault.rs :: source_replaced_while_serializing_is_not_overwritten_or_backed_up_as_ours`). The CLI's default vault path is `%APPDATA%\u0007km\u000bault.kdbx`, the Roaming application data folder (read: `default_vault_path` in `crates/akm-cli/src/main.rs`). Ordinary Windows does not sync it, but a domain roaming profile can. The user can choose any folder, including a sync folder. Detection and refusal cover only a fully downloaded folder.",
+    "rust": {},
+    "expected": "docs/THREAT_MODEL.md:60: control character 0x07"
+  },
+  {
+    "name": "review 1 finding 9: the threat model named a test that unit 1h had removed",
+    "origin": "e9e5fb9:docs/THREAT_MODEL.md:125",
+    "path": "docs/THREAT_MODEL.md",
+    "line_number": 125,
+    "line": "- **AKM does:** a copy sets the Windows formats that exclude the item from clipboard history, from cloud clipboard sync and from monitor processing, in the same open interval as the text (C10; `desktop/src-tauri/src/clipboard.rs :: success_publishes_utf16_and_all_three_zero_exclusions_in_one_interval`). Cleanup clears only AKM's own copy and never a newer identical copy by the user (`identical_user_copy_between_publication_and_capture_is_not_owned_or_cleared`, `a_later_users_clipboard_is_preserved_even_when_its_text_matches`). The lock clears the session's clipboard (`desktop/src-tauri/src/session.rs :: locking_clears_only_the_sessions_clipboard_and_invalidates_imports`).",
+    "rust": {
+      "desktop/src-tauri/src/session.rs": "mod tests {\n    #[test]\n    fn locking_clears_only_the_sessions_clipboard() {\n    }\n}\n"
+    },
+    "expected": "names `locking_clears_only_the_sessions_clipboard_and_invalidates_imports`"
+  }
+]
