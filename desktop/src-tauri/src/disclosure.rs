@@ -44,7 +44,7 @@ pub struct DisclosureReview {
 }
 
 impl DisclosureReview {
-    /// A single key that went over the budget of the session.
+    /// A single key that went over the budget.
     pub fn single(action: KeyDisclosure, key_title: &str) -> Result<Self, CommandError> {
         check_shown_in_full([key_title])?;
         let (title, what, confirm) = if matches!(action, KeyDisclosure::Copy) {
@@ -63,7 +63,7 @@ impl DisclosureReview {
         Ok(Self {
             title,
             body: format!(
-                "This session already showed or copied {FREE_SINGLE_DISCLOSURES} keys in the last {} seconds. Do you want to {what}?\n\nOnly a click in this window can approve it. Secret values are not shown here.\n\nThe key:",
+                "AKM already showed or copied {FREE_SINGLE_DISCLOSURES} keys in the last {} seconds. Do you want to {what}?\n\nOnly a click in this window can approve it. Secret values are not shown here.\n\nThe key:",
                 DISCLOSURE_WINDOW.as_secs()
             ),
             names: vec![key_title.to_string()],
@@ -192,7 +192,7 @@ mod tests {
         let review = DisclosureReview::single(KeyDisclosure::Reveal, "OpenAI dev").unwrap();
         assert_eq!(
             review.body(),
-            "This session already showed or copied 5 keys in the last 60 seconds. Do you want to show the value of this key?\n\nOnly a click in this window can approve it. Secret values are not shown here.\n\nThe key:"
+            "AKM already showed or copied 5 keys in the last 60 seconds. Do you want to show the value of this key?\n\nOnly a click in this window can approve it. Secret values are not shown here.\n\nThe key:"
         );
         assert_eq!(review.names(), ["OpenAI dev"]);
         let copy = DisclosureReview::single(KeyDisclosure::Copy, "OpenAI dev").unwrap();

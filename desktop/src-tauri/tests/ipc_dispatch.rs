@@ -1005,10 +1005,12 @@ fn a_damaged_journal_is_replaced_only_after_the_user_approves(
         damaged,
         "a decline changes nothing"
     );
-    reveal(false).unwrap_err();
+    // The single-key budget counts across sessions, so an earlier check may have spent it.
+    // A budget window approves here, and the damaged journal itself must refuse the reveal.
+    dialog.approve.store(true, Ordering::SeqCst);
+    assert_eq!(reveal(false).unwrap_err()["kind"], "journal");
 
     // The user approves: the damaged file is kept byte for byte and disclosure works again.
-    dialog.approve.store(true, Ordering::SeqCst);
     let kept = call(webview, "audit_recover", serde_json::json!({})).unwrap();
     let kept_name = kept["keptName"].as_str().unwrap();
     assert!(kept_name.contains(".damaged-"), "{kept_name}");

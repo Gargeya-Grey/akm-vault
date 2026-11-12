@@ -1022,6 +1022,59 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn fr04_a_refused_delete_after_a_failed_write_names_the_remnant() {
+        struct FailedWrite(DeleteRefused);
+        impl ExportIo for FailedWrite {
+            fn write(&mut self, file: &mut File, contents: &str) -> Result<(), CommandError> {
+                // Part of the plaintext reaches the file before the write fails.
+                file.write_all(&contents.as_bytes()[..contents.len() / 2])
+                    .map_err(io)?;
+                Err(io(std::io::Error::other("injected write failure")))
+            }
+
+            fn discard(&self) -> Discard {
+                self.0.discard()
+            }
+        }
+
+        let directory = temporary_directory();
+        let target = directory.path().join("out.env");
+        let remnants = Remnants::default();
+
+        let error = prepare_private_with(
+            &target,
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &remnants,
+            &mut FailedWrite(DeleteRefused::default()),
+        )
+        .err()
+        .expect("injected write failure");
+
+        assert_eq!(error.message, "injected write failure");
+        let left = temporary_files(directory.path());
+        assert_eq!(left.len(), 1, "the refused delete leaves the file");
+        assert_eq!(
+            fs::read(&left[0]).unwrap(),
+            b"TOKEN=fa",
+            "part of the plaintext"
+        );
+        let warning = remnants
+            .warning()
+            .expect("an unconfirmed delete is reported");
+        assert!(
+            warning.contains(&left[0].display().to_string()),
+            "the warning names the remnant: {warning}"
+        );
+        assert!(
+            !warning.contains("fake-owned") && !warning.contains("TOKEN"),
+            "{warning}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn fr04_a_confirmed_delete_reports_nothing_whichever_way_the_export_ends() {
         let directory = temporary_directory();
         let target = directory.path().join("out.env");

@@ -138,10 +138,11 @@ struct NativeOwner {
     claimed: bool,
 }
 
-/// How many single-key disclosures (a reveal or a copy) one session may make in a rolling
-/// minute before the next one needs the approval of the user in a native window. A page can
-/// read its session ID, so the ID is no user gesture: this budget stops a loop of single
-/// requests from doing the work of one bulk request (finding FR-03).
+/// How many single-key disclosures (a reveal or a copy) AKM makes in a rolling minute before
+/// the next one needs the approval of the user in a native window. A page can read its
+/// session ID, so the ID is no user gesture: this budget stops a loop of single requests
+/// from doing the work of one bulk request (finding FR-03). The budget counts across
+/// sessions, because a page that knows the password can lock and unlock.
 pub const FREE_SINGLE_DISCLOSURES: usize = 5;
 pub const DISCLOSURE_WINDOW: Duration = Duration::from_secs(60);
 
@@ -154,21 +155,15 @@ pub enum Admission {
     NeedsApproval,
 }
 
-/// The times of the single-key disclosures of one session. It belongs to the session whose
-/// ticket it holds: a request of any other session starts a new log, and a lock or a new
-/// opening clears it.
+/// The times of the single-key disclosures of this run of AKM. Nothing clears it: a lock and
+/// a new opening leave it as it is. A time leaves it when its rolling minute has passed.
 #[derive(Default)]
 struct DisclosureLog {
-    ticket: Option<Ticket>,
     times: Vec<Duration>,
 }
 
 impl DisclosureLog {
-    fn times_for(&mut self, ticket: Ticket, now: Duration) -> &mut Vec<Duration> {
-        if self.ticket != Some(ticket) {
-            self.ticket = Some(ticket);
-            self.times.clear();
-        }
+    fn recent(&mut self, now: Duration) -> &mut Vec<Duration> {
         self.times
             .retain(|at| now.saturating_sub(*at) < DISCLOSURE_WINDOW);
         &mut self.times
@@ -618,7 +613,6 @@ impl Session {
     }
 
     fn retire_owner(&self, gate: &mut Gate) {
-        gate.disclosures = DisclosureLog::default();
         if let Some(owner) = gate.owner.take() {
             (self.notify_locked)(NativeLockNotice {
                 session_id: owner.id.to_string(),
@@ -726,7 +720,7 @@ impl Session {
         Ok(())
     }
 
-    /// Counts one single-key request of the session `ticket` against its budget. The gate is
+    /// Counts one single-key request of the session `ticket` against the budget. The gate is
     /// held only for this count in memory.
     pub fn admit_single_disclosure(&self, ticket: Ticket) -> Result<Admission, CommandError> {
         let mut gate = self.gate()?;
@@ -734,7 +728,7 @@ impl Session {
         if self.current(&mut gate)?.ticket != ticket {
             return Err(CommandError::locked());
         }
-        let times = gate.disclosures.times_for(ticket, now);
+        let times = gate.disclosures.recent(now);
         if times.len() < FREE_SINGLE_DISCLOSURES {
             times.push(now);
             Ok(Admission::Free)
@@ -750,7 +744,7 @@ impl Session {
         if self.current(&mut gate)?.ticket != ticket {
             return Err(CommandError::locked());
         }
-        gate.disclosures.times_for(ticket, now).push(now);
+        gate.disclosures.recent(now).push(now);
         Ok(())
     }
 

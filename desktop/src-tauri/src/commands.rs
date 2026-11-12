@@ -349,7 +349,7 @@ pub async fn keys_list(
 }
 
 /// Shows one key's value to the page. `None` means that the user declined in the native window
-/// that a request over the budget of the session needs (`session::FREE_SINGLE_DISCLOSURES`).
+/// that a request over the budget needs (`session::FREE_SINGLE_DISCLOSURES`).
 #[tauri::command]
 pub async fn key_reveal(
     state: State<'_, VaultState>,
@@ -3567,6 +3567,31 @@ mod tests {
         );
     }
 
+    /// Class A: a modal window cannot run under the gate, so the session is checked again after
+    /// it. A new session opened while the window was open ends the request as `locked`: the
+    /// session that asked is gone. Nothing is disclosed.
+    #[test]
+    fn fr03_a_new_session_while_the_window_is_open_answers_locked_and_discloses_nothing() {
+        let f = disclosing();
+        let session = f.session.clone();
+        let vault = f._directory.path().join("vault.kdbx");
+        let reopening = ScriptedConfirm::during(true, move || {
+            session.lock().unwrap();
+            session.observe(crate::policy::Signal::Available);
+            let ticket = session.begin_open().unwrap();
+            session
+                .open(ticket, || {
+                    Vault::open(&vault, "fake-test-password-123!").map_err(Into::into)
+                })
+                .unwrap();
+        });
+
+        let error = bulk_preview(&f, &reopening, &everything()).unwrap_err();
+
+        assert_eq!(error.kind, "locked", "{error:?}");
+        assert!(!error.message.contains("fake"), "{}", error.message);
+    }
+
     #[test]
     fn fr03_a_change_while_the_window_is_open_refuses_the_disclosure() {
         let f = disclosing();
@@ -3780,7 +3805,7 @@ mod tests {
     }
 
     #[test]
-    fn fr03_an_approved_single_key_counts_against_the_budget_and_a_lock_clears_it() {
+    fn fr03_an_approved_single_key_counts_against_the_budget_and_a_new_session_does_not_reset_it() {
         let f = disclosing();
         let yes = ScriptedConfirm::new(true);
         for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
@@ -3802,6 +3827,7 @@ mod tests {
             "an approval buys one request, not a pass"
         );
 
+        // A page that knows the password locks and unlocks, in the same minute.
         f.session.lock().unwrap();
         f.session.observe(crate::policy::Signal::Available);
         let ticket = f.session.begin_open().unwrap();
@@ -3814,20 +3840,31 @@ mod tests {
                 .map_err(Into::into)
             })
             .unwrap();
-        let fresh = ScriptedConfirm::new(false);
+        let no = ScriptedConfirm::new(false);
         let id = f.keys[0].clone();
-        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
-            assert!(single_disclosure(
+        let single = |host: &ScriptedConfirm| {
+            single_disclosure(
                 &f.session,
-                &fresh,
+                host,
                 &owner(&f.session),
                 &id,
-                KeyDisclosure::Reveal
+                KeyDisclosure::Reveal,
             )
             .unwrap()
-            .is_some());
+        };
+        assert!(single(&no).is_none(), "the new session asks too");
+        assert_eq!(no.shown().len(), 1);
+
+        // The budget frees itself only with time.
+        f.clock.set(1_061);
+        let free = ScriptedConfirm::new(false);
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            assert!(single(&free).is_some());
         }
-        assert!(fresh.shown().is_empty(), "a new session has a new budget");
+        assert!(
+            free.shown().is_empty(),
+            "a minute later the budget is free again"
+        );
     }
 
     #[test]
