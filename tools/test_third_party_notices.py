@@ -12,10 +12,15 @@ from pathlib import Path
 
 GENERATOR = [sys.executable, "tools/generate_third_party_notices.py"]
 NOTICES = Path("THIRD_PARTY_NOTICES.md")
+ADDRESSES = Path("tools/public_snapshot/notice-addresses.txt")
 MPL_CRATES = {"cssparser", "cssparser-macros", "selectors", "dtoa-short", "option-ext"}
 spec = importlib.util.spec_from_file_location("notices", Path(__file__).resolve().parent / "generate_third_party_notices.py")
 notices = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(notices)
+spec = importlib.util.spec_from_file_location("snapshot", Path(__file__).resolve().parent / "make_public_snapshot.py")
+snapshot = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = snapshot
+spec.loader.exec_module(snapshot)
 # An independent, wider net than the generator's own rule: any file or folder whose name says licence,
 # notice, copying, copyright, patent or third party, at any depth (finding U4-R1-06).
 BROAD = re.compile(r"(licen[cs]|notice|copying|copyright|patent|third.?party|unlicense|^ofl)", re.IGNORECASE)
@@ -37,12 +42,28 @@ def case(name, ok, detail=""):
             print(f"     {detail}")
 
 
-def check(output):
-    return subprocess.run(GENERATOR + ["--check", "--output", str(output)], capture_output=True, text=True)
+def check(output, addresses=ADDRESSES):
+    return subprocess.run(GENERATOR + ["--check", "--output", str(output), "--addresses", str(addresses)], capture_output=True, text=True)
 
 
 run = check(NOTICES)
-case("the committed file is current", run.returncode == 0, run.stdout + run.stderr)
+case("the committed file and its address list are current", run.returncode == 0, run.stdout + run.stderr)
+
+# Finding U4-R1-04: the snapshot scan accepts exactly the generated addresses, and the check fails on any other list.
+listed = [line for line in ADDRESSES.read_text(encoding="utf-8").splitlines() if line and not line.startswith("#")]
+shaped = {match.group().casefold() for match in snapshot.EMAIL.finditer(NOTICES.read_text(encoding="utf-8"))}
+case("the address list holds every e-mail-shaped string of the notices once, and nothing else", sorted(line.casefold() for line in listed) == sorted(shaped) and len(shaped) > 0, f"{len(listed)} listed, {len(shaped)} in the file")
+with tempfile.TemporaryDirectory(prefix="akm-notices-test-") as folder:
+    copy = Path(folder) / "notice-addresses.txt"
+    original = ADDRESSES.read_text(encoding="utf-8")
+    copy.write_bytes((original + "@".join(("someone.private", "private-mail.test")) + "\n").encode("utf-8"))
+    run = check(NOTICES, copy)
+    case("an address list with an added address fails the check", run.returncode == 1 and "notice-addresses.txt is out of date" in run.stdout, run.stdout + run.stderr)
+    copy.write_bytes(original.replace(listed[0] + "\n", "", 1).encode("utf-8"))
+    run = check(NOTICES, copy)
+    case("an address list without one of its addresses fails the check", run.returncode == 1 and "notice-addresses.txt is out of date" in run.stdout, run.stdout + run.stderr)
+    run = check(NOTICES, Path(folder) / "missing.txt")
+    case("a missing address list fails the check", run.returncode == 1, run.stdout + run.stderr)
 
 text = NOTICES.read_text(encoding="utf-8")
 with tempfile.TemporaryDirectory(prefix="akm-notices-test-") as folder:
