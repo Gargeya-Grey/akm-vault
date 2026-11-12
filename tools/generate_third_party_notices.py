@@ -8,11 +8,21 @@ A crate is shipped when the workspace members reach it through normal dependenci
 dependencies and dev dependencies are left out, and so are the workspace crates themselves.
 npm: desktop/package-lock.json, every package that is not marked `dev`.
 
-The file lists name, version and licence. It does not copy licence texts or copyright lines: they
-are in each package's source. A release must add them (see the file's own note).
+Licence texts: each shipped package's own licence files (LICENSE*, LICENCE*, COPYING*, NOTICE*,
+UNLICENSE*, COPYRIGHT*, OFL*, and the manifest's `license-file`), read from the unpacked crate in the
+Cargo registry and from desktop/node_modules. So the crates must be fetched (any cargo build does it)
+and `npm ci` must have run in desktop. Identical texts are printed once, with the list of packages
+that carry them. A package that ships no licence file gets the standard text of each licence in its
+expression, from tools/licence_texts/<SPDX id>.txt (SPDX licence list, version in that folder's
+README), and the file says so for that package.
+
+The text is the file's text with line endings made LF, trailing spaces on each line removed, and
+control characters other than the tab removed (tools/check_docs.py refuses them in Markdown). The
+file says this once.
 """
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -21,8 +31,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "THIRD_PARTY_NOTICES.md"
+STANDARD = Path(__file__).resolve().parent / "licence_texts"
+NODE_MODULES = ROOT / "desktop" / "node_modules"
 TARGET = "x86_64-pc-windows-msvc"
 MPL = re.compile(r"\bMPL-2\.0\b")
+LICENCE_FILE = re.compile(r"^(licen[cs]e|copying|notice|unlicense|copyright|ofl)", re.IGNORECASE)
+NOT_A_TEXT = (".spdx", ".json", ".rs", ".js", ".ts", ".toml", ".html")
+CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+SPDX_ID = re.compile(r"[A-Za-z0-9.+-]+")
+EXPRESSION_WORDS = {"AND", "OR", "WITH"}
 
 
 def shipped_crates():
@@ -49,13 +66,21 @@ def shipped_crates():
     crates = []
     for identifier in seen - members:
         package = packages[identifier]
+        folder = Path(package["manifest_path"]).parent
+        files = licence_files(folder)
+        if package.get("license_file"):
+            extra = (folder / package["license_file"]).resolve()
+            if extra.is_file() and extra not in files:
+                files.append(extra)
         crates.append(
             {
                 "name": package["name"],
                 "version": package["version"],
                 "license": package["license"] or "(no licence field; read the licence file in the package)",
                 "repository": package["repository"] or "",
-                "registry": (package["source"] or "").startswith("registry+"),
+                "authors": package.get("authors") or [],
+                "files": files,
+                "base": folder,
             }
         )
     return sorted(crates, key=lambda crate: (crate["name"], crate["version"]))
@@ -68,8 +93,73 @@ def shipped_npm():
         if not key or entry.get("dev"):
             continue
         name = key.rsplit("node_modules/", 1)[-1]
-        packages.append({"name": name, "version": entry["version"], "license": entry.get("license") or "(none in the lock file)"})
+        folder = ROOT / "desktop" / key
+        installed = folder / "package.json"
+        if not installed.is_file():
+            raise SystemExit(f"{installed} is missing. Run `npm ci` in desktop first, then run this tool again.")
+        version = json.loads(installed.read_text(encoding="utf-8")).get("version")
+        if version != entry["version"]:
+            raise SystemExit(f"desktop/{key} is {version}, the lock file says {entry['version']}. Run `npm ci` in desktop.")
+        author = json.loads(installed.read_text(encoding="utf-8")).get("author")
+        packages.append(
+            {
+                "name": name,
+                "version": entry["version"],
+                "license": entry.get("license") or "(none in the lock file)",
+                "authors": [author if isinstance(author, str) else (author or {}).get("name", "")] if author else [],
+                "files": licence_files(folder),
+                "base": folder,
+            }
+        )
     return sorted(packages, key=lambda package: (package["name"], package["version"]))
+
+
+def licence_files(folder):
+    return sorted(
+        (path for path in folder.iterdir() if path.is_file() and LICENCE_FILE.match(path.name) and not path.name.lower().endswith(NOT_A_TEXT)),
+        key=lambda path: path.name.lower(),
+    )
+
+
+def clean(raw):
+    text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    text = CONTROL.sub("", text)
+    return "\n".join(line.rstrip() for line in text.split("\n")).strip("\n") + "\n"
+
+
+def licence_ids(expression):
+    return sorted({word for word in SPDX_ID.findall(expression) if word not in EXPRESSION_WORDS})
+
+
+def standard_text(identifier):
+    path = STANDARD / f"{identifier}.txt"
+    if not path.is_file():
+        raise SystemExit(f"{path} is missing: a shipped package without a licence file uses {identifier}. Add the SPDX text.")
+    return clean(path.read_bytes())
+
+
+def collect_texts(packages):
+    """Map each distinct text to the packages and files that carry it."""
+    texts = {}
+    for kind, package in packages:
+        label = f"{package['name']} {package['version']} ({kind})"
+        if package["files"]:
+            for path in package["files"]:
+                text = clean(path.read_bytes())
+                texts.setdefault(text, []).append(f"{label}: `{path.name}`")
+        else:
+            authors = ", ".join(author for author in package["authors"] if author) or "none declared"
+            for identifier in licence_ids(package["license"]):
+                text = standard_text(identifier)
+                texts.setdefault(text, []).append(
+                    f"{label}: ships no licence file; the standard {identifier} text applies. Authors in its manifest: {authors}"
+                )
+    return texts
+
+
+def fence(text):
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    return "`" * max(3, longest + 1)
 
 
 def cell(text):
@@ -87,11 +177,17 @@ def render(crates, npm):
         "Do not edit it by hand. `python tools/generate_third_party_notices.py --check` fails when it is out of date.\n"
     )
     out.append(
-        "**Limit.** This file names each dependency, its version and its licence expression. It does not "
-        "reproduce the licence texts or the copyright lines of the authors. They are in each package's "
-        "source (the `.crate` archive or the npm package). A release that distributes the binaries must "
-        "add them, for example with a licence-collecting tool, and an independent review must confirm the "
-        "result. This file is not legal advice.\n"
+        "**What this file holds.** Each shipped dependency with its version and its licence expression, "
+        "and at the end the text of every licence file that those packages ship, with the copyright "
+        "lines that the files hold. A text that several packages ship is printed once, with the list "
+        "of those packages. A package that ships no licence file is listed with the standard text of "
+        "its licence and the authors that its manifest names.\n"
+    )
+    out.append(
+        "**Limits.** The texts come from the packages as published. Line endings are LF, trailing spaces "
+        "are removed, and control characters other than the tab are removed (for example a form feed "
+        "between licence sections). A copyright line that a package keeps only in its source files, and "
+        "not in a licence file, is not here. No lawyer has reviewed this file, and it is not legal advice.\n"
     )
     out.append(f"## Rust crates ({len(crates)})\n")
     out.append(
@@ -108,8 +204,7 @@ def render(crates, npm):
         "The Mozilla Public License 2.0 applies to its files. AKM uses these crates unmodified, as "
         "published on crates.io. A release that ships the binaries must make the source of these "
         "crates available. The source of each is the `.crate` archive at the address below. It is also "
-        "in the repository named in the last column. The licence text is "
-        "<https://www.mozilla.org/MPL/2.0/>.\n"
+        "in the repository named in the last column. The licence text is in the licence texts below.\n"
     )
     out.append("| Crate | Version | Licence | Source archive | Repository |")
     out.append("|---|---|---|---|---|")
@@ -121,15 +216,25 @@ def render(crates, npm):
     out.append(f"## npm packages in the desktop frontend ({len(npm)})\n")
     out.append(
         "The packages of `desktop/package-lock.json` that are not development-only. The three "
-        "`@fontsource` packages ship font files under the SIL Open Font License 1.1. That licence "
-        "requires its text and the font copyright lines with the fonts; they are in each package, "
-        "and a release must carry them.\n"
+        "`@fontsource` packages ship font files under the SIL Open Font License 1.1. Its text and the "
+        "font copyright lines are in the licence texts below.\n"
     )
     out.append("| Package | Version | Licence |")
     out.append("|---|---|---|")
     for package in npm:
         out.append(f"| {cell(package['name'])} | {package['version']} | {cell(package['license'])} |")
     out.append("")
+    texts = collect_texts([("crate", crate) for crate in crates] + [("npm", package) for package in npm])
+    ordered = sorted(texts.items(), key=lambda item: (sorted(item[1])[0], hashlib.sha256(item[0].encode()).hexdigest()))
+    out.append(f"## Licence texts ({len(ordered)} distinct texts)\n")
+    for number, (text, carriers) in enumerate(ordered, 1):
+        out.append(f"### Text {number}\n")
+        out.append("Shipped by:\n")
+        for carrier in sorted(carriers):
+            out.append(f"- {carrier}")
+        out.append("")
+        marks = fence(text)
+        out.append(f"{marks}text\n{text}{marks}\n")
     return "\n".join(out)
 
 
