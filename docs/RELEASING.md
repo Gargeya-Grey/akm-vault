@@ -51,6 +51,16 @@ Both are owner decisions: the publisher name, and any money.
 
 None yet. Step 1 adds it here.
 
+## What an install and an uninstall touch
+
+Read from the NSIS template of tauri-bundler 2.10.4 and from `desktop/src-tauri/tauri.conf.json` (`installMode` `currentUser`). The `install-upgrade-uninstall` job of `.github/workflows/native-proof.yml` checks them, and it has never run.
+
+- The setup program installs `akm-desktop.exe` and `uninstall.exe` in `%LOCALAPPDATA%\AKM`, an uninstall entry under `HKCU`, and a Start menu entry. The installed `akm-desktop.exe` is the build with one change by the bundler: its bundle-type mark. The install job checks that the installed program is the hashed build with only that change (`tools/InstallBinding.psm1`).
+- The journal is in `%LOCALAPPDATA%\akm\journal`, inside the install folder `%LOCALAPPDATA%\AKM` (the same folder, because Windows ignores case). The uninstaller deletes the program files and the shortcuts, then removes the install folder only when it is empty, so the journal and its folder stay. Only the "Delete app data" box of an interactive uninstall removes more: `%APPDATA%\com.akm.desktop` (the settings) and `%LOCALAPPDATA%\com.akm.desktop` (the WebView2 data), with everything in them. The vault is wherever the user put it; a vault inside one of those two folders goes with them.
+- No earlier release exists, so no upgrade from an older version has been tested. The install job installs one version a second time over an install with user data.
+
+Release notes say this, and tell the user to copy the vault before an uninstall.
+
 ## How a user checks a download
 
 Use PowerShell. Replace the names with the release's files.

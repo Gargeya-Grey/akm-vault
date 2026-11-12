@@ -34,6 +34,7 @@ CHECKS = [
     ("KeePassXC fetch tool test", POWERSHELL + ["tools/test_fetch_keepassxc.ps1"]),
     ("verification helper test", POWERSHELL + ["tools/test_akm_verify.ps1"]),
     ("native-proof guard test", POWERSHELL + ["tools/test_native_proof_guards.ps1"]),
+    ("install binding test", POWERSHELL + ["tools/test_install_binding.ps1"]),
     ("proof snapshot test", POWERSHELL + ["tools/test_proof_snapshot.ps1"]),
 ]
 SKIPPED = [

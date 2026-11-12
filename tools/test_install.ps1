@@ -16,22 +16,30 @@ The steps, each recorded in steps.json and as one PASS or FAIL line:
    folder (no AKM_JOURNAL_ROOT, because this runner is disposable), and a settings file that selects
    the fake vault.
 2. Install: the setup program with /S (silent, for the current user). Check the program files,
-   the uninstall registry entry and the Start menu entry.
+   the uninstall registry entry and the Start menu entry, and that the installed program is the
+   desktop build -DesktopExe, which the preflight checked against SHA256SUMS.txt, with only the
+   bundler's NSIS mark (tools/InstallBinding.psm1). So an older program in the setup program fails.
 3. Start: the installed akm-desktop.exe through tools/verify_windows_app.ps1 -JournalOnly, with
    that script's own fake vaults.
 4. Upgrade: the same setup program again over the install. The program files and the user data
-   must be the same afterwards. This is a reinstall of one version, not an upgrade from an older one.
+   must be the same afterwards. No earlier release exists, so this is a second install of one
+   version over an install with user data, not an upgrade from an older version.
 5. Uninstall: uninstall.exe /S. The program files, the registry entry and the shortcuts must be
-   gone. The vault, the settings and the journal must be byte-identical to step 1.
+   gone. The vault, the settings and the journal must be byte-identical to step 1. The journal
+   folder %LOCALAPPDATA%\akm\journal is inside the install folder, and the uninstaller removes
+   that folder only when it is empty (RMDir without /r), so the folder must hold only `journal`.
+   A silent uninstall shows no "Delete app data" box; that box, in an interactive uninstall,
+   removes %APPDATA%\com.akm.desktop and %LOCALAPPDATA%\com.akm.desktop, and no test covers it.
 
 The tool deletes nothing itself. The only removal is the AKM uninstaller, on the install that this
 tool made.
 
 .EXAMPLE
-./tools/test_install.ps1 -Setup out\AKM_0.1.0_x64-setup.exe -CliExe out\akm.exe -Evidence $env:RUNNER_TEMP\evidence\install -DisposableRunner
+./tools/test_install.ps1 -Setup out\AKM_0.1.0_x64-setup.exe -DesktopExe out\akm-desktop.exe -CliExe out\akm.exe -Evidence $env:RUNNER_TEMP\evidence\install -DisposableRunner
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Setup,
+    [Parameter(Mandatory = $true)][string]$DesktopExe,
     [Parameter(Mandatory = $true)][string]$CliExe,
     [Parameter(Mandatory = $true)][string]$Evidence,
     [string]$ProofScript,
@@ -40,6 +48,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'DisposableRunner.psm1') -Force
 Assert-DisposableRunner -Tool 'tools/test_install.ps1' -Confirmed:$DisposableRunner
+Import-Module (Join-Path $PSScriptRoot 'InstallBinding.psm1') -Force
 # Windows PowerShell 5.1 leaves $PSScriptRoot empty in a parameter default, so the default is set here.
 if (-not $ProofScript) { $ProofScript = Join-Path $PSScriptRoot 'verify_windows_app.ps1' }
 
@@ -64,13 +73,14 @@ if (Test-Path -LiteralPath $desktopLink) { $existing += $desktopLink }
 if ($existing.Count) {
     throw "REFUSED: AKM state exists already on this computer: $($existing -join '; '). A test install could change it. Nothing was changed."
 }
-foreach ($file in @($Setup, $CliExe, $ProofScript)) {
+foreach ($file in @($Setup, $DesktopExe, $CliExe, $ProofScript)) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "REFUSED: $file does not exist. Nothing was changed." }
 }
 if (Test-Path -LiteralPath $Evidence) { throw "REFUSED: the evidence folder $Evidence exists already. Nothing was changed." }
 
 New-Item -ItemType Directory -Path $Evidence | Out-Null
 $setupFull = (Resolve-Path -LiteralPath $Setup).Path
+$desktopFull = (Resolve-Path -LiteralPath $DesktopExe).Path
 $cliFull = (Resolve-Path -LiteralPath $CliExe).Path
 $work = Join-Path $env:RUNNER_TEMP ('akm-install-test-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $work | Out-Null
@@ -151,8 +161,8 @@ function Assert-Installed {
     Assert-True ($links.Count -eq 1) "expected one Start menu AKM.lnk, found $($links.Count)"
     $target = Get-LinkTarget $links[0].FullName
     Assert-True ([string]::Equals($target, $installed.Exe, [StringComparison]::OrdinalIgnoreCase)) "the Start menu entry points at $target"
-    $sha = (Get-FileHash -LiteralPath $installed.Exe -Algorithm SHA256).Hash.ToLowerInvariant()
-    return "exe=$($installed.Exe) sha256=$sha startMenu=$($links[0].FullName) desktopLink=$(Test-Path -LiteralPath $desktopLink) webView2=$(Get-WebView2Version)"
+    $binding = Assert-InstalledBuild -Installed $installed.Exe -Built $desktopFull
+    return "exe=$($installed.Exe) $binding startMenu=$($links[0].FullName) desktopLink=$(Test-Path -LiteralPath $desktopLink) webView2=$(Get-WebView2Version)"
 }
 # The setup program installs the WebView2 runtime when it is missing (embedBootstrapper), so the
 # install step records the version that the app then uses.

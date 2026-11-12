@@ -232,7 +232,7 @@ jobs:
         shell: pwsh
         run: |
           $setup = Get-ChildItem "$env:RUNNER_TEMP\build" -Filter '*-setup.exe' | Select-Object -First 1
-          powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_install.ps1 -Setup $setup.FullName -CliExe "$env:RUNNER_TEMP\build\akm.exe" -Evidence "$env:RUNNER_TEMP\evidence\install" -DisposableRunner *>&1 |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_install.ps1 -Setup $setup.FullName -DesktopExe "$env:RUNNER_TEMP\build\akm-desktop.exe" -CliExe "$env:RUNNER_TEMP\build\akm.exe" -Evidence "$env:RUNNER_TEMP\evidence\install" -DisposableRunner *>&1 |
             Tee-Object -FilePath "$env:RUNNER_TEMP\evidence\install-transcript.txt"
           exit $LASTEXITCODE
       - if: always()

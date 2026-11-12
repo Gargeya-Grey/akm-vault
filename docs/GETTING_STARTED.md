@@ -62,6 +62,8 @@ Do you already have a `.env` file? Open **Use keys** and select **Import .env…
 
 Copy your vault file to a safe place first. Then open Windows **Settings**, go to **Apps**, then **Installed apps**, find **AKM** and select **Uninstall**.
 
+The uninstaller removes the program. It keeps your vault and the activity journal (`%LOCALAPPDATA%\akm\journal\`). If you tick **Delete app data**, it also removes the app's settings and window data (`%APPDATA%\com.akm.desktop` and `%LOCALAPPDATA%\com.akm.desktop`), with everything in those folders. Do not keep your vault there.
+
 ## More detail
 
 The [README](../README.md) describes what AKM protects and what it does not protect, and how developers can use its command-line tool.
