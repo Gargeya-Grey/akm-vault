@@ -48,6 +48,15 @@ path = "tests/custom.rs"
 harness = false
 """
 
+CLAIMS_HEAD = "# Claims\n\n| Claim | Where stated | Evidence | Limit |\n|---|---|---|---|\n"
+WORKFLOW = ".github/workflows/native-proof.yml"
+
+
+def claims(*rows):
+    """A docs/CLAIMS.md with these table rows; the first row is on line 5."""
+    return {"docs/CLAIMS.md": CLAIMS_HEAD + "".join(row + "\n" for row in rows)}
+
+
 # (name, markdown text, expected substring of the output or None when the check must pass, extra files)
 SYNTHETIC = [
     ("a vertical tab is a control character", "line one\n\x0bline two\n", "notes.md:2: control character 0x0b"),
@@ -74,6 +83,48 @@ SYNTHETIC = [
         "The test `a_step_of_a_custom_harness` runs it.\n",
         "names `a_step_of_a_custom_harness`, which is a fn but not a test",
         {"app/Cargo.toml": CUSTOM_MANIFEST.replace("harness = false", "harness = true"), "app/tests/custom.rs": "fn a_step_of_a_custom_harness() {}\n"},
+    ),
+    ("a claim whose evidence is a test passes", "", None, claims("| A claim. | README.md | `a_real_test_with_four_words` | None. |")),
+    (
+        "a claim whose evidence is not a fn fails",
+        "",
+        "docs/CLAIMS.md:5: evidence `no_such_test_here_at_all` is neither a test fn nor a proof name",
+        claims("| A claim. | README.md | `no_such_test_here_at_all` | None. |"),
+    ),
+    (
+        "a claim whose evidence is a plain fn fails, also without the word test",
+        "",
+        "docs/CLAIMS.md:5: evidence `a_plain_function_that_is_not_a_test` is neither a test fn nor a proof name",
+        claims("| A claim. | README.md | `a_plain_function_that_is_not_a_test` | None. |"),
+    ),
+    (
+        "a second evidence item is checked too",
+        "",
+        "docs/CLAIMS.md:6: evidence `another_helper_with_many_words` is neither a test fn nor a proof name",
+        claims("| A claim. | README.md | `a_real_test_with_four_words` | None. |", "| B claim. | README.md | `a_real_test_with_four_words`, `another_helper_with_many_words` | None. |"),
+    ),
+    ("a claim without evidence fails", "", "docs/CLAIMS.md:5: the evidence cell names no test fn and no proof name", claims("| A claim. | README.md | read the source | None. |")),
+    ("an unknown proof name fails", "", "docs/CLAIMS.md:5: evidence `made-up-proof` is neither a test fn nor a proof name", claims("| A claim. | README.md | `made-up-proof` | None. |")),
+    (
+        "a proof name passes when its file holds its job",
+        "",
+        None,
+        {**claims("| A claim. | README.md | `native-proof-install` | Never ran. |"), WORKFLOW: "jobs:\n  install-upgrade-uninstall:\n    runs-on: x\n"},
+    ),
+    (
+        "a proof name fails when its file lacks its job",
+        "",
+        "docs/CLAIMS.md:5: proof `native-proof-install` needs .github/workflows/native-proof.yml with",
+        {**claims("| A claim. | README.md | `native-proof-install` | Never ran. |"), WORKFLOW: "jobs:\n  build:\n    runs-on: x\n"},
+    ),
+    ("a proof name fails when its file is missing", "", "docs/CLAIMS.md:5: proof `native-proof-install` needs .github/workflows/native-proof.yml", claims("| A claim. | README.md | `native-proof-install` | Never ran. |")),
+    ("a claim row needs four cells", "", "docs/CLAIMS.md:5: a claim row needs 4 cells (claim, where stated, evidence, limit), not 3", claims("| A claim. | `a_real_test_with_four_words` | None. |")),
+    ("a claim with an empty limit fails", "", "docs/CLAIMS.md:5: the limit cell is empty", claims("| A claim. | README.md | `a_real_test_with_four_words` |  |")),
+    (
+        "a table with another header is not a claim table",
+        "",
+        None,
+        {"docs/CLAIMS.md": "| Proof name | What runs |\n|---|---|\n| `made-up-proof` | x |\n\n" + CLAIMS_HEAD.split("\n", 2)[2] + "| A claim. | README.md | `a_real_test_with_four_words` | None. |\n"},
     ),
 ]
 
@@ -119,5 +170,20 @@ print(f"{'ok  ' if ok else 'FAIL'} the working tree passes")
 failures += not ok
 if not ok:
     print(run.stdout)
+
+# A parser that matched no row would pass every claim unchecked, so the real file must yield its rows.
+claims_file = Path("docs/CLAIMS.md")
+claims_text = claims_file.read_text(encoding="utf-8") if claims_file.exists() else ""
+rows = 0
+in_claims = False
+for line in claims_text.split("\n"):
+    in_claims = line.startswith("|") and (in_claims or line.startswith("| Claim |"))
+    rows += in_claims and not line.startswith(("| Claim |", "|-"))
+counted = f"{rows} claims checked" in run.stdout
+ok = rows >= 20 and counted
+print(f"{'ok  ' if ok else 'FAIL'} every row of docs/CLAIMS.md is checked ({rows} rows)")
+failures += not ok
+if not ok:
+    print(f"     expected '{rows} claims checked' in: {run.stdout.strip()[-200:]}")
 print("all cases passed" if not failures else f"{failures} case(s) failed")
 sys.exit(1 if failures else 0)

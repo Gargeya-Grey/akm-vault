@@ -148,7 +148,7 @@ This attacker supplies a `.env` file that the user imports (for example from a c
 ### 14. Malicious or vulnerable dependency (supply chain)
 
 - **AKM does:** `Cargo.lock` is committed and builds use `--locked` ([TESTING.md](TESTING.md)). The checks `tools/check_dependencies.ps1` (advisories, licenses, sources, bans) and `tools/check_no_network.py` run locally. They find known advisories and the entry of a networking crate. The KDBX writer is a community crate (PROJECT.md).
-- **Limits:** an advisory database lists only known problems. A malicious new version in the lock file passes if it has no advisory. Builds are unsigned development builds. Reproducible builds and fuzzing are proposals ([ROADMAP.md](ROADMAP.md) items 4 and 5). Findings from the checks are in [FINDINGS.md](FINDINGS.md) when a person has read them.
+- **Limits:** an advisory database lists only known problems. A malicious new version in the lock file passes if it has no advisory. Builds are unsigned development builds ([RELEASING.md](RELEASING.md) compares the signing options). AKM does not promise a reproducible build: CI rebuilds the CLI and reports whether the hashes match, and does not fail on a difference ([TESTING.md](TESTING.md#reproducible-builds)). Fuzzing is a proposal ([ROADMAP.md](ROADMAP.md) item 5). Findings from the checks are in [FINDINGS.md](FINDINGS.md) when a person has read them.
 
 ### 15. Network attacker
 
@@ -156,7 +156,7 @@ This attacker supplies a `.env` file that the user imports (for example from a c
 - **Limits:**
   - The check cannot prove the absence of a connection. It looks for the usual entry points.
   - The WebView2 runtime is Microsoft software. AKM does not control its own network use.
-  - The Windows installer may download the WebView2 bootstrapper at install time (`webviewInstallMode: downloadBootstrapper`). That is an install-time request by the installer, not by AKM at run time. The promise must say "at run time".
+  - The Windows installer holds the WebView2 bootstrapper (`webviewInstallMode: embedBootstrapper` in `desktop/src-tauri/tauri.conf.json`). When the WebView2 runtime is missing, the bootstrapper downloads it at install time. That is an install-time request by Microsoft's bootstrapper, not by AKM at run time. The promise must say "at run time".
   - The Tauri crate declares `reqwest` for Android and iOS builds. AKM does not build for them. The shipped Windows tree does not hold it.
 
 ## Disclosed limits
@@ -174,4 +174,4 @@ Hardware attacks, a malicious operating system, a compromised Windows administra
 
 ## Keep this document true
 
-Change a row when a contract, a test or a seam changes. Do not add a claim that has no test or source reading behind it.
+Change a row when a contract, a test or a seam changes. Do not add a claim that has no test or source reading behind it. A promise to users also goes in [CLAIMS.md](CLAIMS.md), where `tools/check_docs.py` checks that its evidence exists.
