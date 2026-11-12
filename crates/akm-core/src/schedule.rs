@@ -2,8 +2,15 @@
 //!
 //! Scheduling uses exact instants. Whole days exist only to show a distance to a person, and
 //! they round so that a key is never shown as safe when it is past due.
+//!
+//! This module is the only place in AKM that computes with dates (core review 1, finding 6).
+//! A day count comes from a person or from a vault, so no count can make it panic: each
+//! function here gives a checked or a saturated result, and the lint below refuses an
+//! operator that can overflow. The test `date_arithmetic_lives_only_in_the_schedule_module`
+//! fails when other code computes with dates.
+#![deny(clippy::arithmetic_side_effects)]
 
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
 use serde::Serialize;
 
 use crate::error::{Error, Result};
@@ -53,15 +60,20 @@ pub enum Remaining {
 }
 
 impl Remaining {
+    /// The distance between two instants. The range of a date is far smaller than the range
+    /// of a millisecond count, so the saturating steps here never saturate in practice.
     pub fn of(due: DateTime<Utc>, now: DateTime<Utc>) -> Self {
-        let left = (due - now).num_milliseconds();
+        let left = due.signed_duration_since(now).num_milliseconds();
         match left {
             0 => Self::Now,
             left if left > 0 => Self::In {
-                days: (left + DAY_MILLISECONDS - 1) / DAY_MILLISECONDS,
+                days: left
+                    .saturating_sub(1)
+                    .div_euclid(DAY_MILLISECONDS)
+                    .saturating_add(1),
             },
             late => Self::Overdue {
-                days: -late / DAY_MILLISECONDS,
+                days: late.saturating_neg().div_euclid(DAY_MILLISECONDS),
             },
         }
     }
@@ -77,4 +89,31 @@ impl Remaining {
 /// no value can make this panic.
 pub fn rotation_due(changed: DateTime<Utc>, days: u32) -> Option<DateTime<Utc>> {
     changed.checked_add_signed(Duration::try_days(i64::from(days))?)
+}
+
+/// The instant `days` whole days after `instant`. A count beyond the range of a date
+/// saturates at the last or the first instant that a date can hold, so `list --expiring` with
+/// any count lists every key with an expiry, or none (core review 1, finding 6).
+pub fn days_after(instant: DateTime<Utc>, days: i64) -> DateTime<Utc> {
+    Duration::try_days(days)
+        .and_then(|span| instant.checked_add_signed(span))
+        .unwrap_or(if days < 0 {
+            DateTime::<Utc>::MIN_UTC
+        } else {
+            DateTime::<Utc>::MAX_UTC
+        })
+}
+
+/// The instant `days` whole days before `instant`. A count beyond the range of a date
+/// saturates at the first instant that a date can hold, so a retention purge with any count
+/// finds nothing older than that (core review 1, finding 6).
+pub fn days_before(instant: DateTime<Utc>, days: u32) -> DateTime<Utc> {
+    Duration::try_days(i64::from(days))
+        .and_then(|span| instant.checked_sub_signed(span))
+        .unwrap_or(DateTime::<Utc>::MIN_UTC)
+}
+
+/// The second after `time`, or `None` at the last second that a date can hold.
+pub fn second_after(time: NaiveDateTime) -> Option<NaiveDateTime> {
+    time.checked_add_signed(Duration::try_seconds(1)?)
 }

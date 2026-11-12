@@ -637,14 +637,11 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                     );
                 }
                 (None, Some(days)) => {
+                    let cutoff = akm_core::schedule::days_before(vault.now(), days);
                     let due = vault
                         .recycled()
                         .iter()
-                        .filter(|item| {
-                            item.deleted_at.is_some_and(|at| {
-                                at < vault.now() - chrono::Duration::days(i64::from(days))
-                            })
-                        })
+                        .filter(|item| item.deleted_at.is_some_and(|at| at < cutoff))
                         .count();
                     if due == 0 {
                         status!(

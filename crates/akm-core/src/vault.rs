@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use chrono::{DateTime, Duration, NaiveDateTime, Timelike, Utc};
+use chrono::{DateTime, NaiveDateTime, Timelike, Utc};
 use fs2::FileExt;
 use keepass::config::{
     CompressionConfig, DatabaseConfig, DatabaseVersion, InnerCipherConfig, KdfConfig,
@@ -581,7 +581,7 @@ impl Vault {
     /// Recycle Bin more than `days` days ago. It runs only when called.
     pub fn purge_recycled_older_than(&mut self, days: u32) -> Result<Vec<ApiKey>> {
         self.ensure_writable()?;
-        let cutoff = self.clock.now() - Duration::days(i64::from(days));
+        let cutoff = crate::schedule::days_before(self.clock.now(), days);
         let ids: Vec<EntryId> = self
             .recycled()
             .iter()
@@ -922,7 +922,7 @@ impl Vault {
     }
 
     pub fn expiring(&self, within_days: i64) -> Vec<ApiKey> {
-        let cutoff = self.clock.now() + Duration::days(within_days);
+        let cutoff = crate::schedule::days_after(self.clock.now(), within_days);
         let mut keys: Vec<ApiKey> = self
             .list()
             .into_iter()
@@ -1243,14 +1243,12 @@ fn recorded_times(entry: &Entry) -> impl Iterator<Item = NaiveDateTime> + '_ {
 fn next_stamp(now: DateTime<Utc>, entry: &Entry) -> Result<NaiveDateTime> {
     let now = whole_second(now);
     match recorded_times(entry).max() {
-        Some(latest) if now <= latest => latest
-            .checked_add_signed(Duration::seconds(1))
-            .ok_or_else(|| {
-                Error::Invalid(
-                    "a time recorded for this key is too far in the future to order a change after it"
-                        .into(),
-                )
-            }),
+        Some(latest) if now <= latest => crate::schedule::second_after(latest).ok_or_else(|| {
+            Error::Invalid(
+                "a time recorded for this key is too far in the future to order a change after it"
+                    .into(),
+            )
+        }),
         _ => Ok(now),
     }
 }
