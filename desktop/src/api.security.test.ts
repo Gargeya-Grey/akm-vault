@@ -132,6 +132,7 @@ test("a transport failure keeps the native record because it may be the only tru
 // record, and its receipt says that the outcome was lost.
 const TRANSPORT_SHAPES: [string, unknown][] = [
   ["the reviewer's object with an unknown kind", { kind: "transport", message: "fake channel closed" }],
+  ["an object with another unknown kind", { kind: "fakeUnknownKind", message: "fake channel closed" }],
   ["a string", "fake channel closed"],
   ["an Error", new Error("fake channel closed")],
   ["an Error that carries a listed kind", Object.assign(new Error("fake channel closed"), { kind: "launch" })],
