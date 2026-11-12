@@ -21,7 +21,7 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::{
     error::CommandError,
-    session::{Held, Session},
+    session::{Binding, Effect, Held, Session},
 };
 
 pub const TITLE: &str = "AKM";
@@ -215,8 +215,9 @@ impl Reminders {
     /// when `count` is zero, or after a block. A refused permission or a failed notification
     /// blocks further tries for this run: no retry loop.
     ///
-    /// The notifier is called while the session gate is held: lock and a newer opening wait
-    /// for the call, so neither can land between the check and the hand-over. A toast that
+    /// The preference and the permission are read before the commit, outside the session
+    /// gate. The hand-over is the act of `Session::commit`: lock and a newer opening wait for
+    /// that one call, so neither can land between the check and the hand-over. A toast that
     /// the notifier already passed to Windows cannot be withdrawn.
     pub fn notify(
         &self,
@@ -231,25 +232,46 @@ impl Reminders {
             ));
         }
         let mut gate = self.gate()?;
-        session.while_session(session_id, |held| self.attempt(held, &mut gate, count))?;
-        Ok(self.status_of(&gate))
-    }
-
-    fn attempt(&self, held: &Held<'_>, gate: &mut Gate, count: u32) {
+        // A request of a session that is not the current one is refused, whatever the setting.
+        session.snapshot_for(session_id)?;
         if !self.store.enabled() || gate.blocked {
-            return;
+            return Ok(self.status_of(&gate));
         }
         if self.notifier.permission() != Permission::Granted {
             gate.blocked = true;
-            return;
+            return Ok(self.status_of(&gate));
         }
-        match self.notifier.show(held, TITLE, &notification_body(count)) {
+        let mut toast = Toast {
+            notifier: self.notifier.as_ref(),
+            body: notification_body(count),
+        };
+        match session.commit(Binding::Named(session_id), &mut toast)? {
             Ok(()) => gate.delivery = Delivery::Sent,
             Err(_) => {
                 gate.delivery = Delivery::Failed;
                 gate.blocked = true;
             }
         }
+        Ok(self.status_of(&gate))
+    }
+}
+
+/// One notification, ready to hand to Windows. A failed hand-over is the act's answer, not a
+/// refusal: the caller records it as a failed delivery.
+struct Toast<'a> {
+    notifier: &'a dyn Notifier,
+    body: String,
+}
+
+impl Effect for Toast<'_> {
+    type Output = Result<(), String>;
+
+    fn act(&mut self, held: &Held<'_>) -> Result<Self::Output, CommandError> {
+        Ok(self.notifier.show(held, TITLE, &self.body))
+    }
+
+    fn revoke(&mut self) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -320,11 +342,11 @@ mod tests {
 
     fn unlocked() -> (Arc<Session>, tempfile::TempDir) {
         let directory = tempfile::tempdir().unwrap();
-        let session = Arc::new(Session::new(
+        let session = Session::new(
             Arc::new(MonotonicClock::default()),
             Box::new(FakeClipboard(Arc::new(Mutex::new(FakeData::default())))),
             Arc::new(|_| {}),
-        ));
+        );
         session.observe(Signal::Available);
         open_vault(&session, directory.path());
         (session, directory)

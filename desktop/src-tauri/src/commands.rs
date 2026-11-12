@@ -23,7 +23,7 @@ use crate::{
     reminders::{ReminderState, ReminderStatus},
     review_window::ReviewAnswer,
     session::{
-        Access, Admission, OperationWarningKind, Session, Snapshot, Stamped, VaultState,
+        Access, Admission, Binding, OperationWarningKind, Session, Snapshot, Stamped, VaultState,
         WarningReport,
     },
     settings::{current_path, settings_file, PreferenceState, PreferenceStore},
@@ -204,9 +204,7 @@ async fn open_vault(
     if preferences
         .save_vault_path(
             ticket,
-            &|effect| {
-                let _ = session.while_current(ticket, |held| effect(held));
-            },
+            &|effect| session.commit(Binding::Ticket(ticket), effect),
             &opened.value.path,
         )
         .is_err()
@@ -1431,7 +1429,7 @@ mod tests {
         );
     }
 
-    fn test_session() -> (Session, tempfile::TempDir) {
+    fn test_session() -> (Arc<Session>, tempfile::TempDir) {
         use crate::{
             clipboard::tests::{FakeClipboard, FakeData},
             policy::Signal,
@@ -1654,7 +1652,6 @@ mod tests {
     #[test]
     fn a_lock_just_before_the_import_review_shows_no_review() {
         let (session, _directory) = test_session();
-        let session = Arc::new(session);
         let locker = session.clone();
         let confirm = ScriptedConfirm::new(true).on_prepare(move || locker.lock().unwrap());
         let error = import(&session, &confirm, "FAKE_KEY=fake-value\n", "app", "dev")
@@ -1691,7 +1688,6 @@ mod tests {
     #[test]
     fn a_lock_before_the_import_review_leaves_a_truthful_outcome_even_if_the_reply_is_lost() {
         let (session, directory) = test_session();
-        let session = Arc::new(session);
         let locker = session.clone();
         let confirm = ScriptedConfirm::new(true).on_prepare(move || locker.lock().unwrap());
         let (operation, reply) = import_with_lost_reply(&session, &confirm);
@@ -1710,7 +1706,6 @@ mod tests {
     #[test]
     fn a_lock_at_the_window_check_of_an_import_leaves_a_truthful_outcome() {
         let (session, _directory) = test_session();
-        let session = Arc::new(session);
         let locker = session.clone();
         let confirm = ScriptedConfirm::new(true).on_probe(move || locker.lock().unwrap());
         let (operation, reply) = import_with_lost_reply(&session, &confirm);
@@ -1723,7 +1718,6 @@ mod tests {
     #[test]
     fn a_lock_just_before_the_import_window_appears_applies_nothing_even_if_the_user_approves() {
         let (session, directory) = test_session();
-        let session = Arc::new(session);
         let locker = session.clone();
         let confirm = ScriptedConfirm::new(true).on_present(move || locker.lock().unwrap());
         let (operation, reply) = import_with_lost_reply(&session, &confirm);
@@ -2045,7 +2039,15 @@ mod tests {
             match change {
                 "lock" => session.lock().unwrap(),
                 "revision" => {
-                    session.access(Access::Write, None, |_| Ok(())).unwrap();
+                    // A write that replaces the file moves the revision (commit-point.md).
+                    session
+                        .access(Access::Write, None, |vault| {
+                            vault
+                                .add(akm_core::ApiKeyInput::new("Fake other", "fake-other"))
+                                .map(drop)
+                                .map_err(Into::into)
+                        })
+                        .unwrap();
                 }
                 "journal" => {
                     fs::remove_file(journal.path()).unwrap();
@@ -2083,7 +2085,6 @@ mod tests {
         use std::{io::Write, sync::mpsc, time::Duration};
         for late_lock in [false, true] {
             let (session, directory) = test_session();
-            let session = Arc::new(session);
             session
                 .access(Access::Write, None, |vault| {
                     vault
@@ -2498,7 +2499,6 @@ mod tests {
     fn every_change_while_the_dialog_is_open_leaves_the_import_unapplied_and_recorded() {
         for change in ["lock", "session", "write", "reload"] {
             let (session, directory) = test_session();
-            let session = Arc::new(session);
             let confirm = {
                 let session = session.clone();
                 let other = directory.path().join("other.kdbx");
@@ -2576,7 +2576,6 @@ mod tests {
     ) {
         for change in ["hide", "page-load", "discard", "window"] {
             let (session, directory) = test_session();
-            let session = Arc::new(session);
             let window = Arc::new(std::sync::atomic::AtomicBool::new(true));
             let confirm = {
                 let (session, hidden) = (session.clone(), window.clone());
@@ -2628,7 +2627,6 @@ mod tests {
     fn p2r2_02_a_discard_that_native_cannot_take_locks_the_session_and_the_lock_refuses_the_approval(
     ) {
         let (session, directory) = test_session();
-        let session = Arc::new(session);
         let confirm = {
             let session = session.clone();
             let id = owner(&session);
@@ -2767,7 +2765,6 @@ mod tests {
     fn review1_1_a_change_after_the_review_was_read_and_before_the_dialog_shows_no_dialog() {
         for change in ["lock", "write"] {
             let (session, directory) = test_session();
-            let session = Arc::new(session);
             let confirm = {
                 let session = session.clone();
                 ScriptedConfirm::new(true).on_probe(move || match change {
@@ -2815,7 +2812,6 @@ mod tests {
     #[test]
     fn p2r2_02_a_hide_before_the_dialog_opens_does_not_withhold_the_dialog() {
         let (session, _directory) = test_session();
-        let session = Arc::new(session);
         let confirm = {
             let session = session.clone();
             ScriptedConfirm::new(true).on_probe(move || {
@@ -2883,7 +2879,6 @@ mod tests {
     #[test]
     fn a_late_request_a_neither_consumes_nor_blocks_a_valid_request_b() {
         let (session, _directory) = test_session();
-        let session = Arc::new(session);
         let inner_session = session.clone();
         let a = ScriptedConfirm::during(true, move || {
             let b = ScriptedConfirm::new(true);
@@ -2951,7 +2946,6 @@ mod tests {
     fn a_committed_import_keeps_its_receipt_when_lock_arrives_during_the_journal_append() {
         use std::time::{Duration, Instant};
         let (session, directory) = test_session();
-        let session = Arc::new(session);
         let path = directory.path().join("vault.kdbx");
         let initial = fs::read(&path).unwrap();
         let journal = fs::OpenOptions::new()
@@ -3059,13 +3053,13 @@ mod tests {
             entered: entered_tx,
             release: Mutex::new(release_rx),
         });
-        let session = Arc::new(Session::new(
+        let session = Session::new(
             Arc::new(MonotonicClock::default()),
             Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
                 Mutex::new(FakeData::default()),
             ))),
             Arc::new(|_| {}),
-        ));
+        );
         session.observe(Signal::Available);
         fn open(
             session: &Arc<Session>,
@@ -3134,20 +3128,37 @@ mod tests {
             let saved = self.inner.save_vault_path(
                 ticket,
                 &|effect| {
-                    owned(&mut |held| {
-                        self.entered.send(()).unwrap();
-                        self.release
-                            .lock()
-                            .unwrap()
-                            .recv_timeout(std::time::Duration::from_secs(30))
-                            .unwrap();
-                        effect(held);
-                    });
+                    owned(&mut BarrierInAct {
+                        store: self,
+                        inner: effect,
+                    })
                 },
                 vault_path,
             );
             self.log.lock().unwrap().push("A-saved");
             saved
+        }
+    }
+
+    /// The act of the settings commit, with a barrier inside it, under the gate.
+    struct BarrierInAct<'a> {
+        store: &'a BarrierAfterCheck,
+        inner: &'a mut dyn crate::session::Effect<Output = ()>,
+    }
+    impl crate::session::Effect for BarrierInAct<'_> {
+        type Output = ();
+        fn act(&mut self, held: &crate::session::Held<'_>) -> Result<(), CommandError> {
+            self.store.entered.send(()).unwrap();
+            self.store
+                .release
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap();
+            self.inner.act(held)
+        }
+        fn revoke(&mut self) -> Result<(), String> {
+            self.inner.revoke()
         }
     }
 
@@ -3173,13 +3184,13 @@ mod tests {
             release: Mutex::new(release_rx),
             log: log.clone(),
         });
-        let session = Arc::new(Session::new(
+        let session = Session::new(
             Arc::new(MonotonicClock::default()),
             Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
                 Mutex::new(FakeData::default()),
             ))),
             Arc::new(|_| {}),
-        ));
+        );
         session.observe(Signal::Available);
         let open = |session: Arc<Session>, store: Arc<BarrierAfterCheck>, owner: String, path| {
             tauri::async_runtime::block_on(open_vault(
@@ -3249,13 +3260,13 @@ mod tests {
             entered: entered_tx,
             release: Mutex::new(release_rx),
         });
-        let session = Arc::new(Session::new(
+        let session = Session::new(
             Arc::new(MonotonicClock::default()),
             Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
                 Mutex::new(FakeData::default()),
             ))),
             Arc::new(|_| {}),
-        ));
+        );
         session.observe(Signal::Available);
         let open = |session: Arc<Session>, store: Arc<PausingPreferences>, owner: String, path| {
             tauri::async_runtime::block_on(open_vault(
@@ -3322,11 +3333,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let clock = Arc::new(Stepped(std::sync::atomic::AtomicU64::new(1_000)));
         let clipboard = Arc::new(Mutex::new(FakeData::default()));
-        let session = Arc::new(Session::new(
+        let session = Session::new(
             clock.clone(),
             Box::new(FakeClipboard(clipboard.clone())),
             Arc::new(|_| {}),
-        ));
+        );
         session.observe(Signal::Available);
         let ticket = session.begin_open().unwrap();
         session

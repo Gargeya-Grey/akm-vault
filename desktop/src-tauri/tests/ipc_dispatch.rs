@@ -24,6 +24,9 @@ mod launch;
 mod policy;
 #[path = "../src/private_export.rs"]
 mod private_export;
+#[cfg(windows)]
+#[path = "../src/process.rs"]
+mod process;
 #[path = "../src/publication.rs"]
 #[allow(unused_imports)]
 mod publication;
@@ -166,15 +169,30 @@ impl launch::TerminalHost for Terminal {
     fn review_dialog(&self) -> Box<dyn review_window::ReviewDialog + '_> {
         Box::new(self)
     }
-    fn open_terminal(
+    fn prepare_terminal(
         &self,
-        _: &Held<'_>,
         request: &launch::LaunchRequest,
-    ) -> Result<(), error::CommandError> {
-        self.started
-            .lock()
-            .unwrap()
-            .push((request.folder.clone(), request.secrets.to_vec()));
+    ) -> Result<Box<dyn session::Effect<Output = ()> + '_>, error::CommandError> {
+        Ok(Box::new(FakeStart {
+            started: &self.started,
+            request: Some((request.folder.clone(), request.secrets.to_vec())),
+        }))
+    }
+}
+
+/// A prepared start: the commit records it, a revoke drops it.
+struct FakeStart<'a> {
+    started: &'a Mutex<Started>,
+    request: Option<(std::path::PathBuf, Vec<(String, String)>)>,
+}
+impl session::Effect for FakeStart<'_> {
+    type Output = ();
+    fn act(&mut self, _: &Held<'_>) -> Result<(), error::CommandError> {
+        self.started.lock().unwrap().extend(self.request.take());
+        Ok(())
+    }
+    fn revoke(&mut self) -> Result<(), String> {
+        self.request = None;
         Ok(())
     }
 }
@@ -273,13 +291,13 @@ fn call(
 fn main() {
     let directory = tempfile::tempdir().unwrap();
     let clipboard: Clipboard = Arc::default();
-    let session = Arc::new(Session::new(
+    let session = Session::new(
         Arc::new(MonotonicClock::default()),
         Box::new(clipboard_fake::TransactionBackend(clipboard_fake::FakeApi(
             clipboard.clone(),
         ))),
         Arc::new(|_| {}),
-    ));
+    );
     session.observe(policy::Signal::Available);
     let dialog = Dialog::new();
     let terminal = Arc::new(Terminal {

@@ -9,6 +9,8 @@ mod import_review;
 mod launch;
 mod policy;
 mod private_export;
+#[cfg(windows)]
+mod process;
 #[doc(hidden)]
 pub mod publication;
 mod reminders;
@@ -50,13 +52,13 @@ pub fn run() {
             app.manage(launch::TerminalState(Arc::new(launch::NativeTerminal(
                 handle.clone(),
             ))));
-            let session = Arc::new(Session::new(
+            let session = Session::new(
                 Arc::new(MonotonicClock::default()),
                 Box::new(clipboard::NativeClipboard),
                 Arc::new(move |notice| {
                     let _ = handle.emit("vault-locked", notice);
                 }),
-            ));
+            );
             match windows_session::start(session.clone()) {
                 Ok(monitor) => {
                     app.manage(monitor);

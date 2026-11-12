@@ -74,6 +74,17 @@ pub struct Vault {
     session: Uuid,
     /// Counts the changes of `db`: every commit and every reload.
     state: u64,
+    /// The gate that each save passes its file replacement through. `None` replaces at once.
+    commit_gate: Option<Arc<dyn CommitGate>>,
+}
+
+/// The point at which a save replaces the vault file. An application that runs sessions
+/// installs one (`Vault::set_commit_gate`), so that its own session check and the replacement
+/// are one step. The command line installs none.
+pub trait CommitGate: Send + Sync {
+    /// Runs `replace` once and returns its result, or refuses with an error and does not run
+    /// it. A refused save writes nothing: its temporary files are removed.
+    fn commit(&self, replace: &mut dyn FnMut() -> Result<()>) -> Result<()>;
 }
 
 struct ImportPlan {
@@ -129,6 +140,7 @@ impl Vault {
             clock: Arc::new(SystemClock),
             session: Uuid::new_v4(),
             state: 0,
+            commit_gate: None,
         };
         vault.save()?;
         Ok(vault)
@@ -164,12 +176,18 @@ impl Vault {
             clock: Arc::new(SystemClock),
             session: Uuid::new_v4(),
             state: 0,
+            commit_gate: None,
         })
     }
 
     /// The time by this vault's clock. Callers use it for "now" so one clock decides.
     pub fn now(&self) -> DateTime<Utc> {
         self.clock.now()
+    }
+
+    /// Installs the gate that every later save passes its file replacement through.
+    pub fn set_commit_gate(&mut self, gate: Option<Arc<dyn CommitGate>>) {
+        self.commit_gate = gate;
     }
 
     /// Replaces the clock that stamps every time this vault writes (design D9).
@@ -1023,16 +1041,23 @@ impl Vault {
         self.checked_source()?;
         #[cfg(test)]
         tests::run_save_hook(tests::SaveStage::BeforeReplace, &tmp.path, &self.path);
-        if self.fingerprint.is_none() {
-            fs::hard_link(&tmp.path, &self.path).map_err(|error| {
-                if error.kind() == std::io::ErrorKind::AlreadyExists {
-                    Error::VaultChangedOnDisk
-                } else {
-                    Error::Io(error)
-                }
-            })?;
-        } else {
-            fs::rename(&tmp.path, &self.path)?;
+        let new_vault = self.fingerprint.is_none();
+        let mut replace = || -> Result<()> {
+            if new_vault {
+                fs::hard_link(&tmp.path, &self.path).map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::AlreadyExists {
+                        Error::VaultChangedOnDisk
+                    } else {
+                        Error::Io(error)
+                    }
+                })
+            } else {
+                fs::rename(&tmp.path, &self.path).map_err(Error::Io)
+            }
+        };
+        match &self.commit_gate {
+            Some(gate) => gate.commit(&mut replace)?,
+            None => replace()?,
         }
         #[cfg(test)]
         tests::run_save_hook(tests::SaveStage::Committed, &tmp.path, &self.path);

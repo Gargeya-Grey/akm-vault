@@ -6,7 +6,11 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 
-use crate::{error::CommandError, policy::Ticket, session::Held};
+use crate::{
+    error::CommandError,
+    policy::Ticket,
+    session::{Effect, Held},
+};
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,15 +24,16 @@ pub enum PreferenceSave {
     Superseded,
 }
 
-/// Runs the effect only while the opening that asks still owns the session, and holds the
-/// session gate (the one that lock and a newer opening take) while it runs.
-pub type OwnerFence<'a> = &'a dyn Fn(&mut dyn FnMut(&Held<'_>));
+/// Commits the prepared rename only while the opening that asks still owns the session:
+/// `Session::commit`, bound to the ticket of that opening. It revokes the preparation when it
+/// refuses or the rename fails.
+pub type OwnerFence<'a> = &'a dyn Fn(&mut dyn Effect<Output = ()>) -> Result<(), CommandError>;
 
 /// Where the last opened vault path lives. A newer opening always wins over an older one.
 pub trait PreferenceStore: Send + Sync {
     fn saved_vault_path(&self) -> Option<String>;
     fn default_vault_path(&self) -> Result<PathBuf, CommandError>;
-    /// The write happens inside `owned`, so the ownership check and the write are one step.
+    /// The rename happens inside `owned`, so the ownership check and the rename are one step.
     fn save_vault_path(
         &self,
         ticket: Ticket,
@@ -87,9 +92,10 @@ impl PreferenceStore for FilePreferences {
             CommandError::new("config", "The settings location is not available.")
         })?;
         // A fencing token: tickets only grow, and a newer opening's write is final.
-        // Lock order is this lock, then the session gate. The ownership check and the
-        // write are one step under that gate, so a newer opening can neither retire the
-        // owner between them nor write before this write is done.
+        // Lock order is this lock, then the session gate. The temporary file is written
+        // outside the gate. The ownership check and the rename are one step under that gate,
+        // so a newer opening can neither retire the owner between them nor write before this
+        // rename is done.
         let mut newest = self
             .newest
             .lock()
@@ -97,23 +103,19 @@ impl PreferenceStore for FilePreferences {
         if ticket.0 <= *newest {
             return Ok(PreferenceSave::Superseded);
         }
-        let mut written = None;
-        owned(&mut |held| {
-            written = Some(write_settings_file(
-                held,
-                file,
-                &Settings {
-                    vault_path: Some(vault_path.to_string()),
-                },
-            ));
-        });
-        match written {
-            Some(Ok(())) => {
+        let mut prepared = PreparedSettings::write(
+            file,
+            &Settings {
+                vault_path: Some(vault_path.to_string()),
+            },
+        )?;
+        match owned(&mut prepared) {
+            Ok(()) => {
                 *newest = ticket.0;
                 Ok(PreferenceSave::Saved)
             }
-            Some(Err(error)) => Err(error),
-            None => Ok(PreferenceSave::Superseded),
+            Err(error) if prepared.attempted => Err(error),
+            Err(_) => Ok(PreferenceSave::Superseded),
         }
     }
 }
@@ -126,19 +128,58 @@ pub fn settings_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, C
     Ok(dir.join("settings.json"))
 }
 
-fn write_settings_file(
-    _held: &Held<'_>,
-    path: &Path,
-    settings: &Settings,
-) -> Result<(), CommandError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| CommandError::new("io", error.to_string()))?;
+/// The settings file, written beside its place. The commit renames it into place. A drop
+/// before the rename deletes it, so a refusal, a failed rename and a panic leave no temporary
+/// file. The file holds only the vault path.
+struct PreparedSettings {
+    tmp: PathBuf,
+    path: PathBuf,
+    attempted: bool,
+    placed: bool,
+}
+
+impl PreparedSettings {
+    fn write(path: &Path, settings: &Settings) -> Result<Self, CommandError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| CommandError::new("io", error.to_string()))?;
+        }
+        let body = serde_json::to_vec_pretty(settings).map_err(CommandError::internal)?;
+        let prepared = Self {
+            tmp: path.with_extension("json.tmp"),
+            path: path.to_path_buf(),
+            attempted: false,
+            placed: false,
+        };
+        fs::write(&prepared.tmp, body)
+            .map_err(|error| CommandError::new("io", error.to_string()))?;
+        Ok(prepared)
     }
-    let tmp = path.with_extension("json.tmp");
-    let body = serde_json::to_vec_pretty(settings).map_err(CommandError::internal)?;
-    fs::write(&tmp, body).map_err(|error| CommandError::new("io", error.to_string()))?;
-    fs::rename(&tmp, path).map_err(|error| CommandError::new("io", error.to_string()))?;
-    Ok(())
+}
+
+impl Effect for PreparedSettings {
+    type Output = ();
+
+    fn act(&mut self, _held: &Held<'_>) -> Result<(), CommandError> {
+        self.attempted = true;
+        fs::rename(&self.tmp, &self.path)
+            .map_err(|error| CommandError::new("io", error.to_string()))?;
+        self.placed = true;
+        Ok(())
+    }
+
+    /// Nothing to undo here: the drop deletes the temporary file.
+    fn revoke(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl Drop for PreparedSettings {
+    fn drop(&mut self) {
+        if !self.placed {
+            let _ = fs::remove_file(&self.tmp);
+        }
+    }
 }
 
 pub fn current_path(
@@ -158,11 +199,20 @@ pub fn current_path(
 mod tests {
     use super::*;
 
-    fn owned(effect: &mut dyn FnMut(&Held<'_>)) {
-        effect(&Held::for_test());
+    /// `Session::commit` for a session that is current: act, and revoke when the act fails.
+    fn owned(effect: &mut dyn Effect<Output = ()>) -> Result<(), CommandError> {
+        let result = effect.act(&Held::for_test());
+        if result.is_err() {
+            effect.revoke().unwrap();
+        }
+        result
     }
 
-    fn not_owned(_effect: &mut dyn FnMut(&Held<'_>)) {}
+    /// `Session::commit` for a session that ended: refuse and revoke.
+    fn not_owned(effect: &mut dyn Effect<Output = ()>) -> Result<(), CommandError> {
+        effect.revoke().unwrap();
+        Err(CommandError::locked())
+    }
 
     fn saved(file: &Path) -> Option<String> {
         FilePreferences::new(Some(file.to_path_buf()), None).saved_vault_path()
@@ -209,6 +259,10 @@ mod tests {
             PreferenceSave::Superseded
         );
         assert!(!file.exists());
+        assert!(
+            !file.with_extension("json.tmp").exists(),
+            "a refused commit deletes the prepared file"
+        );
         assert_eq!(
             store
                 .save_vault_path(Ticket(2), &owned, "later-but-older.kdbx")

@@ -2,7 +2,6 @@ use std::{
     ffi::{OsStr, OsString},
     ops::Deref,
     path::{Path, PathBuf},
-    process::Command,
     sync::Arc,
 };
 
@@ -18,7 +17,7 @@ use crate::{
         check_shown_in_full, review_name, review_names, review_path, show_exactly,
         NativeReviewDialog, ReviewAnswer, ReviewDialog,
     },
-    session::{Access, Held, Session},
+    session::{Access, Act, Binding, Effect, Held, Session, Snapshot},
     views::clean,
 };
 
@@ -116,9 +115,13 @@ pub trait TerminalHost: Send + Sync {
     /// Runs at each step of the state table in `docs/design/launch-with-keys.md`. Production
     /// does nothing here. A test places a barrier, so that a lock lands exactly at that step.
     fn reached(&self, _step: LaunchStep) {}
-    /// Starts the terminal. It runs while the session gate is held for the session that was
-    /// reviewed, so a lock cannot slip in between the last check and the start.
-    fn open_terminal(&self, held: &Held<'_>, request: &LaunchRequest) -> Result<(), CommandError>;
+    /// Makes the terminal, suspended, outside the session gate. The launch commits it: under
+    /// the gate, a check of the session and the revision that were reviewed, then the resume.
+    /// A refusal revokes it, which terminates the process before it ran.
+    fn prepare_terminal(
+        &self,
+        request: &LaunchRequest,
+    ) -> Result<Box<dyn Effect<Output = ()> + '_>, CommandError>;
 }
 
 /// The steps of a launch, in order: the rows of the state table. Each one is a point at which a
@@ -139,8 +142,11 @@ pub enum LaunchStep {
     Recorded,
     /// The values are copied. Next: the end of the vault access.
     ValuesCopied,
-    /// The vault is released. Next: the session check and the start, under the gate.
+    /// The vault is released. Next: the suspended terminal is made, outside the gate.
     BeforeStart,
+    /// The suspended terminal exists, and AKM's copy of the values is zeroed. Next: the check
+    /// of the session and the revision, and the resume, under the gate.
+    Prepared,
     /// The terminal has started.
     Started,
 }
@@ -179,25 +185,88 @@ impl<R: tauri::Runtime> TerminalHost for NativeTerminal<R> {
         Box::new(NativeReviewDialog(self.0.clone()))
     }
 
-    fn open_terminal(&self, _held: &Held<'_>, request: &LaunchRequest) -> Result<(), CommandError> {
-        let shell = system_command_prompt()?;
-        let mut command = prepare_command(
-            &shell,
-            &request.folder,
-            std::env::vars_os().map(|(name, _)| name),
-            &request.secrets,
-        );
-        // AKM does not wait for the terminal and does not track it.
-        let child = command.spawn().map_err(|error| {
-            CommandError::new(
+    fn prepare_terminal(
+        &self,
+        request: &LaunchRequest,
+    ) -> Result<Box<dyn Effect<Output = ()> + '_>, CommandError> {
+        #[cfg(windows)]
+        {
+            let shell = system_command_prompt()?;
+            Ok(Box::new(Terminal(suspended_shell(
+                &shell,
+                TERMINAL_ARGUMENTS,
+                &request.folder,
+                &request.secrets,
+                crate::process::Console::New,
+            )?)))
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = request;
+            Err(CommandError::new(
                 "launch",
-                format!("The terminal could not be started. ({error})"),
-            )
-        })?;
-        drop(command);
-        drop(child);
-        Ok(())
+                "A terminal can be opened on Windows only.",
+            ))
+        }
     }
+}
+
+/// A suspended terminal. AKM does not wait for it once it runs, and does not track it.
+#[cfg(windows)]
+struct Terminal(crate::process::Suspended);
+
+#[cfg(windows)]
+impl Effect for Terminal {
+    type Output = ();
+
+    fn act(&mut self, held: &Held<'_>) -> Result<(), CommandError> {
+        self.0.resume(held)
+    }
+
+    fn revoke(&mut self) -> Result<(), String> {
+        self.0.terminate()
+    }
+}
+
+/// The whole command line of a terminal after the program. `/d` turns off the AutoRun
+/// commands of the registry, which would otherwise run with the keys before the user types
+/// anything. The page cannot add an argument.
+const TERMINAL_ARGUMENTS: &str = "/d";
+
+/// The environment of a terminal: the inherited one without any `AKM_*` variable (the rule of
+/// `crates/akm-cli/src/child.rs`), plus the selected variables.
+#[cfg(windows)]
+fn launch_environment<'a>(
+    inherited: impl IntoIterator<Item = (&'a OsStr, &'a OsStr)>,
+    secrets: &'a [(String, String)],
+) -> crate::process::EnvironmentBlock {
+    crate::process::EnvironmentBlock::new(inherited, secrets, is_akm_name)
+}
+
+/// The command prompt, suspended, in `folder`, with the launch environment. It inherits no
+/// handle.
+#[cfg(windows)]
+pub fn suspended_shell(
+    shell: &Path,
+    arguments: &str,
+    folder: &Path,
+    secrets: &[(String, String)],
+    console: crate::process::Console,
+) -> Result<crate::process::Suspended, CommandError> {
+    let inherited: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+    let environment = launch_environment(
+        inherited
+            .iter()
+            .map(|(name, value)| (name.as_os_str(), value.as_os_str())),
+        secrets,
+    );
+    crate::process::Suspended::create(&crate::process::Spec {
+        program: shell,
+        arguments,
+        folder,
+        environment: &environment,
+        console,
+    })
 }
 
 /// The command prompt of the system, found through the Windows system directory and never
@@ -225,40 +294,6 @@ pub fn system_command_prompt() -> Result<PathBuf, CommandError> {
         "launch",
         "A terminal can be opened on Windows only.",
     ))
-}
-
-/// A new console window, for the child to own.
-#[cfg(windows)]
-const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-
-/// The command that opens a terminal in a new console window. `/d` turns off the AutoRun
-/// commands of the registry, which would otherwise run with the keys before the user types
-/// anything. The child inherits this process's environment without any `AKM_*` variable (the
-/// rule of `crates/akm-cli/src/child.rs`), plus the selected variables.
-pub fn prepare_command(
-    shell: &Path,
-    folder: &Path,
-    inherited: impl IntoIterator<Item = OsString>,
-    secrets: &[(String, String)],
-) -> Command {
-    let mut command = Command::new(shell);
-    command.arg("/d").current_dir(folder);
-    for (name, value) in secrets {
-        if !is_akm_name(OsStr::new(name)) {
-            command.env(name, value);
-        }
-    }
-    for name in inherited {
-        if is_akm_name(&name) {
-            command.env_remove(name);
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(CREATE_NEW_CONSOLE);
-    }
-    command
 }
 
 fn is_akm_name(name: &OsStr) -> bool {
@@ -363,8 +398,9 @@ fn checked_folder(folder: PathBuf) -> Result<PathBuf, CommandError> {
 ///
 /// The steps and what a lock does at each one are the state table in
 /// `docs/design/launch-with-keys.md`, section 1.1. The gate is taken only to check the session
-/// and copy what is needed. Blocking work runs outside it. The gate is taken again, and the
-/// session is checked, before any effect that discloses or starts.
+/// and copy what is needed. Blocking work runs outside it. An effect that discloses or starts
+/// is a commit (`docs/design/commit-point.md`): the gate is taken again, and the session and
+/// the revision are checked, in the same hold as the act.
 pub fn run_launch(
     session: &Session,
     host: &dyn TerminalHost,
@@ -420,29 +456,37 @@ pub fn run_launch(
     // user was shown.
     let secrets = session
         .access_reviewed(Access::Read, reviewed, |vault| {
-            disclose_for_launch(session, host, ticket, vault, &project, &environment)
+            disclose_for_launch(session, host, reviewed, vault, &project, &environment)
         })?
         .value;
     let count = secrets.len();
-    let request = LaunchRequest { folder, secrets };
     host.reached(LaunchStep::BeforeStart);
-    session.while_current(ticket, |held| host.open_terminal(held, &request))??;
+    // No terminal is made for a session that already ended.
+    session.ensure(ticket)?;
+    let mut terminal = {
+        let request = LaunchRequest { folder, secrets };
+        host.prepare_terminal(&request)?
+        // The request drops here: AKM's copy of the values is zeroed before the commit.
+    };
+    host.reached(LaunchStep::Prepared);
+    // A write since the review moved the revision at its own commit, so it refuses this one.
+    session.commit(Binding::Revision(reviewed), terminal.as_mut())?;
     host.reached(LaunchStep::Started);
     Ok(Some(count))
 }
 
 /// The record, then the values. The session is checked before each one: a lock that came first
-/// stops it. The values are copied under the gate, and only after the record is durable.
+/// stops it. The copy of the values is a commit, and runs only after the record is durable.
 fn disclose_for_launch(
     session: &Session,
     host: &dyn TerminalHost,
-    ticket: crate::policy::Ticket,
+    reviewed: Snapshot,
     vault: &mut Vault,
     project: &str,
     environment: &str,
 ) -> Result<LaunchSecrets, CommandError> {
     let plan = vault.plan_env(Some(project), Some(environment), false)?;
-    session.ensure(ticket)?;
+    session.ensure(reviewed.ticket)?;
     host.reached(LaunchStep::RecordNext);
     // The journal takes a file lock and can stall, so it runs outside the gate. A lock during
     // the write is prompt. It leaves a record for a launch that never starts (owner's option (a)).
@@ -452,7 +496,10 @@ fn disclose_for_launch(
         Some(&format!("launch requested; {} keys selected", plan.len())),
     )?;
     host.reached(LaunchStep::Recorded);
-    let values = session.while_current(ticket, |_held| vault.env_vars(&plan, &proof))??;
+    let values = session.commit(
+        Binding::Revision(reviewed),
+        &mut Act::new(|_held: &Held<'_>| vault.env_vars(&plan, &proof).map_err(CommandError::from)),
+    )?;
     host.reached(LaunchStep::ValuesCopied);
     Ok(LaunchSecrets(values))
 }
@@ -541,11 +588,11 @@ mod tests {
             keepass::DatabaseKey::new().with_password(PASSWORD),
         )
         .unwrap();
-        let session = Arc::new(Session::new(
+        let session = Session::new(
             clock,
             Box::new(FakeClipboard(Arc::new(Mutex::new(FakeData::default())))),
             Arc::new(|_| {}),
-        ));
+        );
         session.observe(Signal::Available);
         let ticket = session.begin_open().unwrap();
         session
@@ -581,6 +628,8 @@ mod tests {
         launched: Mutex<Vec<Launched>>,
         while_choosing: Box<dyn Fn() + Send + Sync>,
         while_preparing: Box<dyn Fn() + Send + Sync>,
+        /// Runs inside the making of the suspended terminal: a barrier inside process creation.
+        while_creating: Box<dyn Fn() + Send + Sync>,
         before_window: Box<dyn Fn() + Send + Sync>,
         while_confirming: Box<dyn Fn() + Send + Sync>,
         window_result: Mutex<Option<ReviewFailure>>,
@@ -600,6 +649,7 @@ mod tests {
                 launched: Mutex::new(Vec::new()),
                 while_choosing: Box::new(|| {}),
                 while_preparing: Box::new(|| {}),
+                while_creating: Box::new(|| {}),
                 before_window: Box::new(|| {}),
                 while_confirming: Box::new(|| {}),
                 window_result: Mutex::new(None),
@@ -640,17 +690,45 @@ mod tests {
             (self.at_step)(step);
         }
 
-        fn open_terminal(
+        fn prepare_terminal(
             &self,
-            _held: &Held<'_>,
             request: &LaunchRequest,
-        ) -> Result<(), CommandError> {
-            self.events.lock().unwrap().push("launch");
-            (self.while_launching)();
-            self.launched.lock().unwrap().push(Launched {
-                folder: request.folder.clone(),
-                envs: request.secrets.to_vec(),
-            });
+        ) -> Result<Box<dyn Effect<Output = ()> + '_>, CommandError> {
+            self.events.lock().unwrap().push("prepare");
+            (self.while_creating)();
+            Ok(Box::new(FakeTerminal {
+                host: self,
+                launched: Some(Launched {
+                    folder: request.folder.clone(),
+                    envs: request.secrets.to_vec(),
+                }),
+            }))
+        }
+    }
+
+    /// A suspended terminal, scripted. The commit records the start; a revoke drops it.
+    struct FakeTerminal<'a> {
+        host: &'a FakeHost,
+        launched: Option<Launched>,
+    }
+
+    impl Effect for FakeTerminal<'_> {
+        type Output = ();
+
+        fn act(&mut self, _held: &Held<'_>) -> Result<(), CommandError> {
+            self.host.events.lock().unwrap().push("launch");
+            (self.host.while_launching)();
+            self.host
+                .launched
+                .lock()
+                .unwrap()
+                .extend(self.launched.take());
+            Ok(())
+        }
+
+        fn revoke(&mut self) -> Result<(), String> {
+            self.host.events.lock().unwrap().push("revoked");
+            self.launched = None;
             Ok(())
         }
     }
@@ -795,7 +873,10 @@ mod tests {
         let fixture = fake_vault(&DEV);
         let host = FakeHost::choosing(fixture.directory.path());
         assert_eq!(launch(&fixture, &host).unwrap(), Some(2));
-        assert_eq!(host.events(), ["window", "folder", "confirm", "launch"]);
+        assert_eq!(
+            host.events(),
+            ["window", "folder", "confirm", "prepare", "launch"]
+        );
         assert_eq!(
             host.launched(),
             vec![Launched {
@@ -920,37 +1001,139 @@ mod tests {
         }
     }
 
+    /// Replaces case 2b, which asserted that a lock waits for process creation. The terminal
+    /// is now made suspended, outside the gate: a lock during creation finishes at once, and
+    /// the commit then refuses and terminates the terminal.
     #[test]
-    fn case_2b_the_start_runs_under_the_session_gate_so_a_lock_waits_for_it() {
+    fn a_lock_while_the_terminal_is_created_is_prompt_and_the_terminal_never_starts() {
         let fixture = fake_vault(&DEV);
         let mut host = FakeHost::choosing(fixture.directory.path());
-        let finished = Arc::new(AtomicBool::new(false));
-        let waiting = Arc::new(Mutex::new(None));
-        let (session, flag, slot) = (fixture.session.clone(), finished.clone(), waiting.clone());
-        let observed_during_start = Arc::new(AtomicBool::new(true));
-        let observed = observed_during_start.clone();
-        host.while_launching = Box::new(move || {
-            let (session, flag) = (session.clone(), flag.clone());
-            *slot.lock().unwrap() = Some(std::thread::spawn(move || {
+        let session = fixture.session.clone();
+        let prompt = Arc::new(AtomicBool::new(false));
+        let seen = prompt.clone();
+        host.while_creating = Box::new(move || {
+            let (done, finished) = mpsc::channel();
+            let session = session.clone();
+            std::thread::spawn(move || {
                 session.lock().unwrap();
-                flag.store(true, Ordering::SeqCst);
-            }));
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            observed.store(finished.load(Ordering::SeqCst), Ordering::SeqCst);
+                done.send(()).unwrap();
+            });
+            let finished = finished.recv_timeout(Duration::from_secs(10)).is_ok();
+            seen.store(finished, Ordering::SeqCst);
         });
-        let result = launch(&fixture, &host);
-        waiting.lock().unwrap().take().unwrap().join().unwrap();
+        let error = launch(&fixture, &host).unwrap_err();
         assert!(
-            !observed_during_start.load(Ordering::SeqCst),
-            "a lock finished while the terminal was starting"
+            prompt.load(Ordering::SeqCst),
+            "the lock waited for process creation"
         );
-        assert_eq!(host.launched().len(), 1);
-        // The lock came after the start. The reply must not claim that nothing happened.
-        match result {
-            Ok(Some(2)) => {}
-            Err(error) => assert_eq!(error.kind, "completedWhileLocked"),
-            other => panic!("{other:?}"),
+        assert_eq!(error.kind, "locked");
+        assert_eq!(
+            host.events(),
+            ["window", "folder", "confirm", "prepare", "revoked"]
+        );
+        assert!(host.launched().is_empty(), "a terminal started");
+    }
+
+    /// The values were read at the reviewed revision. A rotate or a remove of the same session
+    /// after that moves the revision at its own commit, so the start refuses.
+    #[test]
+    fn a_same_session_rotate_or_remove_at_the_last_step_before_the_start_refuses_it() {
+        for change in ["rotate", "remove"] {
+            let fixture = fake_vault(&DEV);
+            let mut host = FakeHost::choosing(fixture.directory.path());
+            let session = fixture.session.clone();
+            host.at_step = Box::new(move |step| {
+                if step != LaunchStep::Prepared {
+                    return;
+                }
+                session
+                    .access(Access::Write, None, |vault| {
+                        let id = vault
+                            .list()
+                            .into_iter()
+                            .find(|key| key.title == "Token")
+                            .unwrap()
+                            .id;
+                        if change == "rotate" {
+                            vault.rotate(&id, "fake-rotated-value".into()).map(|_| ())
+                        } else {
+                            vault.remove(&id).map(|_| ())
+                        }
+                        .map_err(Into::into)
+                    })
+                    .unwrap();
+            });
+            let error = launch(&fixture, &host).unwrap_err();
+            assert_eq!(error.kind, "stalePreview", "{change}");
+            assert_eq!(
+                host.events(),
+                ["window", "folder", "confirm", "prepare", "revoked"],
+                "{change}"
+            );
+            assert!(host.launched().is_empty(), "{change}: a terminal started");
         }
+    }
+
+    /// A write that passed its checks and waits at its own commit point when the launch commits.
+    /// The gate orders the two: the terminal starts with the reviewed values, then the write
+    /// replaces the file. Both answers are true.
+    #[test]
+    fn a_write_in_progress_at_the_start_is_ordered_by_the_gate_and_both_answers_are_true() {
+        let fixture = fake_vault(&DEV);
+        let before = std::fs::read(fixture.vault_path()).unwrap();
+        let (arrived, at_commit) = mpsc::channel::<()>();
+        let (release, go) = mpsc::channel::<()>();
+        let (arrived, go) = (Mutex::new(arrived), Mutex::new(go));
+        fixture.session.at_commit(move || {
+            arrived.lock().unwrap().send(()).unwrap();
+            go.lock().unwrap().recv().unwrap();
+        });
+        let writer = Arc::new(Mutex::new(None));
+        let (session, slot) = (fixture.session.clone(), writer.clone());
+        let (at_commit, release) = (Mutex::new(at_commit), Mutex::new(release));
+        let mut host = FakeHost::choosing(fixture.directory.path());
+        host.at_step = Box::new(move |step| match step {
+            LaunchStep::Prepared => {
+                let session = session.clone();
+                *slot.lock().unwrap() = Some(std::thread::spawn(move || {
+                    session
+                        .access(Access::Write, None, |vault| {
+                            let id = vault
+                                .list()
+                                .into_iter()
+                                .find(|key| key.title == "Token")
+                                .unwrap()
+                                .id;
+                            vault
+                                .rotate(&id, "fake-rotated-value".into())
+                                .map_err(Into::into)
+                        })
+                        .map(|done| done.snapshot.revision)
+                }));
+                at_commit
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("the write reached its commit point");
+            }
+            LaunchStep::Started => release.lock().unwrap().send(()).unwrap(),
+            _ => {}
+        });
+        assert_eq!(launch(&fixture, &host).unwrap(), Some(2));
+        let revision = writer.lock().unwrap().take().unwrap().join().unwrap();
+        assert_eq!(revision.unwrap(), 1, "the write committed after the start");
+        assert_eq!(
+            host.launched()[0].envs,
+            [
+                (
+                    "OPENAI_API_KEY".to_string(),
+                    "fake-openai-value".to_string()
+                ),
+                ("TOKEN".to_string(), "fake-token-value".to_string()),
+            ],
+            "the terminal holds the reviewed values"
+        );
+        assert_ne!(std::fs::read(fixture.vault_path()).unwrap(), before);
     }
 
     #[test]
@@ -972,7 +1155,7 @@ mod tests {
         let result = session.access_reviewed(Access::Read, reviewed, |vault| {
             session.lock().unwrap();
             let host = FakeHost::choosing(Path::new("C:/unused"));
-            disclose_for_launch(&session, &host, reviewed.ticket, vault, "app", "dev")
+            disclose_for_launch(&session, &host, reviewed, vault, "app", "dev")
         });
         assert_eq!(result.err().unwrap().kind, "locked");
         assert!(
@@ -1158,47 +1341,74 @@ mod tests {
     fn a_lock_at_each_step_of_the_launch_has_the_outcome_of_the_state_table() {
         use LaunchStep::*;
         // The step, whether a review appears, whether a record is written, whether the values
-        // leave the vault, and whether a terminal starts.
+        // leave the vault, whether a suspended terminal is made, and whether it starts. A made
+        // terminal that does not start is revoked.
         let table = [
-            (Planned, false, false, false, false),
-            (FolderChecked, false, false, false, false),
-            (LastCheckPassed, true, false, false, false),
-            (Approved, true, false, false, false),
-            (RecordNext, true, true, false, false),
-            (Recorded, true, true, false, false),
-            (ValuesCopied, true, true, true, false),
-            (BeforeStart, true, true, true, false),
-            (Started, true, true, true, true),
+            (Planned, false, false, false, false, false),
+            (FolderChecked, false, false, false, false, false),
+            (LastCheckPassed, true, false, false, false, false),
+            (Approved, true, false, false, false, false),
+            (RecordNext, true, true, false, false, false),
+            (Recorded, true, true, false, false, false),
+            (ValuesCopied, true, true, true, false, false),
+            (BeforeStart, true, true, true, false, false),
+            (Prepared, true, true, true, true, false),
+            (Started, true, true, true, true, true),
         ];
-        for (step, review, record, values, started) in table {
-            let fixture = fake_vault(&DEV);
-            let mut host = FakeHost::choosing(fixture.directory.path());
-            let session = fixture.session.clone();
-            host.at_step = Box::new(move |reached| {
-                if reached == step {
-                    session.lock().unwrap();
+        for event in ["lock", "new session"] {
+            for (step, review, record, values, prepared, started) in table {
+                let fixture = fake_vault(&DEV);
+                let mut host = FakeHost::choosing(fixture.directory.path());
+                let session = fixture.session.clone();
+                let opening = Arc::new(Mutex::new(None));
+                let slot = opening.clone();
+                host.at_step = Box::new(move |reached| {
+                    if reached == step {
+                        session.lock().unwrap();
+                        if event == "new session" {
+                            *slot.lock().unwrap() = Some(session.begin_open().unwrap());
+                        }
+                    }
+                });
+                let result = launch(&fixture, &host);
+                let row = format!("{event} at {step:?}");
+                if started {
+                    assert_eq!(result.unwrap(), Some(2), "{row}");
+                } else {
+                    assert_eq!(result.err().unwrap().kind, "locked", "{row}");
                 }
-            });
-            let result = launch(&fixture, &host);
-            if started {
-                assert_eq!(result.unwrap(), Some(2), "{step:?}");
-            } else {
-                assert_eq!(result.err().unwrap().kind, "locked", "{step:?}");
-            }
-            assert_eq!(host.reviews.lock().unwrap().len() == 1, review, "{step:?}");
-            assert_eq!(
-                fixture
-                    .journal_actions()
-                    .iter()
-                    .any(|action| action == "run-requested"),
-                record,
-                "{step:?}"
-            );
-            let steps = host.steps.lock().unwrap().clone();
-            assert_eq!(steps.contains(&ValuesCopied), values, "{step:?}: {steps:?}");
-            assert_eq!(!host.launched().is_empty(), started, "{step:?}");
-            if !started {
-                assert!(!steps.contains(&Started), "{step:?}");
+                assert_eq!(host.reviews.lock().unwrap().len() == 1, review, "{row}");
+                assert_eq!(
+                    fixture
+                        .journal_actions()
+                        .iter()
+                        .any(|action| action == "run-requested"),
+                    record,
+                    "{row}"
+                );
+                let steps = host.steps.lock().unwrap().clone();
+                let events = host.events();
+                assert_eq!(steps.contains(&ValuesCopied), values, "{row}: {steps:?}");
+                assert_eq!(events.contains(&"prepare"), prepared, "{row}: {events:?}");
+                assert_eq!(
+                    events.contains(&"revoked"),
+                    prepared && !started,
+                    "{row}: {events:?}"
+                );
+                assert_eq!(!host.launched().is_empty(), started, "{row}");
+                if !started {
+                    assert!(!steps.contains(&Started), "{row}");
+                }
+                let opened = opening.lock().unwrap().take();
+                if let Some(ticket) = opened {
+                    let path = fixture.vault_path();
+                    fixture
+                        .session
+                        .open(ticket, || Vault::open(&path, PASSWORD).map_err(Into::into))
+                        .unwrap();
+                    let fresh = fixture.session.snapshot().unwrap();
+                    assert_eq!((fresh.ticket, fresh.revision), (ticket, 0), "{row}");
+                }
             }
         }
     }
@@ -1406,87 +1616,79 @@ mod tests {
         assert!(review_text(&review.body(), review.names()).contains("hold 1 variable:\n  ONLY"));
     }
 
-    fn names<'a>(command: &'a Command, wanted: &'a str) -> Vec<(String, Option<String>)> {
-        command
-            .get_envs()
-            .filter(|(name, _)| {
-                name.to_string_lossy()
-                    .to_ascii_uppercase()
-                    .starts_with(wanted)
-            })
-            .map(|(name, value)| {
-                (
-                    name.to_string_lossy().into_owned(),
-                    value.map(|value| value.to_string_lossy().into_owned()),
-                )
-            })
-            .collect()
+    fn block(inherited: &[(&str, &str)], secrets: &[(&str, &str)]) -> Vec<String> {
+        let secrets: Vec<(String, String)> = secrets
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        launch_environment(
+            inherited
+                .iter()
+                .map(|(name, value)| (OsStr::new(name), OsStr::new(value))),
+            &secrets,
+        )
+        .strings()
     }
 
     #[test]
     fn case_7_the_child_environment_holds_the_selected_variables_and_no_akm_variable() {
-        let command = prepare_command(
-            Path::new("C:/shell/cmd.exe"),
-            Path::new("C:/work"),
-            ["PATH", "AKM_PASSWORD", "akm_journal_root", "Akm_Other"].map(OsString::from),
-            &[
-                ("OPENAI_API_KEY".into(), "fake-openai-value".into()),
-                ("TOKEN".into(), "fake-token-value".into()),
-            ],
-        );
-        assert_eq!(command.get_program(), "C:/shell/cmd.exe");
-        assert_eq!(command.get_current_dir(), Some(Path::new("C:/work")));
         assert_eq!(
-            command.get_args().collect::<Vec<_>>(),
-            ["/d"],
+            TERMINAL_ARGUMENTS, "/d",
             "AutoRun stays off, and the page cannot add an argument"
         );
         assert_eq!(
-            names(&command, "OPENAI_API_KEY"),
-            [(
-                "OPENAI_API_KEY".to_string(),
-                Some("fake-openai-value".to_string())
-            )]
-        );
-        assert_eq!(
-            names(&command, "TOKEN"),
-            [("TOKEN".to_string(), Some("fake-token-value".to_string()))]
-        );
-        let akm = names(&command, "AKM_");
-        assert_eq!(akm.len(), 3, "{akm:?}");
-        assert!(akm.iter().all(|(_, value)| value.is_none()), "{akm:?}");
-        assert!(
-            names(&command, "PATH").is_empty(),
+            block(
+                &[
+                    ("PATH", "C:\\Windows"),
+                    ("AKM_PASSWORD", "fake-inherited"),
+                    ("akm_journal_root", "fake-root"),
+                    ("Akm_Other", "fake-other"),
+                ],
+                &[
+                    ("OPENAI_API_KEY", "fake-openai-value"),
+                    ("TOKEN", "fake-token-value"),
+                ],
+            ),
+            [
+                "OPENAI_API_KEY=fake-openai-value",
+                "PATH=C:\\Windows",
+                "TOKEN=fake-token-value",
+            ],
             "PATH stays inherited, untouched"
         );
     }
 
-    /// A real child process, with no window. The command is the one a launch prepares, plus
-    /// the arguments that make it print what it received.
+    /// A real child process, suspended and then resumed, with no window. It is made by the
+    /// function that makes a terminal, with the arguments of a terminal plus the ones that make
+    /// it print what it received.
     #[cfg(windows)]
     #[test]
     fn a_real_child_gets_the_folder_and_the_selected_variables_and_no_akm_variable() {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
         assert!(
             std::env::var_os("AKM_JOURNAL_ROOT").is_some(),
             "the test needs one real AKM_ variable to inherit (.cargo/config.toml)"
         );
         let folder = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let printed = output.path().join("child.txt");
         let shell = system_command_prompt().unwrap();
         assert_eq!(shell.file_name().unwrap(), "cmd.exe");
-        let mut command = prepare_command(
-            &shell,
-            folder.path(),
-            std::env::vars_os().map(|(name, _)| name),
-            &[("OPENAI_API_KEY".into(), "fake-openai-value".into())],
+        let arguments = format!(
+            "{TERMINAL_ARGUMENTS} /c cd>\"{0}\"&&set>>\"{0}\"",
+            printed.display()
         );
-        command.args(["/c", "cd&&set"]);
-        command.creation_flags(CREATE_NO_WINDOW);
-        let output = command.output().unwrap();
-        assert!(output.status.success());
-        let text = String::from_utf8_lossy(&output.stdout);
+        let mut child = suspended_shell(
+            &shell,
+            &arguments,
+            folder.path(),
+            &[("OPENAI_API_KEY".into(), "fake-openai-value".into())],
+            crate::process::Console::Hidden,
+        )
+        .unwrap();
+        assert!(!printed.exists(), "a suspended child ran");
+        child.resume(&Held::for_test()).unwrap();
+        assert_eq!(child.wait(30_000), Some(0));
+        let text = std::fs::read_to_string(&printed).unwrap();
         let mut lines = text.lines();
         assert_eq!(
             lines.next().unwrap().to_lowercase(),
@@ -1509,15 +1711,8 @@ mod tests {
 
     #[test]
     fn a_selected_name_with_the_akm_prefix_never_reaches_the_child() {
-        let command = prepare_command(
-            Path::new("C:/shell/cmd.exe"),
-            Path::new("C:/work"),
-            Vec::<OsString>::new(),
-            &[("AKM_PASSWORD".into(), "fake-leak".into())],
-        );
-        assert!(names(&command, "AKM_")
-            .iter()
-            .all(|(_, value)| value.is_none()));
+        assert!(block(&[], &[("AKM_PASSWORD", "fake-leak")]).is_empty());
+        assert!(block(&[], &[("akm_password", "fake-leak")]).is_empty());
     }
 
     #[test]
