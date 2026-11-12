@@ -297,3 +297,88 @@ fn an_expiry_with_a_fraction_of_a_second_is_refused_by_add_and_changes_nothing()
     let json = fixture.run("2026-01-01T00:00:00Z", "UTC", &["list", "--json"]);
     assert!(text(&json.stdout).contains("\"expires_at\": \"2026-11-10T12:00:00Z\""));
 }
+
+// ------------------------------------------- core review 1, finding 6: extreme day counts
+
+/// Finding 6 (the FR-15 class), through the binary: `list --expiring` and
+/// `purge --older-than-days` take any count that their type holds. A count beyond the calendar
+/// gives every key with an expiry, none, or nothing to purge, with exit code 0 and the vault
+/// bytes unchanged.
+#[test]
+fn extreme_day_counts_in_list_and_purge_exit_cleanly_and_change_nothing() {
+    let fixture = Fixture::new();
+    fixture.add(
+        "2026-01-01T00:00:00Z",
+        &["Dated", "--env-var", "DATED_KEY", "--expires", "2026-11-10"],
+    );
+    fixture.add(
+        "2026-01-01T00:00:00Z",
+        &["Recycled", "--env-var", "RECYCLED_KEY"],
+    );
+    let removed = fixture.run("2026-01-02T00:00:00Z", "UTC", &["rm", "Recycled", "--yes"]);
+    assert!(removed.status.success(), "{}", text(&removed.stderr));
+    let before = fs::read(&fixture.vault).unwrap();
+    let now = "2026-06-01T00:00:00Z";
+    for days in ["4294967295", "9223372036854775807", "106751991167301"] {
+        let output = fixture.run(now, "UTC", &["list", &format!("--expiring={days}")]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{days}: {}",
+            text(&output.stderr)
+        );
+        assert!(row(&text(&output.stdout), "Dated").contains("2026-11-10"));
+    }
+    for days in ["-9223372036854775808", "-4294967295"] {
+        let output = fixture.run(now, "UTC", &["list", &format!("--expiring={days}")]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{days}: {}",
+            text(&output.stderr)
+        );
+        assert!(text(&output.stdout).contains("no keys"), "{days}");
+    }
+    for days in ["4294967295", "100000000"] {
+        let output = fixture.run(now, "UTC", &["purge", "--older-than-days", days, "--yes"]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{days}: {}",
+            text(&output.stderr)
+        );
+        assert!(
+            text(&output.stdout).contains("Nothing to purge"),
+            "{days}: {}",
+            text(&output.stdout)
+        );
+    }
+    assert_eq!(fs::read(&fixture.vault).unwrap(), before, "vault unchanged");
+}
+
+// ------------------------------------------- core review 1, finding 7: whole seconds only
+
+/// Finding 7, through the binary: a fraction with 1, 9 or 10 digits is refused, also when
+/// chrono would drop the digits beyond nine. Nothing is stored.
+#[test]
+fn an_expiry_fraction_of_any_length_is_refused_by_add_and_changes_nothing() {
+    let fixture = Fixture::new();
+    let before = fs::read(&fixture.vault).unwrap();
+    for expires in [
+        "2030-01-02T00:00:45.9Z",
+        "2030-01-02T00:00:45.000000001Z",
+        "2030-01-02T00:00:45.0000000001Z",
+    ] {
+        let refused = fixture.try_add(
+            "2026-01-01T00:00:00Z",
+            &["Fractional", "--expires", expires],
+        );
+        assert!(!refused.status.success(), "{expires} was accepted");
+        let message = text(&refused.stderr);
+        assert!(
+            message.contains("fraction of a second"),
+            "{expires}: {message}"
+        );
+    }
+    assert_eq!(fs::read(&fixture.vault).unwrap(), before, "vault unchanged");
+}

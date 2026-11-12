@@ -267,3 +267,227 @@ fn an_expiry_with_a_fraction_of_a_second_is_refused_and_a_zero_fraction_is_not()
         assert_eq!(parse_expiry(input).unwrap(), utc(instant), "{input}");
     }
 }
+
+// ------------------------------------------- core review 1, finding 6: extreme day counts
+
+/// Finding 6 (the FR-15 class): every day count that a caller passes gives a controlled
+/// result. A count beyond the calendar lists every key with an expiry, or none; a purge cutoff
+/// beyond the calendar purges nothing. No value panics, and nothing is written.
+#[test]
+fn extreme_day_counts_for_expiry_and_purge_never_panic_and_change_nothing() {
+    let (directory, mut vault, _) = vault_at("2026-01-01T00:00:00Z");
+    let mut dated = ApiKeyInput::new("Dated", "fake-secret");
+    dated.expires_at = Some(parse_expiry("2026-11-10").unwrap());
+    vault.add(dated).unwrap();
+    vault
+        .add(ApiKeyInput::new("Undated", "fake-other"))
+        .unwrap();
+    let recycled = vault
+        .add(ApiKeyInput::new("Recycled", "fake-recycled"))
+        .unwrap();
+    vault.remove(&recycled.id).unwrap();
+    let path = directory.path().join("vault.kdbx");
+    let before = std::fs::read(&path).unwrap();
+    for days in [i64::MAX, i64::from(u32::MAX), 106_751_991_167_301, 1 << 40] {
+        let titles: Vec<String> = vault.expiring(days).into_iter().map(|k| k.title).collect();
+        assert_eq!(titles, ["Dated"], "{days}");
+    }
+    for days in [i64::MIN, -i64::from(u32::MAX), -(1 << 40)] {
+        assert!(vault.expiring(days).is_empty(), "{days}");
+    }
+    for days in [u32::MAX, 100_000_000] {
+        assert!(
+            vault.purge_recycled_older_than(days).unwrap().is_empty(),
+            "{days}"
+        );
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), before, "nothing was written");
+    assert_eq!(vault.recycled().len(), 1);
+}
+
+/// Finding 6, the structural guard: only `schedule.rs` computes with dates. Its functions give
+/// a checked or a saturated result, and `#![deny(clippy::arithmetic_side_effects)]` refuses
+/// an overflowing operator there. This scan fails when the source of the core, the CLI or the
+/// desktop back end names a date-arithmetic constructor or method anywhere else. The limit:
+/// it cannot see the subtraction of two dates with no named method after it.
+#[test]
+fn date_arithmetic_lives_only_in_the_schedule_module() {
+    const NAMES: &[&str] = &[
+        "TimeDelta",
+        "Days",
+        "Months",
+        "checked_add_signed",
+        "checked_sub_signed",
+        "signed_duration_since",
+        "checked_add_days",
+        "checked_sub_days",
+        "checked_add_months",
+        "checked_sub_months",
+        "num_weeks",
+        "num_days",
+        "num_hours",
+        "num_minutes",
+        "num_seconds",
+        "num_milliseconds",
+        "num_microseconds",
+        "num_nanoseconds",
+    ];
+    const CALLS: &[&str] = &[
+        "timestamp",
+        "timestamp_millis",
+        "timestamp_micros",
+        "timestamp_nanos_opt",
+        "and_local_timezone",
+    ];
+    const DURATION: &[&str] = &[
+        "weeks",
+        "days",
+        "hours",
+        "minutes",
+        "seconds",
+        "milliseconds",
+        "microseconds",
+        "nanoseconds",
+        "try_weeks",
+        "try_days",
+        "try_hours",
+        "try_minutes",
+        "try_seconds",
+        "try_milliseconds",
+        "new",
+        "zero",
+        "max_value",
+        "min_value",
+    ];
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = Vec::new();
+    let mut folders: Vec<PathBuf> = [
+        "crates/akm-core/src",
+        "crates/akm-cli/src",
+        "desktop/src-tauri/src",
+    ]
+    .iter()
+    .map(|folder| root.join(folder))
+    .collect();
+    while let Some(folder) = folders.pop() {
+        for item in std::fs::read_dir(&folder).unwrap() {
+            let path = item.unwrap().path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    assert!(files.len() > 10, "the scan found the source files");
+    let mut found = Vec::new();
+    for path in files {
+        if path.ends_with("akm-core/src/schedule.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (number, line) in text.lines().enumerate() {
+            let code = line.split("//").next().unwrap();
+            let mut words: Vec<(usize, &str)> = Vec::new();
+            let mut start = None;
+            for (at, c) in code.char_indices().chain([(code.len(), ' ')]) {
+                let part = c.is_alphanumeric() || c == '_';
+                match (part, start) {
+                    (true, None) => start = Some(at),
+                    (false, Some(from)) => {
+                        words.push((from, &code[from..at]));
+                        start = None;
+                    }
+                    _ => {}
+                }
+            }
+            for (index, &(at, word)) in words.iter().enumerate() {
+                let rest = code[at + word.len()..].trim_start();
+                let next = words.get(index + 1).map(|&(_, w)| w);
+                let chrono_duration = word == "Duration"
+                    && rest.starts_with("::")
+                    && next.is_some_and(|w| DURATION.contains(&w))
+                    || word == "Duration" && code.contains("chrono");
+                if NAMES.contains(&word)
+                    || CALLS.contains(&word) && rest.starts_with('(')
+                    || chrono_duration
+                {
+                    found.push(format!("{}:{}: {word}", path.display(), number + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "date arithmetic outside akm-core/src/schedule.rs; add a checked or saturating function there and call it:\n{}",
+        found.join("\n")
+    );
+}
+
+// ---------------------------------------------- core review 1, finding 7: whole seconds only
+
+/// Finding 7 (class O, validate where input comes in): the rule lives in `ApiKeyInput`, so
+/// core `add` and `update` refuse a sub-second expiry from any caller, the desktop draft
+/// included. Nothing is stored, and the stored key keeps its expiry.
+#[test]
+fn core_add_and_update_refuse_a_sub_second_expiry_and_change_nothing() {
+    let (directory, mut vault, _) = vault_at("2026-01-01T00:00:00Z");
+    let fractional = [
+        utc("2030-01-02T00:00:45.900Z"),
+        utc("2030-01-02T00:00:45.000000001Z"),
+        utc("2030-01-02T00:00:45.999999999Z"),
+    ];
+    for expires in fractional {
+        let mut input = ApiKeyInput::new("Fractional", "fake-secret");
+        input.expires_at = Some(expires);
+        let message = vault.add(input).unwrap_err().to_string();
+        assert!(
+            message.contains("fraction of a second"),
+            "{expires}: {message}"
+        );
+    }
+    assert!(vault.list().is_empty(), "nothing was stored");
+
+    let mut whole = ApiKeyInput::new("Whole", "fake-secret");
+    whole.expires_at = Some(utc("2030-01-02T00:00:45Z"));
+    let key = vault.add(whole).unwrap();
+    let path = directory.path().join("vault.kdbx");
+    let before = std::fs::read(&path).unwrap();
+    for expires in fractional {
+        let mut edit = vault.edit_input(&key.id).unwrap();
+        edit.expires_at = Some(expires);
+        let message = vault.update(&key.id, edit).unwrap_err().to_string();
+        assert!(
+            message.contains("fraction of a second"),
+            "{expires}: {message}"
+        );
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), before, "nothing was written");
+    assert_eq!(
+        vault.get_by_id(&key.id).unwrap().expires_at,
+        Some(utc("2030-01-02T00:00:45Z"))
+    );
+}
+
+/// Finding 7, the text path: chrono keeps nine fraction digits and drops the rest, so the check
+/// reads the text that the person wrote. Any nonzero fraction digit refuses, at any position.
+#[test]
+fn an_expiry_fraction_beyond_nine_digits_is_refused_from_the_text() {
+    for input in [
+        "2030-01-02T00:00:45.0000000001Z",
+        "2030-01-02T00:00:45.000000000000000009Z",
+        "2030-01-02T00:00:45.0000000001+02:00",
+    ] {
+        let message = parse_expiry(input)
+            .expect_err(&format!("{input} was accepted"))
+            .to_string();
+        assert!(
+            message.contains("fraction of a second"),
+            "{input}: {message}"
+        );
+    }
+    assert_eq!(
+        parse_expiry("2030-01-02T00:00:45.000000000000Z").unwrap(),
+        utc("2030-01-02T00:00:45Z")
+    );
+}

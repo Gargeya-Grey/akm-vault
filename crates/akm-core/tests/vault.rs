@@ -168,50 +168,75 @@ fn imports_dotenv_pairs_and_updates_matching_keys() {
     assert_eq!(github.project.as_deref(), Some("demo"));
 }
 
+/// FR-22 and core review 1, finding 11: one variable lives in three scopes. `other/dev`
+/// differs from `demo/dev` by its project only, and `demo/prod` by its environment only. An
+/// import into `demo/dev` changes that scope alone, and an import into a fourth scope adds a
+/// key. Every secret is compared in memory and after the vault is opened again, so a match on
+/// the project alone, or on the environment alone, fails this test.
 #[test]
 fn import_never_updates_a_different_project_or_environment() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vault.kdbx");
     let mut vault = Vault::create(&path, PASSWORD, None).unwrap();
-    let mut existing = sample();
-    existing.env_var = Some("OPENAI_API_KEY".into());
-    let original = vault.add(existing).unwrap();
-
+    let mut keys = Vec::new();
+    for (project, environment, secret) in [
+        ("demo", "dev", "fake-demo-dev"),
+        ("other", "dev", "fake-other-dev"),
+        ("demo", "prod", "fake-demo-prod"),
+    ] {
+        let mut input = ApiKeyInput::new(format!("OpenAI {project} {environment}"), secret);
+        input.env_var = Some("OPENAI_API_KEY".into());
+        input.project = Some(project.into());
+        input.environment = Some(environment.into());
+        keys.push(vault.add(input).unwrap());
+    }
+    let batch = [("OPENAI_API_KEY".to_string(), "fake-imported".to_string())];
+    let preview = vault
+        .preview_import_env(&batch, Some("demo"), Some("dev"))
+        .unwrap();
+    assert_eq!((preview.added, preview.updated), (0, 1));
+    assert_eq!(preview.changes[0].title, "OpenAI demo dev");
+    assert_eq!(
+        vault.import_env(&batch, Some("demo"), Some("dev")).unwrap(),
+        (0, 1)
+    );
+    let fourth = [("OPENAI_API_KEY".to_string(), "fake-other-prod".to_string())];
     assert_eq!(
         vault
-            .import_env(
-                &[("OPENAI_API_KEY".into(), "other-project-secret".into())],
-                Some("other"),
-                Some("prod"),
-            )
+            .import_env(&fourth, Some("other"), Some("prod"))
             .unwrap(),
-        (1, 0),
+        (1, 0)
     );
-    assert_eq!(vault.get_by_id(&original.id).unwrap(), original);
-    assert_eq!(vault.list().len(), 2);
-
-    // FR-22: metadata does not hold the secret, so compare the protected values of both
-    // scopes, in memory and after the vault is opened again.
-    let other = vault
+    let added = vault
         .list()
         .into_iter()
-        .find(|key| key.project.as_deref() == Some("other"))
-        .expect("the import added a key in the other scope");
-    assert_ne!(other.id, original.id);
+        .find(|key| {
+            key.project.as_deref() == Some("other") && key.environment.as_deref() == Some("prod")
+        })
+        .expect("the import added a key in the fourth scope");
+
+    let expected = [
+        (&keys[0].id, "fake-imported"),
+        (&keys[1].id, "fake-other-dev"),
+        (&keys[2].id, "fake-demo-prod"),
+        (&added.id, "fake-other-prod"),
+    ];
     for (label, vault) in [
         ("in memory", &vault),
         ("after reopening", &Vault::open(&path, PASSWORD).unwrap()),
     ] {
-        assert_eq!(
-            secret_of(vault, &original.id),
-            "sk-test-123456789",
-            "the original scope keeps its own secret {label}"
-        );
-        assert_eq!(
-            secret_of(vault, &other.id),
-            "other-project-secret",
-            "the other scope holds the imported secret {label}"
-        );
+        assert_eq!(vault.list().len(), 4, "{label}");
+        for (id, secret) in expected {
+            assert_eq!(secret_of(vault, id), secret, "{id} {label}");
+        }
+        for key in &keys[1..] {
+            assert_eq!(
+                vault.get_by_id(&key.id).unwrap(),
+                *key,
+                "{} keeps its metadata {label}",
+                key.title
+            );
+        }
     }
 }
 
@@ -726,11 +751,22 @@ fn older_formats_require_explicit_upgrade_and_preserve_the_database_and_kdf() {
             bytes
         );
         expected.config.version = keepass::config::DatabaseVersion::KDB4(1);
-        let saved = keepass::Database::parse(
+        let mut saved = keepass::Database::parse(
             &std::fs::read(&path).unwrap(),
             keepass::DatabaseKey::new().with_password(FIXTURE_PASSWORD),
         )
         .unwrap();
+        // The one addition is AKM's ledger of its backups (FR-01). It lists the dated backup
+        // of the original bytes.
+        let ledger = saved.meta.custom_data.remove("AKM_BACKUPS").unwrap();
+        let Some(keepass::db::CustomDataValue::String(ledger)) = ledger.value else {
+            panic!("the ledger is text");
+        };
+        let ledger: serde_json::Value = serde_json::from_str(&ledger).unwrap();
+        let listed = ledger["backups"].as_array().unwrap();
+        assert_eq!(listed.len(), 1, "{ledger}");
+        let name = listed[0]["name"].as_str().unwrap();
+        assert_eq!(std::fs::read(path.with_file_name(name)).unwrap(), bytes);
         assert_eq!(saved, expected);
         let upgraded = std::fs::read(&path).unwrap();
         vault.upgrade().unwrap();

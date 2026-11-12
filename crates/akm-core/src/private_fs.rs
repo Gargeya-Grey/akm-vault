@@ -121,10 +121,14 @@ pub(crate) fn check_private(path: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-pub(crate) use imp::{create_private_dir, file_id, open_dir, open_file, reject_links};
+pub(crate) use imp::{
+    create_private_dir, file_id, move_new, open_dir, open_file, reject_links, remove_file_if,
+};
 
 #[cfg(not(windows))]
-pub(crate) use other::{create_private_dir, file_id, open_dir, open_file, reject_links};
+pub(crate) use other::{
+    create_private_dir, file_id, move_new, open_dir, open_file, reject_links, remove_file_if,
+};
 
 #[cfg(not(windows))]
 mod other {
@@ -153,6 +157,30 @@ mod other {
     pub(crate) fn reject_links(_: &Path) -> Result<()> {
         Err(unsupported())
     }
+
+    /// See the Windows `move_new`. A hard link fails when `to` exists, so the same rule holds.
+    pub(crate) fn move_new(from: &Path, to: &Path) -> std::io::Result<()> {
+        std::fs::hard_link(from, to)?;
+        std::fs::remove_file(from)
+    }
+
+    /// See the Windows `remove_file_if`. Here the check and the delete are two steps, so a
+    /// file that another writer puts at the path between them is deleted.
+    pub(crate) fn remove_file_if(
+        path: &Path,
+        holds: impl FnOnce(&[u8]) -> bool,
+    ) -> std::io::Result<bool> {
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if !metadata.is_file() || !holds(&std::fs::read(path)?) {
+            return Ok(false);
+        }
+        std::fs::remove_file(path)?;
+        Ok(true)
+    }
 }
 
 #[cfg(windows)]
@@ -179,13 +207,14 @@ mod imp {
         TOKEN_USER,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateDirectoryW, CreateFileW, GetDriveTypeW, GetFileInformationByHandle,
-        GetVolumeInformationByHandleW, GetVolumePathNameW, BY_HANDLE_FILE_INFORMATION, CREATE_NEW,
+        CreateDirectoryW, CreateFileW, FileDispositionInfo, GetDriveTypeW,
+        GetFileInformationByHandle, GetVolumeInformationByHandleW, GetVolumePathNameW, MoveFileExW,
+        SetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, DELETE,
         FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
-        FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
-        FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_DATA, OPEN_ALWAYS, OPEN_EXISTING,
-        READ_CONTROL,
+        FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_DATA,
+        MOVEFILE_WRITE_THROUGH, OPEN_ALWAYS, OPEN_EXISTING, READ_CONTROL,
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -219,6 +248,70 @@ mod imp {
 
     fn os_error(context: &str) -> Error {
         refuse(format!("{context}: {}", io::Error::last_os_error()))
+    }
+
+    /// Moves `from` to `to` only when no file is at `to` (core review 1, finding 8). The check
+    /// and the move are one step of the file system, so a file that appears at `to` after AKM
+    /// chose the name is never replaced: the move fails with `AlreadyExists`. This is
+    /// `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`; `std::fs::rename` replaces.
+    pub(crate) fn move_new(from: &Path, to: &Path) -> io::Result<()> {
+        let encode = |path: &Path| -> io::Result<Vec<u16>> {
+            wide(path)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))
+        };
+        let (from, to) = (encode(from)?, encode(to)?);
+        // SAFETY: both buffers are NUL-terminated wide strings that live across the call.
+        if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Deletes the regular file at `path` only when its bytes pass `holds` (FR-01, core review
+    /// 1, finding 1). One handle reads the bytes and deletes the file. It is opened without
+    /// following a link, and it shares reading only, so no other writer can change, rename or
+    /// delete the file between the check and the delete. `false` when nothing was deleted: no
+    /// file, a link or a folder, or other bytes.
+    pub(crate) fn remove_file_if(
+        path: &Path,
+        holds: impl FnOnce(&[u8]) -> bool,
+    ) -> io::Result<bool> {
+        use std::io::Read;
+        use std::os::windows::fs::OpenOptionsExt;
+        let mut file = match fs::OpenOptions::new()
+            .access_mode(FILE_GENERIC_READ | DELETE)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Ok(false);
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        if !holds(&bytes) {
+            return Ok(false);
+        }
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: the handle is open with DELETE access, and the buffer is one
+        // FILE_DISPOSITION_INFO that lives across the call.
+        let marked = unsafe {
+            SetFileInformationByHandle(
+                file.as_raw_handle() as HANDLE,
+                FileDispositionInfo,
+                (&raw const disposition).cast::<c_void>(),
+                size_of::<FILE_DISPOSITION_INFO>() as u32,
+            )
+        };
+        if marked == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(true)
     }
 
     fn wide(path: &Path) -> Result<Vec<u16>> {
@@ -624,5 +717,65 @@ mod tests {
         assert!(storage_allows(3, 0)
             .unwrap_err()
             .contains("persistent ACLs"));
+    }
+
+    /// FR-01, core review 1, finding 1: the delete of a pruned backup. A file with the
+    /// recorded bytes is deleted; a file with other bytes, a folder, a folder link and a
+    /// missing file are not, and a link is never followed to its target.
+    #[cfg(windows)]
+    #[test]
+    fn remove_file_if_deletes_only_a_regular_file_with_the_expected_bytes() {
+        use super::remove_file_if;
+        let dir = tempfile::tempdir().unwrap();
+        let ours = dir.path().join("ours.kdbx");
+        std::fs::write(&ours, b"recorded bytes").unwrap();
+        assert!(remove_file_if(&ours, |bytes| bytes == b"recorded bytes").unwrap());
+        assert!(!ours.exists());
+
+        let other = dir.path().join("other.kdbx");
+        std::fs::write(&other, b"other bytes").unwrap();
+        assert!(!remove_file_if(&other, |bytes| bytes == b"recorded bytes").unwrap());
+        assert_eq!(std::fs::read(&other).unwrap(), b"other bytes");
+
+        let folder = dir.path().join("folder.kdbx");
+        std::fs::create_dir(&folder).unwrap();
+        assert!(!remove_file_if(&folder, |_| true).unwrap_or(false));
+        assert!(folder.is_dir());
+
+        let target = dir.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("inside.txt"), b"keep").unwrap();
+        let junction = dir.path().join("junction.kdbx");
+        let made = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&junction)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        assert!(!remove_file_if(&junction, |_| true).unwrap_or(false));
+        assert_eq!(std::fs::read(target.join("inside.txt")).unwrap(), b"keep");
+        let _ = std::fs::remove_dir(&junction);
+
+        assert!(!remove_file_if(&dir.path().join("missing.kdbx"), |_| true).unwrap());
+
+        // The open refuses a folder and a folder junction by itself. A file link opens, so
+        // only the reparse-point check keeps the link.
+        let linked = dir.path().join("linked.txt");
+        std::fs::write(&linked, b"keep").unwrap();
+        let link = dir.path().join("link.kdbx");
+        match std::os::windows::fs::symlink_file(&linked, &link) {
+            Ok(()) => {
+                assert!(!remove_file_if(&link, |_| true).unwrap());
+                assert!(std::fs::symlink_metadata(&link).is_ok(), "the link stays");
+                assert_eq!(std::fs::read(&linked).unwrap(), b"keep");
+            }
+            Err(error) if error.raw_os_error() == Some(1314) => eprintln!(
+                "NOT RUN: remove_file_if file-link case: Windows error 1314, no privilege to make a file symbolic link"
+            ),
+            Err(error) => panic!("could not make the file link: {error}"),
+        }
     }
 }
