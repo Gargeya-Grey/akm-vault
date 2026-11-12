@@ -338,6 +338,13 @@ From [terminal launch review 2](reviews/2026-11-08-terminal-review2.md), on `34c
 | T-R2-05 | P2 | Open | Terminal | C | A lock just before the import review returns with no native outcome record (contract 7). |
 | T-R2-06 | P2 | Open | Terminal | Failure reporting | A failed native dialog is recorded as the user declining. |
 | T-R2-07 | P3 | Open | Terminal | D | The verification guide still says that the record comes before any value is read. |
+| T-R3-01 | P2 | Open (stop rule) | Terminal | A | The session gate covers the start of `cmd.exe`, so a stalled process start can delay a lock. The design names this exception; the owner's decision does not. |
+| T-R3-02 | P2 | Open (stop rule) | Terminal | Incomplete deny list | `GIT_EDITOR` reached the terminal, and a later `git commit` runs its value. Reserved in `fix/core-findings` (FR-02), which is not merged here. |
+| T-R3-03 | P2 | Open (stop rule) | Terminal | A | A vault write between the value copy and the start is not detected, so a terminal can receive a rotated or removed key. |
+| T-R3-04 | P2 | Open (stop rule) | Terminal | A | `access_reviewed` releases the gate before its closure, so an approved import can commit after a lock. This path predates the unit. |
+| T-R3-05 | P2 | Open (stop rule) | Terminal | C | A hidden window at `ensure_window_shown` bypasses the outcome recorder, so a lost reply leaves no import outcome. T-R2-05 remains open. |
+| T-R3-06 | P2 | Open (stop rule) | Terminal | C | A terminal receipt exists only in the page, so a reload during the review loses the only completion notice. |
+| T-R3-07 | P3 | Open | Terminal | D | STATE.md, a FINDINGS row and a comment in `vault.rs` contradict the decided design. |
 
 ## Found in use (2026-11-08)
 
