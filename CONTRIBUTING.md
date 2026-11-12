@@ -6,7 +6,7 @@ AKM is a Windows API-key manager over a KeePass (KDBX) vault. It is not ready fo
 
 - Use temporary vaults and fake keys. A fake secret starts with `fake-`, so a search for `fake-` finds every leak in a log.
 - Never commit a vault, a backup, an `.env` file, a key, a screenshot, a log or a proof transcript. `.gitignore` refuses many of them, but it is not a secrets scanner. Read your staged diff before each commit.
-- Never let a test or a script write `%LOCALAPPDATA%\akm` or `%APPDATA%\com.akm.desktop`. Each process that a test starts gets its own `AKM_JOURNAL_ROOT`.
+- Never let a test or a script write `%LOCALAPPDATA%\akm` or `%APPDATA%\com.akm.desktop`. Each process that a test starts gets its own `AKM_JOURNAL_ROOT`. The one exception is `tools/test_install.ps1`, which runs only on a disposable runner: it installs the app and writes that runner's default folders on purpose.
 - Keep the clipboard and visible windows out of tests that run without a person watching ([docs/TESTING.md](docs/TESTING.md)).
 - Report a vulnerability privately, never in an issue ([SECURITY.md](SECURITY.md)).
 

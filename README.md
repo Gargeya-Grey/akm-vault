@@ -196,7 +196,10 @@ be saved after a committed change, AKM prints a warning that says the change is 
 and that you must not repeat it.
 
 Tests and proof scripts set `AKM_JOURNAL_ROOT` to a temporary absolute folder, so they
-never touch the real journal.
+never touch the real journal. The one exception is the install test of the native-proof
+workflow (`tools/test_install.ps1`): it runs the installed app without `AKM_JOURNAL_ROOT` on
+a disposable runner, so it writes that runner's default journal. Its guard refuses any
+other computer.
 
 ## Build and verify on Windows
 
