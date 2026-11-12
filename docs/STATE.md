@@ -59,7 +59,7 @@ The owner asked for the cause of the stall and for a plan to pass the bar, and g
 **Done on 2026-11-13.**
 
 - Branch `gate/integration` holds all five open branches (`fix/score-findings`, `fix/terminal-rework`, `fix/core-findings`, `fix/tools-docs`, `ui/key-cabinet`). One conflict, in `docs/FIRST_USE.md`, was resolved by hand. The branch is local and not pushed.
-- Checks on the merged tree: `cargo fmt --check` and Clippy (`-D warnings`) clean; `npm run build` passed; `npm test` 443 passed in 32 files; `npm run test:ui` 104 passed; `check_docs` passed. The Rust workspace tests: see "Last full check run".
+- Checks on the merged tree: `cargo fmt --check` and Clippy (`-D warnings`) clean; `npm run build` passed; `npm test` 443 passed in 32 files; `npm run test:ui` 104 passed; `check_docs` passed. `cargo test --workspace --offline --locked --no-fail-fast` exited 0 with no failed test (the desktop library alone: 288 passed, 1 ignored). The "Last full check run" section below is older; the collect step replaces it.
 - Three workers started, each in its own worktree from `955e3c5`: unit 1 (native session and launch), unit 2 (frontend), unit 4 (tools, CI and release package). Unit 3 (core and CLI) gets its first review before any new fix.
 
 **Decisions taken by the planner, for the owner's veto.**
