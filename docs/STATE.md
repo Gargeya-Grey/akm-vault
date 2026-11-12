@@ -1,6 +1,6 @@
 # Current state
 
-Updated 2026-11-09. Replace this file's sections when they change. History lives in Git.
+Updated 2026-11-13. Replace this file's sections when they change. History lives in Git.
 
 ## Status
 
@@ -50,42 +50,40 @@ Each CI run uploads its own build with a `SHA256SUMS.txt`, and keeps it for 90 d
 | P2R2-03 delayed discard reaches session B (B) | A discard without an identity reaches only the current session. | `view_discard` carries its session ID; a failed discard locks only that session. |
 | P2R2-04 clone replacement mixes journals (B) | The root UUID names one vault. | A fingerprint that this device has seen belongs to the journal that saw it; only an unseen one falls back to the root UUID. |
 
-## Paused run (owner, 2026-11-09)
+## Campaign to the release gate (2026-11-13)
 
-The owner stopped the "fix every finding" run at this safe step, to continue later with stronger models. Each branch below is committed and local. Nothing since `e1e2c94` is pushed or merged. The score stays 66.25/100: no new full review ran.
+The owner asked for the cause of the stall and for a plan to pass the bar, and gave the planner the design decisions. The plan is [design/gate-campaign.md](design/gate-campaign.md). The score stays 66.25/100: no new full review ran.
 
-| Branch | Head | Holds | Review state | Checks |
-|---|---|---|---|---|
-| `ui/key-cabinet` (PR 9) | this commit | Select list, full rows, issuer and unique ID | [Review 4](reviews/2026-11-09-look-review4.md) failed: 2 P2, 2 P3. Patching stopped. | At `daf160d`: `tsc`, `npm test` 396, build, `test:ui` 96, `check_docs` passed. |
-| `fix/terminal-rework` (rework of PR 10) | `4c3ebf7` | T-R2 fixes, amended contract 11, merge of `f76bd5a` | Review 3 failed: 6 P2, 1 P3 (`docs/reviews/2026-11-09-terminal-review3.md` and the T-R3 rows on that branch). Patching stopped. | At `f558a03`, reported by its worker: Rust 535 passed, `npm test` 405, `test:ui` 81. |
-| `fix/core-findings` | `2c0a79a` | FR-01, 02, 05, 08, 12, 15, 16, 17, 18, 22, 28, P2R2-07 | No review. | Reported by its worker: fmt and Clippy clean, Rust 509 passed, 0 failed, 2 ignored, `check_docs` passed. |
-| `fix/tools-docs` | `edbc317` | FR-06, 07, 09, 10, 23, 24, 25, 27, SEC-02, 04, 05, 2-W-01 wording | No review. | Reported by its worker. |
-| `fix/score-findings` | `2d8e013` | FR-03, FR-04, FR-14, on top of the terminal rework at `20e3621` | No review. | Not known. The worker was cancelled during its mutant checks and gave no report. Run the full checks first. |
+**Cause, in short.** The review loop did not converge: 30 reviews with a verdict are recorded, and none passed without a scope split. Fixes were made by instance. New features started before the gate. Areas H and I hold 10 points that are not product code, and the bar cannot be passed without them.
 
-Not done: the merge of these branches, the full check run on the merged tree, the combined review, real-window proofs, a new setup program and a new score. GitHub billing still blocks CI.
+**Done on 2026-11-13.**
 
-**Owner's decisions that come first:**
+- Branch `gate/integration` holds all five open branches (`fix/score-findings`, `fix/terminal-rework`, `fix/core-findings`, `fix/tools-docs`, `ui/key-cabinet`). One conflict, in `docs/FIRST_USE.md`, was resolved by hand. The branch is local and not pushed.
+- Checks on the merged tree: `cargo fmt --check` and Clippy (`-D warnings`) clean; `npm run build` passed; `npm test` 443 passed in 32 files; `npm run test:ui` 104 passed; `check_docs` passed. The Rust workspace tests: see "Last full check run".
+- Three workers started, each in its own worktree from `955e3c5`: unit 1 (native session and launch), unit 2 (frontend), unit 4 (tools, CI and release package). Unit 3 (core and CLI) gets its first review before any new fix.
 
-1. Rows (item 0 below): option (a), (b) or (c).
-2. Terminal launch, stop rule. Windows cannot cancel a process start that has begun, so AKM cannot promise both a prompt lock and no terminal start after a lock. Should AKM (a) accept the named limit that a stalled process start can delay a lock, and fix the other five P2 findings; (b) remove the terminal launch and keep the key history; or (c) keep the pull request unmerged until a redesign?
+**Decisions taken by the planner, for the owner's veto.**
 
-**When the run continues:**
+| Question | Decision |
+|---|---|
+| Terminal launch: a prompt lock, or no terminal after a lock | Both. The process starts suspended outside the session gate. Under the gate, AKM checks the session and the vault revision, then resumes the process or ends it. |
+| Rows: option (a), (b) or (c) | Fix LOOK-R4-01 and LOOK-R4-02 by class (one function builds the facts that a row shows; one read mechanism owns the request identity), then review them with the frontend unit. |
+| Stop rule | A unit gets at most 4 review rounds. A class that fails two rounds gets a redesign that removes its premise. A question goes to the owner only for money, an account, an irreversible step or a contract change. |
+| Review model | The first review runs on GPT-6.1 Terra and GPT-6.1 Sol, both at max effort, with one brief. The better one reviews the rest. |
 
-- Treat every fix above as fixed, not accepted, until the combined review passes.
-- Merge `fix/core-findings` and `fix/tools-docs` into `fix/score-findings`. The first merge closes `GIT_EDITOR` at the source (T-R3-02); that finding still needs a test through the launch path.
-- `desktop/src-tauri/src/session.rs` maps the two new warnings `FilePermissions` and `JournalLineageUnconfirmed` to older notices, whose text is partly wrong. Give each one its own notice in `session.rs`, `types.ts` and `App.tsx`.
-- `fix/tools-docs` moved the evidence and KeePassXC defaults. Update `.agents/skills/verify-akm/SKILL.md` and `docs/TESTING.md` to match.
-- `THIRD_PARTY_NOTICES.md` still lacks the licence texts, and T-R1-08 lacks its foreign-KDBX-to-IPC regression test.
-- Then run the full checks in [TESTING.md](TESTING.md), one review of the combined unit, and a new full review for a score.
+**Gates that need the owner.**
+
+1. GitHub Actions billing. CI has not run since 8 Nov 2026.
+2. A rule that lets a disposable CI runner run the clipboard, real-window and install proofs (AGENTS.md, Safety). Unit 4 writes the workflow and the proposed wording.
+3. OS lock, suspend and a real idle wait on the owner's computer ([FIRST_USE.md](FIRST_USE.md)).
+4. Each merge. Publisher signing. The choice to publish.
 
 ## Next action
 
-0. **Stop rule, rows (2026-11-09).** The owner chose the select-list rework, rows that show each fact in full, and after [review 3](reviews/2026-11-09-look-review3.md) the issuer and unique ID on each Recycle Bin row, with one last review and a report if it failed. [Review 4](reviews/2026-11-09-look-review4.md) found no defect in the select list or the Recycle Bin, and failed on 2 P2 and 2 P3 (LOOK-R4 rows). Patching stopped. The design question for the owner: should AKM (a) make one small fix for LOOK-R4-01 and LOOK-R4-02, with no further review; (b) get another review after that fix; or (c) keep this state and accept the four findings? Merging pull request 9 waits for that answer.
-0. **Stop rule, UI rebuild.** The branch failed two reviews ([review 1](reviews/2026-11-08-ui-rebuild-review1.md), [review 2](reviews/2026-11-08-ui-rebuild-review2.md)), so patching stopped (AGENTS.md). The design question for the owner: both reviews found that the new compact rows drop or clip facts that the old screens showed (class H). Should every row (a) show each fact in full, on more lines, and then get one more review; (b) get one more round of single fixes and a review; or (c) stay as it is, with the owner accepting the open findings UI-R2-01 to UI-R2-05? Merging and installing wait for that answer. The setup program of `58ef81b` is in `W:\AKM-archive\installers\` (SHA-256 `0dbbd98f2f5700707b17e3f7d0339439c92aea55202c3f90b99d728f190dd358`). The GUI proofs did not run on that build: the screen saver was on, so UI Automation could not reach the window. Run `-JournalOnly` and `-JournalExportOnly` on it with the screen on.
-0a. **Stop rule, terminal launch (2026-11-09).** The owner chose option (a): a lock is always prompt, and contract 11 is amended for the desktop. [Review 3](reviews/2026-11-09-terminal-review3.md) of the rework failed with 6 P2 and 1 P3 (T-R3 rows), so patching stopped again. The design question for the owner: can a child-process start ever be separated from a lock, given that Windows cannot cancel a process start that has begun? Should AKM (a) accept a named limit that a stalled process start can delay a lock, and fix the other five; (b) remove the terminal launch and keep the key history; or (c) keep this pull request unmerged until a later redesign?
-1. The owner runs the six tests in [FIRST_USE.md](FIRST_USE.md), and chooses option A or B for R4-04. `tools/verify_windows_app.ps1` now confirms the native import window (P2R2-02), but that path has not run on the real GUI.
-2. Release decisions for the owner: SEC-02 to SEC-05, 2-W-01 and P2R2-07 in [FINDINGS.md](FINDINGS.md).
-3. Later units: P2R2-06 (tests that compare raw temp paths), and the FR rows of the rescore, starting with FR-01, FR-02 and FR-03. The release gate needs a new full review above 90.
+1. Collect units 1, 2 and 4: check each against its brief and the contract in the plan, merge, run the full checks, build, and run the real-surface proofs that need no owner.
+2. Record the two first reviews of unit 3, choose the review model, and start the unit 3 fixes after unit 1 has landed.
+3. One review for each of units 1, 2 and 4, with fix rounds by class.
+4. Area probes, then the owner's gates above, then the full review.
 
 ## Local state outside the repository
 
