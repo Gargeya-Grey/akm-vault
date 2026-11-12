@@ -65,9 +65,9 @@ pub struct ApiKey {
 }
 
 impl ApiKey {
-    /// Case-insensitive match across the fields a person would search by.
+    /// A match across the fields a person would search by, under [`caseless`].
     pub fn matches(&self, needle: &str) -> bool {
-        let needle = needle.to_lowercase();
+        let needle = caseless(needle);
         let haystack = [
             Some(self.title.as_str()),
             self.issuer.as_deref(),
@@ -82,9 +82,7 @@ impl ApiKey {
         .chain(self.tags.iter().map(String::as_str))
         .chain(self.scopes.iter().map(String::as_str));
 
-        haystack
-            .into_iter()
-            .any(|v| v.to_lowercase().contains(&needle))
+        haystack.into_iter().any(|v| caseless(v).contains(&needle))
     }
 
     pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
@@ -270,6 +268,26 @@ impl ApiKeyInput {
         }
         Ok(())
     }
+}
+
+/// The one caseless rule of AKM (FR-17, core review 1, finding 10). Every title comparison
+/// uses it: selection of a live or a recycled key, search, and the CLI listing order.
+///
+/// Each character becomes the lowercase of its uppercase when its uppercase is one character,
+/// and its plain lowercase otherwise. This is Unicode simple case folding in practice, with no
+/// table to keep: `Σ`, `σ` and `ς` are one letter, `ẞ` and `ß` are one letter, and the Kelvin
+/// sign is `k`. `ß` is not `ss`, because its uppercase is two letters. The rule maps letters
+/// only: it does not normalize, so a precomposed `é` and `e` with a combining accent differ.
+pub fn caseless(text: &str) -> String {
+    let mut folded = String::with_capacity(text.len());
+    for letter in text.chars() {
+        let mut upper = letter.to_uppercase();
+        match (upper.next(), upper.next()) {
+            (Some(single), None) => folded.extend(single.to_lowercase()),
+            _ => folded.extend(letter.to_lowercase()),
+        }
+    }
+    folded
 }
 
 pub fn is_valid_env_var(value: &str) -> bool {

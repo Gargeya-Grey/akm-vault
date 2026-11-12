@@ -399,7 +399,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                         .as_deref()
                         .is_none_or(|env| key.environment.as_deref() == Some(env))
             });
-            keys.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+            keys.sort_by_cached_key(|key| akm_core::model::caseless(&key.title));
 
             if json {
                 writeln!(io.out, "{}", listing_json(&keys)?)?;
@@ -476,7 +476,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                 io.out.flush()?;
                 let mut answer = String::new();
                 std::io::stdin().read_line(&mut answer)?;
-                if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+                if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
                     status!(io, "Cancelled.");
                     return Ok(0);
                 }
@@ -1277,7 +1277,7 @@ fn print_key(
 
 /// A non-secret field. `--field secret` never reaches this function.
 fn print_field(out: &mut dyn Write, key: &KeyMetadata, field: &str) -> Result<()> {
-    match field.trim().to_lowercase().as_str() {
+    match field.trim().to_ascii_lowercase().as_str() {
         "id" => writeln!(out, "{}", key.id)?,
         "title" => writeln!(out, "{}", key.title)?,
         "project" => writeln!(out, "{}", key.project.as_deref().unwrap_or(""))?,

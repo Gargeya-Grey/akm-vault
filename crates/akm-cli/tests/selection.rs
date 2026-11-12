@@ -470,3 +470,26 @@ fn a_title_with_non_ascii_letters_is_selected_in_any_case_and_case_twins_are_amb
     );
     assert_eq!(fixture.bytes(), before);
 }
+
+/// Core review 1, finding 10, through the binary: the reviewer's final sigma. A key titled with
+/// `ς` is selected by `Σ` and `σ`, live and recycled. Nothing is written by a read.
+#[test]
+fn a_final_sigma_title_is_selected_by_its_capital_live_and_recycled() {
+    let fixture = Fixture::new(&[Key {
+        title: "Λόγος",
+        var: "LOGOS_KEY",
+        secret: "fake-secret-logos",
+        notes: None,
+        url: None,
+    }]);
+    let before = fixture.bytes();
+    for selector in ["ΛΌΓΟΣ", "λόγοσ", "λόγος"] {
+        let output = fixture.run(&["get", selector, "--field", "secret"]);
+        assert!(output.status.success(), "{selector}: {}", err(&output));
+        assert_eq!(out(&output), "fake-secret-logos\n", "{selector}");
+    }
+    assert_eq!(fixture.bytes(), before);
+    assert!(fixture.run(&["rm", "ΛΌΓΟΣ", "--yes"]).status.success());
+    let restored = fixture.run(&["restore", "λόγοσ"]);
+    assert!(restored.status.success(), "{}", err(&restored));
+}
