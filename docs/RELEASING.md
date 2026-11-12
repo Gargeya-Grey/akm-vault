@@ -14,7 +14,7 @@ A release is:
 - a tag `vX.Y.Z` on a commit of `main` whose CI run is green;
 - the files of that CI run: the setup program, `akm.exe`, and `SHA256SUMS.txt`, and a signature of `SHA256SUMS.txt`;
 - release notes that name the commit, the CI run and the changes, and say that the setup program can download the WebView2 runtime from Microsoft while it installs (FINDINGS.md SEC-05; the no-network promise covers AKM when it runs, not the setup program);
-- `LICENSE`, `THIRD_PARTY_NOTICES.md` and the source offer for the MPL-2.0 crates (SEC-04), which is in `THIRD_PARTY_NOTICES.md`.
+- `LICENSE`, `THIRD_PARTY_NOTICES.md` and the source offer for the MPL-2.0 crates (SEC-04), which is in `THIRD_PARTY_NOTICES.md`. The setup program and the app do not hold these files and do not show them, so the release must carry them as files beside the setup program. A person who gets only the setup program does not get the notices.
 
 A release workflow does not exist yet. It would build from the tag exactly as `build.yml` does and upload the files to a draft release. Writing it is a later step; publishing the draft stays an owner gate.
 
@@ -42,7 +42,7 @@ Both are owner decisions: the publisher name, and any money.
 ## The owner's steps (prepared, not done)
 
 1. **Owner gate.** Make a minisign key pair on the owner's own computer: `minisign -G -p akm-release.pub -s <a path outside every repository>`. Keep the private key off GitHub. Put only the public key in this file, under "Release key", and in the README, in one commit.
-2. **Owner gate.** Before the repository becomes public: run `python tools/make_public_snapshot.py --rev <commit> --scan-only`, clear every hit, then make the snapshot with `--out <new folder> --author "<public name> <public address>"` and publish that history, not the private one (FINDINGS.md FR-26). Turn on GitHub private vulnerability reporting ([SECURITY.md](../SECURITY.md)).
+2. **Owner gate.** Before the repository becomes public: run `python tools/make_public_snapshot.py --rev <commit> --scan-only` and clear every hit. For a file that cannot be scanned, check it, then add the line that `--suggest-opaque` prints to `tools/public_snapshot/opaque-files.txt`. The scan promises only what [TESTING.md](TESTING.md#private-data-before-a-public-push) lists; read its limits. Then make the snapshot with `--out <new folder> --author "<public name> <public address>"` and publish that history, not the private one (FINDINGS.md FR-26). Turn on GitHub private vulnerability reporting ([SECURITY.md](../SECURITY.md)).
 3. Tag the release commit. Wait for its CI run. Download the run's artifact. Check `SHA256SUMS.txt` against the hashes in the run's log.
 4. **Owner gate.** `minisign -Sm SHA256SUMS.txt -s <private key>` makes `SHA256SUMS.txt.minisig`.
 5. **Owner gate.** Publish the release with the files above and the notes.
@@ -50,6 +50,16 @@ Both are owner decisions: the publisher name, and any money.
 ## Release key
 
 None yet. Step 1 adds it here.
+
+## What an install and an uninstall touch
+
+Read from the NSIS template of tauri-bundler 2.10.4 and from `desktop/src-tauri/tauri.conf.json` (`installMode` `currentUser`). The `install-upgrade-uninstall` job of `.github/workflows/native-proof.yml` checks them, and it has never run.
+
+- The setup program installs `akm-desktop.exe` and `uninstall.exe` in `%LOCALAPPDATA%\AKM`, an uninstall entry under `HKCU`, and a Start menu entry. The installed `akm-desktop.exe` is the build with one change by the bundler: its bundle-type mark. The install job checks that the installed program is the hashed build with only that change (`tools/InstallBinding.psm1`).
+- The journal is in `%LOCALAPPDATA%\akm\journal`, inside the install folder `%LOCALAPPDATA%\AKM` (the same folder, because Windows ignores case). The uninstaller deletes the program files and the shortcuts, then removes the install folder only when it is empty, so the journal and its folder stay. Only the "Delete app data" box of an interactive uninstall removes more: `%APPDATA%\com.akm.desktop` (the settings) and `%LOCALAPPDATA%\com.akm.desktop` (the WebView2 data), with everything in them. The vault is wherever the user put it; a vault inside one of those two folders goes with them.
+- No earlier release exists, so no upgrade from an older version has been tested. The install job installs one version a second time over an install with user data.
+
+Release notes say this, and tell the user to copy the vault before an uninstall.
 
 ## How a user checks a download
 

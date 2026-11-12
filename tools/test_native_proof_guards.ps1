@@ -24,6 +24,7 @@ function New-FakeProfile([string[]]$sentinels) {
     foreach ($folder in @('Roaming', 'Local', 'RunnerTemp', 'Temp', 'inputs')) { New-Item -ItemType Directory -Path (Join-Path $root $folder) | Out-Null }
     Set-Content -LiteralPath (Join-Path $root 'inputs\AKM_0.1.0_x64-setup.exe') -Value 'sentinel setup program, not an executable'
     Set-Content -LiteralPath (Join-Path $root 'inputs\akm.exe') -Value 'sentinel CLI, not an executable'
+    Set-Content -LiteralPath (Join-Path $root 'inputs\akm-desktop.exe') -Value 'sentinel desktop build, not an executable'
     Set-Content -LiteralPath (Join-Path $root 'inputs\SHA256SUMS.txt') -Value ('0' * 64 + '  akm.exe')
     foreach ($relative in $sentinels) {
         $path = Join-Path $root $relative
@@ -78,7 +79,7 @@ function Test-Refusal([string]$name, [string]$tool, [string[]]$arguments, [hasht
 }
 
 $ci = @{ GITHUB_ACTIONS = 'true'; RUNNER_ENVIRONMENT = 'github-hosted' }
-$install = @('-Setup', '<root>\inputs\AKM_0.1.0_x64-setup.exe', '-CliExe', '<root>\inputs\akm.exe', '-Evidence', '<root>\RunnerTemp\evidence')
+$install = @('-Setup', '<root>\inputs\AKM_0.1.0_x64-setup.exe', '-DesktopExe', '<root>\inputs\akm-desktop.exe', '-CliExe', '<root>\inputs\akm.exe', '-Evidence', '<root>\RunnerTemp\evidence')
 $installSwitch = $install + '-DisposableRunner'
 
 Test-Refusal 'install test refuses outside GitHub Actions' $installTool $installSwitch @{} @() "GITHUB_ACTIONS is '', not 'true'"
@@ -95,7 +96,7 @@ Test-Refusal 'preflight refuses without -DisposableRunner' $preflightTool $prefl
 
 # Structural: neither tool removes anything itself. The install test's only removal is the AKM
 # uninstaller, on the install that the test made.
-foreach ($tool in @($installTool, $preflightTool, (Join-Path $PSScriptRoot 'DisposableRunner.psm1'))) {
+foreach ($tool in @($installTool, $preflightTool, (Join-Path $PSScriptRoot 'DisposableRunner.psm1'), (Join-Path $PSScriptRoot 'InstallBinding.psm1'))) {
     $tokens = $null; $errors = $null
     [void][Management.Automation.Language.Parser]::ParseFile($tool, [ref]$tokens, [ref]$errors)
     $removals = @($tokens | Where-Object { $_.Text -match '^(Remove-Item|rm|rmdir|del|erase|ri|Clear-Content|Delete|DeleteFile|RmDir)$' })

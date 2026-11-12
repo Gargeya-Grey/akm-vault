@@ -24,7 +24,9 @@ jobs:
           "TMP=$env:RUNNER_TEMP" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # tools/test_check_docs.py reads two past commits
+          # tools/test_check_docs.py compares its fixtures with two past commits. Without them it
+          # says so and still runs its cases (tools/test_snapshot_runs_its_checks.py shows that).
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -49,8 +51,12 @@ jobs:
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_akm_verify.ps1
       - name: Native-proof tools refuse a computer that is not a disposable runner
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_native_proof_guards.ps1
+      - name: The install test binds the installed program to the hashed build
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_install_binding.ps1
       - name: Public-snapshot tool refuses private data and writes only its own new folder
         run: python tools/test_make_public_snapshot.py
+      - name: Every Git call of the tools ignores inherited GIT_ variables
+        run: python tools/test_git_child.py
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm ci
@@ -106,6 +112,9 @@ jobs:
         run: |
           python tools/check_no_network.py
           python tools/test_check_no_network.py
+      # After the build steps, so the crates that the no-network check reads are fetched.
+      - name: A one-commit snapshot of this commit passes its own checks (U4-R1-05)
+        run: python tools/test_snapshot_runs_its_checks.py
       # tools/check_dependencies.ps1 (FINDINGS.md FR-23) needs cargo-audit and cargo-deny, which the
       # runner does not have. It looks for them in .scratch/cargo-tools/bin first, so install them
       # there, at pinned versions with --locked (both support Rust 1.90). The checks fetch the

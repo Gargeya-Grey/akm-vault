@@ -168,7 +168,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # the R4-04 preconditions compare with cfeb1b0
+          fetch-depth: 0 # the R4-04 preconditions compare with cfeb1b0; without it they say so
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -183,8 +183,13 @@ jobs:
         shell: pwsh
         run: |
           $log = "$env:RUNNER_TEMP\evidence\r4-04-preconditions.txt"
-          git diff --quiet cfeb1b0 -- crates desktop Cargo.toml Cargo.lock tools ':(exclude)tools/verify_windows_app.ps1' ':(exclude)tools/ProofSnapshot.psm1' ':(exclude)tools/test_proof_snapshot.ps1'
-          "build inputs equal cfeb1b0 (exit 0 means yes): exit $LASTEXITCODE" | Add-Content $log
+          git cat-file -e 'cfeb1b0^{commit}' 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            "build inputs equal cfeb1b0: not known. Commit cfeb1b0 is not in this history (for example a one-commit public snapshot)." | Add-Content $log
+          } else {
+            git diff --quiet cfeb1b0 -- crates desktop Cargo.toml Cargo.lock tools ':(exclude)tools/verify_windows_app.ps1' ':(exclude)tools/ProofSnapshot.psm1' ':(exclude)tools/test_proof_snapshot.ps1'
+            "build inputs equal cfeb1b0 (exit 0 means yes): exit $LASTEXITCODE" | Add-Content $log
+          }
           "git status --porcelain -- crates desktop tools: [$(git status --porcelain -- crates desktop tools)]" | Add-Content $log
           foreach ($file in 'tools/verify_windows_app.ps1', 'tools/ProofSnapshot.psm1', 'tools/test_proof_snapshot.ps1') {
             "$file sha256=$((Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()) last commit=$(git log -1 --format=%H -- $file)" | Add-Content $log
@@ -227,7 +232,7 @@ jobs:
         shell: pwsh
         run: |
           $setup = Get-ChildItem "$env:RUNNER_TEMP\build" -Filter '*-setup.exe' | Select-Object -First 1
-          powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_install.ps1 -Setup $setup.FullName -CliExe "$env:RUNNER_TEMP\build\akm.exe" -Evidence "$env:RUNNER_TEMP\evidence\install" -DisposableRunner *>&1 |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_install.ps1 -Setup $setup.FullName -DesktopExe "$env:RUNNER_TEMP\build\akm-desktop.exe" -CliExe "$env:RUNNER_TEMP\build\akm.exe" -Evidence "$env:RUNNER_TEMP\evidence\install" -DisposableRunner *>&1 |
             Tee-Object -FilePath "$env:RUNNER_TEMP\evidence\install-transcript.txt"
           exit $LASTEXITCODE
       - if: always()
