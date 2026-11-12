@@ -29,7 +29,8 @@ generated text. Every other rule applies to it.
 On any hit it prints file, line and rule, never the matched text, and exits 1 without writing.
 It refuses a patterns file that Git tracks, an output folder that exists, and an output folder
 inside the source repository. It reads the source repository with `git ls-tree` and `git cat-file`
-only, and never changes it. It writes only into the new folder that it creates, adds no remote and
+only, and never changes it. Every Git call goes through tools/git_child.py, so no inherited GIT_
+variable reaches Git, and the new repository sees no user configuration, template or hook. It writes only into the new folder that it creates, adds no remote and
 never pushes. After the commit it checks that the new tree is the source commit's tree, object for
 object, and that the new repository has exactly one commit.
 """
@@ -37,9 +38,11 @@ object, and that the new repository has exactly one commit.
 import argparse
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import git_child  # noqa: E402  (every Git call goes through it: class F, finding U4-R1-01)
 
 ALLOW_MARK = "public-snapshot: allow"
 DEFAULT_PATTERNS = Path(".scratch") / "public-snapshot-patterns.txt"
@@ -57,7 +60,8 @@ FILE_ENDINGS = {"png", "jpg", "jpeg", "gif", "svg", "ico", "icns", "webp", "bmp"
 
 
 def git(repo, *args, data=None):
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=True, input=data).stdout
+    """One Git command in `repo`, a git_child.Repository: no inherited GIT_ variable reaches it."""
+    return repo.run(*args, input=data)
 
 
 def tracked(repo, rev):
@@ -76,8 +80,7 @@ def identity_patterns(repo):
     """The repository user's own name and address, and the Windows user name: (rule, compiled) pairs."""
     found = []
     for key, rule in (("user.email", "the git user's e-mail address"), ("user.name", "the git user's name")):
-        result = subprocess.run(["git", "-C", str(repo), "config", key], capture_output=True)
-        value = result.stdout.decode("utf-8", errors="replace").strip()
+        value = repo.completed("config", "--get", key).stdout.decode("utf-8", errors="replace").strip()
         if len(value) >= 4:
             found.append((rule, re.compile(re.escape(value), re.IGNORECASE)))
     user = os.environ.get("USERNAME", "")
@@ -91,14 +94,14 @@ def extra_patterns(repo, path):
         return []
     if not path.is_file():
         try:
-            shown = path.resolve().relative_to(Path(repo).resolve()).as_posix()
+            shown = path.resolve().relative_to(repo.work_tree).as_posix()
         except ValueError:
             shown = path.name
         print(f"NOTE: no extra patterns file at {shown}; only the built-in rules apply.")
         return []
     inside = path.resolve()
     try:
-        relative = inside.relative_to(Path(repo).resolve())
+        relative = inside.relative_to(repo.work_tree)
         listed = git(repo, "ls-files", "--", str(relative).replace("\\", "/")).strip()
         if listed:
             raise SystemExit(f"REFUSED: the patterns file {relative} is tracked by Git, so its private words would be published. Nothing was written.")
@@ -183,10 +186,10 @@ def write_snapshot(repo, rev, entries, out, author):
     match = re.fullmatch(r"\s*(.+?)\s*<([^<>]+)>\s*", author)
     if not match:
         raise SystemExit("REFUSED: --author must be 'Name <address>'.")
-    env = dict(os.environ, GIT_AUTHOR_NAME=match.group(1), GIT_AUTHOR_EMAIL=match.group(2), GIT_COMMITTER_NAME=match.group(1),
-               GIT_COMMITTER_EMAIL=match.group(2), GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
-    run = lambda *args: subprocess.run(["git", "-C", str(out), *args], capture_output=True, check=True, env=env)
-    run("init", "-q")
+    who = {"GIT_AUTHOR_NAME": match.group(1), "GIT_AUTHOR_EMAIL": match.group(2), "GIT_COMMITTER_NAME": match.group(1),
+           "GIT_COMMITTER_EMAIL": match.group(2), "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
+    snapshot = git_child.create(out)
+    run = lambda *args: snapshot.run(*args, extra=who)
     run("config", "core.autocrlf", "false")
     run("config", "core.safecrlf", "false")
     run("add", "-A")
@@ -194,7 +197,7 @@ def write_snapshot(repo, rev, entries, out, author):
         if mode == "100755":
             run("update-index", "--chmod=+x", "--", path)
     run("commit", "-q", "--no-verify", "--no-gpg-sign", "-m", "Public snapshot\n\nThe tracked files of one commit of the private repository, without its history.")
-    return source
+    return source, snapshot
 
 
 def verify_snapshot(repo, rev, out):
@@ -222,7 +225,11 @@ def main():
     parser.add_argument("--patterns", type=Path, help=f"the extra patterns file (default: <repo>/{DEFAULT_PATTERNS.as_posix()})")
     parser.add_argument("--scan-only", action="store_true", help="scan and report; write nothing")
     arguments = parser.parse_args()
-    repo = arguments.repo.resolve()
+    try:
+        source_repo = git_child.existing(arguments.repo)
+    except git_child.GitError as error:
+        raise SystemExit(f"REFUSED: {error}. Nothing was written.")
+    repo = source_repo.work_tree
 
     if not arguments.scan_only:
         if arguments.out is None or arguments.author is None:
@@ -235,8 +242,8 @@ def main():
         if not out.parent.is_dir():
             raise SystemExit(f"REFUSED: the parent folder {out.parent} does not exist. Nothing was written.")
 
-    patterns = identity_patterns(repo) + extra_patterns(repo, arguments.patterns or repo / DEFAULT_PATTERNS)
-    entries, hits = scan(repo, arguments.rev, patterns)
+    patterns = identity_patterns(source_repo) + extra_patterns(source_repo, arguments.patterns or repo / DEFAULT_PATTERNS)
+    entries, hits = scan(source_repo, arguments.rev, patterns)
     for path, number, rule in hits:
         print(f"{path}:{number}: {rule}")
     files = len({path for path, _number, _rule in hits})
@@ -246,8 +253,8 @@ def main():
     if arguments.scan_only:
         print(f"RESULT: CLEAN ({len(entries)} files scanned at {arguments.rev})")
         return 0
-    source = write_snapshot(repo, arguments.rev, entries, out, arguments.author)
-    tree, problems = verify_snapshot(repo, arguments.rev, out)
+    source, snapshot = write_snapshot(source_repo, arguments.rev, entries, out, arguments.author)
+    tree, problems = verify_snapshot(source_repo, arguments.rev, snapshot)
     if problems:
         print(f"RESULT: FAIL ({'; '.join(problems)}). The folder {out} stays for inspection.")
         return 1

@@ -51,6 +51,8 @@ jobs:
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_native_proof_guards.ps1
       - name: Public-snapshot tool refuses private data and writes only its own new folder
         run: python tools/test_make_public_snapshot.py
+      - name: Every Git call of the tools ignores inherited GIT_ variables
+        run: python tools/test_git_child.py
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm ci

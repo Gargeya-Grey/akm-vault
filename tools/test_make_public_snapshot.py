@@ -13,6 +13,8 @@ import tempfile
 from pathlib import Path
 
 TOOL = Path(__file__).resolve().parent / "make_public_snapshot.py"
+sys.path.insert(0, str(TOOL.parent))
+import git_child  # noqa: E402
 USER = os.environ.get("USERNAME", "")
 SECRET_WORD = "zebracorn-private-word"
 failures = 0
@@ -28,14 +30,15 @@ def case(name, ok, detail=""):
 
 
 def git(repo, *args):
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True).stdout
+    """A Git command in a test repository, through git_child, so no inherited GIT_ variable reaches it."""
+    folder = Path(repo).resolve()
+    return git_child.Repository(folder / ".git", folder, isolated=True).run(*args).decode("utf-8")
 
 
 def make_source(root, files, patterns=None, history=None):
     """A source repository whose HEAD holds `files`. `history` files form an earlier commit."""
     repo = root / "source"
-    repo.mkdir()
-    git(repo, "init", "-q")
+    git_child.create(repo)
     git(repo, "config", "core.autocrlf", "false")
     git(repo, "config", "user.name", "Snapshot Tester")
     git(repo, "config", "user.email", "tester@example.com")
@@ -60,8 +63,46 @@ def fingerprint(repo):
     return sorted((str(path.relative_to(repo)), hashlib.sha256(path.read_bytes()).hexdigest()) for path in repo.rglob("*") if path.is_file())
 
 
-def run(repo, *args):
-    return subprocess.run([sys.executable, "-I", str(TOOL), "--repo", str(repo), "--rev", "HEAD", *args], capture_output=True, text=True)
+def run(repo, *args, env=None):
+    return subprocess.run([sys.executable, "-I", str(TOOL), "--repo", str(repo), "--rev", "HEAD", *args], capture_output=True, text=True, env=env)
+
+
+def hostile_git(root, repo, out):
+    """Variables and a configuration that point Git at the source, change its configuration, or run hooks
+    that write a marker into the source (finding U4-R1-01). Returns (environment, home, files to keep)."""
+    hooks = root / "hostile-hooks"
+    template = root / "hostile-template"
+    (template / "hooks").mkdir(parents=True)
+    hooks.mkdir()
+    marker = (repo / "hook-ran.txt").as_posix()
+    for name in ("reference-transaction", "pre-commit", "post-commit", "post-checkout", "post-index-change"):
+        for folder in (hooks, template / "hooks"):
+            (folder / name).write_bytes(f"#!/bin/sh\necho {name} >> '{marker}'\n".encode())
+    config = root / "hostile.gitconfig"
+    config.write_bytes(f"[core]\n\tbare = true\n\thooksPath = {hooks.as_posix()}\n[init]\n\ttemplateDir = {template.as_posix()}\n[user]\n\tname = Hostile Home\n\temail = hostile@example.com\n".encode())
+    home = root / "hostile-home"
+    home.mkdir()
+    (home / ".gitconfig").write_bytes(config.read_bytes())
+    variables = {
+        "GIT_DIR": str(repo / ".git"),
+        "GIT_WORK_TREE": str(out),
+        "GIT_INDEX_FILE": str(repo / ".git" / "index"),
+        "GIT_OBJECT_DIRECTORY": str(repo / ".git" / "objects"),
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(repo / ".git" / "objects"),
+        "GIT_COMMON_DIR": str(repo / ".git"),
+        "GIT_CONFIG_GLOBAL": str(config),
+        "GIT_CONFIG_SYSTEM": str(config),
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "core.bare",
+        "GIT_CONFIG_VALUE_0": "true",
+        "GIT_CONFIG_KEY_1": "core.hooksPath",
+        "GIT_CONFIG_VALUE_1": hooks.as_posix(),
+        "GIT_CONFIG_PARAMETERS": "'core.bare'='true'",
+        "GIT_TEMPLATE_DIR": str(template),
+        "GIT_TRACE": str(repo / "git-trace.txt"),
+        "GIT_NAMESPACE": "hostile",
+    }
+    return dict(os.environ, **variables), home, [config, home / ".gitconfig", *hooks.iterdir()]
 
 
 def existing_c_folder():
@@ -142,6 +183,26 @@ with tempfile.TemporaryDirectory(prefix="akm-snapshot-test-") as folder:
         case("the snapshot has no remote", git(out, "remote").strip() == "")
         case("the untracked file of the source is not in the snapshot", not (out / "untracked-sentinel.txt").exists())
     case("the source repository is unchanged, .git included", fingerprint(repo) == before)
+
+    for label, use_home in (("inherited Git variables", False), ("a home configuration with hooks and a template", True)):
+        root = base / ("hostile-home" if use_home else "hostile-variables")
+        root.mkdir()
+        repo = make_source(root, CLEAN)
+        out = root / "public"
+        environment, home, kept = hostile_git(root, repo, out)
+        if use_home:
+            environment = {name: value for name, value in os.environ.items() if not name.upper().startswith("GIT_")}
+            environment.update(HOME=str(home), USERPROFILE=str(home))
+        before = fingerprint(repo)
+        kept_before = [path.read_bytes() for path in kept]
+        result = run(repo, "--out", str(out), "--author", "Public Author <public@example.com>", env=environment)
+        printed = result.stdout + result.stderr
+        case(f"{label}: the source is unchanged, .git included, and no hook ran", fingerprint(repo) == before and not (repo / "hook-ran.txt").exists(), printed.strip()[-600:])
+        case(f"{label}: the hostile configuration and hooks are unchanged", [path.read_bytes() for path in kept] == kept_before)
+        written = result.returncode == 0 and "WROTE" in printed and out.is_dir()
+        case(f"{label}: the snapshot is written, with the source tree and one commit", written and git(out, "rev-parse", "HEAD^{tree}") == git(repo, "rev-parse", "HEAD^{tree}") and git(out, "rev-list", "--all", "--count").strip() == "1", printed.strip()[-600:])
+        hooks = [path.name for path in (out / ".git" / "hooks").iterdir() if not path.name.endswith(".sample")] if (out / ".git" / "hooks").is_dir() else []
+        case(f"{label}: the new repository holds no hook", not hooks, str(hooks))
 
 print("all cases passed" if not failures else f"{failures} case(s) failed")
 sys.exit(1 if failures else 0)

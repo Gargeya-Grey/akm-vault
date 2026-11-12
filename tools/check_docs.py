@@ -25,10 +25,12 @@ Exit 0 when clean, 1 with one line per problem.
 
 import argparse
 import re
-import subprocess
 import sys
 import tomllib
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import git_child  # noqa: E402  (every Git call goes through it: class F)
 
 TEST_NAME = re.compile(r"`(?:[\w/.-]+\s*::\s*)?([a-z][a-z0-9]*(?:_[a-z0-9]+){3,})`")
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -60,8 +62,14 @@ PROOFS = {
 }
 
 
+_repository = []
+
+
 def git(*args):
-    return subprocess.run(["git", *args], capture_output=True, check=True).stdout.decode("utf-8")
+    """A read of the repository at the current folder, with no inherited GIT_ variable (class F)."""
+    if not _repository:
+        _repository.append(git_child.existing(Path.cwd()))
+    return _repository[0].run(*args).decode("utf-8")
 
 
 def source(rev):

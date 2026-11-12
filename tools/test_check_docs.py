@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path
 
 CHECK_PATH = Path(__file__).resolve().parent / "check_docs.py"
+sys.path.insert(0, str(CHECK_PATH.parent))
+import git_child  # noqa: E402
 CHECK = [sys.executable, "tools/check_docs.py"]
 PAST = {
     # The threat model as the security branch first wrote it: "%APPDATA%\akm" lost its backslashes to escapes.
@@ -140,9 +142,8 @@ def run_synthetic(markdown, extra=None):
             (root / name).parent.mkdir(parents=True, exist_ok=True)
             (root / name).write_text(text, encoding="utf-8", newline="")
             files.append(name)
-        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-        subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=root, check=True)
-        subprocess.run(["git", "add", *files], cwd=root, check=True)
+        repository = git_child.create(root)
+        repository.run("add", *files)
         return subprocess.run([sys.executable, str(CHECK_PATH)], cwd=root, capture_output=True, text=True)
 
 
