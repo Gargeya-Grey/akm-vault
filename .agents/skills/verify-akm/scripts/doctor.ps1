@@ -4,7 +4,7 @@
   and exits 1 when any STOP line was printed.
 
 .EXAMPLE
-  ./.agents/skills/verify-akm/scripts/doctor.ps1 -Akm C:\build\release\akm.exe -Desktop C:\build\release\akm-desktop.exe
+  ./.agents/skills/verify-akm/scripts/doctor.ps1 -Akm target\release\akm.exe -Desktop target\release\akm-desktop.exe
 #>
 param([string]$Akm, [string]$Desktop, [switch]$NeedClipboard)
 $stop = $false

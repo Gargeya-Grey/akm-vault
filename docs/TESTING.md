@@ -47,7 +47,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_dependencies.ps1
 
 ## Real-surface tests
 
-For a manual proof of one feature, use the verification skill in [.agents/skills/verify-akm/](../.agents/skills/verify-akm/SKILL.md). It runs a doctor check first, uses a temporary fake vault and journal, and writes a transcript to `W:\AKM-archive\proofs\`.
+For a manual proof of one feature, use the verification skill in [.agents/skills/verify-akm/](../.agents/skills/verify-akm/SKILL.md). It runs a doctor check first, uses a temporary fake vault and journal, and writes a transcript under the evidence root: `AKM_EVIDENCE_ROOT` when it is set, else `%LOCALAPPDATA%\akm-verify\proofs\`. Its ownership records go to `AKM_VERIFY_STATE_ROOT`, else `%LOCALAPPDATA%\akm-verify\state\`. No default depends on a drive letter.
 
 **KeePassXC interchange.** This test uses temporary vaults and fake keys only:
 
@@ -57,7 +57,7 @@ python tools/verify_keepassxc.py --akm target/release/akm.exe --keepassxc "C:/pa
 
 Since unit 2 it also covers rotation, native history, the Recycle Bin, restore, purge and stale-copy merges. KeePassXC 2.8.0 `merge` applies no `DeletedObjects` record, so the merge check compares an AKM purge with a KeePassXC permanent delete (finding 2-W-01).
 
-Use the portable KeePassXC 2.8.0. `tools/fetch_keepassxc.ps1` downloads the official x64 zip from the KeePassXC GitHub release, checks its SHA-256 against the `.DIGEST` file of that release, and, after that check, adds one new folder `KeePassXC-<version>-x64-<first 12 digest characters>` under the destination (default `W:\AKM-archive\tools\keepassxc\`). It never deletes or replaces anything: a second fetch of the same release changes nothing, and an unmarked folder of that name is refused. Remove old folders by hand. It refuses a drive root and a destination at or below a junction. Test it with `powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_fetch_keepassxc.ps1` (no network):
+Use the portable KeePassXC 2.8.0. `tools/fetch_keepassxc.ps1` downloads the official x64 zip from the KeePassXC GitHub release, checks its SHA-256 against the `.DIGEST` file of that release, and, after that check, adds one new folder `KeePassXC-<version>-x64-<first 12 digest characters>` under the destination: `-Destination`, else `AKM_KEEPASSXC_DIR` when it is set, else `%LOCALAPPDATA%\akm-tools\keepassxc\`. The destination must be outside the repository. It never deletes or replaces anything: a second fetch of the same release changes nothing, and an unmarked folder of that name is refused. Remove old folders by hand. It refuses a drive root and a destination at or below a junction. Test it with `powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_fetch_keepassxc.ps1` (no network):
 
 ```powershell
 ./tools/fetch_keepassxc.ps1
