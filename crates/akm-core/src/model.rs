@@ -310,6 +310,29 @@ pub enum ReservedClass {
     ShellStartup,
     TrafficRedirect,
     UserLocation,
+    OutputCapture,
+}
+
+/// The class of a variable name. [`name_class`] is the one rule that decides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameClass {
+    Reserved(ReservedClass),
+    Credential,
+    Other,
+}
+
+/// SCAFFOLD: the rule before CORE-R1-02, so that the new tests run against it.
+pub fn name_class(name: &str) -> NameClass {
+    match reserved_class(name) {
+        Some(class) => NameClass::Reserved(class),
+        None => NameClass::Other,
+    }
+}
+
+impl ImportChange {
+    pub fn name_class(&self) -> NameClass {
+        name_class(&self.name)
+    }
 }
 
 impl ReservedClass {
@@ -324,6 +347,9 @@ impl ReservedClass {
                 "it redirects network traffic or changes which certificates are trusted"
             }
             Self::UserLocation => "it moves the folders where programs keep settings and files",
+            Self::OutputCapture => {
+                "it makes a program write what it does or holds in memory to a file"
+            }
         }
     }
 }

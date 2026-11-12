@@ -694,6 +694,174 @@ fn every_reserved_class_is_refused_by_run_and_export_with_the_key_title_and_neve
     }
 }
 
+/// CORE-R1-02: names that the reserved table covers after core review 1, one or more per
+/// family. `akm add` refuses an explicit and a derived name; `export` and `run` (scoped and
+/// `--all`) refuse a key that an older vault stores under such a name, and no child starts.
+/// No refusal changes the vault file.
+#[test]
+fn newly_reserved_names_are_refused_by_add_export_and_run_with_the_vault_bytes_unchanged() {
+    for name in [
+        "HOST_CC",
+        "TARGET_CC",
+        "CC_X86_64_PC_WINDOWS_MSVC",
+        "TARGET_CFLAGS",
+        "CMAKE",
+        "PKG_CONFIG",
+        "CARGO",
+        "CL",
+        "GIT_DIR",
+        "GIT_TRACE_CURL",
+        "GOCACHEPROG",
+        "NODE_REPL_EXTERNAL_MODULE",
+        "YARN_ENABLE_SCRIPTS",
+        "PYTHONWARNINGS",
+        "JDK_JAVAC_OPTIONS",
+        "DOTNET_ROOT_X64",
+        "MAKEFILES",
+        "PS0",
+        "LESSEDIT",
+        "SOCKS_PROXY",
+    ] {
+        let fixture = Fixture::with_keys(&[
+            (
+                "Stored build key",
+                name,
+                "fake-reserved-secret",
+                "demo",
+                "dev",
+            ),
+            ("Fine key", "FINE_TOKEN", "fake-fine-secret", "demo", "dev"),
+        ]);
+        let before = fs::read(&fixture.vault).unwrap();
+
+        let title = name.replace('_', " ");
+        for add in [
+            vec!["add", "A harmless title", "--env-var", name],
+            vec!["add", title.as_str()],
+        ] {
+            let output = fixture
+                .cli()
+                .args(&add)
+                .args(["--secret", "fake-new-secret", "--project", "demo"])
+                .args(["--env", "dev"])
+                .output()
+                .unwrap();
+            let text = stderr(&output);
+            assert!(!output.status.success(), "{add:?} accepted {name}");
+            assert!(
+                text.contains(name) && text.contains("reserved"),
+                "{name} {add:?}: {text}"
+            );
+            assert!(!text.contains("fake-new-secret"), "{name}: {text}");
+        }
+
+        let path = fixture.report("must-not-exist.json");
+        for selection in [
+            vec!["--project", "demo", "--env", "dev"],
+            vec!["--all"],
+        ] {
+            for verb in ["export", "run"] {
+                let mut command = fixture.cli();
+                command
+                    .env("CLI_TEST_REPORT", &path)
+                    .arg(verb)
+                    .args(&selection);
+                if verb == "run" {
+                    command
+                        .arg("--")
+                        .arg(std::env::current_exe().unwrap())
+                        .args(["--exact", "child_probe", "--ignored", "--nocapture"]);
+                }
+                let output = command.output().unwrap();
+                let text = stderr(&output);
+                assert!(!output.status.success(), "{verb} {selection:?} accepted {name}");
+                assert!(text.contains("Stored build key"), "{name} {verb}: {text}");
+                assert!(text.contains(name), "{name} {verb}: {text}");
+                assert!(text.contains("reserved"), "{name} {verb}: {text}");
+                assert!(
+                    !text.contains("fake-reserved-secret") && !text.contains("fake-fine-secret"),
+                    "{name} {verb}: {text}"
+                );
+                assert!(output.stdout.is_empty(), "{name} {verb}");
+                assert!(!path.exists(), "{name} {verb}: the child must not start");
+            }
+        }
+        assert_eq!(
+            fs::read(&fixture.vault).unwrap(),
+            before,
+            "{name}: the vault file changed"
+        );
+    }
+}
+
+/// CORE-R1-02: a child that `akm run` starts never receives a name that the reserved table
+/// refuses, when an older vault already stores a key under it. A run of the scope that holds
+/// the key starts no child. A run of another scope starts the child, whose environment holds
+/// neither the name (beyond what the child inherits) nor the stored value.
+#[test]
+fn a_child_started_by_run_never_receives_a_reserved_name_that_an_older_vault_stores() {
+    for name in [
+        "HOST_CC",
+        "TARGET_CC",
+        "CC_X86_64_UNKNOWN_LINUX_GNU",
+        "CC_x86_64-unknown-linux-gnu",
+        "host_cxx",
+    ] {
+        let fixture = Fixture::with_keys(&[
+            ("Stored compiler", name, "fake-compiler-path", "demo", "dev"),
+            ("Demo", "DEMO_SECRET", "fake-intended-secret", "demo", "prod"),
+        ]);
+        for selection in [
+            vec!["--project", "demo", "--env", "dev"],
+            vec!["--all"],
+        ] {
+            let path = fixture.report("refused.json");
+            let output = fixture
+                .cli()
+                .env("CLI_TEST_REPORT", &path)
+                .arg("run")
+                .args(&selection)
+                .arg("--")
+                .arg(std::env::current_exe().unwrap())
+                .args(["--exact", "child_probe", "--ignored", "--nocapture"])
+                .output()
+                .unwrap();
+            let text = stderr(&output);
+            assert!(!output.status.success(), "{name} {selection:?}: {text}");
+            assert!(!path.exists(), "{name} {selection:?}: a child started");
+            assert!(text.contains("Stored compiler"), "{name}: {text}");
+            assert!(!text.contains("fake-compiler-path"), "{name}: {text}");
+        }
+
+        let path = fixture.report("started.json");
+        let mut command = fixture.cli();
+        command
+            .env("CLI_TEST_REPORT", &path)
+            .args(["run", "--project", "demo", "--env", "prod", "--"])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", "child_probe", "--ignored", "--nocapture"]);
+        let inherited = effective_environment(&command);
+        let output = command.output().unwrap();
+        assert_success(&output);
+        let child = report(&path);
+        assert_eq!(child["secret"], "fake-intended-secret");
+        let environment: std::collections::BTreeMap<String, String> =
+            serde_json::from_value(child["environment"].clone()).unwrap();
+        let upper = name.to_ascii_uppercase();
+        assert_eq!(
+            environment.get(&upper),
+            inherited.get(&upper),
+            "{name}: the child holds the stored name"
+        );
+        assert!(
+            environment
+                .values()
+                .all(|value| !value.contains("fake-compiler-path")),
+            "{name}: the child holds the stored value"
+        );
+    }
+}
+
 #[test]
 fn reveals_are_audited_before_any_secret_is_printed() {
     let fixture = Fixture::new();
