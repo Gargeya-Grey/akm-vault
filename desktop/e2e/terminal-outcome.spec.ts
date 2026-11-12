@@ -82,6 +82,22 @@ for (const theme of ["light", "dark"]) {
     expect(errors).toEqual([]);
   });
 
+  test(`${theme}: a reply lost in transport keeps the native record, and after a reload the record is the truth`, async ({ page }) => {
+    const errors = await open(page, theme, { terminal: "transport" });
+    await launch(page);
+    const outcomes = page.getByRole("region", { name: "Operation outcomes" });
+    const notices = page.getByRole("region", { name: "Saved-operation notices" });
+    const started = "A terminal opened with keys, but this window did not receive its result.";
+    await expect(outcomes).toContainText("A terminal launch sent no answer to this window. A terminal may hold keys.");
+    await expect(notices).toContainText(started, { timeout: 8000 });
+    expect(await dismissals(page)).toEqual([]);
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Add key", exact: true })).toBeVisible();
+    await expect(notices).toContainText(started, { timeout: 8000 });
+    await expect(outcomes).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
   test(`${theme}: at 900 px each new native notice shows its own text`, async ({ page }) => {
     const kinds = ["filePermissions", "journalLineageUnconfirmed", "terminalStarted", "terminalSessionEnded", "terminalFailed", "terminalDeclined"] as const;
     const errors = await open(page, theme, {}, kinds.map((kind) => ({ id: `retained-${kind}`, originSession: "A", kind })));

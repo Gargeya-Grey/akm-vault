@@ -160,3 +160,30 @@ export interface ReminderStatus {
 
 export type View = "keys" | "use" | "bin" | "activity" | "settings";
 export type Theme = "light" | "dark";
+
+/**
+ * The kinds of a native error reply: the contract with native code (U2-R1-07). A native command
+ * rejects only with a `CommandError`, a plain object `{ kind, message }` whose kind is on this list.
+ * `native.ts` treats a rejection of any other shape as a transport failure. `nativeErrorKinds.test.ts`
+ * compares this list with the kinds that the native sources build.
+ */
+export const NATIVE_ERROR_KINDS = [
+  "ambiguous", "busy", "changedOnDisk", "clipboard", "clipboardLost", "clipboardNotReleased", "clipboardUncertain",
+  "completedWhileLocked", "config", "internal", "invalid", "invalidPath", "io", "journal", "launch", "locked",
+  "notFound", "open", "reviewFailed", "save", "sessionUnavailable", "stalePreview", "tooLarge", "upgradeRequired",
+  "viewChanged",
+] as const;
+
+export type NativeErrorKind = (typeof NATIVE_ERROR_KINDS)[number];
+
+/** An error reply from a native command. */
+export interface NativeError {
+  kind: NativeErrorKind;
+  message: string;
+}
+
+/** A rejection that no native command sent: the page cannot know what the request did. */
+export interface TransportFailure {
+  kind: "transport";
+  message: string;
+}

@@ -4,6 +4,7 @@ import { reads } from "./native";
 import { adoptReservation, nativeOwner, releaseNativeOwner } from "./nativeSession";
 import { acknowledgeNotices, retainedOperationNotices } from "./operationNotices";
 import { acknowledgeCompletions, COMPLETION_EVENT, invalidateSession, retainedCompletions, sessionGeneration, SESSION_LOSS_EVENT } from "./sessionBoundary";
+import { NATIVE_ERROR_KINDS } from "./types";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
 const IMPORT = ["TOKEN=fake-private-value", "private-scope", "private-env"] as const;
@@ -123,6 +124,65 @@ test("a transport failure keeps the native record because it may be the only tru
   native.invoke.mockRejectedValueOnce(new Error("channel closed"));
   await api.importEnv(...IMPORT).catch(() => {});
   expect(native.invoke).not.toHaveBeenCalledWith("vault_dismiss_warnings", expect.anything());
+});
+
+// U2-R1-07. The one boundary function decides where an error came from. A native error reply is
+// a plain object with a string message and a kind on the closed list in types.ts. Every other
+// rejection is a transport failure: the page cannot know the outcome, so it keeps the native
+// record, and its receipt says that the outcome was lost.
+const TRANSPORT_SHAPES: [string, unknown][] = [
+  ["the reviewer's object with an unknown kind", { kind: "transport", message: "fake channel closed" }],
+  ["a string", "fake channel closed"],
+  ["an Error", new Error("fake channel closed")],
+  ["an Error that carries a listed kind", Object.assign(new Error("fake channel closed"), { kind: "launch" })],
+  ["an object whose kind is not a string", { kind: 7, message: "fake channel closed" }],
+  ["a listed kind without a message", { kind: "launch" }],
+  ["an array", ["launch", "fake channel closed"]],
+  ["null", null],
+  ["undefined", undefined],
+];
+const OPERATIONS = [
+  ["env_import", () => api.importEnv(...IMPORT)],
+  ["env_launch_terminal", () => api.launchTerminal("fake-project", "fake-env")],
+] as const;
+
+for (const [command, request] of OPERATIONS) {
+  for (const [shape, rejection] of TRANSPORT_SHAPES) {
+    test(`${command}: a rejection that is ${shape} is a transport failure, so the native record stays`, async () => {
+      native.invoke.mockImplementation(async (name: string) => { if (name === command) throw rejection; });
+      const error = await request().catch((cause: unknown) => cause);
+      expect(error).toMatchObject({ kind: "transport", message: expect.any(String) });
+      expect(native.invoke).not.toHaveBeenCalledWith("vault_dismiss_warnings", expect.anything());
+      expect(retainedCompletions()).toMatchObject([{ outcome: "lost" }]);
+    });
+  }
+  for (const kind of NATIVE_ERROR_KINDS) {
+    test(`${command}: a native error reply of kind ${kind} is the outcome, so the page acknowledges the record`, async () => {
+      native.invoke.mockImplementation(async (name: string) => { if (name === command) throw { kind, message: "fake native failure" }; });
+      const error = await request().catch((cause: unknown) => cause);
+      expect(error).toMatchObject({ kind });
+      expect(native.invoke).toHaveBeenCalledWith("vault_dismiss_warnings", { ids: [dispatchedOperation(command)] });
+      expect(retainedCompletions()).toMatchObject([{ outcome: kind === "completedWhileLocked" ? "completedWhileLocked" : "reportedError" }]);
+    });
+  }
+}
+
+test("a transport failure after the session changed keeps the record and is a cancellation", async () => {
+  let fail!: (reason: unknown) => void;
+  native.invoke.mockReturnValueOnce(new Promise((_, reject) => { fail = reject; }));
+  const outcome = api.launchTerminal("fake-project", "fake-env").catch((error: unknown) => error);
+  invalidateSession();
+  fail(new Error("fake channel closed"));
+  expect(await outcome).toMatchObject({ kind: "locked" });
+  expect(retainedCompletions()).toMatchObject([{ outcome: "unconfirmed" }]);
+  expect(native.invoke).not.toHaveBeenCalledWith("vault_dismiss_warnings", expect.anything());
+});
+
+test("an error passes on only its kind and its message", async () => {
+  native.invoke.mockRejectedValueOnce({ kind: "io", message: "fake native failure", value: "fake-secret" });
+  expect(await reads.keys().catch((error: unknown) => error)).toEqual({ kind: "io", message: "fake native failure" });
+  native.invoke.mockRejectedValueOnce(Object.assign(new Error("fake channel closed"), { value: "fake-secret" }));
+  expect(await reads.keys().catch((error: unknown) => error)).toEqual({ kind: "transport", message: "fake channel closed" });
 });
 
 // P2R2-03. A discard names the session that the page read when it handled the hide. A discard

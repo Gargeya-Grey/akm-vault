@@ -70,7 +70,8 @@ test(`a current-generation ${command} error remains actionable instead of being 
   defaults();
   const reason = { kind: "notFound", message: "No vault at the currently selected C:/fake/b.kdbx." };
   native.invoke.mockImplementation(async (name: string) => { if (name === command) throw reason; return defaultReply(name); });
-  expect(await api.unlock(current.path, "fake-password").catch((error: unknown) => error)).toBe(reason);
+  // The boundary passes on the kind and the message of a native reply, as a new object (U2-R1-07).
+  expect(await api.unlock(current.path, "fake-password").catch((error: unknown) => error)).toEqual(reason);
 });
 }
 

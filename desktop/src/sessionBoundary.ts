@@ -4,7 +4,9 @@ export const WARNING_EVENT = "akm-operation-notices";
 export const COMPLETION_MESSAGE = "An operation completed, but its originating session is no longer available. Do not repeat it. Open the relevant vault or check its export to inspect the saved result.";
 
 export type Operation = "import" | "export" | "terminal" | "operation";
-export type Outcome = "pending" | "completed" | "reportedError" | "cancelled" | "unconfirmed" | "completedWhileLocked";
+// "lost": the request failed in transport, so the page cannot know what it did. Its native record,
+// if one arrives, stays a notice of its own.
+export type Outcome = "pending" | "completed" | "reportedError" | "cancelled" | "unconfirmed" | "completedWhileLocked" | "lost";
 export interface OperationOutcome {
   id: number;
   generation: number;

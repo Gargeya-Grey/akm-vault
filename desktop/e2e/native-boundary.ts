@@ -13,8 +13,11 @@ export interface BoundaryOptions {
   recovery?: "approve" | "decline";
   /** Keep a native record store, as the real Session does, even with no retained notice. */
   nativeStore?: boolean;
-  /** `hold`: a terminal launch never answers, as when the native review is still open. */
-  terminal?: "hold";
+  /**
+   * `hold`: a terminal launch never answers, as when the native review is still open.
+   * `transport`: native records the launch, and the reply is lost in transport (U2-R1-07).
+   */
+  terminal?: "hold" | "transport";
   /** The vault has an older format, so the page offers the format upgrade. */
   needsUpgrade?: boolean;
 }
@@ -42,6 +45,8 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
     const listeners = new Map<string, number>();
     const calls: { command: string; args: Record<string, unknown> }[] = [];
     let next = 0;
+    // Not a native reply: native code rejects only with a kind on the closed list in types.ts.
+    const transportFailure = () => ({ kind: "transport", message: "Fake channel closed." });
     let unlocked = true;
     let owner: string | null = crypto.randomUUID();
     let claimed = false;
@@ -116,6 +121,8 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
               if (options.terminal === "hold") return new Promise(() => {});
               const bridge = (window as unknown as { __akmWarningIPC?: (command: string, payload: unknown) => Promise<unknown> }).__akmWarningIPC;
               if (bridge) await bridge("record", { id: args.operationId, originSession: owner ?? "", kind: "terminalStarted" });
+              // The review's shape: an object with a kind that no native command sends.
+              if (options.terminal === "transport") throw transportFailure();
               return keys.filter((candidate) => candidate.project === args.project && candidate.environment === args.environment).length;
             }
             case "vault_activity": return;

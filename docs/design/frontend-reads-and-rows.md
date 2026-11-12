@@ -7,8 +7,17 @@ also lists the decisions that the owner can veto. The campaign plan is
 ## The read mechanism (fault classes K and L)
 
 One hook, `useNativeRead` in `desktop/src/nativeRead.ts`, owns every read of native state that a
-view shows. A view names a read from the `nativeReads` table and never calls a read of `api`
-itself. The guard test `desktop/src/readGuard.test.ts` fails when a file does.
+view shows. A view names a read from the `nativeReads` table. Each entry of that table is a frozen
+token that only `useNativeRead` can run, so a view cannot call a read itself.
+
+The reads live in `reads`, in `desktop/src/native.ts`, beside the one boundary function `invoke`.
+`api` in `desktop/src/api.ts` holds only actions. Only four files may import `native.ts`, and
+only `native.ts` may import the Tauri IPC (U2-R1-05). The guard test `desktop/src/readGuard.test.ts`
+reads the import graph of `desktop/src` with the TypeScript parser and checks it by the resolved
+module, never by the name of a binding. An alias, a re-export by name or by `export *`, a helper
+that passes the reads on, a namespace import, a dynamic import, a `require`, an import-equals, an
+import glob, a side-effect import and a Tauri global all count. A type-only import does not: it
+gives no value at run time.
 
 The state is a union with three cases:
 
@@ -51,12 +60,14 @@ The rules:
 | Settings | reminder setting | mount, retry | the reply of a saved setting (`apply`) |
 | Key detail | history of one key | the history list opens, retry | close and open again, another key, view expiry |
 | App | status | the 3 second poll and events | allowed: the poll keeps its own request, epoch and transition identity |
-| App | warnings | mount and the 3 second poll | allowed: the reply arrives through the event that `api.ts` owns |
+| App | warnings | mount and the 3 second poll | allowed: the reply arrives through the event that `native.ts` owns |
 | Attention notifier | reminder setting, key list | a 30 second timer, focus, blur, visibility | allowed: it shows nothing and stops when it unmounts |
 
-The three allowed callers are listed in the guard test with their reasons. The guard test also
-fails when an allowed caller no longer calls a read that the list names, so the list cannot grow
-stale. A new member of `api` must be classed as a read or an action, or the guard test fails.
+The guard test names the four files that may import `native.ts`, each with its reason: `api.ts`
+for the actions, `nativeRead.ts` for the mechanism, `App.tsx` for the two polls, and the attention
+notifier. It also fails when an allowed file no longer reaches its module, so the list cannot grow
+stale. A new member of `reads` or of `api` must be classed as a read or an action, or the guard
+test fails.
 
 ### What each view now shows
 
@@ -114,7 +125,8 @@ The contract is in `docs/design/gate-campaign.md`, under "Contract between units
 - `api.launchTerminal` sends a fresh UUID as `operationId`, as `api.importEnv` does. The terminal
   receipt starts before the request leaves, with that ID.
 - A reply acknowledges the native record: a count, a decline and a native error alike. A
-  transport failure keeps the record, because it may be the only truth.
+  transport failure keeps the record, because it may be the only truth. The next section says
+  which rejection is a native error.
 - When the reply is lost and the page is still open, the next warning poll folds the record into
   the waiting receipt: started is completed, session ended is completed while locked, failed is an
   error, and declined is a cancellation. A record settles only a receipt of its own operation.
@@ -126,6 +138,37 @@ The contract is in `docs/design/gate-campaign.md`, under "Contract between units
   of session A, so a newer session B stays open (contract 5).
 - Each terminal receipt says only what is known. A pending launch may already hold keys. An error
   does not confirm that no terminal runs.
+
+### The error contract with native code (U2-R1-07)
+
+The one boundary function, `invoke` in `desktop/src/native.ts`, decides where a rejection came
+from. This is the contract for the native unit.
+
+- A native command rejects only with a `CommandError`: a plain object with the two string fields
+  `kind` and `message`.
+- `kind` is one of the 25 values of `NATIVE_ERROR_KINDS` in `desktop/src/types.ts`: ambiguous,
+  busy, changedOnDisk, clipboard, clipboardLost, clipboardNotReleased, clipboardUncertain,
+  completedWhileLocked, config, internal, invalid, invalidPath, io, journal, launch, locked,
+  notFound, open, reviewFailed, save, sessionUnavailable, stalePreview, tooLarge, upgradeRequired
+  and viewChanged.
+- A new kind goes on that list in the change that adds it to native code. The test
+  `desktop/src/nativeErrorKinds.test.ts` reads `desktop/src-tauri/src`. It fails when the two lists
+  differ, when native code builds a kind in a way that the scan cannot read, and when a command
+  rejects with another error type. The mocked boundary of the Edge tests keeps to the same list.
+- Every other rejection is a transport failure: a string, an `Error` (also one that carries a
+  listed kind), an object with an unknown kind or with no string message, an array, null and
+  undefined. No native command sent it, so the page cannot know what the request did.
+- After a transport failure the page does not acknowledge the outcome record. The receipt has the
+  outcome `lost`. Its text says that the window got no answer, that a terminal may hold keys, and
+  that a saved-operation notice gives the outcome when AKM recorded one. A record that arrives
+  later stays a notice of its own, and it is still there after a reload.
+- A transport failure after the session changed is a cancellation, as before, and it keeps the
+  record too.
+- A caller gets only `kind` and `message`, and nothing else that the rejection carried. A transport
+  failure has the kind `transport`. No native command may use that kind.
+- The page makes some errors itself after it has a reply: `declined`, `locked` after a session
+  change, and `completedWhileLocked` after a lock. `timeout` comes from a deadline around a call.
+  None of them passes through this rule.
 
 ## Smaller findings and their guards
 
@@ -200,9 +243,17 @@ Each decision takes the option that removes state or removes a promise.
 ## Limits
 
 - The mechanism cannot stop a native command that already ran. It only decides what the screen
-  shows. The outcome records in `api.ts` still own what a late mutation reply means.
-- The guard test reads source text. It finds `api.<read>` calls, an index into `api` and a
-  destructured `api`. It does not follow an alias that another module exports.
+  shows. The outcome records in `native.ts` still own what a late mutation reply means.
+- The read guard reads the import graph of `desktop/src`. A computed module name or an import glob
+  counts as a reach of every module, so it fails. The guard does not see code that a file builds
+  from text at run time (`eval`, `new Function`). It does not check what the four allowed files do
+  with the reads.
+- The error-kind scan reads Rust source text with patterns, not a Rust parser. It reads a kind
+  given as a literal, as a constant of the same file, or passed on from another error. It reports
+  every other form, so a new form fails the test until the scan learns it.
+- The plain-object test uses the type tag of the object, so it holds across browser realms. The
+  real Tauri IPC was not run here: the claim that it rejects with a plain object comes from the
+  mocked boundary and the IPC design, not from a run.
 - The state of a key row is not varied alone in the fact table. It comes from the expiry and
   the renewal, which are varied.
 - A project named "All keys" or "Needs attention" gives its shelf the same page title as that
