@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest";
 import { App } from "./App";
 import { api } from "./api";
+import { reads } from "./native";
 import { acknowledgeCompletions, retainedCompletions } from "./sessionBoundary";
 import { beginNativeOpen, endNativeOpen } from "./nativeSession";
 
@@ -44,7 +45,7 @@ for (const between of [true, false]) {
         }
         return defaultReply(command);
       });
-      const call = kind.startsWith("status") ? api.status() : kind.startsWith("unlock") || kind.startsWith("prepare") ? api.unlock("C:/fake/private-a.kdbx", "fake-password") : kind.startsWith("lock") ? api.lock() : api.keys();
+      const call = kind.startsWith("status") ? reads.status() : kind.startsWith("unlock") || kind.startsWith("prepare") ? api.unlock("C:/fake/private-a.kdbx", "fake-password") : kind.startsWith("lock") ? api.lock() : reads.keys();
       const old = call.catch((error: unknown) => error);
       await act(async () => {});
       expect(held).toBe(true); // Unlock cases defer credentials, not their preceding reservation.

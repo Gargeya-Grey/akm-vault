@@ -4,6 +4,7 @@ import { Activity } from "./Activity";
 
 const native = vi.hoisted(() => ({ audit: vi.fn(), recoverJournal: vi.fn() }));
 vi.mock("../api", () => ({ api: native, errorText: (error: unknown) => String(error) }));
+vi.mock("../native", () => ({ reads: native }));
 afterEach(cleanup);
 
 const base = { path: "C:/fake/journal/j-0.jsonl", entries: [], state: "consistent", damage: null, identity: "confirmed", notices: [], brokenAt: null, problemLine: null, totalEntries: 0 };

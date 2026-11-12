@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
 import { api } from "./api";
+import { reads } from "./native";
 import { adoptReservation } from "./nativeSession";
 import { acknowledgeCompletions, invalidateSession, retainedCompletions } from "./sessionBoundary";
 import type { KeyView } from "./types";
@@ -203,7 +204,7 @@ test("a list of recycled keys overtaken by lock is refused as locked", async () 
   adoptReservation(crypto.randomUUID());
   let resolve!: (value: unknown) => void;
   native.invoke.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
-  const outcome = api.recycled().catch((error: unknown) => error);
+  const outcome = reads.recycled().catch((error: unknown) => error);
   invalidateSession();
   resolve([{ key: key(), deletedAt: null }]);
   expect(await outcome).toMatchObject({ kind: "locked" });

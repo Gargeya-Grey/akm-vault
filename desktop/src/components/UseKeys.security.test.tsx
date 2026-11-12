@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   launchTerminal: vi.fn(),
 }));
 
+vi.mock("../native", () => ({ reads: mocks }));
 vi.mock("../api", () => ({
   api: mocks,
   errorText: (error: unknown) => (error && typeof error === "object" && "message" in error ? String((error as { message: unknown }).message) : String(error)),

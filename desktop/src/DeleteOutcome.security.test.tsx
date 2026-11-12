@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { App } from "./App";
-import { api } from "./api";
+import { reads } from "./native";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
@@ -33,7 +33,7 @@ test(`a committed delete with ${warningKind} does not promise recovery`, async (
   expect(document.body.textContent).not.toContain("A backup remains in the .bak file");
   expect(document.body.textContent).not.toContain("The previous vault was retained");
   expect(document.body.textContent).toContain("backup notices");
-  await act(() => api.warnings());
+  await act(() => reads.warnings());
   const notices = screen.getByRole("region", { name: "Saved-operation notices" }).textContent;
   expect(notices).toContain(warningKind === "backupRefresh" ? "convenience backup could not be refreshed" : "retention of its pre-change encrypted backup could not be confirmed");
   expect(notices).not.toContain("saved with a retained");

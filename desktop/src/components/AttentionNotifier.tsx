@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { api } from "../api";
+import { reads } from "../native";
 import { nativeOwner } from "../nativeSession";
 import { attentionOf, canNotify, nextAnnouncement } from "../reminders";
 
@@ -25,9 +26,9 @@ export function AttentionNotifier() {
       try {
         const session = nativeOwner();
         if (session === null) return;
-        const status = await api.remindersStatus();
+        const status = await reads.remindersStatus();
         if (disposed || !canNotify(status)) return;
-        const keys = await api.keys();
+        const keys = await reads.keys();
         if (disposed) return;
         const count = attentionOf(keys, Date.now()).total;
         const step = nextAnnouncement(announced, count, inFront());

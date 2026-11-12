@@ -17,6 +17,8 @@ const api = vi.hoisted(() => ({
   keys: vi.fn(), recycled: vi.fn(), audit: vi.fn(), backup: vi.fn(), remindersStatus: vi.fn(),
   importEnv: vi.fn(), history: vi.fn(),
 }));
+// The views read through native.ts; the import goes through api.ts. One mock serves both.
+vi.mock("./native", () => ({ reads: api }));
 vi.mock("./api", () => ({
   api,
   errorText: (error: unknown) => (error && typeof error === "object" && "message" in error ? String((error as { message: unknown }).message) : String(error)),

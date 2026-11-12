@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, errorText } from "./api";
+import { reads } from "./native";
 import { Activity } from "./components/Activity";
 import { AttentionNotifier } from "./components/AttentionNotifier";
 import { KeysView } from "./components/KeysView";
@@ -177,8 +178,8 @@ export function App() {
     window.addEventListener(WARNING_EVENT, receive);
     setWarnings(retainedApplicationWarnings());
     setOperationNotices(retainedOperationNotices());
-    void api.warnings().catch(() => {});
-    const poll = window.setInterval(() => { void api.warnings().catch(() => {}); }, 3000);
+    void reads.warnings().catch(() => {});
+    const poll = window.setInterval(() => { void reads.warnings().catch(() => {}); }, 3000);
     return () => { window.removeEventListener(WARNING_EVENT, receive); window.clearInterval(poll); };
   }, []);
 
@@ -206,7 +207,7 @@ export function App() {
     const currentTransition = transition.current;
     const current = () => !nativeOpening() && currentRequest === request.current && currentEpoch === epoch.current && currentTransition === transition.current;
     try {
-      const next = await api.status();
+      const next = await reads.status();
       if (currentEpoch === epoch.current && currentTransition === transition.current && next.unlocked) lastAccepted.current = Date.now();
       if (!current()) return;
       if (!next.unlocked) showLocked();

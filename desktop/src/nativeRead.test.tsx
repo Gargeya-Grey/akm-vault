@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { expect, test } from "vitest";
-import { useNativeRead } from "./nativeRead";
+import { readSource, useNativeRead } from "./nativeRead";
 import { invalidateSession } from "./sessionBoundary";
 import { heldReads } from "./testing/held";
 
@@ -170,7 +170,7 @@ test("a change reply after a failed read retries the read", async () => {
 });
 
 test("a read that throws before it returns a promise is a failure, not a crash", async () => {
-  const hook = renderHook(() => useNativeRead<string>(() => { throw { message: "thrown at once" }; }));
+  const hook = renderHook(() => useNativeRead<string>(readSource(() => { throw { message: "thrown at once" }; })));
   await settle();
   expect(hook.result.current.state).toEqual({ status: "failed", error: "thrown at once" });
 });

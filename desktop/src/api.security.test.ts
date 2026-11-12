@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { api } from "./api";
+import { reads } from "./native";
 import { adoptReservation, nativeOwner, releaseNativeOwner } from "./nativeSession";
 import { acknowledgeNotices, retainedOperationNotices } from "./operationNotices";
 import { acknowledgeCompletions, COMPLETION_EVENT, invalidateSession, retainedCompletions, sessionGeneration, SESSION_LOSS_EVENT } from "./sessionBoundary";
@@ -84,18 +85,18 @@ for (const [kind, outcome] of [["importApplied", "completed"], ["importSessionEn
     expect(retainedCompletions()).toMatchObject([{ operation: "import", outcome: "pending" }]);
     const operation = dispatchedOperation();
     native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, kind) : undefined);
-    await api.warnings();
+    await reads.warnings();
     expect(retainedCompletions()).toMatchObject([{ operation: "import", outcome }]);
     expect(retainedOperationNotices()).toEqual([]);
     expect(native.invoke).toHaveBeenCalledWith("vault_dismiss_warnings", { ids: [operation] });
-    await api.warnings();
+    await reads.warnings();
     expect(retainedCompletions()).toHaveLength(1);
   });
 }
 
 test("a native import record for a request this page never made is shown as a notice, not folded", async () => {
   native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(crypto.randomUUID(), "importApplied") : undefined);
-  await api.warnings();
+  await reads.warnings();
   expect(retainedCompletions()).toEqual([]);
   expect(retainedOperationNotices()).toMatchObject([{ kind: "importApplied" }]);
   acknowledgeNotices(retainedOperationNotices().map(({ id }) => id));
@@ -107,7 +108,7 @@ test("a native import record cannot overwrite an outcome the reply already settl
   const operation = dispatchedOperation();
   expect(retainedCompletions()).toMatchObject([{ outcome: "completed" }]);
   native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, "importFailed") : undefined);
-  await api.warnings();
+  await reads.warnings();
   expect(retainedCompletions()).toMatchObject([{ outcome: "completed" }]);
   acknowledgeNotices(retainedOperationNotices().map(({ id }) => id));
 });
@@ -174,24 +175,24 @@ const SCOPED_REQUESTS: [string, () => Promise<unknown>][] = [
   ["vault_activity", () => api.activity()],
   ["vault_upgrade", () => api.upgrade()],
   ["vault_reload", () => api.reload()],
-  ["keys_list", () => api.keys()],
+  ["keys_list", () => reads.keys()],
   ["key_reveal", () => api.reveal("fake-id")],
   ["key_copy", () => api.copy("fake-id")],
   ["key_add", () => api.add({ title: "Fake key", secret: "fake-secret" } as never)],
   ["key_update", () => api.update("fake-id", { title: "Fake key" } as never)],
   ["key_remove", () => api.remove("fake-id")],
   ["key_rotate", () => api.rotate("fake-id", "fake-new-secret")],
-  ["recycled_list", () => api.recycled()],
+  ["recycled_list", () => reads.recycled()],
   ["key_restore", () => api.restore("fake-id")],
   ["key_purge", () => api.purge("fake-id")],
-  ["audit_read", () => api.audit()],
+  ["audit_read", () => reads.audit()],
   ["audit_recover", () => api.recoverJournal()],
   ["env_export", () => api.exportEnv("fake-scope", "fake-env")],
   ["env_copy", () => api.copyEnv("fake-scope", "fake-env")],
   ["env_save", () => api.saveEnv("fake-scope", "fake-env")],
   ["env_launch_terminal", () => api.launchTerminal("fake-scope", "fake-env")],
-  ["key_history", () => api.history("fake-id")],
-  ["backup_info", () => api.backup()],
+  ["key_history", () => reads.history("fake-id")],
+  ["backup_info", () => reads.backup()],
 ];
 
 test.each(SCOPED_REQUESTS)("%s names the session that the page was in when it made the request", async (command, request) => {
@@ -248,7 +249,7 @@ test("a terminal launch is on record as pending before its reply arrives", async
   void api.launchTerminal("fake-project", "fake-env").catch(() => {});
   expect(retainedCompletions()).toMatchObject([{ operation: "terminal", outcome: "pending" }]);
   native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(dispatchedOperation("env_launch_terminal"), "terminalStarted") : undefined);
-  await api.warnings();
+  await reads.warnings();
 });
 
 for (const [kind, outcome] of [["terminalStarted", "completed"], ["terminalSessionEnded", "completedWhileLocked"], ["terminalFailed", "reportedError"], ["terminalDeclined", "cancelled"]] as const) {
@@ -257,11 +258,11 @@ for (const [kind, outcome] of [["terminalStarted", "completed"], ["terminalSessi
     void api.launchTerminal("fake-project", "fake-env").catch(() => {});
     const operation = dispatchedOperation("env_launch_terminal");
     native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, kind) : undefined);
-    await api.warnings();
+    await reads.warnings();
     expect(retainedCompletions()).toMatchObject([{ operation: "terminal", outcome }]);
     expect(retainedOperationNotices()).toEqual([]);
     expect(native.invoke).toHaveBeenCalledWith("vault_dismiss_warnings", { ids: [operation] });
-    await api.warnings();
+    await reads.warnings();
     expect(retainedCompletions()).toHaveLength(1);
   });
 }
@@ -280,7 +281,7 @@ test("a terminal transport failure keeps the native record because it may be the
   expect(native.invoke).not.toHaveBeenCalledWith("vault_dismiss_warnings", expect.anything());
   const operation = dispatchedOperation("env_launch_terminal");
   native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, "terminalStarted") : undefined);
-  await api.warnings();
+  await reads.warnings();
   expect(retainedOperationNotices()).toMatchObject([{ id: operation, kind: "terminalStarted" }]);
   acknowledgeNotices([operation]);
 });
@@ -296,7 +297,7 @@ for (const [request, command, kind] of [
     const settled = request().catch(() => {});
     const operation = dispatchedOperation(command);
     native.invoke.mockImplementation(async (name: string) => name === "vault_warnings" ? recordFor(operation, kind) : undefined);
-    await api.warnings();
+    await reads.warnings();
     expect(retainedCompletions()).toMatchObject([{ outcome: "pending" }]);
     expect(retainedOperationNotices()).toMatchObject([{ id: operation, kind }]);
     expect(native.invoke).not.toHaveBeenCalledWith("vault_dismiss_warnings", expect.anything());
@@ -311,13 +312,13 @@ test("after a reload while the native review is open, the terminal record is the
   void api.launchTerminal("fake-project", "fake-env").catch(() => {});
   const operation = dispatchedOperation("env_launch_terminal");
   vi.resetModules();
-  const reloaded = { api: (await import("./api")).api, notices: await import("./operationNotices"), boundary: await import("./sessionBoundary") };
+  const reloaded = { reads: (await import("./native")).reads, notices: await import("./operationNotices"), boundary: await import("./sessionBoundary") };
   native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, "terminalStarted") : undefined);
-  await reloaded.api.warnings();
+  await reloaded.reads.warnings();
   expect(reloaded.boundary.retainedCompletions()).toEqual([]);
   expect(reloaded.notices.retainedOperationNotices()).toMatchObject([{ id: operation, kind: "terminalStarted" }]);
   expect(native.invoke).not.toHaveBeenCalledWith("vault_dismiss_warnings", expect.anything());
-  await api.warnings(); // The page before the reload settles its own receipt, so later tests start clean.
+  await reads.warnings(); // The page before the reload settles its own receipt, so later tests start clean.
 });
 
 // Contract 5: a record from session A settles A's receipt and never changes session B.
@@ -332,7 +333,7 @@ test("a terminal record from an older session settles that session's receipt and
   window.addEventListener(SESSION_LOSS_EVENT, lost);
   try {
     native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, "terminalSessionEnded") : undefined);
-    await api.warnings();
+    await reads.warnings();
     expect(retainedCompletions()).toMatchObject([{ operation: "terminal", outcome: "completedWhileLocked", generation: origin }]);
     expect(lost.mock.calls.map(([event]) => (event as CustomEvent<{ generation: number }>).detail.generation)).toEqual([origin]);
     expect(sessionGeneration()).toBe(newer);
@@ -391,7 +392,7 @@ test("a cancelled terminal launch overtaken by a session change stays a cancella
 test("a history reply overtaken by a session change is suppressed", async () => {
   let resolve!: (value: unknown) => void;
   native.invoke.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
-  const outcome = api.history("fake-id").catch((error: unknown) => error);
+  const outcome = reads.history("fake-id").catch((error: unknown) => error);
   invalidateSession();
   resolve([{ index: 0, modifiedAt: null, changed: [], secretChanged: false }]);
   expect(await outcome).toMatchObject({ kind: "locked" });
