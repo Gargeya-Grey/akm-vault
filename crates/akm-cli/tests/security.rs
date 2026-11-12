@@ -1286,30 +1286,48 @@ fn check_protected_original_in_actual_cli(relative: bool) {
     let empty_path = fixture.report("empty.kdbx");
     write_database(&empty_path, PASSWORD, &[]);
     let empty = fs::read(&empty_path).unwrap();
-    // Backups that AKM owns by its own rule: the name holds the SHA-256 of the bytes (FR-01).
+    // Files with the backup name format and a true hash that no ledger lists. A name and a
+    // hash are not evidence that AKM wrote a file, so pruning keeps them (FR-01, core review 1,
+    // finding 1).
     let empty_hash = {
         use sha2::{Digest, Sha256};
         hex::encode(Sha256::digest(&empty))
     };
+    let mut futures = Vec::new();
     for index in 0..5 {
         let name = format!(
             "vault.kdbx.bak.29990101T00000{index}000000000Z_00000000-0000-4000-8000-{:012}_{empty_hash}.kdbx",
             index + 1
         );
         fs::write(fixture.report(&name), &empty).unwrap();
+        futures.push(fixture.report(&name));
     }
     fs::create_dir(fixture.report("vault.kdbx.bak")).unwrap();
-    let mut command = if relative {
-        let mut command = cli();
-        command
-            .current_dir(fixture.directory.path())
-            .env("AKM_PASSWORD", PASSWORD)
-            .args(["--vault", "vault.kdbx"]);
-        command
-    } else {
-        fixture.cli()
+    let command = || {
+        if relative {
+            let mut command = cli();
+            command
+                .current_dir(fixture.directory.path())
+                .env("AKM_PASSWORD", PASSWORD)
+                .args(["--vault", "vault.kdbx"]);
+            command
+        } else {
+            fixture.cli()
+        }
     };
-    let output = command.args(["rm", "Demo", "--yes"]).output().unwrap();
+    let backups = || -> Vec<PathBuf> {
+        fs::read_dir(fixture.directory.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("vault.kdbx.bak.")
+            })
+            .collect()
+    };
+    let output = command().args(["rm", "Demo", "--yes"]).output().unwrap();
     assert_success(&output);
     assert!(String::from_utf8_lossy(&output.stdout).contains("Moved"));
     assert!(stderr(&output).contains(".bak could not be refreshed"));
@@ -1317,18 +1335,11 @@ fn check_protected_original_in_actual_cli(relative: bool) {
         .unwrap()
         .list()
         .is_empty());
-    let backups: Vec<_> = fs::read_dir(fixture.directory.path())
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| {
-            p.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("vault.kdbx.bak.")
-        })
-        .collect();
-    assert_eq!(backups.len(), 5);
-    let protected = backups.iter().find(|p| fs::read(p).unwrap() == original);
+    let backups_now = backups();
+    assert_eq!(backups_now.len(), futures.len() + 1);
+    let protected = backups_now
+        .iter()
+        .find(|p| fs::read(p).unwrap() == original);
     assert!(protected.is_some(), "successful CLI deletion must preserve its exact immediate original even when clock names sort later");
     let recovered = cli()
         .env("AKM_PASSWORD", PASSWORD)
@@ -1342,6 +1353,42 @@ fn check_protected_original_in_actual_cli(relative: bool) {
         String::from_utf8_lossy(&recovered.stdout).trim(),
         "fake-intended-secret"
     );
+
+    // Six more saves through the same vault spelling: pruning by the ledger keeps the newest
+    // five of AKM's own backups and never touches the five foreign files.
+    for index in 0..6 {
+        let title = format!("Extra{index}");
+        let mut child = command()
+            .args([
+                "add",
+                &title,
+                "--project",
+                "demo",
+                "--env",
+                "dev",
+                "--secret-stdin",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"fake-extra-secret\n")
+            .unwrap();
+        assert_success(&child.wait_with_output().unwrap());
+    }
+    let own: Vec<_> = backups()
+        .into_iter()
+        .filter(|path| !futures.contains(path))
+        .collect();
+    assert_eq!(own.len(), 5, "{own:?}");
+    for future in &futures {
+        assert_eq!(fs::read(future).unwrap(), empty, "{}", future.display());
+    }
 }
 
 #[test]

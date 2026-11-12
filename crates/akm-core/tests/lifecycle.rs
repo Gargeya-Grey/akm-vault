@@ -834,10 +834,13 @@ fn unrelated_history_attachments_groups_custom_data_and_kdf_survive_every_operat
 /// attachments and custom data, the metadata custom data and the cipher and KDF settings.
 fn foreign_parts(db: &Database) -> String {
     let mut out = format!("{:?}\n", db.config);
+    // `AKM_BACKUPS` is AKM's own ledger of its backups (FR-01), which every save updates.
+    // Every other item is foreign and must not change.
     let mut custom: Vec<_> = db
         .meta
         .custom_data
         .iter()
+        .filter(|(key, _)| key.as_str() != "AKM_BACKUPS")
         .map(|(key, item)| format!("{key}={item:?}"))
         .collect();
     custom.sort();

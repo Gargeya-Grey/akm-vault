@@ -751,11 +751,22 @@ fn older_formats_require_explicit_upgrade_and_preserve_the_database_and_kdf() {
             bytes
         );
         expected.config.version = keepass::config::DatabaseVersion::KDB4(1);
-        let saved = keepass::Database::parse(
+        let mut saved = keepass::Database::parse(
             &std::fs::read(&path).unwrap(),
             keepass::DatabaseKey::new().with_password(FIXTURE_PASSWORD),
         )
         .unwrap();
+        // The one addition is AKM's ledger of its backups (FR-01). It lists the dated backup
+        // of the original bytes.
+        let ledger = saved.meta.custom_data.remove("AKM_BACKUPS").unwrap();
+        let Some(keepass::db::CustomDataValue::String(ledger)) = ledger.value else {
+            panic!("the ledger is text");
+        };
+        let ledger: serde_json::Value = serde_json::from_str(&ledger).unwrap();
+        let listed = ledger["backups"].as_array().unwrap();
+        assert_eq!(listed.len(), 1, "{ledger}");
+        let name = listed[0]["name"].as_str().unwrap();
+        assert_eq!(std::fs::read(path.with_file_name(name)).unwrap(), bytes);
         assert_eq!(saved, expected);
         let upgraded = std::fs::read(&path).unwrap();
         vault.upgrade().unwrap();

@@ -969,12 +969,22 @@ impl Vault {
         }
     }
 
-    fn commit(&mut self, candidate: Database) -> Result<()> {
+    fn commit(&mut self, mut candidate: Database) -> Result<()> {
         if !matches!(candidate.config.version, DatabaseVersion::KDB4(1)) {
             return Err(Error::UpgradeRequired);
         }
         let _lock = acquire_lock(&self.path)?;
         let original = self.checked_source()?;
+        // The backup of the original is named now and recorded in the version that this save
+        // publishes, so pruning has a durable record of every backup it may delete (FR-01,
+        // core review 1, finding 1; see `backups`).
+        let planned = original
+            .as_deref()
+            .map(|bytes| crate::backups::Backup::plan(&self.path, bytes));
+        if let Some(planned) = &planned {
+            let now = whole_second(self.clock.now());
+            crate::backups::record(&mut candidate, &self.path, planned.clone(), now);
+        }
         let mut tmp = PendingFile::temporary(&self.path)?;
         let mut not_private = tmp.not_private.take();
         candidate
@@ -1004,16 +1014,8 @@ impl Vault {
         let fingerprint = bytes_fingerprint(&encrypted);
 
         self.checked_source()?;
-        let mut backup = if let Some(bytes) = &original {
-            // The name holds the SHA-256 of the bytes, so pruning can prove that a file is
-            // one of ours (FR-01, fault class F).
-            let suffix = format!(
-                ".bak.{}_{}_{}.kdbx",
-                Utc::now().format("%Y%m%dT%H%M%S%fZ"),
-                Uuid::new_v4(),
-                bytes_fingerprint(bytes)
-            );
-            let mut backup = PendingFile::new(self.sibling(&suffix))?;
+        let mut backup = if let (Some(bytes), Some(planned)) = (&original, &planned) {
+            let mut backup = PendingFile::new(planned.path(&self.path))?;
             not_private = not_private.or(backup.not_private.take());
             backup.file_mut().write_all(bytes)?;
             backup.sync_and_close()?;
@@ -1068,7 +1070,7 @@ impl Vault {
                 if !fs::read(&backup.path).is_ok_and(|actual| actual == bytes) {
                     return false;
                 }
-                if let Err(error) = self.prune_backups(&backup.path) {
+                if let Err(error) = crate::backups::prune(&self.db, &self.path) {
                     self.warnings.push(VaultWarning {
                         kind: VaultWarningKind::BackupPrune,
                         message: format!(
@@ -1121,46 +1123,6 @@ impl Vault {
         tmp.sync_and_close()?;
         fs::rename(&tmp.path, self.sibling(".bak"))?;
         Ok(tmp.not_private.take())
-    }
-
-    fn prune_backups(&self, protected: &Path) -> Result<()> {
-        let parent = self
-            .path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        let vault_name = self.path.file_name().unwrap_or_default().to_string_lossy();
-        let mut backups = Vec::new();
-        for entry in fs::read_dir(parent)? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            // The directory enumeration may add a leading `./` for a basename-only vault
-            // path. Compare the entry within this same parent, not two differently-spelled
-            // relative paths.
-            if entry.path().file_name() == protected.file_name() {
-                continue;
-            }
-            let Some(certified_hash) = certified_backup_hash(&vault_name, &name) else {
-                continue;
-            };
-            // Only a regular file that this save code wrote: not a link, not a folder.
-            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
-                continue;
-            }
-            // A name is not proof. The bytes must hash to the value in the name.
-            let path = entry.path();
-            if fs::read(&path).is_ok_and(|bytes| bytes_fingerprint(&bytes) == certified_hash) {
-                backups.push(path);
-            }
-        }
-        backups.sort();
-        // Reserve one of the five slots for this commit's verified original,
-        // regardless of clock rollback or later-sorting historical filenames.
-        for backup in backups.iter().take(backups.len().saturating_sub(4)) {
-            fs::remove_file(backup)?;
-        }
-        Ok(())
     }
 
     fn stamp(&self) -> Stamp {
@@ -1472,28 +1434,6 @@ fn acquire_lock(vault_path: &Path) -> Result<File> {
 
 fn bytes_fingerprint(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
-}
-
-/// The SHA-256 that a dated backup name claims for its bytes, if the name has the format
-/// that `commit` writes: `<vault file name>.bak.<25-character time>_<uuid>_<64 lower-case
-/// hex digits>.kdbx`. A name in any other format (the format before FR-01 had no hash, and a
-/// foreign file can have any name) is not ours, and pruning never touches it.
-fn certified_backup_hash<'a>(vault_name: &str, file_name: &'a str) -> Option<&'a str> {
-    let rest = file_name
-        .strip_prefix(vault_name)?
-        .strip_prefix(".bak.")?
-        .strip_suffix(".kdbx")?;
-    let (timestamp, rest) = rest.split_once('_')?;
-    let (id, hash) = rest.split_once('_')?;
-    let well_formed = timestamp.len() == 25
-        && timestamp.is_ascii()
-        && id.len() == 36
-        && Uuid::parse_str(id).is_ok()
-        && hash.len() == 64
-        && hash
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
-    well_formed.then_some(hash)
 }
 
 #[derive(PartialEq, Eq)]

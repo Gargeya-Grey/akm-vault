@@ -25,8 +25,9 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-/// Five backups that AKM owns by its own rule (the name holds the SHA-256 of the bytes) and
-/// whose timestamps sort after any real one.
+/// Five files in the name format of an AKM backup, whose bytes hash to the value in the name
+/// and whose timestamps sort after any real one. AKM did not write them, so it never deletes
+/// them (core review 1, finding 1); they test that a name never decides what is pruned.
 fn future_backups(directory: &Path, empty_bytes: &[u8]) {
     for index in 0..5 {
         let name = format!(
@@ -69,13 +70,18 @@ fn protected_original_survives_future_names_and_failed_convenience_refresh() {
     future_backups(dir.path(), &empty);
     fs::remove_file(dir.path().join("vault.kdbx.bak")).unwrap();
     fs::create_dir(dir.path().join("vault.kdbx.bak")).unwrap();
+    let futures = dated_files(dir.path());
     vault.remove(&key.id).unwrap();
     assert!(
         Vault::open(&path, PASSWORD).unwrap().list().is_empty(),
         "deletion stays a committed success"
     );
     let retained = dated_files(dir.path());
-    assert_eq!(retained.len(), 5);
+    assert!(
+        futures.iter().all(|future| retained.contains(future)),
+        "files that AKM did not write are never pruned"
+    );
+    assert_eq!(retained.len(), futures.len() + 1);
     let exact = retained
         .iter()
         .find(|p| fs::read(p).unwrap() == before_delete);
@@ -101,13 +107,15 @@ fn protected_original_is_reselected_for_each_write_despite_future_names() {
     let empty = fixture(&path);
     let mut vault = Vault::open(&path, PASSWORD).unwrap();
     future_backups(dir.path(), &empty);
-    for index in 0..3 {
+    let futures = dated_files(dir.path());
+    for index in 0..7 {
         let original = fs::read(&path).unwrap();
         vault
             .add(ApiKeyInput::new(format!("Fake {index}"), "fake-only-value"))
             .unwrap();
         let retained = dated_files(dir.path());
-        assert_eq!(retained.len(), 5);
+        assert!(futures.iter().all(|future| retained.contains(future)));
+        assert_eq!(retained.len(), futures.len() + (index + 1).min(5));
         assert!(
             retained.iter().any(|p| fs::read(p).unwrap() == original),
             "write {index} must protect its own immediate original"
@@ -195,4 +203,154 @@ fn pruning_deletes_only_backups_that_prove_they_are_owned() {
         5,
         "nine saves keep five owned backups: {owned:?}"
     );
+}
+
+/// Core review 1, finding 1 (FR-01), the reviewer's closing test: a file that AKM did not
+/// write survives any number of saves, also when its name has AKM's format and its bytes
+/// hash to the value in its name. Sentinels of every shape stay: a true hash (old and future
+/// time), a wrong hash, a hard link to a file outside, a folder link and a folder. AKM still
+/// keeps five dated backups of its own (contract 2), and the newest is the original of the
+/// last save.
+#[test]
+fn a_foreign_file_with_a_true_hash_in_an_akm_name_survives_repeated_pruning() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.kdbx");
+    fixture(&path);
+    let mut vault = Vault::open(&path, PASSWORD).unwrap();
+    let named = |time: &str, bytes: &[u8]| {
+        dir.path().join(format!(
+            "vault.kdbx.bak.{time}_{}_{}.kdbx",
+            uuid::Uuid::new_v4(),
+            sha256_hex(bytes)
+        ))
+    };
+    let mut sentinels: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    for (time, bytes) in [
+        (
+            "20200101T000000000000000Z",
+            b"foreign, true hash, old".to_vec(),
+        ),
+        (
+            "29990101T000000000000000Z",
+            b"foreign, true hash, future".to_vec(),
+        ),
+        ("20200101T000001000000000Z", fs::read(&path).unwrap()),
+    ] {
+        let target = named(time, &bytes);
+        fs::write(&target, &bytes).unwrap();
+        sentinels.push((target, bytes));
+    }
+    let wrong = dir.path().join(format!(
+        "vault.kdbx.bak.20200101T000002000000000Z_{}_{}.kdbx",
+        uuid::Uuid::new_v4(),
+        sha256_hex(b"other bytes")
+    ));
+    fs::write(&wrong, b"foreign, wrong hash").unwrap();
+    sentinels.push((wrong, b"foreign, wrong hash".to_vec()));
+
+    let outside = tempfile::tempdir().unwrap();
+    let linked_bytes = b"foreign file reached through a hard link".to_vec();
+    let linked_target = outside.path().join("user-file.kdbx");
+    fs::write(&linked_target, &linked_bytes).unwrap();
+    let hard_link = named("20200101T000003000000000Z", &linked_bytes);
+    fs::hard_link(&linked_target, &hard_link).unwrap();
+    sentinels.push((hard_link, linked_bytes.clone()));
+
+    let folder = named("20200101T000004000000000Z", b"");
+    fs::create_dir(&folder).unwrap();
+    let folder_target = outside.path().join("linked-folder");
+    fs::create_dir(&folder_target).unwrap();
+    fs::write(folder_target.join("inside.txt"), b"keep me").unwrap();
+    let junction = named("20200101T000005000000000Z", b"");
+    let made = std::process::Command::new("cmd")
+        .arg("/C")
+        .arg("mklink")
+        .arg("/J")
+        .arg(&junction)
+        .arg(&folder_target)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{made:?}");
+
+    let mut last_original = Vec::new();
+    for index in 0..9 {
+        last_original = fs::read(&path).unwrap();
+        vault
+            .add(ApiKeyInput::new(format!("Fake {index}"), "fake-only-value"))
+            .unwrap();
+    }
+
+    for (target, bytes) in &sentinels {
+        assert_eq!(
+            fs::read(target).as_deref().ok(),
+            Some(bytes.as_slice()),
+            "a foreign file must survive pruning: {}",
+            target.display()
+        );
+    }
+    assert_eq!(fs::read(&linked_target).unwrap(), linked_bytes);
+    assert!(folder.is_dir());
+    assert_eq!(fs::read(junction.join("inside.txt")).unwrap(), b"keep me");
+    let foreign: Vec<&PathBuf> = sentinels
+        .iter()
+        .map(|(target, _)| target)
+        .chain([&folder, &junction])
+        .collect();
+    let own: Vec<PathBuf> = dated_files(dir.path())
+        .into_iter()
+        .filter(|p| !foreign.contains(&p))
+        .collect();
+    assert_eq!(
+        own.len(),
+        5,
+        "nine saves keep five backups of AKM's own: {own:?}"
+    );
+    assert!(
+        own.iter().any(|p| fs::read(p).unwrap() == last_original),
+        "the original of the last save is kept"
+    );
+    let _ = fs::remove_dir(&junction);
+}
+
+/// Core review 1, finding 1: the ledger is in the vault file, so a new session prunes the same
+/// backups and still keeps five. A backup that another writer replaced with other bytes is no
+/// longer AKM's: it leaves the ledger and is never deleted.
+#[test]
+fn a_new_session_prunes_by_the_ledger_in_the_file_and_a_replaced_backup_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.kdbx");
+    fixture(&path);
+    let mut vault = Vault::open(&path, PASSWORD).unwrap();
+    for index in 0..2 {
+        vault
+            .add(ApiKeyInput::new(format!("Fake {index}"), "fake-only-value"))
+            .unwrap();
+    }
+    let mut first = dated_files(dir.path());
+    first.sort();
+    assert_eq!(first.len(), 2);
+    let replaced = first[0].clone();
+    fs::write(&replaced, b"another writer replaced this backup").unwrap();
+    drop(vault);
+
+    for session in 0..4 {
+        let mut vault = Vault::open(&path, PASSWORD).unwrap();
+        for index in 0..3 {
+            vault
+                .add(ApiKeyInput::new(
+                    format!("Fake {session} {index}"),
+                    "fake-only-value",
+                ))
+                .unwrap();
+        }
+    }
+    assert_eq!(
+        fs::read(&replaced).unwrap(),
+        b"another writer replaced this backup"
+    );
+    let own: Vec<PathBuf> = dated_files(dir.path())
+        .into_iter()
+        .filter(|p| *p != replaced)
+        .collect();
+    assert_eq!(own.len(), 5, "{own:?}");
 }
