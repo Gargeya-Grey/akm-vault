@@ -768,6 +768,7 @@ fn main() {
     a_discard_names_its_session(&app, webview, &session, &dialog, directory.path());
     the_launch_command_takes_a_scope_and_no_program(webview, &terminal, directory.path());
     every_dispatched_launch_leaves_one_record(webview, &session, &terminal, directory.path());
+    a_core_warning_reaches_the_page_with_its_own_kind(webview, directory.path());
     a_hidden_window_at_the_import_check_leaves_a_failed_record(webview, &dialog, directory.path());
     the_history_command_answers_times_and_field_names(webview, directory.path());
     a_page_that_holds_the_session_id_cannot_disclose_without_the_user(
@@ -1501,6 +1502,80 @@ fn a_hidden_window_at_the_import_check_leaves_a_failed_record(
     )
     .unwrap();
     println!("PASS: env_import with a hidden window opened no dialog, wrote nothing and left one importFailed record.");
+}
+
+/// FR-12 and FR-05, through the production handlers. A vault file that an unseen clone replaced
+/// continues its journal, and the page gets a notice of its own kind, not the generic journal
+/// notice. The file-permission warning needs a file system that ignores private permissions,
+/// which only the core's own test seam can fake, so its kind is checked on the wire as the
+/// reply serializes it.
+fn a_core_warning_reaches_the_page_with_its_own_kind(
+    webview: &tauri::Webview<MockRuntime>,
+    directory: &std::path::Path,
+) {
+    let before = call(webview, "vault_warnings", serde_json::json!({})).unwrap();
+    let ids: Vec<serde_json::Value> = before["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| record["id"].clone())
+        .collect();
+    call(
+        webview,
+        "vault_dismiss_warnings",
+        serde_json::json!({ "ids": ids }),
+    )
+    .unwrap();
+
+    let a = directory.join("lineage-a.kdbx");
+    let b = directory.join("lineage-b.kdbx");
+    let original = akm_core::Vault::create(&a, PASSWORD, None).unwrap();
+    original.log("fake-lineage-marker", None, None).unwrap();
+    drop(original);
+    std::fs::copy(&a, &b).unwrap();
+    let mut clone = akm_core::Vault::open_in(
+        &b,
+        PASSWORD,
+        akm_core::journal::JournalRoot::at(directory.join("other-journal")),
+    )
+    .unwrap();
+    clone
+        .add(akm_core::ApiKeyInput::new("Fake clone", "fake-clone-value"))
+        .unwrap();
+    drop(clone);
+    std::fs::copy(&b, &a).unwrap();
+
+    let reserved = call(webview, "vault_prepare_open", serde_json::json!({})).unwrap();
+    let reserved = reserved.as_str().unwrap().to_string();
+    call(
+        webview,
+        "vault_unlock",
+        serde_json::json!({"path": a.display().to_string(), "password": PASSWORD, "sessionId": reserved}),
+    )
+    .unwrap();
+    call(
+        webview,
+        "key_add",
+        serde_json::json!({"draft": {"title": "Fake lineage", "secret": "fake-lineage-secret"}}),
+    )
+    .unwrap();
+    let report = call(webview, "vault_warnings", serde_json::json!({})).unwrap();
+    let kinds: Vec<&str> = report["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| record["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["journalLineageUnconfirmed"]);
+    assert!(
+        !report.to_string().contains("lineage-a"),
+        "no path on the wire"
+    );
+    assert_eq!(
+        serde_json::to_value(session::OperationWarningKind::FilePermissions).unwrap(),
+        "filePermissions"
+    );
+    println!("PASS: a vault replaced by an unseen clone gives the page one journalLineageUnconfirmed notice and no path; filePermissions has its own name on the wire.");
 }
 
 /// The history command answers times and field names, with the camelCase shape of api.ts.

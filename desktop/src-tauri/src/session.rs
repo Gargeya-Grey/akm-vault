@@ -95,6 +95,8 @@ pub enum OperationWarningKind {
     TerminalSessionEnded,
     TerminalFailed,
     TerminalDeclined,
+    FilePermissions,
+    JournalLineageUnconfirmed,
 }
 
 #[derive(Clone, Serialize)]
@@ -1408,19 +1410,22 @@ fn operation_notice(gate: &mut Gate, ticket: Ticket, kind: OperationWarningKind)
 
 fn core_notices(gate: &mut Gate, ticket: Ticket, warnings: Vec<VaultWarning>) {
     for warning in warnings {
-        let kind = match warning.kind {
-            VaultWarningKind::Journal => OperationWarningKind::Journal,
-            VaultWarningKind::BackupRefresh => OperationWarningKind::BackupRefresh,
-            VaultWarningKind::BackupPrune => OperationWarningKind::BackupPrune,
-            VaultWarningKind::BackupRetention => OperationWarningKind::BackupRetention,
-            // FR-05: the desktop has no notice of its own for this yet. The nearest existing
-            // one tells the person to inspect the backups. A notice with its own text needs a
-            // new kind here, in `types.ts` and in `App.tsx`.
-            VaultWarningKind::FilePermissions => OperationWarningKind::BackupRetention,
-            // FR-12: shown as the generic journal notice until the desktop has its own text.
-            VaultWarningKind::JournalLineageUnconfirmed => OperationWarningKind::Journal,
-        };
-        operation_notice(gate, ticket, kind);
+        operation_notice(gate, ticket, notice_kind(warning.kind));
+    }
+}
+
+/// Each core warning has a notice kind of its own. The page holds the text of each kind; the
+/// core's message, which can name a path, never crosses to the page.
+fn notice_kind(kind: VaultWarningKind) -> OperationWarningKind {
+    match kind {
+        VaultWarningKind::Journal => OperationWarningKind::Journal,
+        VaultWarningKind::BackupRefresh => OperationWarningKind::BackupRefresh,
+        VaultWarningKind::BackupPrune => OperationWarningKind::BackupPrune,
+        VaultWarningKind::BackupRetention => OperationWarningKind::BackupRetention,
+        VaultWarningKind::FilePermissions => OperationWarningKind::FilePermissions,
+        VaultWarningKind::JournalLineageUnconfirmed => {
+            OperationWarningKind::JournalLineageUnconfirmed
+        }
     }
 }
 
@@ -1432,6 +1437,24 @@ mod tests {
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc,
     };
+
+    #[test]
+    fn fr05_fr12_each_core_warning_has_a_notice_kind_of_its_own_on_the_wire() {
+        let wire = |kind| serde_json::to_value(notice_kind(kind)).unwrap();
+        for (kind, name) in [
+            (VaultWarningKind::Journal, "journal"),
+            (VaultWarningKind::BackupRefresh, "backupRefresh"),
+            (VaultWarningKind::BackupPrune, "backupPrune"),
+            (VaultWarningKind::BackupRetention, "backupRetention"),
+            (VaultWarningKind::FilePermissions, "filePermissions"),
+            (
+                VaultWarningKind::JournalLineageUnconfirmed,
+                "journalLineageUnconfirmed",
+            ),
+        ] {
+            assert_eq!(wire(kind), name, "{kind:?}");
+        }
+    }
 
     #[derive(Default)]
     struct TestClock(AtomicU64);
