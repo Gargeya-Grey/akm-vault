@@ -78,7 +78,7 @@ CLEAN = {"README.md": "# Fake project\n\nA synthetic path C:\\fake\\vault.kdbx a
 REFUSALS = [
     ("a user-profile path of this computer", {"notes.md": f"evidence in C:\\Users\\{USER}\\proofs\n"}, None, USER),
     ("a drive path of this computer", {"notes.md": f"build in C:\\{MACHINE_FOLDER}\\akm-build\n"}, None, MACHINE_FOLDER),
-    ("an e-mail address", {"notes.md": "write to private.person@private-mail.test\n"}, None, "private.person"),
+    ("an e-mail address", {"notes.md": "write to private.person@private-mail.test\n"}, None, "private.person"),  # public-snapshot: allow (a synthetic address)
     ("the git user's e-mail address", {"notes.md": "author tester@example.com\n"}, None, None),
     ("extra pattern 2 of the patterns file", {"notes.md": f"the {SECRET_WORD} is here\n"}, f"# private words\n{SECRET_WORD}\n", SECRET_WORD),
     ("extra pattern 1 of the patterns file", {"notes.md": "ticket ACME-12345\n"}, "re:ACME-\\d{5}\n", "ACME-12345"),
