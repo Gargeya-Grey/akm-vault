@@ -14,7 +14,7 @@ A release is:
 - a tag `vX.Y.Z` on a commit of `main` whose CI run is green;
 - the files of that CI run: the setup program, `akm.exe`, and `SHA256SUMS.txt`, and a signature of `SHA256SUMS.txt`;
 - release notes that name the commit, the CI run and the changes, and say that the setup program can download the WebView2 runtime from Microsoft while it installs (FINDINGS.md SEC-05; the no-network promise covers AKM when it runs, not the setup program);
-- `LICENSE`, `THIRD_PARTY_NOTICES.md` and the source offer for the MPL-2.0 crates (SEC-04), which is in `THIRD_PARTY_NOTICES.md`.
+- `LICENSE`, `THIRD_PARTY_NOTICES.md` and the source offer for the MPL-2.0 crates (SEC-04), which is in `THIRD_PARTY_NOTICES.md`. The setup program and the app do not hold these files and do not show them, so the release must carry them as files beside the setup program. A person who gets only the setup program does not get the notices.
 
 A release workflow does not exist yet. It would build from the tag exactly as `build.yml` does and upload the files to a draft release. Writing it is a later step; publishing the draft stays an owner gate.
 

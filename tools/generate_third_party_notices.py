@@ -8,13 +8,18 @@ A crate is shipped when the workspace members reach it through normal dependenci
 dependencies and dev dependencies are left out, and so are the workspace crates themselves.
 npm: desktop/package-lock.json, every package that is not marked `dev`.
 
-Licence texts: each shipped package's own licence files (LICENSE*, LICENCE*, COPYING*, NOTICE*,
-UNLICENSE*, COPYRIGHT*, OFL*, and the manifest's `license-file`), read from the unpacked crate in the
-Cargo registry and from desktop/node_modules. So the crates must be fetched (any cargo build does it)
-and `npm ci` must have run in desktop. Identical texts are printed once, with the list of packages
-that carry them. A package that ships no licence file gets the standard text of each licence in its
-expression, from tools/licence_texts/<SPDX id>.txt (SPDX licence list, version in that folder's
-README), and the file says so for that package.
+Licence texts: each shipped package's own licence files at any depth of its folder (finding
+U4-R1-06): a file whose name starts LICENSE, LICENCE, COPYING, NOTICE, UNLICENSE, COPYRIGHT, OFL,
+PATENTS or THIRD-PARTY / THIRD_PARTY / THIRDPARTY, every file in a folder named LICENSES, LICENCES or
+THIRD-PARTY (and their spellings), and the manifest's `license-file`. Source code files are not
+texts (NOT_A_TEXT). The folder is the unpacked crate in the Cargo registry, or the package in
+desktop/node_modules without the packages nested in its own node_modules, which are listed by
+themselves. So the crates must be fetched (any cargo build does it) and `npm ci` must have run in
+desktop. The tool cannot tell which files a build compiles, so it takes every one: a text can cover
+code that AKM does not ship (for example a Linux-only backend or test images). Identical texts are
+printed once, with the list of packages and paths that carry them. A package that ships no licence
+file gets the standard text of each licence in its expression, from tools/licence_texts/<SPDX id>.txt
+(SPDX licence list, version in that folder's README), and the file says so for that package.
 
 The text is the file's text with line endings made LF, trailing spaces on each line removed, and
 control characters other than the tab removed (tools/check_docs.py refuses them in Markdown). The
@@ -24,6 +29,7 @@ file says this once.
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -35,8 +41,9 @@ STANDARD = Path(__file__).resolve().parent / "licence_texts"
 NODE_MODULES = ROOT / "desktop" / "node_modules"
 TARGET = "x86_64-pc-windows-msvc"
 MPL = re.compile(r"\bMPL-2\.0\b")
-LICENCE_FILE = re.compile(r"^(licen[cs]e|copying|notice|unlicense|copyright|ofl)", re.IGNORECASE)
-NOT_A_TEXT = (".spdx", ".json", ".rs", ".js", ".ts", ".toml", ".html")
+LICENCE_FILE = re.compile(r"^(licen[cs]e|copying|notice|unlicense|copyright|ofl|patents?|third[-_]?party)", re.IGNORECASE)
+LICENCE_FOLDER = re.compile(r"^(licen[cs]es|third[-_]?party(?:[-_]?(?:notices|licen[cs]es))?)$", re.IGNORECASE)
+NOT_A_TEXT = (".spdx", ".json", ".rs", ".js", ".mjs", ".cjs", ".ts", ".map", ".toml", ".html", ".css", ".py", ".c", ".h")
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 SPDX_ID = re.compile(r"[A-Za-z0-9.+-]+")
 EXPRESSION_WORDS = {"AND", "OR", "WITH"}
@@ -69,8 +76,8 @@ def shipped_crates():
         folder = Path(package["manifest_path"]).parent
         files = licence_files(folder)
         if package.get("license_file"):
-            extra = (folder / package["license_file"]).resolve()
-            if extra.is_file() and extra not in files:
+            extra = folder / package["license_file"]
+            if extra.is_file() and extra.resolve() not in {path.resolve() for path in files}:
                 files.append(extra)
         crates.append(
             {
@@ -115,10 +122,16 @@ def shipped_npm():
 
 
 def licence_files(folder):
-    return sorted(
-        (path for path in folder.iterdir() if path.is_file() and LICENCE_FILE.match(path.name) and not path.name.lower().endswith(NOT_A_TEXT)),
-        key=lambda path: path.name.lower(),
-    )
+    """Every licence text of the package in `folder`, at any depth, sorted by path. A nested node_modules
+    holds other packages, which the lock file lists by themselves."""
+    found = []
+    for path in folder.rglob("*"):
+        relative = path.relative_to(folder)
+        if "node_modules" in relative.parts or not path.is_file() or path.name.lower().endswith(NOT_A_TEXT):
+            continue
+        if LICENCE_FILE.match(path.name) or any(LICENCE_FOLDER.match(part) for part in relative.parts[:-1]):
+            found.append(path)
+    return sorted(found, key=lambda path: path.relative_to(folder).as_posix().lower())
 
 
 def clean(raw):
@@ -145,8 +158,12 @@ def collect_texts(packages):
         label = f"{package['name']} {package['version']} ({kind})"
         if package["files"]:
             for path in package["files"]:
-                text = clean(path.read_bytes())
-                texts.setdefault(text, []).append(f"{label}: `{path.name}`")
+                raw = path.read_bytes()
+                if b"\0" in raw:
+                    raise SystemExit(f"{path} looks like a licence file but holds a NUL byte. Read it, then extend NOT_A_TEXT or this rule.")
+                text = clean(raw)
+                shown = Path(os.path.relpath(path, package["base"])).as_posix()
+                texts.setdefault(text, []).append(f"{label}: `{shown}`")
         else:
             authors = ", ".join(author for author in package["authors"] if author) or "none declared"
             for identifier in licence_ids(package["license"]):
@@ -178,10 +195,12 @@ def render(crates, npm):
     )
     out.append(
         "**What this file holds.** Each shipped dependency with its version and its licence expression, "
-        "and at the end the text of every licence file that those packages ship, with the copyright "
-        "lines that the files hold. A text that several packages ship is printed once, with the list "
-        "of those packages. A package that ships no licence file is listed with the standard text of "
-        "its licence and the authors that its manifest names.\n"
+        "and at the end the text of every licence file that those packages ship, at any depth of the "
+        "package and with its path there, with the copyright lines that the files hold. A file below a "
+        "package's root can cover code that AKM does not compile (a backend for another system, test "
+        "data); the tool cannot tell, so it includes every one. A text that several packages ship is "
+        "printed once, with the list of those packages. A package that ships no licence file is listed "
+        "with the standard text of its licence and the authors that its manifest names.\n"
     )
     out.append(
         "**Limits.** The texts come from the packages as published. Line endings are LF, trailing spaces "
