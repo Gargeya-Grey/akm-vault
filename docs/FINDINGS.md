@@ -221,15 +221,15 @@ From [new look review 2](reviews/2026-11-09-look-review2.md), on `c0a7d3b`. This
 | LOOK-R2-02 | P2 | Open | New look | Stale value | Wheel scrolling in the open list is pulled back to the active option, so a long list cannot be scrolled with the mouse. |
 | LOOK-R2-03 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | New look | H | A 1,000-character project name moves Add key below the window. It stays reachable by scrolling. |
 | LOOK-R2-04 | P3 | Fixed, not accepted (guard and mutant, campaign unit 2, `cbb4606`) | New look | J | In forced colours, set and unset lock pins have one fill. The count still shows progress. |
-| LOOK-R3-01 | P2 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | H | Two Recycle Bin entries or two key rows that differ only by issuer look the same, in the row, in the delete confirmation and in the accessibility tree. |
+| LOOK-R3-01 | P2 | Open (not fixed: U2-R1-01) | UI rebuild | H | Two Recycle Bin entries or two key rows that differ only by issuer look the same, in the row, in the delete confirmation and in the accessibility tree. |
 | LOOK-R3-02 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | Stale value | Settings keeps the old count while the replacement list read is pending. |
 | LOOK-R3-03 | P3 | Fixed, not accepted (guard and mutant, campaign unit 2, `cbb4606`) | UI rebuild | H | An all-unfiled vault shows no "No project" context, and an empty vault shows no project total. |
 | LOOK-R3-04 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | New look | H | A 1,000-character unbroken project name makes a shelf button taller than the shelf, and a long unbroken title overflows the delete confirmation. |
 | LOOK-R3-05 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | Failure shown as empty | Use keys offers no retry after its list read fails, and an old error stays after a later successful refresh. |
 | LOOK-R3-06 | P3 | Fixed, not accepted (guard and mutant, campaign unit 2, `cbb4606`) | New look | I | The stacking guard does not include the Recycle Bin permanent-delete confirmation. |
-| LOOK-R4-01 | P2 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | H | The check for look-alike key rows compares raw issuers, so an unset issuer and the literal issuer "No issuer" look the same and show no ID. |
+| LOOK-R4-01 | P2 | Open (not fixed: U2-R1-01) | UI rebuild | H | The check for look-alike key rows compares raw issuers, so an unset issuer and the literal issuer "No issuer" look the same and show no ID. |
 | LOOK-R4-02 | P2 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | Stale value | Use keys has no request identity on its list read, so an older retry or a late failure can replace a newer result. |
-| LOOK-R4-03 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | H | The look-alike check ignores the scope count and renewal facts, so IDs show on rows that differ in those. |
+| LOOK-R4-03 | P3 | Open (not fixed: U2-R1-01) | UI rebuild | H | The look-alike check ignores the scope count and renewal facts, so IDs show on rows that differ in those. |
 | LOOK-R4-04 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | Weak test | The permanent-delete test uses different issuers and reads confirmation text from the DOM. It does not guard entries that differ only by ID. |
 
 ## Full rescore (2026-11-09)
@@ -256,7 +256,7 @@ From the [full rescore](reviews/2026-11-09-full-rescore.md), on `c0a7d3b`: 66.25
 | FR-16 | Medium, reproduced | Open | F | Validation at use only | Add and rotate accept a secret with a NUL, which AKM cannot inject or export. |
 | FR-17 | Low, reproduced | Open | F | Unicode | Title matching folds ASCII case only. |
 | FR-18 | Low, reproduced | Open | F | Lost precision | Fractional seconds of an expiry are dropped. |
-| FR-19 | Medium, reproduced in the accessibility tree | Fixed, not accepted (campaign unit 2, `cbb4606`) | G | H | Same-title keys have identical accessible names and descriptions. |
+| FR-19 | Medium, reproduced in the accessibility tree | Open (not fixed: U2-R1-01) | G | H | Same-title keys have identical accessible names and descriptions. |
 | FR-20 | Medium, inspection | Open (PR 10 is unreviewed) | G | Missing workflow | Detailed key history exists only in the CLI. |
 | FR-21 | Low, reproduced | Open | G | Failure shown as empty | A failed first read shows an error and also "No keys yet". |
 | FR-22 | Medium, inspection | Open | H | Weak test | The import-isolation and failed-rename tests compare metadata, which excludes secrets. The `akm run` test has one scope. |
@@ -303,6 +303,20 @@ From [unit 4 review 1](reviews/2026-11-13-unit4-review1.md), on `a84d9ff`: fail.
 | U4-R1-10 | P3, inspection | Open | Campaign unit 4 | Weak test | The install test logs the hash of the installed program and never compares it with the hashed build. |
 | U4-C-01 | P3, design | Open | Campaign unit 4 | F | The install folder is the parent of the journal folder, so an uninstaller that removes its folder would remove the journal. The install test checks that the journal survives; no run exists yet. |
 | U4-C-02 | P3, coverage | Gap | Campaign unit 2 | Weak test | The 30-second hide of the export preview has no test of its own, and two statements in the key form and the unlock screen about settings and logs have no test. |
+
+## Frontend, review 1 of the campaign (2026-11-13)
+
+From [unit 2 review 1](reviews/2026-11-13-unit2-review1.md), on `7772f45`: fail. The reviewer's checks support the fixes for LOOK-R2-01, LOOK-R2-02, LOOK-R3-02, LOOK-R3-05, LOOK-R3-06, LOOK-R4-02, LOOK-R4-04, UI-R2-02, UI-R2-04 and FR-11; those rows stay not accepted until the unit passes a review. FR-19 and the look-alike rows (LOOK-R3-01, LOOK-R4-01, LOOK-R4-03) are not fixed: see U2-R1-01. The campaign's unit 2 owns every row below.
+
+| ID | Severity | Status | Unit | Class | Problem |
+|---|---|---|---|---|---|
+| U2-R1-01 | P2, reproduced | Open | Campaign unit 2 | Two things drawn the same (third failure of the class) | The look-alike check compares raw strings, one fact at a time. Issuers `Acme  Cloud` and `Acme Cloud` draw the same, and so do issuer `Acme · 1 scope` with no scope and issuer `Acme` with one scope. Neither pair gets an ID. The design changes: every row always shows a short ID (plan, unit 2). |
+| U2-R1-02 | P2, reproduced | Open | Campaign unit 2 | Two things drawn the same | The move and rotation confirmations leave out expiry and renewal, so two keys that differ only there have the same confirmation. The rotation dialog has no accessible description of its target. |
+| U2-R1-03 | P2, reproduced | Open | Campaign unit 2 | State owned by two places | Use keys clears its busy state only when the launch reply arrives. When the outcome arrives through the record and the reply never comes, the form stays disabled and still asks for an answer in the confirmation window. |
+| U2-R1-04 | P2, reproduced | Open | Campaign unit 2 | Stale value (contract 4) | The export preview is bound to project and environment only. After an import into the scope, a failed list read and a retry, the old plaintext returns with no new preview request. |
+| U2-R1-05 | P3, reproduced | Open | Campaign unit 2 | Weak guard | The read guard matches the spelling `api`. An aliased import, a helper and a dynamic access pass it. |
+| U2-R1-06 | P3, reproduced | Open | Campaign unit 2 | Weak guard | The promise-word guard accepts a whole text that contains one approved sentence, so a second promise beside it passes. |
+| U2-R1-07 | P3, inspection | Open | Campaign units 1 and 2 | Contract gap | The page acknowledges an outcome record after every rejection that has a `kind`. The contract does not say that a transport failure has none. |
 
 ## New look review 1 (2026-11-08)
 
