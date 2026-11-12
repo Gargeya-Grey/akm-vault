@@ -87,6 +87,7 @@ test("a failed list read shows no count, says so, and a retry that succeeds show
   expect(fact("Keys")).toContain("AKM could not count the keys. fake read failure");
   expect(fact("Keys")).not.toMatch(/\d in this vault/);
   await user.click(screen.getByRole("button", { name: "Try again" }));
+  await act(async () => {});
   expect(fact("Keys")).toBe("5 in this vault");
 });
 
@@ -210,6 +211,7 @@ test("a retry of an unreadable setting that succeeds clears the error and frees 
   mocks.remindersStatus.mockRejectedValueOnce({ kind: "internal", message: "no" }).mockResolvedValueOnce(base);
   await open();
   await user.click(screen.getByRole("button", { name: "Try again" }));
+  await act(async () => {});
   expect(screen.queryByText("AKM could not read the reminder setting.")).toBeNull();
   expect(toggle().disabled).toBe(false);
 });

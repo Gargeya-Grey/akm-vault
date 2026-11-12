@@ -38,25 +38,28 @@ afterEach(() => {
   native.invoke.mockReset();
 });
 
-const row = (name: string, description: string, identity = "Project demo, environment dev, variable FAKE_KEY, no issuer, ID fake-id.") =>
+const row = (name: string, description: string, identity = "Project demo, environment dev, variable FAKE_KEY, no issuer.") =>
   screen.getByRole("button", { name, description: `${identity} ${description}` });
 
 test("two keys with one title differ in their accessible description", async () => {
   await show([key({ id: "a", title: "Twin", project: "alpha", environment: "dev", resolvedEnvVar: "TWIN_A" }), key({ id: "b", title: "Twin", project: null, environment: null, resolvedEnvVar: "TWIN_B" })]);
-  row("Open Twin", "No expiry date. No rotation interval.", "Project alpha, environment dev, variable TWIN_A, no issuer, ID a.");
-  row("Open Twin", "No expiry date. No rotation interval.", "No project, no environment, variable TWIN_B, no issuer, ID b.");
+  row("Open Twin", "No expiry date. No rotation interval.", "Project alpha, environment dev, variable TWIN_A, no issuer.");
+  row("Open Twin", "No expiry date. No rotation interval.", "No project, no environment, variable TWIN_B, no issuer.");
 });
 
 test("two keys that differ only by issuer differ in their accessible description", async () => {
   await show([key({ id: "a", title: "Twin", issuer: "Acme" }), key({ id: "b", title: "Twin", issuer: "Globex" })]);
-  row("Open Twin", "No expiry date. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, issuer Acme, ID a.");
-  row("Open Twin", "No expiry date. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, issuer Globex, ID b.");
+  row("Open Twin", "No expiry date. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, issuer Acme.");
+  row("Open Twin", "No expiry date. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, issuer Globex.");
 });
 
-test("two key rows that match in every shown fact show their unique IDs", async () => {
+test("two key rows that match in every shown fact show their short unique IDs, and read them", async () => {
   await show([key({ id: "first-unique-id", title: "Twin" }), key({ id: "second-unique-id", title: "Twin" }), key({ id: "other-unique-id", title: "Single" })]);
-  const shownIds = [...document.querySelectorAll(".key-row .key-sub.mono")].map((node) => node.textContent);
-  expect(shownIds.sort()).toEqual(["ID first-unique-id", "ID second-unique-id"]);
+  const shownIds = [...document.querySelectorAll(".key-row .key-id")].map((node) => node.textContent);
+  expect(shownIds.sort()).toEqual(["ID first-un", "ID second-u"]);
+  row("Open Twin", "No expiry date. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, no issuer, ID first-un.");
+  row("Open Twin", "No expiry date. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, no issuer, ID second-u.");
+  row("Open Single", "No expiry date. No rotation interval.");
 });
 
 test("a vault with no projects counts zero projects", async () => {
@@ -165,6 +168,6 @@ test("every row of a longer list has its own description and no row reuses anoth
     key({ id: "a", title: "Alpha", expiresAt: "2026-05-31T12:00:00Z" }),
     key({ id: "b", title: "Bravo", rotationDays: 10 }),
   ]);
-  row("Open Alpha", "Expired 1 day ago. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, no issuer, ID a.");
-  row("Open Bravo", "No expiry date. Rotation unknown, no known secret-change time.", "Project demo, environment dev, variable FAKE_KEY, no issuer, ID b.");
+  row("Open Alpha", "Expired 1 day ago. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, no issuer.");
+  row("Open Bravo", "No expiry date. Rotation unknown, no known secret-change time.", "Project demo, environment dev, variable FAKE_KEY, no issuer.");
 });

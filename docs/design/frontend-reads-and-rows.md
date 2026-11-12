@@ -73,6 +73,32 @@ stale. A new member of `api` must be classed as a read or an action, or the guar
 - Key detail: the history list reads when it opens and drops its read when it closes. A failed
   history read shows its error and Try again inside the history row.
 
+## Row identity (fault classes M and H)
+
+One module, `desktop/src/rowFacts.ts`, builds the facts that a row draws, as the text on screen.
+An unset value draws its fallback: "No project", "No environment" or "No issuer".
+
+- A key row draws its title, issuer, scope count, variable, environment, renewal, expiry and
+  state from `keyRowFacts`. Its group heading draws the project from the same facts.
+- The look-alike check compares the drawn text of every fact. Two rows that match in every
+  drawn fact both show their short unique ID. A row that differs in any drawn fact shows none.
+  An unset value and a literal value that reads like its fallback draw the same text, so the two
+  rows count as look-alikes (LOOK-R4-01). The scope count, the renewal and the expiry count too
+  (LOOK-R4-03).
+- The short ID is the shortest prefix of at least 8 characters that no other ID in the list
+  starts with. Two different IDs never draw the same text.
+- The accessible description of a row is built from the same facts: project, environment,
+  variable, issuer, scope count, and the ID when the row shows one. Then the expiry and the
+  rotation status follow, in words. The name stays "Open <title>" (FR-19).
+- The shelf, the group headings, the environment filter and the search use the drawn text. An
+  unset project and a literal project "No project" share one shelf and one heading.
+- Every dialog that names a key lists its identity facts, and its ID when the row shows one: the
+  move to the Recycle Bin, the rotation, and the key drawer. The confirmation dialog describes
+  itself with its body, so a screen reader reads those facts (UI-R2-01, LOOK-R3-01, LOOK-R4-04).
+- A Recycle Bin row draws its facts from `binRowFacts`, with its ID on every row. Its buttons and
+  the permanent-delete confirmation are described by the same facts.
+- Every `.label` wraps. A 1,000-character issuer made the key drawer 9,879 px wide before.
+
 ## Decisions for the owner's veto
 
 Each decision takes the option that removes state or removes a promise.
@@ -87,6 +113,16 @@ Each decision takes the option that removes state or removes a promise.
 4. Activity keeps one Refresh control as the retry for a failed journal read.
 5. The unmount check inside the reply path stays, although no test can see it: React drops an
    update to an unmounted view. The checks in `reload` and `apply` are tested.
+6. The Recycle Bin keeps the full ID on every row, as the owner chose after look review 3. The
+   rule "an ID only for look-alikes" applies to the key list. The bin row stays as it was, so no
+   fact leaves a screen that showed it (class H).
+7. A key row reads its ID to a screen reader only when it draws one. Before, every row read its
+   full ID. The description now says what the screen says.
+8. A key row without an environment draws "No environment". Before, it drew a dash. The dash
+   was not a word, and a literal dash looked the same.
+9. The environment filter offers "No environment" when a key has none. It finds the rows that
+   draw that text.
+10. The key glyph is not a fact. Two keys can share a glyph, so the check never relies on it.
 
 ## Limits
 
@@ -94,3 +130,7 @@ Each decision takes the option that removes state or removes a promise.
   shows. The outcome records in `api.ts` still own what a late mutation reply means.
 - The guard test reads source text. It finds `api.<read>` calls, an index into `api` and a
   destructured `api`. It does not follow an alias that another module exports.
+- The state of a key row is not varied alone in the fact table. It comes from the expiry and
+  the renewal, which are varied.
+- A project named "All keys" or "Needs attention" gives its shelf the same page title as that
+  shelf. The shelf buttons stay apart by their place under "Projects". This is not fixed here.

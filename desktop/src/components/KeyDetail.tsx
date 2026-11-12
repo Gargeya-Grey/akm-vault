@@ -13,6 +13,8 @@ import { useNow } from "../useNow";
 
 interface Props {
   item: KeyView;
+  /** The ID that the key's row shows, when another row looks the same. */
+  shownId?: string;
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -64,7 +66,7 @@ function EarlierVersions({ id }: { id: string }) {
   );
 }
 
-export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly = false }: Props) {
+export function KeyDetail({ item, shownId, onClose, onEdit, onDelete, onRotate, readOnly = false }: Props) {
   const dialogRef = useDialogFocus<HTMLDivElement>();
   const [secret, setSecret] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(HIDE_SECONDS);
@@ -255,6 +257,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
       </div>
     ),
   });
+  if (shownId !== undefined) facts.push({ key: "ID", value: <span className="mono">{shownId}</span> });
   if (item.createdAt)
     facts.push({
       key: "Added",

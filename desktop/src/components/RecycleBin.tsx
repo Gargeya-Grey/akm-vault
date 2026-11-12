@@ -1,12 +1,19 @@
 import { useId, useState } from "react";
 import { api, errorText } from "../api";
 import { nativeReads, useNativeRead } from "../nativeRead";
-import { formatDateTime, plural } from "../format";
+import { binRowDescription, binRowFacts } from "../rowFacts";
 import type { RecycledKey } from "../types";
+import { FactList } from "./FactList";
 import { EmptyBin, KeyCut } from "./glyphs";
 import { Icon } from "./Icon";
 import { ConfirmDialog, Notice } from "./Notice";
 import { ReadFailure } from "./ReadFailure";
+
+/** The facts that the permanent-delete confirmation lists: the row's facts, in the row's words. */
+function purgeFacts(entry: RecycledKey) {
+  const facts = binRowFacts(entry);
+  return [facts.project, facts.environment, facts.variable, facts.issuer, facts.id, { label: "Removed", text: facts.removed, set: true }, ...(facts.history ? [{ label: "History", text: facts.history, set: true }] : [])];
+}
 
 /**
  * Keys that were removed from the key list. Nothing here is deleted until the user asks:
@@ -103,21 +110,24 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
           </div>
         ) : (
           <ul className="key-rows">
-            {read.state.data.map((item) => (
+            {read.state.data.map((item) => {
+              const facts = binRowFacts(item);
+              return (
               <li className="bin-row" key={item.key.id}>
                 <KeyCut id={item.key.id} />
-                <span className="key-ident" id={`${factsId}-${item.key.id}`}>
-                  <span className="key-title">{item.key.title}</span>
-                  <span className="key-sub">{item.key.project ?? "No project"}</span>
-                  <span className="key-sub">{item.key.environment ?? "No environment"}</span>
-                  <span className="key-sub mono">{item.key.resolvedEnvVar}</span>
-                  <span className="key-sub">{item.key.issuer ?? "No issuer"}</span>
-                  <span className="key-sub mono">ID {item.key.id}</span>
+                <span className="key-ident">
+                  <span className="key-title">{facts.title}</span>
+                  <span className="key-sub">{facts.project.text}</span>
+                  <span className="key-sub">{facts.environment.text}</span>
+                  <span className="key-sub mono">{facts.variable.text}</span>
+                  <span className="key-sub">{facts.issuer.text}</span>
+                  <span className="key-sub mono">ID {facts.id.text}</span>
                   <span className="key-sub">
-                    Removed <span className="mono">{item.deletedAt ? formatDateTime(item.deletedAt) : "at an unknown time"}</span>
-                    {item.key.historyCount > 0 && ` · ${plural(item.key.historyCount, "earlier version")}`}
+                    Removed <span className="mono">{facts.removed}</span>
+                    {facts.history && ` · ${facts.history}`}
                   </span>
                 </span>
+                <span className="sr-only" id={`${factsId}-${item.key.id}`}>{binRowDescription(facts)}</span>
                 <span className="action-cluster">
                   <button
                     type="button"
@@ -143,7 +153,8 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
                   </button>
                 </span>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </section>
@@ -162,14 +173,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
             backups can still hold the key. AKM records the deletion, but a KeePassXC merge with an
             older copy may bring the key back.
           </p>
-          <div className="fact-list">
-            <div className="fact-row"><span className="fact-key">Project</span><span className="fact-value">{purging.key.project ?? "No project"}</span></div>
-            <div className="fact-row"><span className="fact-key">Environment</span><span className="fact-value">{purging.key.environment ?? "No environment"}</span></div>
-            <div className="fact-row"><span className="fact-key">Variable</span><span className="fact-value mono">{purging.key.resolvedEnvVar}</span></div>
-            <div className="fact-row"><span className="fact-key">Issuer</span><span className="fact-value">{purging.key.issuer ?? "No issuer"}</span></div>
-            <div className="fact-row"><span className="fact-key">ID</span><span className="fact-value mono">{purging.key.id}</span></div>
-            <div className="fact-row"><span className="fact-key">Removed</span><span className="fact-value">{purging.deletedAt ? formatDateTime(purging.deletedAt) : "At an unknown time"}</span></div>
-          </div>
+          <FactList facts={purgeFacts(purging)} />
           {purgeError && <Notice tone="error">{purgeError}</Notice>}
         </ConfirmDialog>
       )}

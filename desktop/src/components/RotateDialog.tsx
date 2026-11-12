@@ -1,11 +1,14 @@
 import { useEffect, useId, useState } from "react";
 import { api, errorText } from "../api";
 import type { KeyView, RotationReceipt } from "../types";
+import { FactList, keyIdentityFacts } from "./FactList";
 import { Notice } from "./Notice";
 import { useDialogFocus } from "./useDialogFocus";
 
 interface Props {
   item: KeyView;
+  /** The ID that the key's row shows, when another row looks the same. */
+  shownId?: string;
   onRotated: (receipt: RotationReceipt) => void;
   onClose: () => void;
 }
@@ -15,7 +18,7 @@ interface Props {
  * cancel never hides a request that may still commit. The typed value is cleared as soon as
  * the request ends, whatever the outcome.
  */
-export function RotateDialog({ item, onRotated, onClose }: Props) {
+export function RotateDialog({ item, shownId, onRotated, onClose }: Props) {
   const dialogRef = useDialogFocus<HTMLDivElement>();
   const titleId = useId();
   const fieldId = useId();
@@ -76,6 +79,7 @@ export function RotateDialog({ item, onRotated, onClose }: Props) {
               vault history. This does not change the secret at the provider: create the new
               secret there first.
             </p>
+            <FactList facts={keyIdentityFacts(item, shownId)} />
           </div>
           <div className="field">
             <label htmlFor={fieldId}>New secret</label>

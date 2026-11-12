@@ -1,16 +1,9 @@
 import { Fragment, useEffect, useId, useMemo, useState } from "react";
 import { api, errorText } from "../api";
 import { nativeReads, useNativeRead } from "../nativeRead";
-import {
-  expiryLabel,
-  keyState,
-  needsAttention,
-  plural,
-  rotationLabel,
-  rotationUsed,
-  statusDescription,
-} from "../format";
+import { needsAttention, plural, rotationUsed, statusDescription } from "../format";
 import { attentionOf } from "../reminders";
+import { keyRowDescription, keyRowFacts, lookalikeIds, NO_PROJECT, type KeyRowFacts } from "../rowFacts";
 import type { KeyView, RotationReceipt } from "../types";
 import { useNow } from "../useNow";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
@@ -21,6 +14,7 @@ import { Icon } from "./Icon";
 import { KeyForm } from "./KeyForm";
 import { RotateDialog } from "./RotateDialog";
 import { ConfirmDialog, Notice } from "./Notice";
+import { FactList, keyIdentityFacts } from "./FactList";
 import { ReadFailure } from "./ReadFailure";
 
 interface SummaryControl {
@@ -31,23 +25,19 @@ interface SummaryControl {
 type Shelf =
   | { kind: "all" }
   | { kind: "attention" }
-  | { kind: "project"; name: string | null };
+  // The project as the row draws it: an unset project and a literal "No project" share a shelf.
+  | { kind: "project"; name: string };
 
 const ALL_KEYS: Shelf = { kind: "all" };
 const NO_KEYS: KeyView[] = [];
 
-function identityDescription(key: KeyView): string {
-  const project = key.project === null ? "No project" : `Project ${key.project}`;
-  const environment = key.environment === null ? "no environment" : `environment ${key.environment}`;
-  const issuer = key.issuer === null ? "no issuer" : `issuer ${key.issuer}`;
-  return `${project}, ${environment}, variable ${key.resolvedEnvVar}, ${issuer}, ID ${key.id}.`;
-}
-
 function shelfTitle(shelf: Shelf): string {
   if (shelf.kind === "all") return "All keys";
   if (shelf.kind === "attention") return "Needs attention";
-  return shelf.name ?? "No project";
+  return shelf.name;
 }
+
+const NO_FACTS = new Map<string, KeyRowFacts>();
 
 /**
  * `summary` is owned by the app, so that a dismissal outlives this view until the next unlock.
@@ -81,38 +71,44 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     return () => window.clearTimeout(id);
   }, [flash]);
 
+  // What each row draws. Every shelf, group, filter, search and look-alike check reads these.
+  const factsById = useMemo(() => (all.length === 0 ? NO_FACTS : new Map(all.map((key) => [key.id, keyRowFacts(key, now)]))), [all, now]);
+  const factsOf = (key: KeyView) => factsById.get(key.id) ?? keyRowFacts(key, now);
+
   const attention = attentionOf(all, now);
   // A shelf empties when its last key leaves. The view then falls back, so nobody is stranded on it.
   const shelf: Shelf =
     (chosenShelf.kind === "attention" && attention.total === 0) ||
-    (chosenShelf.kind === "project" && !all.some((key) => key.project === chosenShelf.name))
+    (chosenShelf.kind === "project" && !all.some((key) => factsOf(key).project.text === chosenShelf.name))
       ? ALL_KEYS
       : chosenShelf;
 
   const projects = useMemo(
-    () => uniqueOptions(all.map((key) => key.project)),
-    [all],
+    () => uniqueOptions([...factsById.values()].map((facts) => facts.project.text)).filter((option) => option.value !== NO_PROJECT),
+    [factsById],
   );
   const environments = useMemo(
-    () => uniqueOptions(all.map((key) => key.environment)),
-    [all],
+    () => uniqueOptions([...factsById.values()].map((facts) => facts.environment.text)),
+    [factsById],
   );
-  const unfiled = all.filter((key) => key.project === null).length;
+  const unfiled = [...factsById.values()].filter((facts) => facts.project.text === NO_PROJECT).length;
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return all
       .filter((key) => {
+        const facts = factsById.get(key.id);
+        if (!facts) return false;
         if (shelf.kind === "attention" && !needsAttention(key, now)) return false;
-        if (shelf.kind === "project" && key.project !== shelf.name) return false;
-        if (environment && key.environment !== environment) return false;
+        if (shelf.kind === "project" && facts.project.text !== shelf.name) return false;
+        if (environment && facts.environment.text !== environment) return false;
         if (!needle) return true;
         return [
-          key.title,
-          key.issuer,
-          key.project,
-          key.environment,
-          key.resolvedEnvVar,
+          facts.title,
+          facts.issuer.text,
+          facts.project.text,
+          facts.environment.text,
+          facts.variable.text,
           key.url,
           key.notes,
           ...key.scopes,
@@ -124,28 +120,22 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           .includes(needle);
       })
       .sort((a, b) => a.title.localeCompare(b.title));
-  }, [all, query, shelf, environment, now]);
+  }, [all, factsById, query, shelf, environment, now]);
 
   const groups = useMemo(() => {
-    const byProject = new Map<string | null, KeyView[]>();
+    const byProject = new Map<string, KeyView[]>();
     for (const key of visible) {
-      byProject.set(key.project, [...(byProject.get(key.project) ?? []), key]);
+      const name = factsById.get(key.id)?.project.text ?? NO_PROJECT;
+      byProject.set(name, [...(byProject.get(name) ?? []), key]);
     }
-    return [...byProject].sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : a.localeCompare(b)));
-  }, [visible]);
+    return [...byProject].sort(([a], [b]) => (a === NO_PROJECT ? 1 : b === NO_PROJECT ? -1 : a.localeCompare(b)));
+  }, [visible, factsById]);
   // Rows carry no project column, so the heading is the only place that names the project.
   // On a project shelf the page title names it.
   const showGroupNames = shelf.kind !== "project";
 
-  // Two rows that match in every shown fact need the one fact that is unique.
-  const lookalikes = useMemo(() => {
-    const seen = new Map<string, string[]>();
-    for (const key of all) {
-      const shown = JSON.stringify([key.title, key.issuer, key.project, key.environment, key.resolvedEnvVar]);
-      seen.set(shown, [...(seen.get(shown) ?? []), key.id]);
-    }
-    return new Set([...seen.values()].filter((ids) => ids.length > 1).flat());
-  }, [all]);
+  // Two rows that match in every drawn fact both show their short unique ID (LOOK-R4-01, LOOK-R4-03).
+  const shownIds = useMemo(() => lookalikeIds(all, (key) => key.id, (key) => factsById.get(key.id) ?? {}), [all, factsById]);
 
   const find = (id: string | null) => (id === null ? null : all.find((key) => key.id === id) ?? null);
   const selected = find(selectedId);
@@ -183,7 +173,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     try {
       await api.remove(target.id);
       read.apply((current) => current.filter((key) => key.id !== target.id));
-      if (selectedId === target.id) setSelectedId(null);
+      setSelectedId((current) => (current === target.id ? null : current));
       setFlash(`Moved “${target.title}” to the Recycle Bin. Restore it there, or delete it for good. Check backup notices before you rely on encrypted backups.`);
       setDeletingId(null);
     } catch (cause) {
@@ -194,7 +184,8 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
   }
 
   function renderRow(item: KeyView) {
-    const state = keyState(item, now);
+    const facts = factsOf(item);
+    const shownId = shownIds.get(item.id);
     const used = rotationUsed(item, now);
     return (
       <li className="key-line" key={item.id}>
@@ -207,36 +198,34 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
         >
           <KeyCut id={item.id} />
           <span className="key-ident">
-            <span className="key-title">{item.title}</span>
+            <span className="key-title">{facts.title}</span>
             <span className="key-sub">
-              {item.issuer ?? "No issuer"}
-              {item.scopes.length > 0 && ` · ${plural(item.scopes.length, "scope")}`}
+              {facts.issuer.text}
+              {facts.scopes.set && ` · ${facts.scopes.text}`}
             </span>
-            {lookalikes.has(item.id) && <span className="key-sub mono">ID {item.id}</span>}
+            {shownId !== undefined && <span className="key-sub key-id mono">ID {shownId}</span>}
           </span>
           <span className="key-ident">
-            <span className="key-var mono">{item.resolvedEnvVar}</span>
-            <span className="key-env">{item.environment ?? "—"}</span>
+            <span className="key-var mono">{facts.variable.text}</span>
+            <span className="key-env">{facts.environment.text}</span>
           </span>
           <span className="key-expiry">
-            <span>
-              {item.rotationDays === null ? "no rotation" : `rotate ${rotationLabel(item, now)}`}
-            </span>
+            <span>{facts.renewal}</span>
             <span className="key-when-line">
-              {used !== null && <LifeRule used={used} tone={state.tone} />}
-              <span className={`key-sub${item.expiresAt ? " mono" : ""}`}>{item.expiresAt ? expiryLabel(item) : "no expiry"}</span>
+              {used !== null && <LifeRule used={used} tone={facts.tone} />}
+              <span className={`key-sub${item.expiresAt ? " mono" : ""}`}>{facts.expiry}</span>
             </span>
           </span>
-          <span className={`state state-${state.tone}`}>
+          <span className={`state state-${facts.tone}`}>
             <span className="state-dot" aria-hidden="true" />
-            {state.label}
+            {facts.state}
           </span>
           <span className="row-arrow" aria-hidden="true">
             <Icon name="arrowRight" />
           </span>
         </button>
         <span className="sr-only" id={`${statusId}-${item.id}`}>
-          {identityDescription(item)} {statusDescription(item, now)}
+          {keyRowDescription(facts, shownId)} {statusDescription(item, now)}
         </span>
       </li>
     );
@@ -286,10 +275,10 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           <p className="shelf-label">Projects <span className="num">{projects.length}</span></p>
           {projects.map((option) => (
             <Fragment key={option.value}>
-              {shelfButton({ kind: "project", name: option.value }, option.label, keys.filter((key) => key.project === option.value).length)}
+              {shelfButton({ kind: "project", name: option.value }, option.label, keys.filter((key) => factsOf(key).project.text === option.value).length)}
             </Fragment>
           ))}
-          {unfiled > 0 && shelfButton({ kind: "project", name: null }, "No project", unfiled)}
+          {unfiled > 0 && shelfButton({ kind: "project", name: NO_PROJECT }, NO_PROJECT, unfiled)}
         </nav>}
 
         {showSummary && (
@@ -389,10 +378,10 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
             </div>
           ) : (
             groups.map(([name, items]) => (
-              <section className="key-group" key={name === null ? "no-project" : `project:${name}`}>
+              <section className="key-group" key={`project:${name}`}>
                 {showGroupNames && (
                   <h2 className="group-head">
-                    {name ?? "No project"} <span className="num" aria-hidden="true">{items.length}</span>
+                    {name} <span className="num" aria-hidden="true">{items.length}</span>
                   </h2>
                 )}
                 <ul className="key-rows">{items.map(renderRow)}</ul>
@@ -405,6 +394,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
       {selected && (
         <KeyDetail
           item={selected}
+          shownId={shownIds.get(selected.id)}
           readOnly={readOnly}
           onClose={() => setSelectedId(null)}
           onEdit={() => {
@@ -434,6 +424,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
       {rotating && (
         <RotateDialog
           item={rotating}
+          shownId={shownIds.get(rotating.id)}
           onRotated={rotated}
           onClose={() => { setSelectedId(rotating.id); setRotatingId(null); }}
         />
@@ -453,6 +444,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
             inside the vault. Its secret, history and group are kept. Open the Recycle Bin to
             restore it, or to delete it for good. Nothing is deleted for good until you ask.
           </p>
+          <FactList facts={keyIdentityFacts(deleting, shownIds.get(deleting.id))} />
           {deleteError && <Notice tone="error">{deleteError}</Notice>}
         </ConfirmDialog>
       )}
