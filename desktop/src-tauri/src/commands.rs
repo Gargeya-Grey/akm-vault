@@ -2450,7 +2450,7 @@ mod tests {
         assert_eq!(
             approved.shown(),
             vec![
-                "Import into project \"app\", environment \"dev\"?\n\nAdd 1:\n  TOKEN\n\nSecret values are not shown."
+                "Import into project \"app\", environment \"dev\"?\n\nAdd 1:\n  TOKEN\n\nA program that you start with these keys gets each name as a variable, and can read it as a setting. Import only the names that you expect.\n\nSecret values are not shown."
                     .to_string()
             ]
         );

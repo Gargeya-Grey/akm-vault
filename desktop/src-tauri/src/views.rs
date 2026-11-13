@@ -135,7 +135,10 @@ pub struct KeyDraft {
     notes: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
-    expires_at: Option<DateTime<Utc>>,
+    /// The text that the page sent. `into_input` reads it with the core's one expiry rule
+    /// (`schedule::parse_expiry`), which checks the text: a typed instant has already lost
+    /// every fraction digit after the ninth.
+    expires_at: Option<String>,
     rotation_days: Option<u32>,
 }
 
@@ -155,6 +158,11 @@ impl KeyDraft {
             .username
             .take()
             .or_else(|| existing.and_then(|key| key.username));
+        let expires_at = self
+            .expires_at
+            .as_deref()
+            .map(akm_core::schedule::parse_expiry)
+            .transpose()?;
         Ok(ApiKeyInput {
             title: self.title,
             secret,
@@ -167,7 +175,7 @@ impl KeyDraft {
             url: clean(self.url),
             notes: clean(self.notes),
             tags: tidy(self.tags),
-            expires_at: self.expires_at,
+            expires_at,
             rotation_days: self.rotation_days,
         })
     }
@@ -326,5 +334,67 @@ mod tests {
             crate::test_support::secret_of(&vault, &key.id),
             "fake-secret"
         );
+    }
+
+    /// CORE-R1-07 at the desktop's boundary: the draft reads its expiry as text, with the one
+    /// rule of the core. A fraction of a second is refused before add and before update, also a
+    /// fraction beyond the nine digits that a typed instant keeps, and nothing is stored or
+    /// changed. A whole second, a fraction of zero and a date pass.
+    #[test]
+    fn a_draft_with_a_fraction_of_a_second_in_its_expiry_is_refused_and_stores_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut vault = Vault::create(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+            None,
+        )
+        .unwrap();
+        let draft = |expires: &str| -> KeyDraft {
+            serde_json::from_value(serde_json::json!({
+                "title": "Fake",
+                "secret": "fake-secret",
+                "expiresAt": expires,
+            }))
+            .unwrap()
+        };
+        for refused in [
+            "2030-01-02T03:04:05.5Z",
+            "2030-01-02T03:04:05.000000001Z",
+            "2030-01-02T03:04:05.0000000001Z",
+            "2030-01-02T03:04:05.00000000000000000001Z",
+            "2030-01-02T03:04:05.999+00:00",
+            "tomorrow",
+            "",
+        ] {
+            let error = draft(refused).into_input(None).expect_err(refused);
+            assert_eq!(error.kind, "invalid", "{refused}");
+            assert!(!error.message.contains("fake-secret"), "{refused}");
+        }
+        assert!(vault.list().is_empty());
+        for (accepted, stored) in [
+            ("2030-01-02T03:04:05Z", "2030-01-02T03:04:05+00:00"),
+            ("2030-01-02T03:04:05.000Z", "2030-01-02T03:04:05+00:00"),
+            ("2030-01-02T05:04:05+02:00", "2030-01-02T03:04:05+00:00"),
+            ("2030-01-02", "2030-01-02T23:59:59+00:00"),
+        ] {
+            let input = draft(accepted).into_input(None).unwrap();
+            assert_eq!(input.expires_at.unwrap().to_rfc3339(), stored, "{accepted}");
+        }
+        let key = vault
+            .add(draft("2030-01-02T03:04:05Z").into_input(None).unwrap())
+            .unwrap();
+        let whole = key.expires_at.unwrap();
+        let existing = vault.edit_input(&key.id).unwrap();
+        let error = draft("2031-01-02T03:04:05.25Z")
+            .into_input(Some(existing))
+            .err()
+            .unwrap();
+        assert_eq!(error.kind, "invalid");
+        assert_eq!(vault.list()[0].expires_at, Some(whole));
+        // The core holds the same rule for a typed instant from any other caller.
+        let mut typed = vault.edit_input(&key.id).unwrap();
+        typed.expires_at = Some(whole + chrono::Duration::nanoseconds(1));
+        assert!(vault.update(&key.id, typed).is_err());
+        assert_eq!(vault.list()[0].expires_at, Some(whole));
     }
 }

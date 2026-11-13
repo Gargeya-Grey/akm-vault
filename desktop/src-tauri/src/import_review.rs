@@ -10,6 +10,11 @@ use crate::{
     },
 };
 
+/// What the review says about every name that it lists (FR-02, core review 2). No rule can
+/// tell from a name whether a program reads its value as a secret, a file or a setting, so the
+/// review sorts no name into a safer group. The person who clicks is the check.
+pub const NAME_CAUTION: &str = "A program that you start with these keys gets each name as a variable, and can read it as a setting. Import only the names that you expect.";
+
 /// One dialog lists every change. A bigger import is refused instead of cut short,
 /// so the user never approves names that the dialog did not show.
 pub const MAX_REVIEWED_CHANGES: usize = 25;
@@ -116,6 +121,9 @@ impl ImportReview {
                 self.preview.unchanged
             ));
         }
+        if self.changes_anything() {
+            text.push_str(&format!("\n{NAME_CAUTION}\n"));
+        }
         text.push_str("\nSecret values are not shown.");
         text
     }
@@ -191,6 +199,8 @@ mod tests {
              \n\
              Keep unchanged: 3 (not listed).\n\
              \n\
+             A program that you start with these keys gets each name as a variable, and can read it as a setting. Import only the names that you expect.\n\
+             \n\
              Secret values are not shown."
         );
         assert!(review.replaces_secrets());
@@ -262,9 +272,64 @@ mod tests {
              \n\
              Add 1:\n  ONLY\n\
              \n\
+             A program that you start with these keys gets each name as a variable, and can read it as a setting. Import only the names that you expect.\n\
+             \n\
              Secret values are not shown."
         );
         assert!(!review.replaces_secrets());
+    }
+
+    /// FR-02 and core review 2: the review lists every name in the same way, whatever its
+    /// shape, and says once what a name does. A name that looks like a credential gets no
+    /// other treatment than a file location or a plain setting.
+    #[test]
+    fn every_name_is_listed_the_same_way_and_the_review_says_what_a_name_does() {
+        let names = [
+            "OPENAI_API_KEY",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "AWS_SHARED_CREDENTIALS_FILE",
+            "DATABASE_URL",
+            "DEBUG",
+            "db_password",
+        ];
+        for action in ["add", "update"] {
+            let mut lines = Vec::new();
+            for name in names {
+                let review = ImportReview::new(
+                    "app".into(),
+                    "dev".into(),
+                    ImportPreview {
+                        added: usize::from(action == "add"),
+                        updated: usize::from(action == "update"),
+                        unchanged: 0,
+                        changes: vec![change(name, "Same title", action)],
+                    },
+                )
+                .unwrap();
+                let message = review.message();
+                assert_eq!(message.matches(NAME_CAUTION).count(), 1, "{message}");
+                assert_eq!(message.matches(name).count(), 1, "{message}");
+                // The same text for every name, with only the name changed.
+                lines.push(message.replace(name, "NAME"));
+            }
+            assert!(
+                lines.windows(2).all(|pair| pair[0] == pair[1]),
+                "{lines:#?}"
+            );
+        }
+        // A review that changes nothing lists no name, so it has no caution.
+        let nothing = ImportReview::new(
+            "app".into(),
+            "dev".into(),
+            ImportPreview {
+                added: 0,
+                updated: 0,
+                unchanged: 2,
+                changes: vec![change("SAME", "Same", "unchanged")],
+            },
+        )
+        .unwrap();
+        assert!(!nothing.message().contains(NAME_CAUTION));
     }
 
     #[test]

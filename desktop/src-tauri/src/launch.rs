@@ -1510,6 +1510,32 @@ mod tests {
                 "NPM_CONFIG_REGISTRY",
             ],
             UserLocation => &["TEMP", "TMP", "USERPROFILE", "APPDATA", "CARGO_HOME"],
+            OutputCapture => &[
+                "GIT_TRACE",
+                "git_trace2_event",
+                "GIT_REDIRECT_STDERR",
+                "NODE_V8_COVERAGE",
+                "PYTHON_HISTORY",
+            ],
+        }
+    }
+
+    /// The class after `class`, from no class to the last one. The match has no wildcard, so a
+    /// new class in the core does not compile until the walk below reaches it.
+    fn next_class(
+        class: Option<akm_core::model::ReservedClass>,
+    ) -> Option<akm_core::model::ReservedClass> {
+        use akm_core::model::ReservedClass::*;
+        match class {
+            None => Some(AkmInternal),
+            Some(AkmInternal) => Some(ProcessControl),
+            Some(ProcessControl) => Some(StartupHook),
+            Some(StartupHook) => Some(HelperProgram),
+            Some(HelperProgram) => Some(ShellStartup),
+            Some(ShellStartup) => Some(TrafficRedirect),
+            Some(TrafficRedirect) => Some(UserLocation),
+            Some(UserLocation) => Some(OutputCapture),
+            Some(OutputCapture) => None,
         }
     }
 
@@ -1519,17 +1545,11 @@ mod tests {
     /// reserved family and an ordinary name still start.
     #[test]
     fn t_r3_02_every_reserved_class_and_every_shell_name_is_refused_at_the_launch_boundary() {
-        use akm_core::model::ReservedClass::*;
-        let classes = [
-            AkmInternal,
-            ProcessControl,
-            StartupHook,
-            HelperProgram,
-            ShellStartup,
-            TrafficRedirect,
-            UserLocation,
-        ];
+        let classes: Vec<_> =
+            std::iter::successors(next_class(None), |class| next_class(Some(*class))).collect();
+        assert_eq!(classes.len(), 8);
         for class in classes {
+            assert!(!reserved_names(class).is_empty(), "{class:?}");
             for name in reserved_names(class) {
                 assert_eq!(reserved_class(name), Some(class), "{name}");
                 let fixture =
@@ -1843,6 +1863,12 @@ mod tests {
             ("", false),
         ] {
             assert_eq!(is_akm_name(OsStr::new(name)), removed, "{name:?}");
+            // The one rule of the core gives the same answer (class AkmInternal).
+            assert_eq!(
+                reserved_class(name) == Some(akm_core::model::ReservedClass::AkmInternal),
+                removed,
+                "{name:?}"
+            );
         }
         let child = include_str!("../../../crates/akm-cli/src/child.rs");
         let rule = "name.to_string_lossy()\n        .get(..4)\n        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(\"AKM_\"))";

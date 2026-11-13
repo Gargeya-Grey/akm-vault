@@ -2773,24 +2773,41 @@ mod tests {
             for overtaken in [false, true] {
                 let f = fixture();
                 let origin = f.session.snapshot().unwrap().ticket;
-                if backup_fails {
-                    std::fs::create_dir(f._directory.path().join("vault.kdbx.bak")).unwrap();
-                }
-                // Six old backups in the format that AKM writes (FR-01: the name holds the
-                // SHA-256 of the bytes, and pruning touches only such files). Each is held open
-                // without delete sharing, so removing it fails and the save reports it.
+                // AKM deletes only a backup that its list inside the vault names (FR-01), so the
+                // old backups come from real saves: five saves leave five dated backups, and
+                // the save under test makes the sixth and prunes the oldest. Each one is held
+                // open without delete sharing, so removing it fails and the save reports it.
                 let mut held = Vec::new();
                 if prune_fails {
-                    use sha2::{Digest, Sha256};
                     use std::os::windows::fs::OpenOptionsExt;
-                    for index in 0..6 {
-                        let bytes = format!("fake old backup {index}").into_bytes();
-                        let path = f._directory.path().join(format!(
-                            "vault.kdbx.bak.20000101T000000000000000Z_{}_{:x}.kdbx",
-                            uuid::Uuid::new_v4(),
-                            Sha256::digest(&bytes)
-                        ));
-                        std::fs::write(&path, &bytes).unwrap();
+                    for index in 0..5 {
+                        f.session
+                            .access(Access::Write, None, |vault| {
+                                vault.add(akm_core::ApiKeyInput::new(
+                                    format!("Earlier key {index}"),
+                                    "fake-earlier-secret",
+                                ))?;
+                                Ok(())
+                            })
+                            .unwrap();
+                    }
+                    assert!(serde_json::to_value(f.session.warnings().unwrap()).unwrap()
+                        ["operations"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty());
+                    let dated: Vec<_> = std::fs::read_dir(f._directory.path())
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path())
+                        .filter(|path| {
+                            path.file_name()
+                                .unwrap()
+                                .to_string_lossy()
+                                .starts_with("vault.kdbx.bak.")
+                        })
+                        .collect();
+                    assert_eq!(dated.len(), 5);
+                    for path in dated {
                         held.push(
                             std::fs::OpenOptions::new()
                                 .read(true)
@@ -2800,9 +2817,19 @@ mod tests {
                         );
                     }
                 }
+                if backup_fails {
+                    let legacy = f._directory.path().join("vault.kdbx.bak");
+                    if legacy.exists() {
+                        std::fs::remove_file(&legacy).unwrap();
+                    }
+                    std::fs::create_dir(legacy).unwrap();
+                }
                 let journal =
                     crate::test_support::journal_of(&f._directory.path().join("vault.kdbx"));
                 if journal_fails {
+                    if journal.path().is_file() {
+                        std::fs::remove_file(journal.path()).unwrap();
+                    }
                     std::fs::create_dir(journal.path()).unwrap();
                 }
                 let (saved_tx, saved_rx) = mpsc::channel();

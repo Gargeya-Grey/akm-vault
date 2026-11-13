@@ -50,24 +50,9 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     (
         "desktop/src-tauri/src/launch.rs",
         "AKM_",
-        "the desktop removes inherited AKM_ variables from the terminal with its own prefix \
-         test; the desktop unit moves it to name_class (owned by desktop/src-tauri)",
-    ),
-    (
-        "desktop/src-tauri/src/launch.rs",
-        "PROMPT",
-        "READ_BY_THE_COMMAND_PROMPT: a second check of names that name_class already \
-         reserves (ShellStartup); the desktop unit removes it",
-    ),
-    (
-        "desktop/src-tauri/src/launch.rs",
-        "DIRCMD",
-        "READ_BY_THE_COMMAND_PROMPT, as above",
-    ),
-    (
-        "desktop/src-tauri/src/launch.rs",
-        "COPYCMD",
-        "READ_BY_THE_COMMAND_PROMPT, as above",
+        "is_akm_name, which removes inherited AKM_ variables from the terminal: the launch.rs \
+         test the_akm_name_rule_mirrors_the_one_of_the_command_line pins its text to the one \
+         of child.rs and holds it to name_class",
     ),
 ];
 
