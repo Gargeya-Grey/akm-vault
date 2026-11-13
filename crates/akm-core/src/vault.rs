@@ -813,7 +813,9 @@ impl Vault {
             validate_process_var(&name, &self.stored_secret(id)).map_err(|error| {
                 // A key stored before its name became reserved stays viewable and can be
                 // renamed. Say how, when the name is the problem (FR-02).
-                let hint = if reserved_class(&name).is_some() || !is_valid_env_var(&name) {
+                let hint = if matches!(name_class(&name), NameClass::Reserved(_))
+                    || !is_valid_env_var(&name)
+                {
                     ". The key is not lost: edit it and set a different env var name to use it"
                 } else {
                     ""
