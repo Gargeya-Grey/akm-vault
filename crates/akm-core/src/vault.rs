@@ -25,12 +25,44 @@ use crate::error::{Error, Result};
 use crate::journal::{JournalRoot, VaultEvidence};
 use crate::lifecycle::{Clock, HistoryVersion, RecycledKey, Rotation, SecretChange, SystemClock};
 use crate::model::*;
+use crate::private_fs;
 
 /// Entries live under this top-level group so a vault can also hold unrelated
 /// KeePass entries without them showing up as API keys.
 const GROUP_NAME: &str = "API Keys";
 /// How many earlier fingerprints a session keeps for the journal. The first one is always kept.
 const LINEAGE_LIMIT: usize = 16;
+
+/// The largest vault file that AKM reads (CORE-R2-06). The bytes of a vault file are not
+/// authenticated until its key is checked, so the size is checked before they are read.
+pub const MAX_VAULT_BYTES: u64 = 1 << 30;
+
+fn too_large(what: &str) -> String {
+    format!(
+        "{what} is larger than the {} GiB that AKM reads",
+        MAX_VAULT_BYTES >> 30
+    )
+}
+
+/// The bytes of the vault file at `path`, with the bound of [`MAX_VAULT_BYTES`].
+fn read_vault_file(path: &Path) -> Result<Vec<u8>> {
+    match private_fs::read_bounded(&mut File::open(path)?, MAX_VAULT_BYTES) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+            Err(Error::Open(too_large("the vault file")))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// The file at `path` holds exactly `expected`. It reads at most one byte past its length.
+fn holds_exactly(path: &Path, expected: &[u8]) -> std::io::Result<bool> {
+    match private_fs::read_bounded(&mut File::open(path)?, expected.len() as u64) {
+        Ok(actual) => Ok(actual == expected),
+        Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => Ok(false),
+        Err(error) => Err(error),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VaultWarningKind {
@@ -158,7 +190,7 @@ impl Vault {
         }
 
         let key = DatabaseKey::new().with_password(password);
-        let bytes = fs::read(&path)?;
+        let bytes = read_vault_file(&path)?;
         let fingerprint = Some(bytes_fingerprint(&bytes));
         // FR-28: the header names the cost of the key derivation. Read it first.
         crate::kdf_guard::check(&bytes)?;
@@ -219,7 +251,7 @@ impl Vault {
     }
 
     pub fn reload(&mut self) -> Result<()> {
-        let bytes = fs::read(&self.path)?;
+        let bytes = read_vault_file(&self.path)?;
         let fingerprint = bytes_fingerprint(&bytes);
         crate::kdf_guard::check(&bytes)?;
         let db = Database::parse(&bytes, self.key.clone())
@@ -866,7 +898,7 @@ impl Vault {
         Ok(Disclosure::key(self.stamp(), action, key.id.clone()))
     }
 
-    /// Journals a request to disclose a planned scope, before any value is read.
+    /// Journals a request to disclose a planned scope, before any value leaves the vault.
     pub fn disclose_env(
         &self,
         action: EnvDisclosure,
@@ -1013,7 +1045,14 @@ impl Vault {
         tmp.sync_and_close()?;
         #[cfg(test)]
         tests::run_save_hook(tests::SaveStage::Serialized, &tmp.path, &self.path);
-        let encrypted = fs::read(&tmp.path)?;
+        let encrypted = match private_fs::read_bounded(&mut File::open(&tmp.path)?, MAX_VAULT_BYTES)
+        {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+                return Err(Error::Save(too_large("the encrypted temporary vault")));
+            }
+            Err(error) => return Err(error.into()),
+        };
         // The temporary file is read back from disk, so it gets the same header guard as an
         // opened vault (FR-28): a file swapped in under its name cannot choose the cost.
         crate::kdf_guard::check(&encrypted).map_err(|error| {
@@ -1039,7 +1078,7 @@ impl Vault {
             not_private = not_private.or(backup.not_private.take());
             backup.file_mut().write_all(bytes)?;
             backup.sync_and_close()?;
-            if fs::read(&backup.path)? != *bytes {
+            if !holds_exactly(&backup.path, bytes)? {
                 return Err(Error::Save("encrypted backup verification failed".into()));
             }
             Some(backup)
@@ -1094,7 +1133,7 @@ impl Vault {
             let retained = backup.as_ref().is_some_and(|backup| {
                 // A pre-commit copy is not proof of post-maintenance retention.
                 // Do not prune other recovery candidates if this identity is already lost.
-                if !fs::read(&backup.path).is_ok_and(|actual| actual == bytes) {
+                if !holds_exactly(&backup.path, &bytes).unwrap_or(false) {
                     return false;
                 }
                 if let Err(error) = crate::backups::prune(&self.db, &self.path) {
@@ -1105,7 +1144,7 @@ impl Vault {
                         ),
                     });
                 }
-                fs::read(&backup.path).is_ok_and(|actual| actual == bytes)
+                holds_exactly(&backup.path, &bytes).unwrap_or(false)
             });
             if !retained {
                 self.warnings.push(VaultWarning {
@@ -1126,7 +1165,9 @@ impl Vault {
     }
 
     fn checked_source(&self) -> Result<Option<Vec<u8>>> {
-        let bytes = match fs::read(&self.path) {
+        let read = File::open(&self.path)
+            .and_then(|mut file| private_fs::read_bounded(&mut file, MAX_VAULT_BYTES));
+        let bytes = match read {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return if self.fingerprint.is_none() {
@@ -1134,6 +1175,10 @@ impl Vault {
                 } else {
                     Err(Error::VaultChangedOnDisk)
                 };
+            }
+            // A fingerprint is only ever taken of a file within the bound.
+            Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+                return Err(Error::VaultChangedOnDisk)
             }
             Err(error) => return Err(error.into()),
         };
@@ -2400,5 +2445,53 @@ mod tests {
             .disclose_key(KeyDisclosure::Reveal, &found, None)
             .unwrap();
         assert_eq!(*vault.secret(&key.id, &proof).unwrap(), "fake-sync-secret");
+    }
+
+    /// CORE-R2-06: the bytes of a vault file are unauthenticated until the key is checked.
+    /// Every read of a vault file takes its size from the open handle first, and reads at most
+    /// one byte past the bound. Open, reload, the check before a save and the read-back of the
+    /// encrypted temporary file each refuse a file past the bound.
+    #[test]
+    fn every_read_of_a_vault_file_refuses_a_file_past_the_bound() {
+        fn grow(path: &Path) {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_len(MAX_VAULT_BYTES + 1)
+                .unwrap();
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let large = dir.path().join("large.kdbx");
+        fs::write(&large, b"").unwrap();
+        grow(&large);
+        private_fs::take_read_count();
+        let Err(error) = Vault::open(&large, PASSWORD) else {
+            panic!("a file past the bound was opened");
+        };
+        assert!(error.to_string().contains("larger than"), "{error}");
+        assert_eq!(private_fs::take_read_count(), 0, "the file was never read");
+        drop(dir);
+
+        let (_dir, path, mut vault) = fixture_vault();
+        let saved = fs::read(&path).unwrap();
+        grow(&path);
+        private_fs::take_read_count();
+        let error = vault.reload().unwrap_err();
+        assert!(error.to_string().contains("larger than"), "{error}");
+        assert_eq!(private_fs::take_read_count(), 0, "the file was never read");
+        let error = vault
+            .add(ApiKeyInput::new("Fake", "fake-value"))
+            .unwrap_err();
+        assert!(matches!(error, Error::VaultChangedOnDisk), "{error}");
+
+        fs::write(&path, &saved).unwrap();
+        on_save(SaveStage::Serialized, |temp, _| grow(temp));
+        let error = vault
+            .add(ApiKeyInput::new("Fake", "fake-value"))
+            .unwrap_err();
+        assert!(error.to_string().contains("larger than"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), saved, "the vault is unchanged");
     }
 }

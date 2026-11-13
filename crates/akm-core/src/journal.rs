@@ -27,6 +27,10 @@ const MAPPING_TMP: &str = "mapping.json.tmp";
 const MAPPING_VERSION: u32 = 1;
 const SEEN_LIMIT: usize = 32;
 
+/// The largest `mapping.json` that AKM reads or writes (CORE-R2-06). The mapping holds one
+/// binding per vault, and each binding keeps at most `SEEN_LIMIT` fingerprints.
+pub const MAX_MAPPING_BYTES: usize = 16 << 20;
+
 fn journal_error(message: impl std::fmt::Display) -> Error {
     Error::Journal(message.to_string())
 }
@@ -182,9 +186,7 @@ impl VaultEvidence {
     pub fn from_file(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
-            sha: fs::read(path)
-                .ok()
-                .map(|bytes| hex::encode(Sha256::digest(bytes))),
+            sha: fingerprint_file(path),
             root: None,
             lineage: Vec::new(),
         }
@@ -235,11 +237,29 @@ impl VaultEvidence {
         let (Some(sha), Some(_)) = (&self.sha, &self.root) else {
             return false;
         };
-        match fs::read(canonical) {
-            Ok(bytes) => hex::encode(Sha256::digest(bytes)) != *sha,
-            Err(_) => true,
-        }
+        fingerprint_file(canonical).is_none_or(|actual| actual != *sha)
     }
+}
+
+/// The SHA-256 of a vault file, hashed as a stream, or `None` when the file cannot be read or
+/// is longer than the vault reader takes (CORE-R2-06).
+fn fingerprint_file(path: &Path) -> Option<String> {
+    let bound = crate::vault::MAX_VAULT_BYTES;
+    let file = File::open(path).ok()?;
+    if file.metadata().ok()?.len() > bound {
+        return None;
+    }
+    hash_limited(file, bound)
+}
+
+/// The SHA-256 of a stream, or `None` when it cannot be read or gives more than `limit`
+/// bytes. It reads at most one byte past the limit, so a file that grows after its length was
+/// checked costs no more.
+fn hash_limited(reader: impl Read, limit: u64) -> Option<String> {
+    let mut hasher = Sha256::new();
+    let hashed = std::io::copy(&mut reader.take(limit.saturating_add(1)), &mut hasher).ok()?;
+    private_fs::count_read(hashed);
+    (hashed <= limit).then(|| hex::encode(hasher.finalize()))
 }
 
 fn canonical(path: &Path) -> PathBuf {
@@ -695,9 +715,22 @@ fn load(folder: &Folder) -> Result<Mapping> {
     let Some(mut file) = private_fs::open_file(&path, OpenMode::Read)? else {
         return Ok(Mapping::empty());
     };
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|error| journal_error(format!("cannot read {}: {error}", path.display())))?;
+    let bytes = match private_fs::read_bounded(&mut file, MAX_MAPPING_BYTES as u64) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+            return Err(journal_error(format!(
+                "the mapping file {} is longer than the {} MiB that AKM reads. Its bytes were kept. No record is written until you move or repair it",
+                path.display(),
+                MAX_MAPPING_BYTES >> 20
+            )))
+        }
+        Err(error) => {
+            return Err(journal_error(format!(
+                "cannot read {}: {error}",
+                path.display()
+            )))
+        }
+    };
     let mapping: Mapping = serde_json::from_slice(&bytes).map_err(|_| damaged_mapping(&path))?;
     if mapping.version != MAPPING_VERSION {
         return Err(journal_error(format!(
@@ -710,6 +743,13 @@ fn load(folder: &Folder) -> Result<Mapping> {
 }
 
 fn store(folder: &Folder, mapping: &Mapping) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(mapping)?;
+    if bytes.len() > MAX_MAPPING_BYTES {
+        return Err(journal_error(format!(
+            "the mapping would be longer than the {} MiB that AKM reads, so it was not written",
+            MAX_MAPPING_BYTES >> 20
+        )));
+    }
     let temporary = folder.file(MAPPING_TMP);
     match fs::remove_file(&temporary) {
         Ok(()) => {}
@@ -723,7 +763,6 @@ fn store(folder: &Folder, mapping: &Mapping) -> Result<()> {
     }
     let mut file = private_fs::open_file(&temporary, OpenMode::CreateNew)?
         .ok_or_else(|| journal_error("cannot create the mapping file"))?;
-    let bytes = serde_json::to_vec_pretty(mapping)?;
     file.write_all(&bytes)
         .and_then(|()| file.sync_all())
         .map_err(|error| journal_error(format!("cannot write the mapping: {error}")))?;
@@ -1614,5 +1653,81 @@ mod tests {
             assert!(error.contains(reason), "{error}");
             assert!(root.open().is_err());
         }
+    }
+
+    /// CORE-R2-06: `mapping.json` sits in a folder that other programs of the same user can
+    /// write. Its size is checked before it is read whole and parsed, and AKM never writes a
+    /// mapping that its own reader would refuse. A refused mapping keeps its bytes.
+    #[test]
+    fn a_mapping_past_its_bound_is_refused_on_read_and_never_written() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = JournalRoot::at(directory.path().join("journal"));
+        let folder = root.open_or_create().unwrap();
+        let mut padded = serde_json::to_vec(&Mapping::empty()).unwrap();
+        padded.resize(MAX_MAPPING_BYTES + 1, b' ');
+        fs::write(folder.file(MAPPING), &padded).unwrap();
+        let message = load(&folder).unwrap_err().to_string();
+        assert!(message.contains("longer than"), "{message}");
+        assert_eq!(
+            fs::read(folder.file(MAPPING)).unwrap(),
+            padded,
+            "its bytes are kept"
+        );
+
+        padded.truncate(MAX_MAPPING_BYTES);
+        fs::write(folder.file(MAPPING), &padded).unwrap();
+        assert!(
+            load(&folder).unwrap().journals.is_empty(),
+            "a mapping at the bound is read"
+        );
+
+        let mut large = Mapping::empty();
+        let one = binding(&"p".repeat(4096), None, None, &[]);
+        large.journals = vec![one; MAX_MAPPING_BYTES / 4096 + 1];
+        let message = store(&folder, &large).unwrap_err().to_string();
+        assert!(message.contains("longer than"), "{message}");
+        assert_eq!(
+            fs::read(folder.file(MAPPING)).unwrap(),
+            padded,
+            "the old mapping stays"
+        );
+        assert!(!folder.file(MAPPING_TMP).exists());
+    }
+
+    /// CORE-R2-06: the fingerprint of a vault file is the hash of a stream with the bound of
+    /// the vault reader. A file past the bound has no fingerprint, as a file that cannot be
+    /// read has none.
+    #[test]
+    fn the_fingerprint_of_a_file_past_the_vault_bound_is_unknown() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large.kdbx");
+        fs::write(&path, b"fake vault bytes").unwrap();
+        let sha = hex::encode(Sha256::digest(b"fake vault bytes"));
+        assert_eq!(VaultEvidence::from_file(&path).sha, Some(sha.clone()));
+        let unlocked = VaultEvidence::unlocked(&path, Some(sha), "fake-root".into());
+        assert!(!unlocked.is_stale(&canonical(&path)));
+
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(crate::vault::MAX_VAULT_BYTES + 1)
+            .unwrap();
+        private_fs::take_read_count();
+        assert_eq!(VaultEvidence::from_file(&path).sha, None);
+        assert!(unlocked.is_stale(&canonical(&path)));
+        assert_eq!(private_fs::take_read_count(), 0, "the file was never read");
+
+        // The stream bound holds by itself, for a file that grows after its length was read.
+        assert_eq!(
+            hash_limited(&b"fake vault bytes"[..], 16),
+            Some(hex::encode(Sha256::digest(b"fake vault bytes")))
+        );
+        assert_eq!(hash_limited(&[7u8; 4096][..], 16), None);
+        assert_eq!(
+            private_fs::take_read_count(),
+            33,
+            "16, then 16 and one byte more"
+        );
     }
 }

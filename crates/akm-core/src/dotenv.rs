@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::error::{Error, Result};
 use crate::model::is_valid_env_var;
 
@@ -7,6 +9,19 @@ pub const MAX_BYTES: usize = 256 * 1024;
 pub const MAX_LINE_BYTES: usize = 16 * 1024;
 /// The most entries in one document.
 pub const MAX_ENTRIES: usize = 500;
+
+#[cfg(test)]
+thread_local! {
+    static WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts the bytes that `parse` scans to number its lines and the name comparisons that it
+/// makes, so that a test can prove a bound on its work by a count and not by a clock.
+fn work(steps: usize) {
+    #[cfg(test)]
+    WORK.with(|work| work.set(work.get().saturating_add(steps)));
+    let _ = steps;
+}
 
 /// Render one `NAME=value` line, quoting only when the value needs it.
 ///
@@ -72,10 +87,14 @@ pub fn parse(input: &str) -> Result<Vec<(String, String)>> {
     }
 
     let mut out: Vec<(String, String)> = Vec::new();
+    let mut names: HashSet<&str> = HashSet::new();
     let mut position = 0;
+    // The number of the line that starts at `position`. It is counted as the parse goes, so
+    // the work stays linear in the size of the document (CORE-R2-06).
+    let mut line_number = 1;
 
     while position < input.len() {
-        let first = line_of(input, position);
+        let first = line_number;
         let (line_end, next) = match input[position..].find('\n') {
             Some(offset) => (position + offset, position + offset + 1),
             None => (input.len(), input.len()),
@@ -86,6 +105,7 @@ pub fn parse(input: &str) -> Result<Vec<(String, String)>> {
         if trimmed.is_empty() || trimmed.starts_with('#') {
             reject_lone_cr(line, first)?;
             position = next;
+            line_number += 1;
             continue;
         }
 
@@ -96,7 +116,8 @@ pub fn parse(input: &str) -> Result<Vec<(String, String)>> {
         if !is_valid_env_var(name) {
             return Err(at_line(first, invalid_name(name)));
         }
-        if out.iter().any(|(existing, _)| existing == name) {
+        work(1);
+        if !names.insert(name) {
             return Err(at_line(first, format!("{name} appears more than once")));
         }
         if out.len() == MAX_ENTRIES {
@@ -110,7 +131,7 @@ pub fn parse(input: &str) -> Result<Vec<(String, String)>> {
             .chars()
             .next()
             .filter(|ch| matches!(ch, '"' | '\''));
-        let (value, resume) = match quote {
+        let (value, resume, next_line) = match quote {
             Some(quote) => {
                 let value_start = offset_in(input, value_text) + 1;
                 let (value, close) = quoted(input, value_start, quote, first)?;
@@ -119,7 +140,7 @@ pub fn parse(input: &str) -> Result<Vec<(String, String)>> {
                     .map_or(input.len(), |at| close + at);
                 let tail = without_cr(&input[close..tail_end], tail_end < input.len());
                 let trimmed_tail = tail.trim_start_matches([' ', '\t']);
-                let close_line = line_of(input, close);
+                let close_line = first + newlines(&input[position..close]);
                 if !(trimmed_tail.is_empty() || trimmed_tail.starts_with('#')) {
                     return Err(at_line(
                         close_line,
@@ -128,7 +149,7 @@ pub fn parse(input: &str) -> Result<Vec<(String, String)>> {
                 }
                 reject_lone_cr(tail, close_line)?;
                 check_statement_lines(input, position, tail_end, first)?;
-                (value, (tail_end + 1).min(input.len()))
+                (value, (tail_end + 1).min(input.len()), close_line + 1)
             }
             None => {
                 reject_lone_cr(line, first)?;
@@ -144,12 +165,14 @@ pub fn parse(input: &str) -> Result<Vec<(String, String)>> {
                         .trim_matches([' ', '\t'])
                         .to_string(),
                     next,
+                    first + 1,
                 )
             }
         };
 
         out.push((name.to_string(), value));
         position = resume;
+        line_number = next_line;
     }
 
     Ok(out)
@@ -159,12 +182,15 @@ fn at_line(line: usize, message: String) -> Error {
     Error::Invalid(format!("line {line}: {message}"))
 }
 
+/// The number of the line that holds byte `at`. For one error only: the parse counts its
+/// lines as it goes.
 fn line_of(input: &str, at: usize) -> usize {
-    input.as_bytes()[..at]
-        .iter()
-        .filter(|&&byte| byte == b'\n')
-        .count()
-        + 1
+    newlines(&input[..at]) + 1
+}
+
+fn newlines(text: &str) -> usize {
+    work(text.len());
+    text.bytes().filter(|&byte| byte == b'\n').count()
 }
 
 fn offset_in(input: &str, part: &str) -> usize {
@@ -268,6 +294,93 @@ fn quoted(input: &str, start: usize, quote: char, first: usize) -> Result<(Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn counted<T>(run: impl FnOnce() -> T) -> (T, usize) {
+        WORK.with(|work| work.set(0));
+        let result = run();
+        (result, WORK.with(std::cell::Cell::get))
+    }
+
+    /// CORE-R2-06 sweep: the dotenv text comes from a file that AKM did not write. Within the
+    /// size and entry limits, `parse` does work linear in the size of the document: it
+    /// numbers its lines as it goes, and finds a repeated name without a scan of the names
+    /// before it. Proved by a count of the steps, not by a clock.
+    #[test]
+    fn parse_does_linear_work_on_a_document_within_the_limits() {
+        let mut blank = "\n".repeat(MAX_BYTES - 64);
+        blank.push_str("LAST=1\n");
+        let (parsed, steps) = counted(|| parse(&blank));
+        assert_eq!(parsed.unwrap().len(), 1);
+        assert!(
+            steps <= 2 * blank.len(),
+            "{steps} steps for {} bytes",
+            blank.len()
+        );
+
+        let names: String = (0..MAX_ENTRIES)
+            .map(|index| format!("NAME_{index}=value\n"))
+            .collect();
+        let (parsed, steps) = counted(|| parse(&names));
+        assert_eq!(parsed.unwrap().len(), MAX_ENTRIES);
+        assert!(
+            steps <= 2 * names.len(),
+            "{steps} steps for {} bytes",
+            names.len()
+        );
+
+        let quoted: String = (0..MAX_ENTRIES)
+            .map(|index| format!("Q_{index}=\"a\nb\"\n"))
+            .collect();
+        let (parsed, steps) = counted(|| parse(&quoted));
+        assert_eq!(parsed.unwrap().len(), MAX_ENTRIES);
+        assert!(
+            steps <= 2 * quoted.len(),
+            "{steps} steps for {} bytes",
+            quoted.len()
+        );
+    }
+
+    /// The line numbers in errors stay right after the change to counting as it goes.
+    #[test]
+    fn errors_name_the_right_line_after_blank_lines_comments_and_multiline_values() {
+        for (text, line) in [
+            (
+                "
+# c
+A=1
+B=\"x
+y\"
+
+lower=2
+",
+                "line 7:",
+            ),
+            (
+                "A=1
+B=\"x
+y\" junk
+",
+                "line 3:",
+            ),
+            (
+                "A=1
+
+A=2
+",
+                "line 3:",
+            ),
+            (
+                "A=1
+B=\"open
+
+",
+                "line 2:",
+            ),
+        ] {
+            let message = parse(text).unwrap_err().to_string();
+            assert!(message.contains(line), "{text:?}: {message}");
+        }
+    }
 
     #[test]
     fn emits_plain_values_without_quotes() {

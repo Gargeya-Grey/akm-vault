@@ -28,6 +28,24 @@ pub const MAX_ARGON2_PARALLELISM: u64 = 256;
 /// AES-KDF rounds.
 pub const MAX_AES_ROUNDS: u64 = 2_000_000_000;
 
+// The bounds on the work of the guard (CORE-R2-06). The header is not authenticated until
+// the key is derived, so every count and every length that it states is bounded here, and the
+// guard does a fixed amount of work for each field and each entry. KeePassXC, kdbxweb and the
+// `keepass` crate write about ten header fields, about eight KDF entries and keys of one to
+// five bytes; each bound is far above that. A file beyond a bound is refused before any key
+// derivation, with the bound in the message.
+
+/// The most fields of an outer header.
+pub const MAX_HEADER_FIELDS: usize = 64;
+/// The outer header ends within this many bytes of the start of the file.
+pub const MAX_HEADER_BYTES: usize = 1 << 20;
+/// The most entries of one variant dictionary (the KDF parameters, the public custom data).
+pub const MAX_DICTIONARY_ENTRIES: usize = 64;
+/// The longest key of a variant dictionary, in bytes.
+pub const MAX_DICTIONARY_KEY_BYTES: usize = 256;
+/// The names that the guard reads from the KDF parameters.
+const KDF_NAMES: [&[u8]; 7] = [b"$UUID", b"S", b"R", b"V", b"M", b"I", b"P"];
+
 #[cfg(test)]
 const SIGNATURE: [u8; 8] = [0x03, 0xD9, 0xA2, 0x9A, 0x67, 0xFB, 0x4B, 0xB5];
 const IDENTIFIER: [u8; 4] = [0x03, 0xD9, 0xA2, 0x9A];
@@ -129,6 +147,19 @@ fn bytes_text(bytes: u64) -> String {
 
 type Read<T> = std::result::Result<T, Unreadable>;
 
+#[cfg(test)]
+thread_local! {
+    static WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts the steps of the guard (a field, an entry, a key comparison), so that a test can
+/// prove a bound on its work by a count and not by a clock.
+fn work(steps: usize) {
+    #[cfg(test)]
+    WORK.with(|work| work.set(work.get().saturating_add(steps)));
+    let _ = steps;
+}
+
 const CUT_SHORT: Unreadable = Unreadable("the header is cut short");
 
 /// A cursor over a byte slice that never reads past the end and never overflows.
@@ -223,19 +254,26 @@ fn read_kdb(bytes: &[u8]) -> Header {
 
 /// The outer header of KDBX 3 (field lengths in 16 bits) or KDBX 4 (32 bits), field by field
 /// as the reader parses it. A field that appears twice counts the last time, as in the reader.
+/// At most [`MAX_HEADER_FIELDS`] fields, ending within [`MAX_HEADER_BYTES`].
 fn read_kdbx(bytes: &[u8], major: u16) -> Read<Cost> {
     let mut cursor = Cursor::new(bytes, 12);
     let mut cost = None;
-    loop {
+    for _ in 0..MAX_HEADER_FIELDS {
+        work(1);
         let id = cursor.u8()?;
         let length = if major == 3 {
             usize::from(cursor.u16()?)
         } else {
             cursor.length32()?
         };
+        if cursor.at.saturating_add(length) > MAX_HEADER_BYTES {
+            return Err(Unreadable(
+                "the header is longer than the 1 MiB that AKM reads",
+            ));
+        }
         let data = cursor.take(length)?;
         match (major, id) {
-            (_, 0) => break,
+            (_, 0) => return cost.ok_or(Unreadable("the header names no key derivation")),
             // Comment, cipher, master seed, IV; KDBX 3 also transform seed, stream key and
             // stream start bytes. Byte strings of any length.
             (_, 1 | 2 | 4 | 7) | (3, 5 | 8 | 9) => {}
@@ -255,10 +293,13 @@ fn read_kdbx(bytes: &[u8], major: u16) -> Read<Cost> {
             _ => return Err(Unreadable("the header has a field that the reader refuses")),
         }
     }
-    cost.ok_or(Unreadable("the header names no key derivation"))
+    Err(Unreadable(
+        "the header has more than the 64 fields that AKM reads",
+    ))
 }
 
 /// One value of a variant dictionary: its type byte and its bytes.
+#[derive(Clone, Copy)]
 struct Value<'a> {
     kind: u8,
     bytes: &'a [u8],
@@ -272,18 +313,42 @@ const I64: u8 = 0x0d;
 const STRING: u8 = 0x18;
 const BYTES: u8 = 0x42;
 
+/// The last value of each name of [`KDF_NAMES`] that a dictionary holds.
+type Named<'a> = [Option<Value<'a>>; KDF_NAMES.len()];
+
 /// A KDBX 4 variant dictionary (version 1.0), parsed as `VariantDictionary::parse` does it:
-/// entries while at least ten bytes remain, then a zero type byte. Of a key that appears twice,
-/// the last one counts. Every number must have its width.
-fn read_dictionary(data: &[u8]) -> Read<Vec<(&[u8], Value<'_>)>> {
+/// entries while at least ten bytes remain, then a zero type byte. Every number must have its
+/// width. At most [`MAX_DICTIONARY_ENTRIES`] entries, each key at most
+/// [`MAX_DICTIONARY_KEY_BYTES`].
+///
+/// Of a key that appears twice, the last one counts, as in the reader. The guard reads only
+/// the names of [`KDF_NAMES`], so it keeps the last value of each of them in its own slot and
+/// compares each key with those names only: the work for one entry is fixed, and never grows
+/// with the number of entries before it (CORE-R2-06). The reader keys the entries by the text
+/// of the key (lossy UTF-8); no other byte key gives one of these ASCII names, so comparing
+/// bytes is the same.
+fn read_dictionary(data: &[u8]) -> Read<Named<'_>> {
     let mut cursor = Cursor::new(data, 0);
     if cursor.u16()? != 0x0100 {
         return Err(Unreadable("the KDF dictionary has an unknown version"));
     }
-    let mut entries: Vec<(&[u8], Value<'_>)> = Vec::new();
+    let mut named: Named<'_> = [None; KDF_NAMES.len()];
+    let mut entries = 0usize;
     while cursor.remaining() > 9 {
+        entries += 1;
+        if entries > MAX_DICTIONARY_ENTRIES {
+            return Err(Unreadable(
+                "a variant dictionary has more than the 64 entries that AKM reads",
+            ));
+        }
+        work(1);
         let kind = cursor.u8()?;
         let key_length = cursor.length32()?;
+        if key_length > MAX_DICTIONARY_KEY_BYTES {
+            return Err(Unreadable(
+                "a variant dictionary has a key longer than the 256 bytes that AKM reads",
+            ));
+        }
         let key = cursor.take(key_length)?;
         let value_length = cursor.length32()?;
         let bytes = cursor.take(value_length)?;
@@ -297,27 +362,31 @@ fn read_dictionary(data: &[u8]) -> Read<Vec<(&[u8], Value<'_>)>> {
             BOOL | STRING | BYTES => {}
             _ => return Err(Unreadable("the KDF dictionary has an unknown value type")),
         }
-        // The reader keys the entries by the text of the key (lossy UTF-8). No other byte key
-        // gives one of the ASCII names that are read below, so comparing bytes is the same.
-        entries.retain(|(known, _)| *known != key);
-        entries.push((key, Value { kind, bytes }));
+        let slot = KDF_NAMES.iter().position(|name| {
+            work(1);
+            *name == key
+        });
+        if let Some(slot) = slot {
+            named[slot] = Some(Value { kind, bytes });
+        }
     }
     if cursor.u8().ok() != Some(0) {
         return Err(Unreadable("the KDF dictionary has no end"));
     }
-    Ok(entries)
+    Ok(named)
 }
 
 /// The reader's `TryFrom<VariantDictionary>` for the KDF: the KDF UUID selects the numbers,
 /// and each must be present with its type.
 fn read_kdf_parameters(data: &[u8]) -> Read<Cost> {
-    let entries = read_dictionary(data)?;
+    let named = read_dictionary(data)?;
     let get = |name: &[u8], kind: u8| {
-        entries
+        KDF_NAMES
             .iter()
-            .find(|(key, _)| *key == name)
-            .filter(|(_, value)| value.kind == kind)
-            .map(|(_, value)| value.bytes)
+            .position(|known| *known == name)
+            .and_then(|slot| named[slot])
+            .filter(|value| value.kind == kind)
+            .map(|value| value.bytes)
             .ok_or(Unreadable(
                 "the KDF dictionary lacks a value, or has it with another type",
             ))
@@ -605,6 +674,120 @@ pub(crate) mod rewrite {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn counted<T>(run: impl FnOnce() -> T) -> (T, usize) {
+        WORK.with(|work| work.set(0));
+        let result = run();
+        (result, WORK.with(std::cell::Cell::get))
+    }
+
+    /// A usual AES header whose KDF dictionary also holds `extra` distinct keys that the
+    /// reader ignores.
+    fn many_entries(extra: usize) -> Vec<u8> {
+        let mut entries = vec![
+            (0x42, "$UUID".to_string(), KDF_AES_KDBX4.to_vec()),
+            (0x05, "R".to_string(), 1000u64.to_le_bytes().to_vec()),
+            (0x42, "S".to_string(), vec![7u8; 32]),
+        ];
+        for index in 0..extra {
+            entries.push((0x42, format!("u{index:07}"), Vec::new()));
+        }
+        let borrowed: Vec<(u8, &str, Vec<u8>)> = entries
+            .iter()
+            .map(|(kind, key, value)| (*kind, key.as_str(), value.clone()))
+            .collect();
+        crafted::kdbx4_entries(&borrowed)
+    }
+
+    /// CORE-R2-06, the reviewer's closing test: a header whose KDF dictionary holds 60,000
+    /// entries (about 1 MB) gets a controlled refusal, and the guard's work stays within a
+    /// fixed bound. The bound is a count of the steps of the guard, never a clock.
+    #[test]
+    fn a_kdf_dictionary_with_very_many_entries_is_refused_with_bounded_work() {
+        let header = many_entries(60_000);
+        // The size of the reviewer's header, under the 1 MiB bound: the entry limit refuses it.
+        assert!(header.len() > 1_000_000, "{}", header.len());
+        assert!(header.len() < MAX_HEADER_BYTES, "{}", header.len());
+        let (result, steps) = counted(|| check(&header));
+        let error = result.expect_err("a dictionary of 60,000 entries is refused");
+        assert!(error.to_string().contains("stops before"), "{error}");
+        assert!(error.to_string().contains("64 entries"), "{error}");
+        let bound = (MAX_HEADER_FIELDS + MAX_DICTIONARY_ENTRIES) * (2 + KDF_NAMES.len());
+        assert!(steps <= bound, "{steps} steps, bound {bound}");
+    }
+
+    /// CORE-R2-06: under the limits, the work grows with the number of entries, not with its
+    /// square: each entry costs at most one step and one comparison per name that is read.
+    #[test]
+    fn the_guard_does_linear_work_on_a_dictionary_within_the_limits() {
+        for extra in [0usize, 10, 30, MAX_DICTIONARY_ENTRIES - 3] {
+            let header = many_entries(extra);
+            let (result, steps) = counted(|| check(&header));
+            assert!(result.is_ok(), "{extra}: {result:?}");
+            let entries = extra + 3;
+            let bound = MAX_HEADER_FIELDS + entries * (1 + KDF_NAMES.len());
+            assert!(
+                steps <= bound,
+                "{extra} extra entries: {steps} steps, bound {bound}"
+            );
+        }
+        let over = many_entries(MAX_DICTIONARY_ENTRIES - 2);
+        let text = check(&over).unwrap_err().to_string();
+        assert!(text.contains(&MAX_DICTIONARY_ENTRIES.to_string()), "{text}");
+    }
+
+    /// A usual AES header with `count` comment fields of `length` bytes before its KDF field.
+    fn with_comments(count: usize, length: usize) -> Vec<u8> {
+        let mut bytes = crafted::aes4(1000);
+        let mut fields = Vec::new();
+        for _ in 0..count {
+            fields.push(1u8);
+            fields.extend_from_slice(&(length as u32).to_le_bytes());
+            fields.resize(fields.len() + length, b'c');
+        }
+        bytes.splice(12..12, fields);
+        bytes
+    }
+
+    /// CORE-R2-06: each other bound of the header holds at its value and refuses one past it,
+    /// and the refusal names the bound: the number of fields, the length of the header and
+    /// the length of a dictionary key.
+    #[test]
+    fn each_bound_of_the_header_holds_at_its_value_and_refuses_one_past_it() {
+        let refused_with = |bytes: &[u8], bound: &str| {
+            let text = check(bytes).unwrap_err().to_string();
+            assert!(
+                text.contains("stops before") && text.contains(bound),
+                "{text}"
+            );
+        };
+        // The KDF field and the end field are two of the fields.
+        assert!(check(&with_comments(MAX_HEADER_FIELDS - 2, 0)).is_ok());
+        refused_with(
+            &with_comments(MAX_HEADER_FIELDS - 1, 0),
+            &MAX_HEADER_FIELDS.to_string(),
+        );
+
+        assert_eq!(MAX_HEADER_BYTES, 1 << 20, "the message says 1 MiB");
+        let usual = crafted::aes4(1000).len();
+        let room = MAX_HEADER_BYTES - usual - 5;
+        assert!(check(&with_comments(1, room)).is_ok());
+        refused_with(&with_comments(1, room + 1), "1 MiB");
+
+        let keyed = |length: usize| {
+            crafted::kdbx4_entries(&[
+                (0x42, "$UUID", KDF_AES_KDBX4.to_vec()),
+                (0x05, "R", 1000u64.to_le_bytes().to_vec()),
+                (0x42, "S", vec![7; 32]),
+                (0x42, &"k".repeat(length), Vec::new()),
+            ])
+        };
+        assert!(check(&keyed(MAX_DICTIONARY_KEY_BYTES)).is_ok());
+        refused_with(
+            &keyed(MAX_DICTIONARY_KEY_BYTES + 1),
+            &MAX_DICTIONARY_KEY_BYTES.to_string(),
+        );
+    }
 
     #[test]
     fn a_header_at_each_limit_is_within_it_and_one_over_is_refused() {

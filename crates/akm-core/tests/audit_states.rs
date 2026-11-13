@@ -269,3 +269,66 @@ fn each_kind_of_damage_is_named_and_a_healthy_chain_names_none() {
         );
     }
 }
+
+/// CORE-R2-06 sweep: the journal reader reads a line of at most `MAX_RECORD_BYTES`, with its
+/// line end. A longer line is no record that AKM writes: the journal reads as damaged at that
+/// line, the reader holds no more than the bound, and the bytes stay. The writer refuses a
+/// record that the reader would not take, so AKM never writes a line that it cannot read.
+#[test]
+fn a_journal_line_longer_than_the_record_bound_is_damage_and_never_written() {
+    use akm_core::audit::MAX_RECORD_BYTES;
+    let directory = tempfile::tempdir().unwrap();
+    let log = ChainFile::at(directory.path().join("journal.jsonl"), "fake-journal");
+    log.append("add-completed", None, None).unwrap();
+    let one = std::fs::read(log.path()).unwrap().len();
+    // A detail that makes the second line exactly the bound, with its line end.
+    let fits = "d".repeat(MAX_RECORD_BYTES - one - 64);
+    log.append("add-completed", None, Some(&fits)).unwrap();
+    let lines: Vec<usize> = std::fs::read(log.path())
+        .unwrap()
+        .split_inclusive(|byte| *byte == b'\n')
+        .map(<[u8]>::len)
+        .collect();
+    // The time stamp text varies by a few bytes, so the record stays 40 bytes under the bound.
+    let pad = MAX_RECORD_BYTES - lines[1] - 40;
+    let exact = format!("{fits}{}", "d".repeat(pad));
+    let directory = tempfile::tempdir().unwrap();
+    let log = ChainFile::at(directory.path().join("journal.jsonl"), "fake-journal");
+    log.append("add-completed", None, None).unwrap();
+    log.append("add-completed", None, Some(&exact)).unwrap();
+    let snapshot = log.snapshot(10).unwrap();
+    assert_eq!(snapshot.state, AuditState::Consistent);
+    assert_eq!(snapshot.total_entries, 2);
+
+    let refused = log.append(
+        "add-completed",
+        None,
+        Some(&format!("{exact}{}", "d".repeat(80))),
+    );
+    assert!(refused.is_err(), "a record past the bound is never written");
+    assert_eq!(log.snapshot(10).unwrap().total_entries, 2);
+
+    // A valid third record, padded with JSON white space inside its object: the fields and
+    // the hash are unchanged, so only the length makes it no record.
+    log.append("reveal-requested", None, None).unwrap();
+    let bytes = std::fs::read(log.path()).unwrap();
+    let third = bytes[..bytes.len() - 1]
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .unwrap()
+        + 1;
+    assert_eq!(bytes[third], b'{');
+    let mut padded = bytes[..=third].to_vec();
+    padded.resize(padded.len() + MAX_RECORD_BYTES, b' ');
+    padded.extend_from_slice(&bytes[third + 1..]);
+    std::fs::write(log.path(), &padded).unwrap();
+    let snapshot = log.snapshot(10).unwrap();
+    assert_eq!(
+        snapshot.state,
+        AuditState::Corrupt,
+        "a padded record past the bound"
+    );
+    assert_eq!(snapshot.problem_line, Some(3));
+    assert_eq!(snapshot.damage, Some(Damage::MalformedJson));
+    assert_eq!(std::fs::read(log.path()).unwrap(), padded, "the bytes stay");
+}
