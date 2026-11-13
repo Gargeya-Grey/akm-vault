@@ -124,7 +124,7 @@ pub const MAX_RECORD_BYTES: usize = 64 * 1024;
 /// What a recovery kept and what it started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recovery {
-    /// The damaged journal, unchanged, under its dated name beside the new journal.
+    /// A copy of the damaged file, byte for byte, under its dated name beside the new file.
     pub kept: PathBuf,
     /// The size of the kept file.
     pub bytes: u64,
@@ -135,11 +135,11 @@ pub struct Recovery {
 /// The steps of a recovery at which a test can make the file system fail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecoveryStep {
+    CreateKept,
+    SyncKept,
     CreateNew,
     SyncNew,
-    RenameAside,
     Install,
-    Restore,
 }
 
 #[cfg(test)]
@@ -308,87 +308,91 @@ impl Store for PrivateStore {
     }
 }
 
-/// Keeps the damaged file at `path` aside under a dated name, byte for byte, and puts the
-/// bytes that `fresh` makes from the kept file and its name in its place: a journal chain
-/// (FR-14) or the mapping (FV-01). The caller holds the lock of the file and checked that it
-/// is damaged. `damaged` is the file, open to read.
+/// Keeps a copy of the damaged file at `path` under a dated name, byte for byte, and puts the
+/// bytes that `fresh` makes from the copy and its name in its place: a journal chain (FR-14)
+/// or the mapping (FV-01). The caller holds the lock of the file and checked that it is
+/// damaged. `read` opens the file; `None` is a mapping that is missing beside its journals,
+/// and its copy is empty.
 ///
-/// The order is what keeps the old file usable as evidence after every failure. The new
-/// bytes are written and synced to a file of their own first. Then the damaged file is
-/// renamed, and only then the new file takes its name. A failure before the first rename
-/// leaves the damaged file where it was. A failure of the second rename puts the damaged
-/// file back. Only a failure of both leaves the name free, and the error says so. Only a
-/// file that this call created is ever removed.
+/// The damaged file stays in place until the last step (FW-02, class C). The copy is written
+/// and synced first, then the new file under a pending name, and one replacing move puts the
+/// new file in the place of the damaged one. A stop before that move leaves the damaged file
+/// where it was, so the next start refuses disclosure and offers the recovery again, which
+/// makes one more copy. No state has the file missing. Just before the move, the file must
+/// still hold the bytes of the copy, so a file that changed is not replaced. A failure that
+/// this call returns removes the copy and the pending file, which it created, and nothing else.
 pub(crate) fn set_aside(
     path: &Path,
-    damaged: File,
     now: DateTime<Utc>,
-    create_new: impl FnOnce(&Path) -> Result<File>,
+    read: impl Fn() -> Result<Option<File>>,
+    create_new: impl Fn(&Path) -> Result<File>,
     fresh: impl FnOnce(&Recovery, &str) -> Result<Vec<u8>>,
 ) -> Result<Recovery> {
-    let (bytes, sha256) = fingerprint(damaged)?;
     let kept = free_kept_path(path, now)?;
     let kept_name = kept
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
+    // The name was chosen by an absence check, and `create_new` refuses it when another writer
+    // took it since (core review 1, finding 8).
+    let mut copy = reach(RecoveryStep::CreateKept)
+        .and_then(|()| create_new(&kept))
+        .map_err(|error| {
+            Error::Journal(format!(
+                "the damaged file could not be kept as {kept_name}, so nothing was changed; try again ({error})"
+            ))
+        })?;
+    // From here the copy is ours, and only this call removes it.
+    let copied = reach(RecoveryStep::SyncKept)
+        .and_then(|()| fingerprint(read()?, &mut copy))
+        .and_then(|fingerprint| {
+            copy.sync_data()?;
+            Ok(fingerprint)
+        });
+    drop(copy);
+    let (bytes, sha256) = copied.map_err(|error| stopped(error, &[&kept]))?;
     let recovery = Recovery {
         kept,
         bytes,
         sha256,
     };
-    let new_bytes = fresh(&recovery, &kept_name)?;
-    let kept = &recovery.kept;
+    let kept = recovery.kept.as_path();
+    let new_bytes = fresh(&recovery, &kept_name).map_err(|error| stopped(error, &[kept]))?;
 
     let mut name = path.as_os_str().to_os_string();
     name.push(format!(".recovering-{}", uuid::Uuid::new_v4().simple()));
     let pending = PathBuf::from(name);
-    reach(RecoveryStep::CreateNew)?;
-    let mut created = create_new(&pending)?;
-    // From here the pending file is ours, and only this call removes it.
+    let mut created = reach(RecoveryStep::CreateNew)
+        .and_then(|()| create_new(&pending))
+        .map_err(|error| stopped(error, &[kept]))?;
+    // From here the pending file is ours too.
     let written = reach(RecoveryStep::SyncNew)
         .and_then(|()| Ok(created.write_all(&new_bytes)?))
         .and_then(|()| Ok(created.sync_data()?));
     drop(created);
-    if let Err(error) = written {
-        return Err(with_leftover(error, &pending));
-    }
-
-    // Every move below refuses a taken destination (`move_new`): the kept name was chosen by
-    // an absence check, and the name of the file is free only because the damaged file moved
-    // away, so another writer can take either name in between (core review 1, finding 8). The
-    // new bytes already name the kept file, so a taken name refuses.
-    let aside = reach(RecoveryStep::RenameAside)
-        .and_then(|()| private_fs::move_new(path, kept).map_err(Error::from));
-    if let Err(error) = aside {
-        return Err(with_leftover(
-            Error::Journal(format!(
-                "the damaged file could not be kept aside as {kept_name}, so nothing was changed; try again ({error})"
-            )),
-            &pending,
-        ));
-    }
-    let installed = reach(RecoveryStep::Install)
-        .and_then(|()| private_fs::move_new(&pending, path).map_err(Error::from));
-    if let Err(error) = installed {
-        let restored = reach(RecoveryStep::Restore)
-            .and_then(|()| private_fs::move_new(kept, path).map_err(Error::from));
-        return Err(match restored {
-            Ok(()) => with_leftover(
-                Error::Journal(format!(
-                    "the new file could not be put in place, so the damaged file was put back ({error})"
-                )),
-                &pending,
-            ),
-            Err(restore) => Error::Journal(format!(
-                "the new file could not be put in place ({error}) and the damaged file could not be put back ({restore}). The damaged file is kept as {}. The new file is {}. Move one of them to {} to continue",
-                kept.display(),
-                pending.display(),
-                path.display()
-            )),
-        });
-    }
+    written
+        .and_then(|()| reach(RecoveryStep::Install))
+        .and_then(|()| {
+            if fingerprint(read()?, std::io::sink())? != (recovery.bytes, recovery.sha256.clone()) {
+                return Err(Error::Journal(
+                    "the damaged file changed during the recovery".into(),
+                ));
+            }
+            Ok(fs::rename(&pending, path)?)
+        })
+        .map_err(|error| stopped(error, &[&pending, kept]))?;
     Ok(recovery)
+}
+
+/// The error of a recovery that stopped before the new file took the place of the damaged
+/// one. It removes `created`, the files that the recovery made, and says so if it cannot.
+fn stopped(error: Error, created: &[&Path]) -> Error {
+    let error = Error::Journal(format!(
+        "the recovery stopped, so nothing was changed; try again ({error})"
+    ));
+    created
+        .iter()
+        .fold(error, |error, path| with_leftover(error, path))
 }
 
 /// The refusal of a recovery whose damaged file is not the one that the person approved.
@@ -399,19 +403,22 @@ pub(crate) fn not_approved(damaged: &Path) -> Error {
     ))
 }
 
-/// The size and the SHA-256 of a file.
-fn fingerprint(file: File) -> Result<(u64, String)> {
-    let mut reader = BufReader::new(file);
+/// The size and the SHA-256 of a file, or of no bytes when there is no file. Each byte read
+/// is also written to `copy`.
+fn fingerprint(file: Option<File>, mut copy: impl Write) -> Result<(u64, String)> {
     let mut hasher = Sha256::new();
     let mut bytes = 0u64;
     let mut block = [0u8; 8192];
-    loop {
-        let read = std::io::Read::read(&mut reader, &mut block)?;
-        if read == 0 {
-            break;
+    if let Some(mut file) = file {
+        loop {
+            let read = std::io::Read::read(&mut file, &mut block)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&block[..read]);
+            copy.write_all(&block[..read])?;
+            bytes += read as u64;
         }
-        hasher.update(&block[..read]);
-        bytes += read as u64;
     }
     Ok((bytes, hex::encode(hasher.finalize())))
 }
@@ -655,9 +662,9 @@ impl ChainFile {
         Ok(snapshot)
     }
 
-    /// Keeps a damaged chain file aside under a dated name, byte for byte, and starts a new
-    /// chain in its place (`set_aside`). The first record of the new chain states the gap and
-    /// the SHA-256 of the kept file; `then` follows it. The chain file must be damaged.
+    /// Keeps a copy of a damaged chain file under a dated name, byte for byte, and starts a
+    /// new chain in its place (`set_aside`). The first record of the new chain states the gap
+    /// and the SHA-256 of the kept file; `then` follows it. The chain file must be damaged.
     pub(crate) fn recover(&self, now: DateTime<Utc>, then: &[NewRecord<'_>]) -> Result<Recovery> {
         let _lock = self.store.lock(true)?;
         let Some(file) = self.store.read()? else {
@@ -670,16 +677,11 @@ impl ChainFile {
                 "The activity journal is not damaged, so nothing was moved.".into(),
             ));
         }
-        let damaged = self
-            .store
-            .read()?
-            .ok_or_else(|| Error::Journal("the journal file disappeared".into()))?;
-        let create_new = |pending: &Path| self.store.create_new(pending);
         set_aside(
             &self.path,
-            damaged,
             now,
-            create_new,
+            || self.store.read(),
+            |pending| self.store.create_new(pending),
             |recovery, kept_name| {
                 let detail = format!(
                 "history before this record cannot be proved complete; the damaged journal ({} bytes, SHA-256 {}) is kept as {kept_name}",
@@ -801,12 +803,13 @@ impl AuditLog {
 
     /// A deliberate recovery from a damaged mapping of the folder (FV-01), else from a damaged
     /// journal of this vault (FR-14). It touches that one file and no other file of the
-    /// folder. The damaged file is kept under a dated name beside it, byte for byte. A
+    /// folder. A copy of the damaged file is kept under a dated name beside it, byte for byte;
+    /// a mapping that is missing beside journals counts as damaged, and its copy is empty. A
     /// damaged journal is replaced by a new journal with one record that states the gap and
     /// the SHA-256 of the kept file. A damaged mapping is replaced by an empty one, and each
     /// vault's new journal starts with that record. Appends and disclosure work again after
-    /// that. When nothing is damaged, the recovery is refused. A failure at any step leaves
-    /// the damaged file as evidence, in place.
+    /// that. When nothing is damaged, the recovery is refused. A failure or a stop at any step
+    /// leaves the damaged file in place (FW-02).
     pub fn recover_damaged(&self) -> Result<Recovery> {
         self.recover_at(Utc::now(), None)
     }
@@ -998,13 +1001,21 @@ mod recovery_tests {
     impl Fixture {
         fn new() -> Self {
             let directory = tempfile::tempdir().unwrap();
-            let vault = directory.path().join("vault.kdbx");
-            fs::write(&vault, b"fake vault bytes").unwrap();
-            let log = AuditLog::new(
-                JournalRoot::at(directory.path().join("journal")),
-                VaultEvidence::from_file(&vault),
-            );
+            fs::write(directory.path().join("vault.kdbx"), b"fake vault bytes").unwrap();
+            let log = Self::log_in(directory.path());
             Self { directory, log }
+        }
+
+        fn log_in(directory: &Path) -> AuditLog {
+            AuditLog::new(
+                JournalRoot::at(directory.join("journal")),
+                VaultEvidence::from_file(&directory.join("vault.kdbx")),
+            )
+        }
+
+        /// A new log on the same folder and vault, as after a restart of AKM.
+        fn reopened(&self) -> AuditLog {
+            Self::log_in(self.directory.path())
         }
 
         fn journal(&self) -> PathBuf {
@@ -1042,6 +1053,78 @@ mod recovery_tests {
 
     fn then() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 11, 9, 10, 15, 0).unwrap()
+    }
+
+    /// Runs `recover` and stops it at `step` as a crash does: nothing of the call runs after
+    /// that point, no later step and no clean-up.
+    fn stopped_at<T>(step: RecoveryStep, recover: impl FnOnce() -> T) {
+        at_recovery_step(step, || panic!("AKM stops here"));
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(recover));
+        assert!(stopped.is_err(), "the recovery did not reach {step:?}");
+    }
+
+    /// FW-02, class C: AKM stops during a journal recovery, after it kept the damaged
+    /// journal and before the new journal takes its place. A new log on the same folder still
+    /// finds the damage and refuses a record, and a retry ends with the gap record.
+    #[test]
+    fn fw02_a_journal_recovery_that_stops_before_its_last_step_leaves_the_damage_in_place() {
+        let fixture = Fixture::new();
+        let damaged = fixture.damaged();
+        let path = fixture.journal();
+
+        stopped_at(RecoveryStep::Install, || {
+            fixture.log.recover_damaged_at(then())
+        });
+
+        let log = fixture.reopened();
+        assert_eq!(
+            log.damaged_file().unwrap(),
+            Some(path.clone()),
+            "the recovery is offered again"
+        );
+        assert_eq!(fs::read(&path).unwrap(), damaged, "the damaged journal");
+        assert!(
+            log.append("reveal-requested", None, None).is_err(),
+            "disclosure stays blocked"
+        );
+        let recovery = log.recover_damaged_at(then()).unwrap();
+        assert_eq!(fs::read(&recovery.kept).unwrap(), damaged);
+        log.append("reveal-requested", None, None).unwrap();
+        let entries = log.read(10).unwrap();
+        assert_eq!(entries[0].action, RECOVERED);
+        let detail = entries[0].detail.as_deref().unwrap();
+        assert!(detail.contains(&recovery.sha256), "{detail}");
+        assert_eq!(entries[1].action, "reveal-requested");
+    }
+
+    /// Classes B and F: another writer changes the damaged journal while the recovery runs.
+    /// The copy holds what the recovery read, so the changed file is not replaced: the
+    /// recovery refuses, the writer's bytes stay, and no copy and no new file are left.
+    #[test]
+    fn fr14_a_journal_that_changes_during_the_recovery_is_not_replaced() {
+        let fixture = Fixture::new();
+        fixture.damaged();
+        let path = fixture.journal();
+        let sentinel = path.clone();
+        at_recovery_step(RecoveryStep::Install, move || {
+            fs::write(&sentinel, b"another writer's file").unwrap();
+        });
+
+        let error = fixture
+            .log
+            .recover_damaged_at(then())
+            .expect_err("recovery must not replace the file")
+            .to_string();
+
+        assert_eq!(fs::read(&path).unwrap(), b"another writer's file");
+        assert!(error.contains("nothing was changed"), "{error}");
+        let names: Vec<_> = fixture.folder().into_iter().map(|(name, _)| name).collect();
+        assert!(
+            !names
+                .iter()
+                .any(|name| name.contains(".damaged-") || name.contains(".recovering-")),
+            "{names:?}"
+        );
     }
 
     #[test]
@@ -1137,9 +1220,10 @@ mod recovery_tests {
     #[test]
     fn fr14_a_failure_at_each_step_leaves_the_damaged_journal_in_place_and_blocked() {
         for step in [
+            RecoveryStep::CreateKept,
+            RecoveryStep::SyncKept,
             RecoveryStep::CreateNew,
             RecoveryStep::SyncNew,
-            RecoveryStep::RenameAside,
             RecoveryStep::Install,
         ] {
             let fixture = Fixture::new();
@@ -1167,30 +1251,6 @@ mod recovery_tests {
         }
     }
 
-    #[test]
-    fn fr14_when_the_damaged_journal_cannot_be_put_back_the_error_names_both_files() {
-        let fixture = Fixture::new();
-        let damaged = fixture.damaged();
-        fail_recovery_at(RecoveryStep::Install);
-        fail_recovery_at(RecoveryStep::Restore);
-
-        let error = fixture
-            .log
-            .recover_damaged_at(then())
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains(".damaged-20261109T101500Z"), "{error}");
-        assert!(error.contains(".recovering-"), "{error}");
-        let names: Vec<_> = fixture.folder().into_iter().map(|(name, _)| name).collect();
-        let kept = names
-            .iter()
-            .find(|name| name.contains(".damaged-"))
-            .expect("the damaged journal is kept");
-        let kept_bytes = fs::read(fixture.directory.path().join("journal").join(kept)).unwrap();
-        assert_eq!(kept_bytes, damaged, "the evidence is intact");
-    }
-
     /// Core review 1, finding 8: another writer creates a file at the kept name after
     /// recovery chose it. The file survives byte for byte, recovery refuses and changes
     /// nothing, and a retry keeps the damaged journal under the next free name.
@@ -1201,7 +1261,7 @@ mod recovery_tests {
         let path = fixture.journal();
         let taken = PathBuf::from(format!("{}.damaged-20261109T101500Z", path.display()));
         let sentinel = taken.clone();
-        at_recovery_step(RecoveryStep::RenameAside, move || {
+        at_recovery_step(RecoveryStep::CreateKept, move || {
             fs::write(&sentinel, b"another writer's file").unwrap();
         });
 
@@ -1233,32 +1293,6 @@ mod recovery_tests {
         );
         assert_eq!(fs::read(&recovery.kept).unwrap(), damaged);
         assert_eq!(fs::read(&taken).unwrap(), b"another writer's file");
-    }
-
-    /// Core review 1, finding 8: another writer creates a file at the journal name in the
-    /// moment after the damaged journal moved aside. The file survives, the new chain does
-    /// not replace it, and the error names the kept journal and the new one.
-    #[test]
-    fn fr14_a_file_made_at_the_journal_name_during_install_survives() {
-        let fixture = Fixture::new();
-        let damaged = fixture.damaged();
-        let path = fixture.journal();
-        let sentinel = path.clone();
-        at_recovery_step(RecoveryStep::Install, move || {
-            fs::write(&sentinel, b"another writer's file").unwrap();
-        });
-
-        let error = fixture
-            .log
-            .recover_damaged_at(then())
-            .expect_err("recovery must not replace the file")
-            .to_string();
-
-        assert_eq!(fs::read(&path).unwrap(), b"another writer's file");
-        assert!(error.contains(".damaged-20261109T101500Z"), "{error}");
-        assert!(error.contains(".recovering-"), "{error}");
-        let kept = PathBuf::from(format!("{}.damaged-20261109T101500Z", path.display()));
-        assert_eq!(fs::read(&kept).unwrap(), damaged, "the evidence is intact");
     }
 
     #[test]
@@ -1342,25 +1376,143 @@ mod recovery_tests {
     impl TwoLogs {
         fn new() -> Self {
             let directory = tempfile::tempdir().unwrap();
-            let logs = ["a.kdbx", "b.kdbx"]
+            for name in ["a.kdbx", "b.kdbx"] {
+                fs::write(
+                    directory.path().join(name),
+                    format!("fake vault bytes of {name}"),
+                )
+                .unwrap();
+            }
+            let logs = Self::logs_in(directory.path());
+            for log in &logs {
+                log.append("add-completed", None, None).unwrap();
+            }
+            Self { directory, logs }
+        }
+
+        fn logs_in(directory: &Path) -> Vec<AuditLog> {
+            ["a.kdbx", "b.kdbx"]
                 .into_iter()
                 .map(|name| {
-                    let vault = directory.path().join(name);
-                    let bytes = format!("fake vault bytes of {name}");
-                    fs::write(&vault, &bytes).unwrap();
-                    let log = AuditLog::new(
-                        JournalRoot::at(directory.path().join("journal")),
+                    let vault = directory.join(name);
+                    AuditLog::new(
+                        JournalRoot::at(directory.join("journal")),
                         VaultEvidence::unlocked(
                             &vault,
-                            Some(hex::encode(Sha256::digest(bytes))),
+                            Some(hex::encode(Sha256::digest(fs::read(&vault).unwrap()))),
                             format!("fake-vault-id-{name}"),
                         ),
-                    );
-                    log.append("add-completed", None, None).unwrap();
-                    log
+                    )
                 })
-                .collect();
-            Self { directory, logs }
+                .collect()
+        }
+
+        /// New logs on the same folder and vaults, as after a restart of AKM.
+        fn reopened(&self) -> Vec<AuditLog> {
+            Self::logs_in(self.directory.path())
+        }
+    }
+
+    /// FW-02, class C: AKM stops during a mapping recovery, after it kept the damaged mapping
+    /// and before the new mapping takes its place. New logs on the same folder still find the
+    /// damage and refuse every record, and a retry resumes both vaults with the gap record.
+    #[test]
+    fn fw02_a_mapping_recovery_that_stops_before_its_last_step_leaves_the_damage_in_place() {
+        let f = TwoLogs::new();
+        let damaged = damage_mapping(f.directory.path());
+        let mapping = f.directory.path().join("journal").join("mapping.json");
+
+        stopped_at(RecoveryStep::Install, || {
+            f.logs[0].recover_damaged_at(then())
+        });
+
+        let logs = f.reopened();
+        for log in &logs {
+            assert_eq!(log.damaged_file().unwrap(), Some(mapping.clone()));
+            assert!(
+                log.append("reveal-requested", None, None).is_err(),
+                "disclosure stays blocked"
+            );
+        }
+        assert_eq!(fs::read(&mapping).unwrap(), damaged, "the damaged mapping");
+        let recovery = logs[0].recover_damaged_at(then()).unwrap();
+        assert_eq!(fs::read(&recovery.kept).unwrap(), damaged);
+        for log in &logs {
+            assert!(
+                log.append_reporting("reveal-requested", None, None, true)
+                    .unwrap(),
+                "the first record warns"
+            );
+            let entries = log.read(10).unwrap();
+            assert_eq!(entries[0].action, RECOVERED);
+            let detail = entries[0].detail.as_deref().unwrap();
+            assert!(detail.contains(&recovery.sha256), "{detail}");
+        }
+    }
+
+    /// FW-02, the reviewer's state: an AKM from before the fix stopped a mapping recovery
+    /// after it moved the damaged mapping aside and before the new mapping took its place. No
+    /// mapping, and a journal beside it: the history of this folder exists, and nothing links
+    /// it. The same holds when the mapping was deleted. AKM reads this as a damaged mapping: a
+    /// reveal is refused and the recovery is offered, never an empty mapping that starts a new
+    /// journal with no record of the gap. The recovery keeps an empty file as the record of
+    /// the missing mapping, changes no other file, and the next reveal states the gap.
+    #[test]
+    fn fw02_a_missing_mapping_beside_a_journal_is_damage_and_its_recovery_states_the_gap() {
+        for interrupted in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let journal = directory.path().join("journal");
+            let mut vault = crate::Vault::create_in(
+                directory.path().join("a.kdbx"),
+                "fake-mapping-password",
+                None,
+                JournalRoot::at(&journal),
+            )
+            .unwrap();
+            let key = vault
+                .add(crate::ApiKeyInput::new("Fake", "fake-mapping-value"))
+                .unwrap();
+            reveal(&vault, &key).unwrap();
+            assert_eq!(lineage_warnings(&mut vault), 0);
+            let mapping = journal.join("mapping.json");
+            if interrupted {
+                let bytes = fs::read(&mapping).unwrap();
+                fs::write(
+                    journal.join("mapping.json.damaged-20261113T101500Z"),
+                    &bytes[..bytes.len() / 2],
+                )
+                .unwrap();
+                fs::write(
+                    journal.join("mapping.json.recovering-00000000000000000000000000000000"),
+                    br#"{"version": 1, "journals": []}"#,
+                )
+                .unwrap();
+            }
+            fs::remove_file(&mapping).unwrap();
+            let before = folder_of(directory.path());
+
+            let refused = reveal(&vault, &key).unwrap_err().to_string();
+
+            assert!(refused.contains("mapping"), "{interrupted}: {refused}");
+            assert_eq!(folder_of(directory.path()), before, "{interrupted}");
+            let log = vault.audit_log();
+            assert_eq!(log.damaged_file().unwrap(), Some(mapping.clone()));
+            let recovery = log.recover_damaged_file(&mapping).unwrap();
+            assert_eq!(recovery.bytes, 0, "{interrupted}");
+            assert_eq!(fs::read(&recovery.kept).unwrap(), b"", "{interrupted}");
+            let after = folder_of(directory.path());
+            for file in &before {
+                assert!(after.contains(file), "{interrupted}: {} changed", file.0);
+            }
+            reveal(&vault, &key).unwrap();
+            assert_eq!(lineage_warnings(&mut vault), 1, "{interrupted}");
+            let entries = vault.audit_log().read(10).unwrap();
+            assert_eq!(entries[0].action, RECOVERED, "{interrupted}");
+            let detail = entries[0].detail.as_deref().unwrap();
+            let kept = recovery.kept.file_name().unwrap().to_string_lossy();
+            for fact in ["cannot be proved complete", "missing", kept.as_ref()] {
+                assert!(detail.contains(fact), "{interrupted}: {fact}: {detail}");
+            }
         }
     }
 
@@ -1467,9 +1619,10 @@ mod recovery_tests {
     fn fv01_a_failed_mapping_recovery_changes_nothing_and_a_retry_ends_the_same() {
         for step in [
             None,
+            Some(RecoveryStep::CreateKept),
+            Some(RecoveryStep::SyncKept),
             Some(RecoveryStep::CreateNew),
             Some(RecoveryStep::SyncNew),
-            Some(RecoveryStep::RenameAside),
             Some(RecoveryStep::Install),
         ] {
             let f = TwoLogs::new();

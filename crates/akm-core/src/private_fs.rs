@@ -205,14 +205,12 @@ pub(crate) fn check_private(path: &Path) -> Result<()> {
 
 #[cfg(windows)]
 pub(crate) use imp::{
-    create_private_dir, file_id, link_count, move_new, open_dir, open_file, reject_links,
-    remove_file_if,
+    create_private_dir, file_id, link_count, open_dir, open_file, reject_links, remove_file_if,
 };
 
 #[cfg(not(windows))]
 pub(crate) use other::{
-    create_private_dir, file_id, link_count, move_new, open_dir, open_file, reject_links,
-    remove_file_if,
+    create_private_dir, file_id, link_count, open_dir, open_file, reject_links, remove_file_if,
 };
 
 #[cfg(not(windows))]
@@ -255,12 +253,6 @@ mod other {
 
     pub(crate) fn reject_links(_: &Path) -> Result<()> {
         Err(unsupported())
-    }
-
-    /// See the Windows `move_new`. A hard link fails when `to` exists, so the same rule holds.
-    pub(crate) fn move_new(from: &Path, to: &Path) -> std::io::Result<()> {
-        std::fs::hard_link(from, to)?;
-        std::fs::remove_file(from)
     }
 
     /// See the Windows `remove_file_if`. Here the check and the delete are two steps, so a
@@ -315,13 +307,13 @@ mod imp {
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateDirectoryW, CreateFileW, FileDispositionInfo, GetDriveTypeW,
-        GetFileInformationByHandle, GetVolumeInformationByHandleW, GetVolumePathNameW, MoveFileExW,
+        GetFileInformationByHandle, GetVolumeInformationByHandleW, GetVolumePathNameW,
         SetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, DELETE,
         FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
         FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
-        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_DATA,
-        MOVEFILE_WRITE_THROUGH, OPEN_ALWAYS, OPEN_EXISTING, READ_CONTROL,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_DATA, OPEN_ALWAYS,
+        OPEN_EXISTING, READ_CONTROL,
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -355,23 +347,6 @@ mod imp {
 
     fn os_error(context: &str) -> Error {
         refuse(format!("{context}: {}", io::Error::last_os_error()))
-    }
-
-    /// Moves `from` to `to` only when no file is at `to` (core review 1, finding 8). The check
-    /// and the move are one step of the file system, so a file that appears at `to` after AKM
-    /// chose the name is never replaced: the move fails with `AlreadyExists`. This is
-    /// `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`; `std::fs::rename` replaces.
-    pub(crate) fn move_new(from: &Path, to: &Path) -> io::Result<()> {
-        let encode = |path: &Path| -> io::Result<Vec<u16>> {
-            wide(path)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))
-        };
-        let (from, to) = (encode(from)?, encode(to)?);
-        // SAFETY: both buffers are NUL-terminated wide strings that live across the call.
-        if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
     }
 
     /// Deletes the regular file at `path` only when its bytes pass `holds` (FR-01, core review
@@ -964,12 +939,11 @@ mod tests {
     }
 
     /// FV-21, the class: every Win32 call of this module that takes a path works past 260
-    /// characters. A private folder, its storage check, a private file, a move without
-    /// replacement and a file ID.
+    /// characters. A private folder, its storage check, a private file and a file ID.
     #[cfg(windows)]
     #[test]
     fn the_private_calls_take_paths_longer_than_260_characters() {
-        use super::{check_private, create_private_dir, file_id, move_new, open_dir, open_file};
+        use super::{check_private, create_private_dir, file_id, open_dir, open_file};
         let dir = tempfile::tempdir().unwrap();
         let parent = dir.path().join("p".repeat(120)).join("q".repeat(120));
         std::fs::create_dir_all(&parent).unwrap();
@@ -984,10 +958,7 @@ mod tests {
                 .unwrap(),
         );
         check_private(&first).unwrap();
-        let second = folder.join("b".repeat(40));
-        move_new(&first, &second).unwrap();
-        assert!(!first.exists() && second.exists());
-        assert!(file_id(&second).is_some());
+        assert!(file_id(&first).is_some());
     }
 
     /// FR-01, core review 1, finding 1: the delete of a pruned backup. A file with the
