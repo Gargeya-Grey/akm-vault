@@ -112,10 +112,139 @@ struct AddArgs {
     /// Read the secret from stdin (single line, trailing newline stripped)
     #[arg(long)]
     secret_stdin: bool,
+}
 
-    /// Pass the secret as an argument. Visible in the process list; avoid.
-    #[arg(long, value_parser = parse_secret)]
-    secret: Option<Secret>,
+/// FV-04: each option replaces one field. A field that the command does not name is written
+/// back as `Vault::edit_input` read it, the same input that a desktop update starts from.
+#[derive(Args)]
+#[command(group(clap::ArgGroup::new("change").required(true).multiple(true)))]
+struct EditArgs {
+    /// Id or exact title of a key (any letter case). A partial word is refused
+    /// and the refusal lists candidates.
+    query: String,
+
+    #[arg(long, group = "change")]
+    title: Option<String>,
+
+    #[arg(long, group = "change")]
+    project: Option<String>,
+
+    #[arg(long = "env", group = "change")]
+    environment: Option<String>,
+
+    #[arg(long = "env-var", group = "change")]
+    env_var: Option<String>,
+
+    #[arg(long, group = "change")]
+    issuer: Option<String>,
+
+    #[arg(long, group = "change")]
+    username: Option<String>,
+
+    #[arg(long, group = "change")]
+    url: Option<String>,
+
+    #[arg(long, group = "change")]
+    notes: Option<String>,
+
+    /// Expiry: a date YYYY-MM-DD (it ends at 23:59:59 UTC that day) or a full RFC 3339 time
+    #[arg(long, group = "change")]
+    expires: Option<String>,
+
+    /// Rotation interval in days
+    #[arg(long, group = "change")]
+    rotation_days: Option<u32>,
+
+    /// One scope; repeat it for more. The scopes given replace the stored list
+    #[arg(long = "scope", group = "change")]
+    scopes: Vec<String>,
+
+    /// One tag; repeat it for more. The tags given replace the stored list
+    #[arg(long = "tag", group = "change")]
+    tags: Vec<String>,
+
+    /// Empty an optional field; repeat it for more
+    #[arg(long, value_enum, group = "change")]
+    clear: Vec<Field>,
+}
+
+/// The optional fields that `edit --clear` empties.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Field {
+    Project,
+    Env,
+    EnvVar,
+    Issuer,
+    Username,
+    Url,
+    Notes,
+    Expires,
+    RotationDays,
+    #[value(alias = "scope")]
+    Scopes,
+    #[value(alias = "tag")]
+    Tags,
+}
+
+impl EditArgs {
+    /// Whether an option gives this field a value.
+    fn sets(&self, field: Field) -> bool {
+        match field {
+            Field::Project => self.project.is_some(),
+            Field::Env => self.environment.is_some(),
+            Field::EnvVar => self.env_var.is_some(),
+            Field::Issuer => self.issuer.is_some(),
+            Field::Username => self.username.is_some(),
+            Field::Url => self.url.is_some(),
+            Field::Notes => self.notes.is_some(),
+            Field::Expires => self.expires.is_some(),
+            Field::RotationDays => self.rotation_days.is_some(),
+            Field::Scopes => !self.scopes.is_empty(),
+            Field::Tags => !self.tags.is_empty(),
+        }
+    }
+
+    /// Replaces each named field of `input`; every other field stays as stored.
+    fn apply(self, input: &mut ApiKeyInput, expires: Option<DateTime<Utc>>) {
+        fn replace<T>(field: &mut Option<T>, given: Option<T>) {
+            if given.is_some() {
+                *field = given;
+            }
+        }
+        if let Some(title) = self.title {
+            input.title = title;
+        }
+        replace(&mut input.project, self.project);
+        replace(&mut input.environment, self.environment);
+        replace(&mut input.env_var, self.env_var);
+        replace(&mut input.issuer, self.issuer);
+        replace(&mut input.username, self.username);
+        replace(&mut input.url, self.url);
+        replace(&mut input.notes, self.notes);
+        replace(&mut input.expires_at, expires);
+        replace(&mut input.rotation_days, self.rotation_days);
+        if !self.scopes.is_empty() {
+            input.scopes = self.scopes;
+        }
+        if !self.tags.is_empty() {
+            input.tags = self.tags;
+        }
+        for field in self.clear {
+            match field {
+                Field::Project => input.project = None,
+                Field::Env => input.environment = None,
+                Field::EnvVar => input.env_var = None,
+                Field::Issuer => input.issuer = None,
+                Field::Username => input.username = None,
+                Field::Url => input.url = None,
+                Field::Notes => input.notes = None,
+                Field::Expires => input.expires_at = None,
+                Field::RotationDays => input.rotation_days = None,
+                Field::Scopes => input.scopes.clear(),
+                Field::Tags => input.tags.clear(),
+            }
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -126,7 +255,7 @@ enum Commands {
         name: Option<String>,
     },
 
-    /// Add a key (prompts for the secret unless --secret-stdin is used)
+    /// Add a key (the secret comes from the prompt or from stdin, never from an argument)
     Add(Box<AddArgs>),
 
     /// List keys (secrets are never printed)
@@ -160,6 +289,11 @@ enum Commands {
         #[arg(long)]
         reveal: bool,
     },
+
+    /// Change the metadata of a key (the secret stays; `rotate` changes it)
+    ///
+    /// Each option replaces one field. A field that you do not name stays as stored.
+    Edit(Box<EditArgs>),
 
     /// Replace the secret of a key and record the time (the new secret comes from the
     /// prompt or from stdin, never from an argument)
@@ -343,12 +477,12 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                 rotation_days,
                 username,
                 secret_stdin,
-                secret,
             } = *args;
+            storable_tags(&tags)?;
             let password = master_password(false)?;
             let mut vault = open_vault(&path, &password)?;
             drop(password);
-            let secret = secret_value(secret, secret_stdin)?;
+            let secret = secret_value(secret_stdin)?;
 
             let input = ApiKeyInput {
                 title,
@@ -492,6 +626,43 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             );
         }
 
+        Commands::Edit(args) => {
+            let expires = args.expires.as_deref().map(parse_expiry).transpose()?;
+            storable_tags(&args.tags)?;
+            if let Some(field) = args.clear.iter().find(|field| args.sets(**field)) {
+                return Err(Error::Invalid(format!(
+                    "the command both sets and clears {:?}; name it once",
+                    clap::ValueEnum::to_possible_value(field)
+                        .map_or_else(String::new, |value| value.get_name().to_string())
+                )));
+            }
+            let password = master_password(false)?;
+            let mut vault = open_vault(&path, &password)?;
+            drop(password);
+            let key = select(&vault, &args.query)?;
+            let mut input = vault.edit_input(&key.id)?;
+            args.apply(&mut input, expires);
+            let saved = vault.update(&key.id, input)?;
+            print_warnings(io, &mut vault);
+            // A save adds a version to the history, so an equal key means that nothing was saved.
+            if saved == key {
+                status!(
+                    io,
+                    "No change: {:?} ({}) already has these values, so nothing was saved.",
+                    key.title,
+                    key.id
+                );
+                return Ok(0);
+            }
+            status!(
+                io,
+                "Updated {:?} ({}). The secret is unchanged.",
+                saved.title,
+                saved.id
+            );
+            let _ = print_key(&mut *io.out, &KeyMetadata::new(&saved, vault.now()), None);
+        }
+
         Commands::Rotate {
             query,
             secret_stdin,
@@ -500,7 +671,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             let mut vault = open_vault(&path, &password)?;
             drop(password);
             let key = select(&vault, &query)?;
-            let secret = secret_value(None, secret_stdin)?;
+            let secret = secret_value(secret_stdin)?;
             let rotation = vault.rotate(&key.id, secret)?;
             print_warnings(io, &mut vault);
             status!(
@@ -914,6 +1085,21 @@ fn with_test_clock(vault: Vault) -> Result<Vault> {
     Ok(vault)
 }
 
+/// KDBX keeps an entry's tags in one text that a reader splits at `;`, `,` and tab and trims,
+/// so such a tag would come back changed. The save check would refuse it after the unlock,
+/// with a message that does not say why.
+fn storable_tags(tags: &[String]) -> Result<()> {
+    match tags
+        .iter()
+        .find(|tag| tag.contains([';', ',', '\t']) || tag.trim() != tag.as_str())
+    {
+        Some(tag) => Err(Error::Invalid(format!(
+            "the tag {tag:?} cannot be stored: a KDBX tag holds no ';', ',' or tab, and no space at either end"
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// A time as the CLI prints it.
 fn show_time(time: DateTime<Utc>) -> String {
     time.format("%Y-%m-%d %H:%M:%S UTC").to_string()
@@ -1026,19 +1212,10 @@ fn master_password(confirm: bool) -> Result<Zeroizing<String>> {
 /// this size, so no growth leaves an unzeroed copy of a partial secret behind.
 const SECRET_STDIN_LIMIT: usize = 1024 * 1024;
 
-/// `--secret`: the value is held in a `Secret` (zeroized on drop, never printed) from the
-/// moment it leaves the parser (FR-08).
-fn parse_secret(value: &str) -> std::result::Result<Secret, String> {
-    Ok(Secret::new(value))
-}
-
 /// Every secret string in this program is a `Secret` or a `Zeroizing` buffer from its first
-/// read. Nothing here keeps a plain `String` or `Vec<u8>` copy of it (FR-08).
-fn secret_value(given: Option<Secret>, from_stdin: bool) -> Result<Secret> {
-    if let Some(secret) = given {
-        return Ok(secret);
-    }
-
+/// read. Nothing here keeps a plain `String` or `Vec<u8>` copy of it (FR-08). A secret never
+/// comes from an argument, which the process list and the shell history keep (FV-11).
+fn secret_value(from_stdin: bool) -> Result<Secret> {
     if from_stdin {
         return Ok(read_secret(std::io::stdin())?.into_secret());
     }
@@ -1343,23 +1520,9 @@ mod tests {
     /// first read. These lines stop compiling if a path returns a plain `String` again.
     #[test]
     fn secret_paths_return_zeroizing_types_not_plain_strings() {
-        let _: fn(Option<Secret>, bool) -> Result<Secret> = secret_value;
-        let _: fn(&str) -> std::result::Result<Secret, String> = parse_secret;
+        let _: fn(bool) -> Result<Secret> = secret_value;
         let _: fn(&[u8]) -> Result<SecretText> = |bytes| read_secret(bytes);
         let _: fn(bool) -> Result<Zeroizing<String>> = master_password;
-        // The parsed `--secret` value is a `Secret`: it prints as redacted text.
-        let Ok(cli) = Cli::try_parse_from(["akm", "add", "Fake title", "--secret", "fake-arg"])
-        else {
-            panic!("the add command does not parse");
-        };
-        let Commands::Add(args) = cli.command else {
-            panic!("not an add command");
-        };
-        let shown = format!("{:?}", args.secret);
-        assert!(
-            shown.contains("redacted") && !shown.contains("fake-arg"),
-            "{shown}"
-        );
     }
 
     /// FR-08: the production code reads no secret with a plain `String` buffer.
@@ -1734,6 +1897,65 @@ mod tests {
             journal_actions(&path),
             ["export-requested", "export-completed"]
         );
+    }
+
+    /// FV-06: after `destination` checked the folder, and before the file is written, the
+    /// folder is moved away and a junction to another folder takes its name. The reviewer
+    /// held the journal mapping lock in this window.
+    #[cfg(windows)]
+    struct ReplacedFolder {
+        chosen: std::path::PathBuf,
+        moved: std::path::PathBuf,
+        elsewhere: std::path::PathBuf,
+    }
+
+    #[cfg(windows)]
+    impl FilePublisher for ReplacedFolder {
+        fn write_new(&mut self, path: &Path, envs: &[(String, String)]) -> Result<()> {
+            std::fs::rename(&self.chosen, &self.moved)?;
+            let linked = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&self.chosen)
+                .arg(&self.elsewhere)
+                .output()?;
+            assert!(linked.status.success(), "mklink /J failed");
+            export::write_new(path, envs)
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_file_export_writes_nothing_when_its_checked_folder_is_replaced_by_a_junction() {
+        let (directory, path) = fake_export_vault();
+        let chosen = directory.path().join("chosen");
+        let elsewhere = directory.path().join("elsewhere");
+        std::fs::create_dir(&chosen).unwrap();
+        std::fs::create_dir(&elsewhere).unwrap();
+        let mut files = ReplacedFolder {
+            chosen: chosen.clone(),
+            moved: directory.path().join("chosen-moved"),
+            elsewhere: elsewhere.clone(),
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run_with(
+            export_file_cli(&path, &chosen.join("fake-export.env")),
+            &mut Io {
+                out: &mut out,
+                err: &mut err,
+                files: &mut files,
+                complete: append_completion,
+            },
+        );
+        let _ = std::fs::remove_dir(&chosen);
+        let err = String::from_utf8_lossy(&err);
+        assert_eq!(code, 1, "{err}");
+        assert!(err.contains("destination folder changed"), "{err}");
+        assert!(!err.contains(SECRET), "{err}");
+        for folder in [&elsewhere, &files.moved] {
+            let left: Vec<_> = std::fs::read_dir(folder).unwrap().collect();
+            assert!(left.is_empty(), "{} holds {left:?}", folder.display());
+        }
+        assert_eq!(journal_actions(&path), ["export-requested"]);
     }
 
     struct RefusingFiles;

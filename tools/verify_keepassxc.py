@@ -82,7 +82,7 @@ def main():
             return entries
 
         akm("init", "--name", "Interchange regression")
-        akm("add", "OpenAI interop", "--project", "demo", "--env", "dev", "--secret", "fake-original-value", "--env-var", "OPENAI_API_KEY")
+        akm("add", "OpenAI interop", "--project", "demo", "--env", "dev", "--secret-stdin", "--env-var", "OPENAI_API_KEY", stdin="fake-original-value\n")
         original_keys = json.loads(akm("list", "--json").stdout)
         original_id = original_keys[0]["id"]
         info = kpxc("db-info", vault)
@@ -99,7 +99,7 @@ def main():
         before_upgrade = vault.read_bytes()
         assert int.from_bytes(before_upgrade[8:12], "little") == 0x00040000, "Expected KeePassXC KDBX 4.0 fixture"
 
-        akm("add", "Must not be saved", "--secret", "fake", success=False)
+        akm("add", "Must not be saved", "--secret-stdin", stdin="fake\n", success=False)
         assert vault.read_bytes() == before_upgrade, "Refused upgrade changed the original vault"
         assert not list(work.glob("*.tmp")), "Refused write left a temporary file"
         akm("upgrade", "--yes")
@@ -110,7 +110,7 @@ def main():
         assert next(key for key in keys if key["title"] == "OpenAI interop")["id"] == original_id
         foreign = next(key for key in keys if key["title"] == "Foreign key")
         assert akm("get", foreign["id"], "--field", "secret").stdout.strip() == "fake-foreign-value"
-        akm("add", "After interchange", "--secret", "fake-new-value")
+        akm("add", "After interchange", "--secret-stdin", stdin="fake-new-value\n")
         entries = exported_entries()
         assert entries["OpenAI interop"][1]["Notes"] == "Edited in the real KeePassXC"
         assert entries["OpenAI interop"][0].find("History/Entry") is not None, "KeePassXC history was lost"

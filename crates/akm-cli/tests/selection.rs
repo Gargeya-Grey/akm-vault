@@ -369,7 +369,7 @@ fn the_readme_documents_the_selector_rule() {
 /// `select` enforces, and never the old substring search.
 #[test]
 fn the_help_of_every_selector_command_states_the_exact_rule() {
-    for command in ["get", "rotate", "rm", "history", "restore", "purge"] {
+    for command in ["get", "edit", "rotate", "rm", "history", "restore", "purge"] {
         let output = Command::new(env!("CARGO_BIN_EXE_akm"))
             .args([command, "--help"])
             .output()

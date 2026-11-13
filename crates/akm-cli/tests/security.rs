@@ -207,6 +207,59 @@ fn password_argument_is_not_accepted_or_echoed() {
     }
 }
 
+/// A child process with this input on its stdin.
+fn output_with_stdin(command: &mut Command, input: &str) -> Output {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+// FV-11: a secret on a command line stays in the process list and the shell history, so
+// `add` takes no secret argument. The refusal prints no part of the value.
+#[test]
+fn add_takes_no_secret_as_an_argument_and_prints_no_part_of_it() {
+    const VALUE: &str = "fv11q7z9k3m5x8w2";
+    let fixture = Fixture::new();
+    let before = fs::read(&fixture.vault).unwrap();
+    let joined = format!("--secret={VALUE}");
+    for args in [
+        vec!["add", "Argument key", "--secret", VALUE],
+        vec!["add", "Argument key", joined.as_str()],
+        vec!["add", "--secret", VALUE, "Argument key"],
+    ] {
+        let output = fixture.cli().args(&args).output().unwrap();
+        assert!(!output.status.success(), "{args:?} was accepted");
+        let shown = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            stderr(&output)
+        );
+        for part in VALUE.as_bytes().windows(4) {
+            let part = std::str::from_utf8(part).unwrap();
+            assert!(!shown.contains(part), "{args:?} printed {part:?}: {shown}");
+        }
+        assert_eq!(fs::read(&fixture.vault).unwrap(), before, "{args:?}");
+    }
+    let output = output_with_stdin(
+        fixture
+            .cli()
+            .args(["add", "Argument key", "--secret-stdin"]),
+        &format!("{VALUE}\n"),
+    );
+    assert_success(&output);
+    assert_eq!(stored_secret(&fixture.vault, "Argument key"), VALUE);
+}
+
 #[test]
 fn unscoped_export_is_rejected_before_opening_the_vault() {
     let directory = temporary_directory();
@@ -816,13 +869,14 @@ fn newly_reserved_names_are_refused_by_add_export_and_run_with_the_vault_bytes_u
             vec!["add", "A harmless title", "--env-var", name],
             vec!["add", title.as_str()],
         ] {
-            let output = fixture
-                .cli()
-                .args(&add)
-                .args(["--secret", "fake-new-secret", "--project", "demo"])
-                .args(["--env", "dev"])
-                .output()
-                .unwrap();
+            let output = output_with_stdin(
+                fixture
+                    .cli()
+                    .args(&add)
+                    .args(["--secret-stdin", "--project", "demo"])
+                    .args(["--env", "dev"]),
+                "fake-new-secret\n",
+            );
             let text = stderr(&output);
             assert!(!output.status.success(), "{add:?} accepted {name}");
             assert!(
@@ -1390,6 +1444,19 @@ fn committed_changes_exit_zero_with_closed_output_pipes() {
         assert_eq!(add.code(), Some(0), "add: {case}");
         assert_eq!(stored_secret(&fixture.vault, "Added"), "fake-added-secret");
 
+        let mut edit = fixture.cli();
+        edit.args(["edit", "Added", "--notes", "fake-note"]);
+        assert_eq!(
+            status_with(edit, stdout_closed, stderr_closed, None).code(),
+            Some(0),
+            "edit: {case}"
+        );
+        let edited = Vault::open(&fixture.vault, PASSWORD)
+            .unwrap()
+            .find("Added")
+            .unwrap();
+        assert_eq!(edited.notes.as_deref(), Some("fake-note"), "edit: {case}");
+
         let mut rm = fixture.cli();
         rm.args(["rm", "Added", "--yes"]);
         assert_eq!(
@@ -1699,10 +1766,10 @@ fn older_formats_remain_readable_and_only_upgrade_with_explicit_confirmation() {
         assert_success(&output);
         assert_eq!(fs::read(&path).unwrap(), *bytes);
 
-        let output = command()
-            .args(["add", "New fake key", "--secret", "fake-upgrade-secret"])
-            .output()
-            .unwrap();
+        let output = output_with_stdin(
+            command().args(["add", "New fake key", "--secret-stdin"]),
+            "fake-upgrade-secret\n",
+        );
         assert!(!output.status.success());
         assert!(
             stderr(&output).contains("akm upgrade"),
@@ -2016,6 +2083,134 @@ fn file_export_that_cannot_confirm_removal_of_its_plaintext_temp_says_so_and_nam
     );
 }
 
+/// The temporary file that a failed export left, and the folder that holds it.
+fn only_temp_in(folder: &Path) -> PathBuf {
+    let temp = fs::read_dir(folder)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert!(temp
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with(".akm-export-"));
+    temp
+}
+
+fn shown(path: &Path) -> String {
+    let canonical = path.canonicalize().unwrap().display().to_string();
+    canonical
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&canonical)
+        .to_string()
+}
+
+// FV-07: the owned temporary file is renamed, another file takes its old name, and the
+// cleanup fails. The warning names the renamed file, never the file at the old name.
+#[test]
+#[cfg(windows)]
+fn a_cleanup_warning_names_the_renamed_temporary_file_and_never_the_file_at_its_old_name() {
+    struct RenamedThenUndeletable {
+        renamed: PathBuf,
+        old: Option<PathBuf>,
+    }
+    impl export::ExportIo for RenamedThenUndeletable {
+        fn publish(&mut self, _file: &fs::File, destination: &Path) -> akm_core::Result<()> {
+            let temp = only_temp_in(destination.parent().unwrap());
+            fs::rename(&temp, &self.renamed)?;
+            fs::write(&temp, b"unrelated sentinel\n")?;
+            self.old = Some(temp);
+            Err(std::io::Error::other("injected publication failure").into())
+        }
+
+        fn discard(&mut self, _file: &fs::File) -> bool {
+            false
+        }
+    }
+
+    let directory = temporary_directory();
+    let mut io = RenamedThenUndeletable {
+        renamed: directory.path().join("renamed-owned.tmp"),
+        old: None,
+    };
+    let message = export::write_new_with(
+        &directory.path().join("out.env"),
+        &[("EXPORT_SECRET".into(), "fake-test-value".into())],
+        &mut io,
+    )
+    .unwrap_err()
+    .to_string();
+    let old = io.old.unwrap();
+    assert!(message.contains("could not confirm cleanup"), "{message}");
+    assert!(message.contains(&shown(&io.renamed)), "{message}");
+    assert!(!message.contains(".akm-export-"), "{message}");
+    assert!(!message.contains("fake-test-value"), "{message}");
+    assert_eq!(fs::read(&old).unwrap(), b"unrelated sentinel\n");
+}
+
+// FV-07: when AKM cannot read the current name of its file, the warning gives the name AKM
+// created, says the file may have another name now, and never tells the user to delete it.
+// When the name cannot be read before the first byte, nothing is written.
+#[test]
+fn a_cleanup_warning_without_a_current_name_never_directs_a_deletion() {
+    struct Nameless {
+        published: bool,
+        fail_at_once: bool,
+        wrote: bool,
+    }
+    impl export::ExportIo for Nameless {
+        fn write(
+            &mut self,
+            file: &mut fs::File,
+            envs: &[(String, String)],
+        ) -> akm_core::Result<()> {
+            self.wrote = true;
+            export::write(file, envs)
+        }
+
+        fn publish(&mut self, _file: &fs::File, _destination: &Path) -> akm_core::Result<()> {
+            self.published = true;
+            Err(std::io::Error::other("injected publication failure").into())
+        }
+
+        fn discard(&mut self, _file: &fs::File) -> bool {
+            false
+        }
+
+        fn current_path(&mut self, file: &fs::File) -> akm_core::Result<PathBuf> {
+            if self.published || self.fail_at_once {
+                return Err(std::io::Error::other("injected name failure").into());
+            }
+            export::final_path(file)
+        }
+    }
+
+    for fail_at_once in [false, true] {
+        let directory = temporary_directory();
+        let mut io = Nameless {
+            published: false,
+            fail_at_once,
+            wrote: false,
+        };
+        let message = export::write_new_with(
+            &directory.path().join("out.env"),
+            &[("EXPORT_SECRET".into(), "fake-test-value".into())],
+            &mut io,
+        )
+        .unwrap_err()
+        .to_string();
+        let temp = only_temp_in(directory.path());
+        assert!(message.contains("could not confirm cleanup"), "{message}");
+        assert!(message.contains(&shown(&temp)), "{message}");
+        assert!(message.contains("may have another name now"), "{message}");
+        assert!(!message.contains("Delete it yourself"), "{message}");
+        assert!(!message.contains("fake-test-value"), "{message}");
+        assert_eq!(io.wrote, !fail_at_once, "{message}");
+    }
+}
+
 #[test]
 fn file_export_whose_cleanup_is_confirmed_reports_only_its_own_failure() {
     struct ConfirmedDelete;
@@ -2120,6 +2315,130 @@ fn file_export_cleanup_and_publication_never_claim_a_replaced_temp_name() {
         assert_eq!(
             fs::read_dir(directory.path()).unwrap().count(),
             1 + usize::from(succeed)
+        );
+    }
+}
+
+#[cfg(windows)]
+fn junction(link: &Path, target: &Path) {
+    let output = Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "mklink: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// The names in a folder, and whether any file there holds the fake value.
+fn holds_value(folder: &Path, value: &[u8]) -> (Vec<String>, bool) {
+    let mut names = Vec::new();
+    let mut found = false;
+    for entry in fs::read_dir(folder).unwrap() {
+        let entry = entry.unwrap();
+        names.push(entry.file_name().to_string_lossy().into_owned());
+        if let Ok(bytes) = fs::read(entry.path()) {
+            found |= bytes.windows(value.len()).any(|window| window == value);
+        }
+    }
+    (names, found)
+}
+
+// FV-06: the checked folder is moved away, and a junction to another folder takes its name,
+// after the destination check and before the temporary file is created.
+#[test]
+#[cfg(windows)]
+fn file_export_refuses_a_folder_replaced_by_a_junction_before_any_plaintext_is_written() {
+    struct SwapAtCreate {
+        chosen: PathBuf,
+        moved: PathBuf,
+        elsewhere: PathBuf,
+        wrote: bool,
+    }
+    impl export::ExportIo for SwapAtCreate {
+        fn create_private(&mut self, path: &Path) -> akm_core::Result<fs::File> {
+            fs::rename(&self.chosen, &self.moved)?;
+            junction(&self.chosen, &self.elsewhere);
+            export::private_file(path)
+        }
+
+        fn write(
+            &mut self,
+            file: &mut fs::File,
+            envs: &[(String, String)],
+        ) -> akm_core::Result<()> {
+            self.wrote = true;
+            export::write(file, envs)
+        }
+    }
+
+    let directory = temporary_directory();
+    let chosen = directory.path().join("chosen");
+    let elsewhere = directory.path().join("elsewhere");
+    fs::create_dir(&chosen).unwrap();
+    fs::create_dir(&elsewhere).unwrap();
+    let target = export::destination(&chosen.join("out.env")).unwrap();
+    let mut io = SwapAtCreate {
+        chosen: chosen.clone(),
+        moved: directory.path().join("chosen-moved"),
+        elsewhere: elsewhere.clone(),
+        wrote: false,
+    };
+    let result = export::write_new_with(
+        &target,
+        &[("EXPORT_SECRET".into(), "fake-redirected-value".into())],
+        &mut io,
+    );
+    let _ = fs::remove_dir(&chosen);
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("destination folder changed"), "{message}");
+    assert!(!io.wrote, "plaintext was written before the location check");
+    for folder in [&elsewhere, &io.moved] {
+        let (names, found) = holds_value(folder, b"fake-redirected-value");
+        assert!(
+            names.is_empty() && !found,
+            "{}: {names:?}",
+            folder.display()
+        );
+    }
+}
+
+// FV-06: a publication that does not end at the checked destination is removed through the
+// owned handle. The seam stands for a folder that changes during the rename.
+#[test]
+#[cfg(windows)]
+fn file_export_removes_a_publication_that_landed_outside_the_checked_folder() {
+    struct PublishElsewhere(PathBuf);
+    impl export::ExportIo for PublishElsewhere {
+        fn publish(&mut self, file: &fs::File, _destination: &Path) -> akm_core::Result<()> {
+            export::publish_new(file, &self.0)
+        }
+    }
+
+    let directory = temporary_directory();
+    let chosen = directory.path().join("chosen");
+    let elsewhere = directory.path().join("elsewhere");
+    fs::create_dir(&chosen).unwrap();
+    fs::create_dir(&elsewhere).unwrap();
+    let target = export::destination(&chosen.join("out.env")).unwrap();
+    let mut io = PublishElsewhere(export::destination(&elsewhere.join("out.env")).unwrap());
+    let result = export::write_new_with(
+        &target,
+        &[("EXPORT_SECRET".into(), "fake-redirected-value".into())],
+        &mut io,
+    );
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("destination folder changed"), "{message}");
+    for folder in [&chosen, &elsewhere] {
+        let (names, found) = holds_value(folder, b"fake-redirected-value");
+        assert!(
+            names.is_empty() && !found,
+            "{}: {names:?}",
+            folder.display()
         );
     }
 }
@@ -2583,12 +2902,13 @@ fn the_readme_names_the_recorded_audit_actions_in_their_order() {
             word.ends_with("-requested") || word.ends_with("-completed") || word.ends_with("-start")
         })
         .collect();
-    // The lifecycle actions are recorded by other commands; lifecycle.rs asserts that each is written.
+    // Other commands record these; lifecycle.rs and edit.rs assert that each is written.
     let lifecycle = [
         "rotate-completed",
         "remove-completed",
         "restore-completed",
         "purge-completed",
+        "update-completed",
     ];
     let expected: std::collections::BTreeSet<&str> =
         recorded.iter().copied().chain(lifecycle).collect();

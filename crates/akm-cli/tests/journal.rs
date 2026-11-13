@@ -40,6 +40,23 @@ fn assert_success(output: &Output) {
     assert!(output.status.success(), "{}", stderr(output));
 }
 
+/// A child process with this input on its stdin.
+fn output_with_stdin(command: &mut Command, input: &str) -> Output {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
 fn write_database(path: &Path, password: &str) {
     let mut db = Database::new();
     db.config.kdf_config = KdfConfig::Aes { rounds: 10 };
@@ -239,8 +256,7 @@ fn nothing_but_the_vault_and_its_backups_appears_beside_a_synced_vault() {
                 PROJECT.into(),
                 "--env".into(),
                 ENVIRONMENT.into(),
-                "--secret".into(),
-                "fake-second-secret".into(),
+                "--secret-stdin".into(),
             ],
         ),
         (
@@ -280,7 +296,10 @@ fn nothing_but_the_vault_and_its_backups_appears_beside_a_synced_vault() {
         ),
     ];
     for (name, args) in steps {
-        let output = fixture.cli().args(&args).output().unwrap();
+        let output = match name {
+            "add" => output_with_stdin(fixture.cli().args(&args), "fake-second-secret\n"),
+            _ => fixture.cli().args(&args).output().unwrap(),
+        };
         assert_success(&output);
         assert_no_journal_metadata_in(fixture.vault_dir());
         assert!(
@@ -352,13 +371,10 @@ fn a_legacy_sidecar_is_reported_and_left_byte_identical() {
     let lock = PathBuf::from(format!("{}.lock", sidecar.display()));
 
     assert_success(&fixture.reveal());
-    assert_success(
-        &fixture
-            .cli()
-            .args(["add", "AnotherFake", "--secret", "fake-another"])
-            .output()
-            .unwrap(),
-    );
+    assert_success(&output_with_stdin(
+        fixture.cli().args(["add", "AnotherFake", "--secret-stdin"]),
+        "fake-another\n",
+    ));
     let audit = fixture.audit();
     assert_success(&audit);
 
@@ -478,11 +494,10 @@ fn an_extra_ace_for_another_account_fails_closed_before_disclosure_and_warns_aft
         stderr(&reveal)
     );
 
-    let add = fixture
-        .cli()
-        .args(["add", "SavedAnyway", "--secret", "fake-saved-anyway"])
-        .output()
-        .unwrap();
+    let add = output_with_stdin(
+        fixture.cli().args(["add", "SavedAnyway", "--secret-stdin"]),
+        "fake-saved-anyway\n",
+    );
     assert_success(&add);
     let error = stderr(&add);
     assert!(error.contains("warning:"), "{error}");
@@ -752,13 +767,10 @@ fn restoring_an_earlier_copy_is_recorded_in_the_same_journal() {
     let fixture = Fixture::new();
     assert_success(&fixture.reveal());
     let earlier = fs::read(&fixture.vault).unwrap();
-    assert_success(
-        &fixture
-            .cli()
-            .args(["add", "LaterFake", "--secret", "fake-later"])
-            .output()
-            .unwrap(),
-    );
+    assert_success(&output_with_stdin(
+        fixture.cli().args(["add", "LaterFake", "--secret-stdin"]),
+        "fake-later\n",
+    ));
     fs::write(&fixture.vault, &earlier).unwrap();
     assert_success(&fixture.reveal());
     assert_eq!(fixture.journals().len(), 1);
@@ -951,13 +963,10 @@ fn a_failed_disclosure_keeps_the_rollback_indication_for_the_next_process() {
     let fixture = Fixture::new();
     assert_success(&fixture.reveal());
     let earlier = fs::read(&fixture.vault).unwrap();
-    assert_success(
-        &fixture
-            .cli()
-            .args(["add", "LaterFake", "--secret", "fake-later"])
-            .output()
-            .unwrap(),
-    );
+    assert_success(&output_with_stdin(
+        fixture.cli().args(["add", "LaterFake", "--secret-stdin"]),
+        "fake-later\n",
+    ));
     fs::write(&fixture.vault, &earlier).unwrap();
 
     let journal = fixture.journals().remove(0);
@@ -1063,10 +1072,11 @@ impl Fixture {
     }
 
     fn add_at(&self, vault: &Path, title: &str) -> Output {
-        self.command(vault, Some(PASSWORD))
-            .args(["add", title, "--secret", "fake-clone-secret"])
-            .output()
-            .unwrap()
+        output_with_stdin(
+            self.command(vault, Some(PASSWORD))
+                .args(["add", title, "--secret-stdin"]),
+            "fake-clone-secret\n",
+        )
     }
 
     fn audit_at(&self, vault: &Path) -> Output {
@@ -1318,12 +1328,13 @@ fn an_unseen_clone_that_replaces_the_vault_warns_once_and_keeps_the_journal() {
         let clone = fixture.directory.path().join("clone.kdbx");
         fs::copy(&fixture.vault, &clone).unwrap();
         let other_root = fixture.directory.path().join("other-journal-root");
-        let added = fixture
-            .command(&clone, Some(PASSWORD))
-            .env("AKM_JOURNAL_ROOT", &other_root)
-            .args(["add", "ClonedKey", "--secret", "fake-clone-secret"])
-            .output()
-            .unwrap();
+        let added = output_with_stdin(
+            fixture
+                .command(&clone, Some(PASSWORD))
+                .env("AKM_JOURNAL_ROOT", &other_root)
+                .args(["add", "ClonedKey", "--secret-stdin"]),
+            "fake-clone-secret\n",
+        );
         assert_success(&added);
         fs::copy(&clone, &fixture.vault).unwrap();
 

@@ -118,7 +118,9 @@ screen-capture path.
 
 Commands below assume a freshly built `akm.exe` is on PATH. Without `AKM_PASSWORD`,
 the CLI prompts for the master password. There is no password argument because
-command lines are observable by other processes.
+command lines are observable by other processes. For the same reason, a key's secret
+never comes from an argument: `add` and `rotate` read it from a hidden prompt, or from
+stdin with `--secret-stdin`.
 
 ```powershell
 akm init --name "Personal API keys"
@@ -127,6 +129,7 @@ akm list
 akm get "OpenAI dev"                # masked
 akm get "OpenAI dev" --reveal       # full value; private screen only
 akm get <entry-uuid> --field secret
+akm edit "OpenAI dev" --env staging --clear notes   # metadata only; the secret stays
 
 akm run --project my-app --env dev -- npm test
 akm export --project my-app --env dev --output .env.local
@@ -138,7 +141,7 @@ A key is selected by its entry id or its exact title, in any letter case. One ru
 compares letters: each letter becomes the lowercase of its uppercase, so `Σ`, `σ` and
 `ς` match, but `ß` does not match `ss`, and an accent typed as a separate mark does not
 match the same accented letter typed as one character. A partial word,
-or a word found in a note or URL, selects nothing: `get`, `rm`, `rotate`, `history`,
+or a word found in a note or URL, selects nothing: `get`, `edit`, `rm`, `rotate`, `history`,
 `restore` and `purge` refuse it and list candidates by id, title, project and
 environment, never a secret, note or URL. Two keys with the same title are refused
 until you pass the id.
@@ -169,8 +172,10 @@ the current Windows account or an administrator from reading an export.
 
 File exports require Windows storage with persistent ACLs. The CLI verifies its
 private temporary file's permissions before writing and publishes without replacing
-an existing destination. Write/flush/sync/publication failures trigger owned-file
-cleanup. If the CLI cannot confirm that it removed its temporary file, it says "could not confirm cleanup", names the file and exits with a failure, so you can delete it yourself. This is not secure erasure or a crash/power-loss cleanup guarantee.
+an existing destination. It reads the file's location from the open handle before it
+writes and after it publishes: a destination folder that was moved or replaced after the
+check (for example by a junction) stops the export. Write/flush/sync/publication failures trigger owned-file
+cleanup. If the CLI cannot confirm that it removed its temporary file, it says "could not confirm cleanup", names the file by its current name, read from the open handle, and exits with a failure, so you can delete it yourself. If it cannot read that name, it gives the name it created, says that the file may have another name now, and does not tell you to delete a file by that name. This is not secure erasure or a crash/power-loss cleanup guarantee.
 Desktop exports prepare outside the lock-state gate and check authorization before
 publication. A lock cancels an export that has not been authorized for publication;
 an already-authorized OS operation may finish and must report its completed outcome.
