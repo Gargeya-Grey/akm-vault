@@ -3465,13 +3465,17 @@ mod tests {
             .session
             .active_owner(f.session.snapshot().unwrap().ticket)
             .unwrap();
+        // A panic in an access no longer poisons the mutex (U1-R1-04,
+        // `u1_r1_04_an_access_that_fails_after_its_replacement_answers_completed_while_locked`),
+        // so the test poisons it with a panic while its guard is held.
         let session = f.session.clone();
         assert!(std::thread::spawn(move || {
-            let _: Result<Stamped<()>, _> =
-                session.access(Access::Read, None, |_| panic!("injected worker panic"));
+            let _stored = session.vault.lock().unwrap();
+            panic!("injected worker panic");
         })
         .join()
         .is_err());
+        assert!(f.session.vault.is_poisoned());
         assert!(f
             .session
             .access(Access::Read, None, |vault| Ok(vault.list()))
