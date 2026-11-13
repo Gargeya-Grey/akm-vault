@@ -525,7 +525,8 @@ button:disabled { cursor: default; opacity: 0.4; }
 /* Dialogs and drawers */
 .overlay { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 20px; background: var(--scrim); }
 .overlay-drawer { place-items: stretch end; padding: 0; }
-.drawer { display: flex; flex-direction: column; width: min(540px, 100vw); height: 100vh; overflow-y: auto; border-radius: var(--r-group) 0 0 var(--r-group); animation: drawer-in var(--t-slow) var(--ease); }
+/* The scroll padding keeps a control that scrolls into view above the sticky footer, which wraps to three rows at 200 percent text. */
+.drawer { display: flex; flex-direction: column; width: min(540px, 100vw); height: 100vh; overflow-y: auto; scroll-padding-bottom: 6rem; border-radius: var(--r-group) 0 0 var(--r-group); animation: drawer-in var(--t-slow) var(--ease); }
 @keyframes drawer-in { from { transform: translateX(44px); } to { transform: translateX(0); } }
 .drawer:focus, .confirm:focus { outline: none; }
 .drawer form { display: flex; flex: 1; flex-direction: column; }
@@ -534,7 +535,7 @@ button:disabled { cursor: default; opacity: 0.4; }
 .drawer-foot.end { justify-content: flex-end; }
 .import-scope { margin-top: 14px; }
 .form-error { margin-top: 14px; }
-.drawer-foot { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 26px; background: var(--float); box-shadow: inset 0 1px 0 var(--line); }
+.drawer-foot { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 26px; background: var(--float); box-shadow: inset 0 1px 0 var(--line); }
 .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 24px 26px 18px; }
 .drawer-ident { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
 .drawer-ident > div { min-width: 0; }
@@ -543,14 +544,14 @@ button:disabled { cursor: default; opacity: 0.4; }
 .modal-head .state { margin-top: 5px; }
 .confirm { width: min(500px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; overflow-wrap: anywhere; padding: 22px 24px; border-radius: 20px; }
 .confirm-body { margin: 10px 0 14px; color: var(--muted); }
-.dialog-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.action-cluster { display: flex; align-items: center; gap: 6px; }
+.dialog-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.action-cluster { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
 .secret-stage { padding: 16px 18px 14px; border-radius: 14px; background: var(--well); box-shadow: var(--well-in); }
 .secret-stage .label { color: var(--muted); }
 .secret-value { display: block; min-height: 26px; margin: 4px 0 12px; font-size: 0.875rem; overflow-wrap: anywhere; }
 .secret-value.masked { color: var(--accent); letter-spacing: 0.06em; }
-.secret-actions { display: flex; gap: 8px; }
+.secret-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .secret-note { margin: 12px 0 0; color: var(--muted); font-size: 0.78125rem; }
 @media (prefers-reduced-motion: reduce) { .drawer { animation: none; } }
 
