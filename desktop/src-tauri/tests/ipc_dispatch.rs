@@ -20,10 +20,15 @@ mod import_review;
 #[path = "../src/launch.rs"]
 #[allow(unused_imports)]
 mod launch;
+#[path = "../src/outcome.rs"]
+mod outcome;
 #[path = "../src/policy.rs"]
 mod policy;
 #[path = "../src/private_export.rs"]
 mod private_export;
+#[cfg(windows)]
+#[path = "../src/process.rs"]
+mod process;
 #[path = "../src/publication.rs"]
 #[allow(unused_imports)]
 mod publication;
@@ -60,6 +65,10 @@ use tauri::{
     test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY},
     webview::InvokeRequest,
 };
+
+/// The bound of a wait for an event that must happen: the same value as
+/// `test_support::PATIENCE` in the library (class Q).
+const PATIENCE: Duration = Duration::from_secs(120);
 
 type Clipboard = Arc<Mutex<clipboard_fake::FakeState>>;
 
@@ -137,7 +146,7 @@ impl review_window::ReviewDialog for &Dialog {
         if let Some((entered, release)) = held {
             entered.send(()).unwrap();
             release
-                .recv_timeout(Duration::from_secs(60))
+                .recv_timeout(PATIENCE)
                 .expect("the test answers the dialog");
         }
         Ok(if self.approve.load(Ordering::SeqCst) {
@@ -149,38 +158,109 @@ impl review_window::ReviewDialog for &Dialog {
 }
 
 /// The native terminal, scripted. It opens no window and starts no process: it records what
-/// native code would have started.
+/// native code would have started. `arm` makes the next review wait until the test answers it,
+/// and `at` runs a test step (a lock, a page load, a fault) when the launch reaches a step.
 type Started = Vec<(std::path::PathBuf, Vec<(String, String)>)>;
+type Step = (launch::LaunchStep, Box<dyn FnOnce() + Send>);
 struct Terminal {
-    folder: std::path::PathBuf,
+    /// The folder that the picker answers. `None` is a cancel.
+    folder: Mutex<Option<std::path::PathBuf>>,
     approve: AtomicBool,
+    live: AtomicBool,
+    fail_prepare: AtomicBool,
+    reviews: AtomicUsize,
+    hold: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    step: Mutex<Option<Step>>,
     started: Mutex<Started>,
+}
+impl Terminal {
+    fn new(folder: &std::path::Path) -> Arc<Self> {
+        Arc::new(Self {
+            folder: Mutex::new(Some(folder.to_path_buf())),
+            approve: AtomicBool::new(true),
+            live: AtomicBool::new(true),
+            fail_prepare: AtomicBool::new(false),
+            reviews: AtomicUsize::new(0),
+            hold: Mutex::default(),
+            step: Mutex::default(),
+            started: Mutex::default(),
+        })
+    }
+
+    /// `entered` fires when the review opens. Send on `release` to answer it.
+    fn arm(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *self.hold.lock().unwrap() = Some((entered_tx, release_rx));
+        (entered_rx, release_tx)
+    }
+
+    fn at(&self, step: launch::LaunchStep, run: impl FnOnce() + Send + 'static) {
+        *self.step.lock().unwrap() = Some((step, Box::new(run)));
+    }
 }
 impl launch::TerminalHost for Terminal {
     fn window_live(&self) -> bool {
-        true
+        self.live.load(Ordering::SeqCst)
     }
     fn choose_folder(&self) -> Result<Option<std::path::PathBuf>, error::CommandError> {
-        Ok(Some(self.folder.clone()))
+        Ok(self.folder.lock().unwrap().clone())
     }
     fn review_dialog(&self) -> Box<dyn review_window::ReviewDialog + '_> {
         Box::new(self)
     }
-    fn open_terminal(
+    fn reached(&self, step: launch::LaunchStep) {
+        let mut slot = self.step.lock().unwrap();
+        if slot.as_ref().is_some_and(|(at, _)| *at == step) {
+            let (_, run) = slot.take().unwrap();
+            drop(slot);
+            run();
+        }
+    }
+    fn prepare_terminal(
         &self,
-        _: &Held<'_>,
         request: &launch::LaunchRequest,
-    ) -> Result<(), error::CommandError> {
-        self.started
-            .lock()
-            .unwrap()
-            .push((request.folder.clone(), request.secrets.to_vec()));
+    ) -> Result<Box<dyn session::Effect<Output = ()> + '_>, error::CommandError> {
+        if self.fail_prepare.load(Ordering::SeqCst) {
+            return Err(error::CommandError::new(
+                "terminal",
+                "The fake terminal could not be made.",
+            ));
+        }
+        Ok(Box::new(FakeStart {
+            started: &self.started,
+            request: Some((request.folder.clone(), request.secrets.to_vec())),
+        }))
+    }
+}
+
+/// A prepared start: the commit records it, a revoke drops it.
+struct FakeStart<'a> {
+    started: &'a Mutex<Started>,
+    request: Option<(std::path::PathBuf, Vec<(String, String)>)>,
+}
+impl session::Effect for FakeStart<'_> {
+    type Output = ();
+    fn act(&mut self, _: &Held<'_>) -> Result<(), error::CommandError> {
+        self.started.lock().unwrap().extend(self.request.take());
+        Ok(())
+    }
+    fn revoke(&mut self) -> Result<(), String> {
+        self.request = None;
         Ok(())
     }
 }
 
 impl review_window::ReviewDialog for &Terminal {
     fn show(&self, _: &review_window::ReviewText) -> Result<i32, review_window::ReviewFailure> {
+        self.reviews.fetch_add(1, Ordering::SeqCst);
+        let held = self.hold.lock().unwrap().take();
+        if let Some((entered, release)) = held {
+            entered.send(()).unwrap();
+            release
+                .recv_timeout(PATIENCE)
+                .expect("the test answers the review");
+        }
         Ok(if self.approve.load(Ordering::SeqCst) {
             review_window::CONFIRM_BUTTON
         } else {
@@ -255,7 +335,7 @@ fn call(
         );
     });
     let response = response_rx
-        .recv_timeout(Duration::from_secs(60))
+        .recv_timeout(PATIENCE)
         .expect("actual command response");
     dispatch.join().unwrap();
     match response {
@@ -273,20 +353,16 @@ fn call(
 fn main() {
     let directory = tempfile::tempdir().unwrap();
     let clipboard: Clipboard = Arc::default();
-    let session = Arc::new(Session::new(
+    let session = Session::new(
         Arc::new(MonotonicClock::default()),
         Box::new(clipboard_fake::TransactionBackend(clipboard_fake::FakeApi(
             clipboard.clone(),
         ))),
         Arc::new(|_| {}),
-    ));
+    );
     session.observe(policy::Signal::Available);
     let dialog = Dialog::new();
-    let terminal = Arc::new(Terminal {
-        folder: directory.path().to_path_buf(),
-        approve: AtomicBool::new(true),
-        started: Mutex::default(),
-    });
+    let terminal = Terminal::new(directory.path());
     let owner = session.prepare_open().unwrap();
     *PAGE_SESSION.lock().unwrap() = Some(owner.clone());
     let ticket = session.claim_open(&owner).unwrap();
@@ -368,7 +444,7 @@ fn main() {
                 Ok(())
             })
         });
-        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        entered_rx.recv_timeout(PATIENCE).unwrap();
         let sequence_before = clipboard.lock().unwrap().sequence;
         let (response_tx, response_rx) = mpsc::channel();
         let (returned_tx, returned_rx) = mpsc::channel();
@@ -403,7 +479,7 @@ fn main() {
         holding.join().unwrap().unwrap();
         dispatch.join().unwrap();
         let response = early
-            .or_else(|| response_rx.recv_timeout(Duration::from_secs(60)).ok())
+            .or_else(|| response_rx.recv_timeout(PATIENCE).ok())
             .expect("actual command response");
         assert!(
             matches!(response, InvokeResponse::Ok(_)),
@@ -695,7 +771,11 @@ fn main() {
     the_dialog_is_the_review(&app, webview, &session, &dialog, directory.path());
     a_discard_names_its_session(&app, webview, &session, &dialog, directory.path());
     the_launch_command_takes_a_scope_and_no_program(webview, &terminal, directory.path());
+    every_dispatched_launch_leaves_one_record(webview, &session, &terminal, directory.path());
+    a_core_warning_reaches_the_page_with_its_own_kind(webview, directory.path());
+    a_hidden_window_at_the_import_check_leaves_a_failed_record(webview, &dialog, directory.path());
     the_history_command_answers_times_and_field_names(webview, directory.path());
+    a_foreign_entry_with_history_shows_only_known_field_names(webview, directory.path());
     a_page_that_holds_the_session_id_cannot_disclose_without_the_user(
         webview,
         &dialog,
@@ -930,10 +1010,12 @@ fn a_damaged_journal_is_replaced_only_after_the_user_approves(
         damaged,
         "a decline changes nothing"
     );
-    reveal(false).unwrap_err();
+    // The single-key budget counts across sessions, so an earlier check may have spent it.
+    // A budget window approves here, and the damaged journal itself must refuse the reveal.
+    dialog.approve.store(true, Ordering::SeqCst);
+    assert_eq!(reveal(false).unwrap_err()["kind"], "journal");
 
     // The user approves: the damaged file is kept byte for byte and disclosure works again.
-    dialog.approve.store(true, Ordering::SeqCst);
     let kept = call(webview, "audit_recover", serde_json::json!({})).unwrap();
     let kept_name = kept["keptName"].as_str().unwrap();
     assert!(kept_name.contains(".damaged-"), "{kept_name}");
@@ -1019,7 +1101,10 @@ fn a_stale_request_never_acts_on_the_session_that_replaced_its_own(
         ("env_export", scope.clone()),
         ("env_copy", scope.clone()),
         ("env_save", scope.clone()),
-        ("env_launch_terminal", scope),
+        (
+            "env_launch_terminal",
+            serde_json::json!({"project": "demo", "environment": "dev", "operationId": uuid::Uuid::new_v4().to_string()}),
+        ),
         ("key_history", serde_json::json!({"id": id})),
         ("backup_info", serde_json::json!({})),
     ];
@@ -1087,6 +1172,7 @@ fn the_launch_command_takes_a_scope_and_no_program(
     )
     .unwrap();
     let hostile = serde_json::json!({
+        "operationId": uuid::Uuid::new_v4().to_string(),
         "project": "demo", "environment": "dev",
         "program": "calc.exe", "command": "calc.exe", "path": "C:/evil", "cwd": "C:/evil",
         "folder": "C:/evil", "workingDirectory": "C:/evil", "args": ["/c", "calc"],
@@ -1107,6 +1193,8 @@ fn the_launch_command_takes_a_scope_and_no_program(
     );
 
     terminal.approve.store(false, Ordering::SeqCst);
+    let mut hostile = hostile;
+    hostile["operationId"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
     assert_eq!(
         call(webview, "env_launch_terminal", hostile.clone()).unwrap(),
         serde_json::Value::Null,
@@ -1121,7 +1209,8 @@ fn the_launch_command_takes_a_scope_and_no_program(
         call(webview, "env_launch_terminal", stale).unwrap_err()["kind"],
         "locked"
     );
-    let mut unscoped = serde_json::json!({"project": "demo"});
+    let mut unscoped =
+        serde_json::json!({"project": "demo", "operationId": uuid::Uuid::new_v4().to_string()});
     unscoped["sessionId"] = serde_json::json!(owner);
     assert_eq!(
         call(webview, "env_launch_terminal", unscoped).unwrap_err()["kind"],
@@ -1130,6 +1219,439 @@ fn the_launch_command_takes_a_scope_and_no_program(
     );
     assert_eq!(terminal.started.lock().unwrap().len(), 1);
     println!("PASS: env_launch_terminal is registered, answers a count or null, ignores every program, path and argument that a page adds, and refuses a stale session.");
+}
+
+/// Class N, through the production handlers. Every launch that passes its session check leaves
+/// exactly one outcome record, on every way out, and the record does not depend on the reply:
+/// the test reads each reply as a page that lost it would, and then reads the record. A request
+/// with a malformed operation ID, or of a session that is not the current one, is refused with
+/// no record. A record of session A changes nothing in session B.
+fn every_dispatched_launch_leaves_one_record(
+    webview: &tauri::Webview<MockRuntime>,
+    session: &Arc<Session>,
+    terminal: &Arc<Terminal>,
+    directory: &std::path::Path,
+) {
+    use launch::LaunchStep;
+    let scope = |operation: &str| serde_json::json!({"operationId": operation, "project": "demo", "environment": "dev"});
+    let fresh = |name: &str| {
+        let (owner, _) = open_new(webview, directory, name);
+        call(
+            webview,
+            "key_add",
+            serde_json::json!({"draft": {"title": "Fake outcome", "secret": "fake-outcome-secret", "project": "demo", "environment": "dev", "envVar": "OUTCOME_TOKEN"}}),
+        )
+        .unwrap();
+        owner
+    };
+    let started = || terminal.started.lock().unwrap().len();
+    let only_record = |operation: &str, kind: &str, case: &str| {
+        assert_eq!(record_kinds(webview, operation), [kind], "{case}");
+        call(
+            webview,
+            "vault_dismiss_warnings",
+            serde_json::json!({"ids": [operation]}),
+        )
+        .unwrap();
+        assert!(
+            record_kinds(webview, operation).is_empty(),
+            "{case}: acknowledged"
+        );
+    };
+    let lock = {
+        let session = session.clone();
+        move || {
+            let _ = session.lock();
+        }
+    };
+    let mut owner = fresh("outcome-0.kdbx");
+
+    let malformed = call(webview, "env_launch_terminal", scope("not-a-uuid")).unwrap_err();
+    assert_eq!(malformed["kind"], "invalid");
+    let stale_operation = uuid::Uuid::new_v4().to_string();
+    let mut stale = scope(&stale_operation);
+    stale["sessionId"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
+    assert_eq!(
+        call(webview, "env_launch_terminal", stale).unwrap_err()["kind"],
+        "locked"
+    );
+    assert!(record_kinds(webview, &stale_operation).is_empty());
+    let report = call(webview, "vault_warnings", serde_json::json!({})).unwrap();
+    assert!(!report.to_string().contains("not-a-uuid"));
+
+    // The ways out before the start. None of them starts a terminal.
+    let before = started();
+    type Case<'a> = (
+        &'a str,
+        &'a str,
+        &'a str,
+        Box<dyn Fn() + 'a>,
+        Box<dyn Fn() + 'a>,
+    );
+    let cases: Vec<Case> = vec![
+        (
+            "a request without an environment",
+            "invalid",
+            "terminalFailed",
+            Box::new(|| {}),
+            Box::new(|| {}),
+        ),
+        (
+            "a hidden window at the window check",
+            "viewChanged",
+            "terminalFailed",
+            Box::new(|| terminal.live.store(false, Ordering::SeqCst)),
+            Box::new(|| terminal.live.store(true, Ordering::SeqCst)),
+        ),
+        (
+            "a cancelled folder picker",
+            "null",
+            "terminalDeclined",
+            Box::new(|| *terminal.folder.lock().unwrap() = None),
+            Box::new(|| *terminal.folder.lock().unwrap() = Some(directory.to_path_buf())),
+        ),
+        (
+            "a folder that does not exist",
+            "invalidPath",
+            "terminalFailed",
+            Box::new(|| *terminal.folder.lock().unwrap() = Some(directory.join("missing-folder"))),
+            Box::new(|| *terminal.folder.lock().unwrap() = Some(directory.to_path_buf())),
+        ),
+        (
+            "a declined review",
+            "null",
+            "terminalDeclined",
+            Box::new(|| terminal.approve.store(false, Ordering::SeqCst)),
+            Box::new(|| terminal.approve.store(true, Ordering::SeqCst)),
+        ),
+        (
+            "a terminal that could not be made",
+            "terminal",
+            "terminalFailed",
+            Box::new(|| terminal.fail_prepare.store(true, Ordering::SeqCst)),
+            Box::new(|| terminal.fail_prepare.store(false, Ordering::SeqCst)),
+        ),
+        (
+            "a fault after the approval",
+            "internal",
+            "terminalFailed",
+            Box::new(|| {
+                terminal.at(LaunchStep::Approved, || {
+                    panic!("a fake fault in the launch")
+                })
+            }),
+            Box::new(|| {}),
+        ),
+    ];
+    for (case, reply, kind, arrange, restore) in &cases {
+        let operation = uuid::Uuid::new_v4().to_string();
+        arrange();
+        let mut args = scope(&operation);
+        if *case == "a request without an environment" {
+            args["environment"] = serde_json::Value::Null;
+        }
+        let lost = call(webview, "env_launch_terminal", args);
+        restore();
+        match lost {
+            Ok(value) => assert_eq!(value.to_string(), *reply, "{case}"),
+            Err(error) => assert_eq!(error["kind"], *reply, "{case}"),
+        }
+        only_record(&operation, kind, case);
+        assert_eq!(started(), before, "{case}: nothing started");
+    }
+
+    // A start, and a fault after it: the record says that the terminal started.
+    for case in ["a start", "a fault after the start"] {
+        let operation = uuid::Uuid::new_v4().to_string();
+        if case == "a fault after the start" {
+            terminal.at(LaunchStep::Started, || {
+                panic!("a fake fault after the start")
+            });
+        }
+        let before = started();
+        let lost = call(webview, "env_launch_terminal", scope(&operation));
+        assert_eq!(lost.is_ok(), case == "a start", "{case}");
+        only_record(&operation, "terminalStarted", case);
+        assert_eq!(started(), before + 1, "{case}");
+    }
+
+    // A page load while the review is open, then the approval: the page that replaced the one
+    // that sent the request finds the start in the record.
+    let operation = uuid::Uuid::new_v4().to_string();
+    let (entered, release) = terminal.arm();
+    let pending = send(webview, "env_launch_terminal", scope(&operation));
+    entered.recv_timeout(PATIENCE).unwrap();
+    session.document_started();
+    release.send(()).unwrap();
+    let _lost = reply(&pending);
+    only_record(
+        &operation,
+        "terminalStarted",
+        "a page load during the review",
+    );
+
+    // A lock at each step around the start.
+    for (case, step, reply_kind, kind, starts) in [
+        (
+            "a lock during the review",
+            None,
+            "locked",
+            "terminalFailed",
+            false,
+        ),
+        (
+            "a lock at the prepared step",
+            Some(LaunchStep::Prepared),
+            "locked",
+            "terminalFailed",
+            false,
+        ),
+        (
+            "a lock after the start",
+            Some(LaunchStep::Started),
+            "1",
+            "terminalSessionEnded",
+            true,
+        ),
+    ] {
+        let operation = uuid::Uuid::new_v4().to_string();
+        let before = started();
+        let lost = match step {
+            None => {
+                let (entered, release) = terminal.arm();
+                let pending = send(webview, "env_launch_terminal", scope(&operation));
+                entered.recv_timeout(PATIENCE).unwrap();
+                lock();
+                release.send(()).unwrap();
+                reply(&pending)
+            }
+            Some(step) => {
+                terminal.at(step, lock.clone());
+                call(webview, "env_launch_terminal", scope(&operation))
+            }
+        };
+        match lost {
+            Ok(value) => assert_eq!(value.to_string(), reply_kind, "{case}"),
+            Err(error) => assert_eq!(error["kind"], reply_kind, "{case}"),
+        }
+        only_record(&operation, kind, case);
+        assert_eq!(started(), before + usize::from(starts), "{case}");
+        owner = fresh(&format!("outcome-{}.kdbx", case.len()));
+    }
+
+    // Session A asks; session B opens while A's review is open; A is refused. A's record names
+    // A, and B's own launch, record and acknowledgement are B's alone.
+    let a_operation = uuid::Uuid::new_v4().to_string();
+    let (entered, release) = terminal.arm();
+    let pending = send(webview, "env_launch_terminal", scope(&a_operation));
+    entered.recv_timeout(PATIENCE).unwrap();
+    let b_owner = fresh("outcome-b.kdbx");
+    assert_ne!(b_owner, owner);
+    let b_before = session.snapshot().unwrap();
+    release.send(()).unwrap();
+    // The access after the review finds another session current.
+    assert_eq!(reply(&pending).unwrap_err()["kind"], "stalePreview");
+    assert_eq!(record_kinds(webview, &a_operation), ["terminalFailed"]);
+    let b_after = session.snapshot().unwrap();
+    assert_eq!(
+        (b_after.ticket, b_after.revision, b_after.presentation),
+        (b_before.ticket, b_before.revision, b_before.presentation),
+        "A's record changed nothing in B"
+    );
+    let b_operation = uuid::Uuid::new_v4().to_string();
+    let before = started();
+    assert_eq!(
+        call(webview, "env_launch_terminal", scope(&b_operation)).unwrap(),
+        serde_json::json!(1)
+    );
+    assert_eq!(started(), before + 1);
+    let report = call(webview, "vault_warnings", serde_json::json!({})).unwrap();
+    let origin = |operation: &str| {
+        report["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| record["id"] == operation)
+            .unwrap()["originSession"]
+            .clone()
+    };
+    assert_ne!(origin(&a_operation), origin(&b_operation));
+    only_record(&a_operation, "terminalFailed", "session A");
+    only_record(&b_operation, "terminalStarted", "session B");
+    println!("PASS: every env_launch_terminal that passed its session check left exactly one outcome record (started, session ended, failed or declined) on each way out, including a hidden window, a fault before and after the start and a lost reply; a malformed ID or a stale session left none; A's record changed nothing in B.");
+}
+
+/// T-R3-05, through the production handlers. A hidden window at the window check refuses the
+/// import before any dialog, and the request still leaves its failed record.
+fn a_hidden_window_at_the_import_check_leaves_a_failed_record(
+    webview: &tauri::Webview<MockRuntime>,
+    dialog: &Arc<Dialog>,
+    directory: &std::path::Path,
+) {
+    let (owner, path) = open_new(webview, directory, "hidden-import.kdbx");
+    let operation = uuid::Uuid::new_v4().to_string();
+    let opened = dialog.opened.load(Ordering::SeqCst);
+    dialog.window_live.store(false, Ordering::SeqCst);
+    let lost = call(
+        webview,
+        "env_import",
+        import_args(&owner, &operation, "TOKEN=fake-hidden\n"),
+    );
+    dialog.window_live.store(true, Ordering::SeqCst);
+    assert_eq!(lost.unwrap_err()["kind"], "viewChanged");
+    assert_eq!(dialog.opened.load(Ordering::SeqCst), opened, "no dialog");
+    assert_eq!(record_kinds(webview, &operation), ["importFailed"]);
+    assert!(demo_dev_is_empty(&path), "nothing was written");
+    call(
+        webview,
+        "vault_dismiss_warnings",
+        serde_json::json!({"ids": [operation]}),
+    )
+    .unwrap();
+    println!("PASS: env_import with a hidden window opened no dialog, wrote nothing and left one importFailed record.");
+}
+
+/// FR-12 and FR-05, through the production handlers. A vault file that an unseen clone replaced
+/// continues its journal, and the page gets a notice of its own kind, not the generic journal
+/// notice. The file-permission warning needs a file system that ignores private permissions,
+/// which only the core's own test seam can fake, so its kind is checked on the wire as the
+/// reply serializes it.
+fn a_core_warning_reaches_the_page_with_its_own_kind(
+    webview: &tauri::Webview<MockRuntime>,
+    directory: &std::path::Path,
+) {
+    let before = call(webview, "vault_warnings", serde_json::json!({})).unwrap();
+    let ids: Vec<serde_json::Value> = before["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| record["id"].clone())
+        .collect();
+    call(
+        webview,
+        "vault_dismiss_warnings",
+        serde_json::json!({ "ids": ids }),
+    )
+    .unwrap();
+
+    let a = directory.join("lineage-a.kdbx");
+    let b = directory.join("lineage-b.kdbx");
+    let original = akm_core::Vault::create(&a, PASSWORD, None).unwrap();
+    original.log("fake-lineage-marker", None, None).unwrap();
+    drop(original);
+    std::fs::copy(&a, &b).unwrap();
+    let mut clone = akm_core::Vault::open_in(
+        &b,
+        PASSWORD,
+        akm_core::journal::JournalRoot::at(directory.join("other-journal")),
+    )
+    .unwrap();
+    clone
+        .add(akm_core::ApiKeyInput::new("Fake clone", "fake-clone-value"))
+        .unwrap();
+    drop(clone);
+    std::fs::copy(&b, &a).unwrap();
+
+    let reserved = call(webview, "vault_prepare_open", serde_json::json!({})).unwrap();
+    let reserved = reserved.as_str().unwrap().to_string();
+    call(
+        webview,
+        "vault_unlock",
+        serde_json::json!({"path": a.display().to_string(), "password": PASSWORD, "sessionId": reserved}),
+    )
+    .unwrap();
+    call(
+        webview,
+        "key_add",
+        serde_json::json!({"draft": {"title": "Fake lineage", "secret": "fake-lineage-secret"}}),
+    )
+    .unwrap();
+    let report = call(webview, "vault_warnings", serde_json::json!({})).unwrap();
+    let kinds: Vec<&str> = report["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| record["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["journalLineageUnconfirmed"]);
+    assert!(
+        !report.to_string().contains("lineage-a"),
+        "no path on the wire"
+    );
+    assert_eq!(
+        serde_json::to_value(session::OperationWarningKind::FilePermissions).unwrap(),
+        "filePermissions"
+    );
+    println!("PASS: a vault replaced by an unseen clone gives the page one journalLineageUnconfirmed notice and no path; filePermissions has its own name on the wire.");
+}
+
+/// T-R1-08, through the production handlers. A vault that another KeePass program wrote holds an
+/// entry with native history and custom field names. `key_history` answers the known names and
+/// "Other" for the rest: no custom name and no value reaches the page.
+fn a_foreign_entry_with_history_shows_only_known_field_names(
+    webview: &tauri::Webview<MockRuntime>,
+    directory: &std::path::Path,
+) {
+    use keepass::db::fields;
+    let path = directory.join("foreign-history.kdbx");
+    let mut db = keepass::Database::new();
+    db.config.kdf_config = keepass::config::KdfConfig::Aes { rounds: 10 };
+    {
+        let mut root = db.root_mut();
+        let mut group = root.add_group();
+        group.name = "API Keys".into();
+        let mut entry = group.add_entry();
+        entry.set_unprotected(fields::TITLE, "Fake foreign");
+        entry.set_protected(fields::PASSWORD, "fake-foreign-one");
+        entry.set_unprotected("fake-secret-in-a-field-name", "fake-field-value-one");
+        let before = (*entry).clone();
+        entry
+            .history
+            .get_or_insert_with(Default::default)
+            .add_entry(before);
+        entry.set_protected(fields::PASSWORD, "fake-foreign-two");
+        entry.set_unprotected("fake-secret-in-a-field-name", "fake-field-value-two");
+        entry.set_unprotected("another-fake-name", "fake-added");
+        entry.set_unprotected(fields::TITLE, "Fake foreign renamed");
+    }
+    db.save(
+        &mut std::fs::File::create(&path).unwrap(),
+        keepass::DatabaseKey::new().with_password(PASSWORD),
+    )
+    .unwrap();
+
+    let reserved = call(webview, "vault_prepare_open", serde_json::json!({})).unwrap();
+    let reserved = reserved.as_str().unwrap().to_string();
+    call(
+        webview,
+        "vault_unlock",
+        serde_json::json!({"path": path.display().to_string(), "password": PASSWORD, "sessionId": reserved}),
+    )
+    .unwrap();
+    let listed = call(webview, "keys_list", serde_json::json!({})).unwrap();
+    let id = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|key| key["title"] == "Fake foreign renamed")
+        .expect("the foreign entry is listed")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let history = call(webview, "key_history", serde_json::json!({"id": id})).unwrap();
+    assert_eq!(history.as_array().unwrap().len(), 1, "{history}");
+    assert_eq!(history[0]["secretChanged"], true);
+    assert_eq!(
+        history[0]["changed"],
+        serde_json::json!(["Password", "Title", "Other"]),
+        "{history}"
+    );
+    let wire = history.to_string();
+    assert!(
+        !wire.contains("fake"),
+        "no custom name and no value: {wire}"
+    );
+    println!("PASS: key_history of a foreign entry with history answers Password, Title and Other, and no custom field name or value.");
 }
 
 /// The history command answers times and field names, with the camelCase shape of api.ts.
@@ -1172,10 +1694,7 @@ fn the_history_command_answers_times_and_field_names(
 }
 
 fn reply(rx: &mpsc::Receiver<InvokeResponse>) -> Result<serde_json::Value, serde_json::Value> {
-    match rx
-        .recv_timeout(Duration::from_secs(60))
-        .expect("the command answers")
-    {
+    match rx.recv_timeout(PATIENCE).expect("the command answers") {
         InvokeResponse::Ok(InvokeResponseBody::Json(text)) => {
             Ok(serde_json::from_str(&text).unwrap())
         }
@@ -1288,7 +1807,7 @@ fn the_dialog_is_the_review(
             "env_import",
             import_args(&owner, &operation, "TOKEN=fake-approved\n"),
         );
-        entered.recv_timeout(Duration::from_secs(20)).unwrap();
+        entered.recv_timeout(PATIENCE).unwrap();
         let reviewed = session.snapshot().unwrap();
         match approval {
             "a discard that reached native while the dialog was open" => {
@@ -1347,7 +1866,7 @@ fn the_dialog_is_the_review(
             "env_import",
             import_args(&owner, &operation, "TOKEN=fake-refused\n"),
         );
-        entered.recv_timeout(Duration::from_secs(20)).unwrap();
+        entered.recv_timeout(PATIENCE).unwrap();
         let mut other = None;
         match change {
             "lock" => {
@@ -1422,7 +1941,7 @@ fn a_discard_names_its_session(
         "env_import",
         import_args(&b, &operation, "TOKEN=fake-b-import\n"),
     );
-    entered.recv_timeout(Duration::from_secs(20)).unwrap();
+    entered.recv_timeout(PATIENCE).unwrap();
     let b_before = session.snapshot().unwrap();
     let notices_before = delivered.lock().unwrap().len();
 
@@ -1577,7 +2096,7 @@ fn clipboard_through_the_handlers(
             Ok(())
         });
     });
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    entered_rx.recv_timeout(PATIENCE).unwrap();
     let response = send(webview, "key_copy", serde_json::json!({"id": id}));
     call(
         webview,
@@ -1588,7 +2107,7 @@ fn clipboard_through_the_handlers(
     release_tx.send(()).unwrap();
     holding.join().unwrap();
     let reply = response
-        .recv_timeout(Duration::from_secs(60))
+        .recv_timeout(PATIENCE)
         .expect("the delayed copy answers");
     let InvokeResponse::Err(error) = reply else {
         panic!("a copy delayed past a lock must fail");

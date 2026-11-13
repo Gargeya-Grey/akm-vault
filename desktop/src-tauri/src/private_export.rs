@@ -775,7 +775,8 @@ mod tests {
         .unwrap();
         let (replacement, displaced) = displace_temp(directory.path());
 
-        assert_eq!(prepared.publish().unwrap(), target);
+        use crate::test_support::canonical;
+        assert_eq!(canonical(&prepared.publish().unwrap()), canonical(&target));
 
         assert_eq!(fs::read(&target).unwrap(), b"TOKEN=fake-owned\n");
         assert_private_acl(&target);
@@ -1018,6 +1019,59 @@ mod tests {
             .warning()
             .unwrap()
             .contains(&left[0].display().to_string()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fr04_a_refused_delete_after_a_failed_write_names_the_remnant() {
+        struct FailedWrite(DeleteRefused);
+        impl ExportIo for FailedWrite {
+            fn write(&mut self, file: &mut File, contents: &str) -> Result<(), CommandError> {
+                // Part of the plaintext reaches the file before the write fails.
+                file.write_all(&contents.as_bytes()[..contents.len() / 2])
+                    .map_err(io)?;
+                Err(io(std::io::Error::other("injected write failure")))
+            }
+
+            fn discard(&self) -> Discard {
+                self.0.discard()
+            }
+        }
+
+        let directory = temporary_directory();
+        let target = directory.path().join("out.env");
+        let remnants = Remnants::default();
+
+        let error = prepare_private_with(
+            &target,
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &remnants,
+            &mut FailedWrite(DeleteRefused::default()),
+        )
+        .err()
+        .expect("injected write failure");
+
+        assert_eq!(error.message, "injected write failure");
+        let left = temporary_files(directory.path());
+        assert_eq!(left.len(), 1, "the refused delete leaves the file");
+        assert_eq!(
+            fs::read(&left[0]).unwrap(),
+            b"TOKEN=fa",
+            "part of the plaintext"
+        );
+        let warning = remnants
+            .warning()
+            .expect("an unconfirmed delete is reported");
+        assert!(
+            warning.contains(&left[0].display().to_string()),
+            "the warning names the remnant: {warning}"
+        );
+        assert!(
+            !warning.contains("fake-owned") && !warning.contains("TOKEN"),
+            "{warning}"
+        );
     }
 
     #[cfg(windows)]
@@ -1434,9 +1488,10 @@ mod tests {
         fs::write(&target, b"previous approved export\n").unwrap();
         assert!(windows::verify_private_acl(&File::open(&target).unwrap()).is_err());
 
+        use crate::test_support::canonical;
         assert_eq!(
-            write_private(&target, "TOKEN=fake-owned\n", &[], &[]).unwrap(),
-            target
+            canonical(&write_private(&target, "TOKEN=fake-owned\n", &[], &[]).unwrap()),
+            canonical(&target)
         );
 
         assert_eq!(fs::read(&target).unwrap(), b"TOKEN=fake-owned\n");

@@ -129,6 +129,9 @@ pub trait ImportConfirm: Send + Sync {
     /// before the dialog opens, so that no dialog appears over a window nobody can see. It
     /// does not gate the answer: the user's click in the dialog stands.
     fn window_live(&self) -> bool;
+    /// Runs right after a recovery moved the damaged journal, inside its vault access.
+    /// Production does nothing here. A test locks there.
+    fn journal_moved(&self) {}
 }
 
 pub struct ConfirmState(pub Arc<dyn ImportConfirm>);
