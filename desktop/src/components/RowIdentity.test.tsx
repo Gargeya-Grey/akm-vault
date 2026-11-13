@@ -153,10 +153,10 @@ const SEARCHES: [query: string, stored: Partial<KeyView>, found: boolean][] = [
   ["Σ", { title: "λόγος" }, true],
   ["νομοσ", { notes: "ΝΟΜΟΣ" }, true],
   ["straße", { title: "STRAẞE" }, true],
-  ["Key", { title: "key" }, true],
+  ["\u212Aey", { title: "key" }, true],
   ["ǆ", { title: "ǅ" }, true],
   ["STRASSE", { title: "Straße" }, false],
-  ["é", { title: "é" }, false],
+  ["e\u0301", { title: "é" }, false],
 ];
 
 for (const [query, stored, found] of SEARCHES) {
