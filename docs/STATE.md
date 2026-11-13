@@ -195,7 +195,7 @@ One class is new in review 2: work without a bound on bytes that are not authent
 
 ## Next action
 
-The path is in "Destination, measures and path" above. The one next action: collect the fix round for the FV rows (two workers: core and CLI; desktop). Check each fix against its regression test, merge, run the full checks and the real-surface runs once on the merged tree, and then start the second full review.
+The path is in "Destination, measures and path" above. The one next action: collect the fix round for the FV rows (three workers: core, CLI and desktop; the two tool findings FV-15 and FV-16 are fixed in `15d3a99`). Check each fix against its regression test, merge, run the full checks and the real-surface runs once on the merged tree, and then start the second full review.
 
 Open with the owner:
 
