@@ -1314,7 +1314,12 @@ impl Session {
         })
     }
 
+    /// Every ID must have the one spelling of `outcome::parse_operation_id`. An ID with any
+    /// other spelling refuses the whole call, and nothing is dismissed.
     pub fn dismiss_warnings(&self, ids: &[String]) -> Result<(), CommandError> {
+        for id in ids {
+            crate::outcome::parse_operation_id(id)?;
+        }
         let mut gate = self.gate()?;
         gate.notices.retain(|notice| !ids.contains(&notice.id));
         gate.warnings.retain(|notice| !ids.contains(&notice.id));
