@@ -244,4 +244,27 @@ for (const theme of ["light", "dark"]) {
     expect(await confirm.evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(0);
     for (const name of ["Cancel", "Delete for good"]) await expect(confirm.getByRole("button", { name, exact: true }), name).toBeInViewport({ ratio: 1 });
   });
+
+  // FV-12, class H: a stored username is a fact of the key, so the drawer and the form show it.
+  test(`${theme}: at 900 px the key drawer and the edit form show a stored username in full`, async ({ page }) => {
+    await open(page, theme, { keys: [{ id: "username-entry-0001", title: "Fake AWS", username: "AKIAFAKEEXAMPLE" }, { id: "username-entry-0002", title: "Long username", username: LONG }] });
+    const drawer = page.locator(".drawer.raised");
+    const username = drawer.locator(".fact-row", { has: page.locator(".fact-key", { hasText: /^Username$/ }) }).locator(".fact-value");
+    await page.getByRole("button", { name: "Open Fake AWS", exact: true }).click();
+    await expect(username).toHaveText("AKIAFAKEEXAMPLE");
+    await username.scrollIntoViewIfNeeded();
+    expect(await readable(username)).toBe(true);
+    await expect(username).toBeInViewport({ ratio: 1 });
+    await drawer.getByRole("button", { name: "Edit", exact: true }).click();
+    const field = page.getByLabel("Username", { exact: true });
+    await expect(field).toHaveValue("AKIAFAKEEXAMPLE");
+    await field.scrollIntoViewIfNeeded();
+    await expect(field).toBeInViewport({ ratio: 1 });
+    await page.locator(".drawer-foot").getByRole("button", { name: "Cancel", exact: true }).click();
+
+    await page.getByRole("button", { name: "Open Long username", exact: true }).click();
+    await expect(username).toHaveText(LONG);
+    expect(await drawer.evaluate((node) => node.scrollWidth - node.clientWidth), "username drawer").toBeLessThanOrEqual(0);
+    expect(await inside(username, drawer), "username in the drawer").toBe(true);
+  });
 }
