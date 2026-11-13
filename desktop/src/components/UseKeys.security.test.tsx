@@ -1,25 +1,43 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { UseKeys } from "./UseKeys";
-import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
+import { adoptReservation, PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
+import { acknowledgeCompletions, invalidateSession, retainedCompletions } from "../sessionBoundary";
 
 const mocks = vi.hoisted(() => ({
-  backup: vi.fn().mockResolvedValue({ exists: false }),
   keys: vi.fn().mockResolvedValue([]),
   importEnv: vi.fn().mockResolvedValue({ added: 1, updated: 1 }),
   exportEnv: vi.fn(),
   copyEnv: vi.fn(),
+  saveEnv: vi.fn(),
   launchTerminal: vi.fn(),
 }));
 
-vi.mock("../native", () => ({ reads: mocks }));
-vi.mock("../api", () => ({
-  api: mocks,
-  errorText: (error: unknown) => (error && typeof error === "object" && "message" in error ? String((error as { message: unknown }).message) : String(error)),
+// The real api, boundary and receipts run here, because the receipts own the wait of a dispatched
+// operation (U2-R1-03). The Tauri IPC sends each command to its mock.
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (command: string, args: Record<string, unknown> = {}) => {
+    switch (command) {
+      case "keys_list": return mocks.keys();
+      case "env_import": return mocks.importEnv(args.text, args.project, args.environment);
+      case "env_launch_terminal": return mocks.launchTerminal(args.project, args.environment);
+      case "env_export": return mocks.exportEnv(args.project, args.environment);
+      case "env_copy": return mocks.copyEnv(args.project, args.environment);
+      case "env_save": return mocks.saveEnv(args.project, args.environment);
+      case "vault_dismiss_warnings": return Promise.resolve();
+      default: return Promise.reject(new Error(`Unexpected command ${command}`));
+    }
+  },
 }));
 
-beforeEach(() => vi.clearAllMocks());
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+beforeEach(() => { vi.clearAllMocks(); adoptReservation(crypto.randomUUID()); });
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  // A request that never answered keeps its receipt, so the next test starts a new session.
+  invalidateSession();
+  acknowledgeCompletions(retainedCompletions().map(({ id }) => id));
+});
 
 
 function fillImport(text = "TOKEN=fake", project = "demo", environment = "dev") {

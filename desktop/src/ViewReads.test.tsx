@@ -6,7 +6,7 @@ import { KeysView } from "./components/KeysView";
 import { RecycleBin } from "./components/RecycleBin";
 import { Settings } from "./components/Settings";
 import { UseKeys } from "./components/UseKeys";
-import { invalidateSession } from "./sessionBoundary";
+import { beginOutcome, invalidateSession, sessionGeneration, settleOutcome } from "./sessionBoundary";
 import { held, type Held } from "./testing/held";
 import type { KeyView } from "./types";
 
@@ -106,7 +106,12 @@ for (const { name, view, read, empty, failed } of VIEWS) {
 
 // LOOK-R4-02: Use keys had no request identity on its list read.
 function importOnce() {
-  api.importEnv.mockResolvedValueOnce({ added: 1, updated: 0 });
+  // As native.ts does: the import has a receipt, and its reply settles it (U2-R1-03).
+  api.importEnv.mockImplementationOnce(() => {
+    const receipt = beginOutcome("import", sessionGeneration());
+    const reply = Promise.resolve({ added: 1, updated: 0 }).then((report) => { settleOutcome(receipt, "completed"); return report; });
+    return Object.assign(reply, { receipt });
+  });
   fireEvent.click(screen.getByRole("button", { name: "Import .env…" }));
   for (const [label, value] of [["Paste the .env contents", "TOKEN=fake"], ["Target project", "demo"], ["Target environment", "dev"]]) {
     fireEvent.change(screen.getByLabelText(label), { target: { value } });

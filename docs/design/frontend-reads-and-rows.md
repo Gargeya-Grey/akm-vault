@@ -139,6 +139,42 @@ The contract is in `docs/design/gate-campaign.md`, under "Contract between units
 - Each terminal receipt says only what is known. A pending launch may already hold keys. An error
   does not confirm that no terminal runs.
 
+### One owner for a dispatched operation (U2-R1-03)
+
+The receipts in `desktop/src/sessionBoundary.ts` are the one owner of the state of a dispatched
+operation: a terminal launch, an import and a file export. A receipt has an outcome and says who
+settled it: the reply, the native record, or a failure in transport. A form keeps no waiting flag
+of its own. It waits while a receipt of its operation, made in the current session, is pending.
+It shows a reply only when the reply settled the receipt, and the outcome text when the record or
+a transport failure settled it. A preview and a copy have no receipt and no record, so their
+`busy` flag stays in the view: native refuses a second confirmation window while one is open
+(`busy`).
+
+| Row | Events, in order | Receipt | The form waits | The form shows | The record |
+|---|---|---|---|---|---|
+| 1 | the reply | settled by the reply | until the reply | the reply: a count, a decline or a native error | acknowledged by the reply |
+| 2 | the record, and no reply | settled by the record | until the record | the outcome of the record | acknowledged when it settles the receipt |
+| 3 | the record, then a late reply | settled by the record | until the record | the outcome of the record; the late reply changes nothing | acknowledged |
+| 4 | the reply, then the record | settled by the reply | until the reply | the reply | the reply acknowledged it, so it is dropped |
+| 5 | neither | pending | while the session lasts | that it waits for the native windows | kept by native |
+| 6 | a reload between | gone with the page | a new page does not wait | nothing | stays a notice until the user dismisses it |
+| 7 | a transport failure | `lost` | until the failure | that the window got no answer | kept, and a notice of its own |
+| 8 | a lock between | pending, or settled by the reply as completed while locked | the view unmounts; a new session does not wait for an older one | nothing | settles only the receipt of its own session (contract 5) |
+| 9 | a second launch | a new receipt | for its own receipt only | its own outcome; a late reply of the first changes nothing | each record settles only its own receipt |
+| 10 | a hide, an expiry or a change of view while it waits | pending | yes: the button stays disabled until the receipt settles | nothing of the reply, which may be protected | unchanged |
+
+`UseKeys.operations.test.tsx` tests each row with the real api, boundary and receipts over a mocked
+IPC. `terminal-outcome.spec.ts` tests row 2 in Edge for the terminal and for the import. Before
+this change, rows 2, 3, 7, 9 and 10 failed: the form waited until the reply, so a record left it
+waiting for ever, and a hide ended the wait while the native window was still open.
+
+The sweep of the class: only `env_import` and `env_launch_terminal` have a native record, and both
+now wait on their receipt. A file export has a receipt and no record, and it waits on its receipt
+too. A preview, a copy, a reveal, a journal recovery and the key, bin, settings and unlock actions
+have no receipt and no record, so their local wait has no second owner. The preview and the copy
+also end their wait on a hide. If the user then asks again while the first native window is
+open, native refuses with `busy`.
+
 ### The error contract with native code (U2-R1-07)
 
 The one boundary function, `invoke` in `desktop/src/native.ts`, decides where a rejection came

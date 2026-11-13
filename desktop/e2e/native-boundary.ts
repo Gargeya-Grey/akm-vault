@@ -18,6 +18,8 @@ export interface BoundaryOptions {
    * `transport`: native records the launch, and the reply is lost in transport (U2-R1-07).
    */
   terminal?: "hold" | "transport";
+  /** `hold`: an import never answers, as when its native confirmation is still open. */
+  importReply?: "hold";
   /** The vault has an older format, so the page offers the format upgrade. */
   needsUpgrade?: boolean;
 }
@@ -152,7 +154,7 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
               { seq: "3", ts: "2026-10-31T00:00:00Z", action: "add-completed", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: "fake detail: 2 keys added, 1 updated" },
             ] };
             case "backup_info": return { path: "C:/fake-test/vault.kdbx.bak", exists: false, bytes: 0, modified: null };
-            case "env_import": return { added: 0, updated: 1 };
+            case "env_import": return options.importReply === "hold" ? new Promise(() => {}) : { added: 0, updated: 1 };
             case "key_history": return [{ index: 0, modifiedAt: "2026-10-30T12:00:00Z", changed: ["Password"], secretChanged: true }];
             case "env_export": return "OPENAI_API_KEY=fake-browser-test-value\n";
             default: throw new Error(`Unexpected test IPC: ${command}`);

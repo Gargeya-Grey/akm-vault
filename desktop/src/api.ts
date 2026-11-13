@@ -3,7 +3,7 @@ import { invoke, rawInvoke } from "./native";
 import { adoptReservation, beginNativeOpen, confirmNativeLock, endNativeOpen, invalidateNativeView, nativeCancellation, nativeOwner, releaseNativeOwner } from "./nativeSession";
 import { sessionGeneration } from "./sessionBoundary";
 import { acknowledgeNotices } from "./operationNotices";
-import type { ImportReport, JournalRecovery, KeyDraft, KeyView, ReminderStatus, RotationReceipt, Status } from "./types";
+import type { Dispatched, ImportReport, JournalRecovery, KeyDraft, KeyView, ReminderStatus, RotationReceipt, Status } from "./types";
 
 export { errorKind, errorText } from "./errors";
 
@@ -116,9 +116,9 @@ export const api = {
     text: string,
     project: string,
     environment: string,
-  ): Promise<ImportReport | null> => {
+  ): Dispatched<ImportReport | null> => {
     const sessionId = nativeOwner();
-    if (sessionId === null) return Promise.reject({ kind: "locked", message: "The session changed. Unlock the vault again." });
+    if (sessionId === null) return Object.assign(Promise.reject({ kind: "locked", message: "The session changed. Unlock the vault again." }), { receipt: null });
     const operationId = crypto.randomUUID();
     return invoke<ImportReport | null>("env_import", { sessionId, operationId, text, project, environment }, undefined, operationId);
   },

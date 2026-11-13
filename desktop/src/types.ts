@@ -182,6 +182,12 @@ export interface NativeError {
   message: string;
 }
 
+/**
+ * The reply of a request that has a receipt (U2-R1-03): an import, a terminal launch or a file
+ * export. `receipt` names it in sessionBoundary.ts, which owns its state.
+ */
+export type Dispatched<T> = Promise<T> & { readonly receipt: number | null };
+
 /** A rejection that no native command sent: the page cannot know what the request did. */
 export interface TransportFailure {
   kind: "transport";

@@ -3,7 +3,7 @@ import { errorText } from "./errors";
 import { beginOutcome, completedWhileLocked, reportCompletion, sessionGeneration, settleOutcome } from "./sessionBoundary";
 import { acknowledgeNotices, receiveWarnings } from "./operationNotices";
 import { acceptNativeStatus, invalidateNativeView, nativeNoticeStamp, nativeOwner } from "./nativeSession";
-import { NATIVE_ERROR_KINDS, type AuditReport, type BackupInfo, type HistoryVersion, type KeyView, type NativeError, type NativeErrorKind, type RecycledKey, type ReminderStatus, type Status, type TransportFailure, type WarningReport } from "./types";
+import { NATIVE_ERROR_KINDS, type AuditReport, type BackupInfo, type HistoryVersion, type KeyView, type NativeError, type NativeErrorKind, type RecycledKey, type ReminderStatus, type Status, type TransportFailure, type WarningReport, type Dispatched } from "./types";
 
 /**
  * The one boundary with native code. Only the files that `readGuard.test.ts` names may import this
@@ -46,15 +46,22 @@ function provenance(rejection: unknown): NativeError | TransportFailure {
   return { kind: "transport", message: errorText(rejection) };
 }
 
-/** A call of a native command with the page's session rules. `operation` is the ID of a native outcome record. */
-export async function invoke<T>(command: string, args?: Record<string, unknown>, expectedOwner?: string, operation?: string): Promise<T> {
+/**
+ * A call of a native command with the page's session rules. `operation` is the ID of a native
+ * outcome record. The reply carries the ID of its receipt, or null when the command has none.
+ */
+export function invoke<T>(command: string, args?: Record<string, unknown>, expectedOwner?: string, operation?: string): Dispatched<T> {
   const generation = sessionGeneration();
-  const bootstrap = command === "vault_status" && nativeOwner() === null;
-  const notices = nativeNoticeStamp();
   // A terminal that opened cannot be taken back, so its receipt exists before the request leaves.
   const outcome = command === "env_import" ? beginOutcome("import", generation, operation)
     : command === "env_launch_terminal" ? beginOutcome("terminal", generation, operation)
     : command === "env_save" ? beginOutcome("export", generation) : undefined;
+  return Object.assign(call<T>(command, args, expectedOwner, operation, generation, outcome), { receipt: outcome ?? null });
+}
+
+async function call<T>(command: string, args: Record<string, unknown> | undefined, expectedOwner: string | undefined, operation: string | undefined, generation: number, outcome: number | undefined): Promise<T> {
+  const bootstrap = command === "vault_status" && nativeOwner() === null;
+  const notices = nativeNoticeStamp();
   const cancelled = () => ({ kind: "locked", message: "The session changed. Unlock the vault again." });
   const committedWhileLocked = () => {
     if (outcome !== undefined) settleOutcome(outcome, "completedWhileLocked");
@@ -67,7 +74,7 @@ export async function invoke<T>(command: string, args?: Record<string, unknown>,
     // a different, non-tombstoned owner is still accepted, not blanket-dropped.
     if (bootstrap && generation === sessionGeneration() && notices !== nativeNoticeStamp()) invalidateNativeView();
     const obsolete = generation !== sessionGeneration();
-    if (outcome !== undefined) settleOutcome(outcome, obsolete ? "unconfirmed" : settled);
+    if (outcome !== undefined) settleOutcome(outcome, obsolete ? "unconfirmed" : settled, settled === "lost" ? "transport" : "reply");
     return obsolete ? cancelled() : error;
   };
   let result: T;
