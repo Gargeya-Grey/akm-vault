@@ -65,6 +65,11 @@ export function Activity() {
 
   const entries = report ? [...report.entries].reverse() : [];
   const shortId = useShortIds(entries.flatMap((entry) => (entry.keyId === null ? [] : [entry.keyId])));
+  const startNew = (
+    <button type="button" className="btn-secondary" onClick={() => void recover()} disabled={recovering || read.busy} aria-busy={recovering || undefined}>
+      {recovering ? "Waiting for your answer…" : "Start a new journal…"}
+    </button>
+  );
 
   return (
     <main className="view">
@@ -113,6 +118,18 @@ export function Activity() {
           />
         )}
 
+        {/* FV-01: a damaged mapping file stops the read itself, so no snapshot can say that it is damaged. Native finds the damaged file and names it in its window. */}
+        {read.state.status === "failed" && (
+          <div className="ledger-message">
+            <Notice tone="info">
+              If the error says that the mapping file is damaged, key reveal, copy and export stay blocked for every vault on this device.
+              You can start again. A window names the damaged file and asks you first. The damaged file is kept unchanged beside it, and the next record of each vault states the gap.
+              History before the damage cannot be proved complete. When no file is damaged, nothing changes.
+            </Notice>
+            {startNew}
+          </div>
+        )}
+
         {report?.notices.map((notice) => (
           <div className="ledger-message" key={notice.kind}>
             <Notice tone="info">{notice.message}</Notice>
@@ -135,16 +152,14 @@ export function Activity() {
               You can start a new journal. A window will ask you first. The damaged file is kept unchanged beside it, and the new journal records the gap.
               History before the damage cannot be proved complete.
             </Notice>
-            <button type="button" className="btn-secondary" onClick={() => void recover()} disabled={recovering || read.busy} aria-busy={recovering || undefined}>
-              {recovering ? "Waiting for your answer…" : "Start a new journal…"}
-            </button>
+            {startNew}
           </div>
         )}
 
         {recovery?.kind === "done" && (
           <div className="ledger-message">
             <Notice tone="ok">
-              A new journal started. The damaged file was kept as <span className="mono path-text">{recovery.result.keptName}</span> ({recovery.result.bytes} bytes, SHA-256 <span className="mono path-text">{recovery.result.sha256}</span>). History before the damage cannot be proved complete.
+              The damaged file was kept as <span className="mono path-text">{recovery.result.keptName}</span> ({recovery.result.bytes} bytes, SHA-256 <span className="mono path-text">{recovery.result.sha256}</span>), and a new file took its place. History before the damage cannot be proved complete.
             </Notice>
           </div>
         )}

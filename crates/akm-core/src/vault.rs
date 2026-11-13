@@ -71,6 +71,19 @@ fn refuse_second_name(file: &File) -> Result<()> {
     refuse_names(private_fs::link_count(file)?)
 }
 
+/// A save refuses a vault path whose last part is a symbolic link: the replacement would
+/// replace the link and leave the file it points to with the old vault (FV-03). A link in a
+/// folder of the path is followed, so the replacement stays in the real folder. Reading stays
+/// possible.
+fn refuse_link(path: &Path) -> Result<()> {
+    if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(Error::Save(
+            "the vault path is a symbolic link, and a save would replace the link and leave the vault it points to unchanged. Nothing was changed. Open the vault by its real path, and save there".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// The file at `path` holds exactly `expected`. It reads at most one byte past its length.
 fn holds_exactly(path: &Path, expected: &[u8]) -> std::io::Result<bool> {
     match private_fs::read_bounded(&mut File::open(path)?, expected.len() as u64) {
@@ -89,8 +102,9 @@ pub enum VaultWarningKind {
     /// A file that AKM wrote beside the vault could not be made private to the current
     /// user (the file system keeps no Windows permissions, or refused them).
     FilePermissions,
-    /// The vault file changed outside AKM, and AKM cannot confirm that it is the same vault.
-    /// Its history continues in the existing journal (FR-12).
+    /// The vault file changed outside AKM (FR-12), or the journal mapping was started again
+    /// after damage (FV-01), and AKM cannot confirm that it is the same vault. Its history
+    /// continues in the journal that AKM keeps for its path.
     JournalLineageUnconfirmed,
 }
 
@@ -260,7 +274,7 @@ impl Vault {
         if self.lineage_unconfirmed.swap(false, Ordering::Relaxed) {
             warnings.push(VaultWarning {
                 kind: VaultWarningKind::JournalLineageUnconfirmed,
-                message: "this vault file changed outside AKM, so AKM cannot confirm that it is the same vault. Its history continues in the existing journal.".into(),
+                message: "this vault file changed outside AKM, or the journal mapping of this device was started again, so AKM cannot confirm that it is the same vault. Its history continues in the journal that AKM keeps for this path.".into(),
             });
         }
         warnings
@@ -1116,7 +1130,9 @@ impl Vault {
                     }
                 })
             } else {
-                // Again under the lock: a second name made after the last check (CORE-R2-05).
+                // Again under the lock: a second name or a link made after the last check
+                // (CORE-R2-05, FV-03).
+                refuse_link(&self.path)?;
                 refuse_second_name(&File::open(&self.path)?)?;
                 fs::rename(&tmp.path, &self.path).map_err(Error::Io)
             }
@@ -1181,6 +1197,7 @@ impl Vault {
     }
 
     fn checked_source(&self) -> Result<Option<Vec<u8>>> {
+        refuse_link(&self.path)?;
         let read = File::open(&self.path).and_then(|mut file| {
             let names = private_fs::link_count(&file)?;
             Ok((names, private_fs::read_bounded(&mut file, MAX_VAULT_BYTES)?))
@@ -2031,15 +2048,105 @@ mod tests {
         );
     }
 
+    /// FV-21: on a path longer than 260 characters every file of a save is private too. The
+    /// folder grants Everyone read access to what it holds, so a file that took the folder's
+    /// permissions would be readable by Everyone. A vault path of 130 characters gives dated
+    /// backups of 267 characters, as in the reviewer's run.
+    #[cfg(windows)]
+    #[test]
+    fn a_save_on_a_long_path_in_a_shared_folder_keeps_every_file_private() {
+        use std::os::windows::ffi::OsStrExt;
+        let units = |path: &Path| path.as_os_str().encode_wide().count();
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        let granted = std::process::Command::new("icacls")
+            .arg(&shared)
+            .args(["/grant", "*S-1-1-0:(OI)(CI)(R)"])
+            .output()
+            .unwrap();
+        assert!(granted.status.success(), "{granted:?}");
+        let stem = 130 - units(&shared) - 1 - ".kdbx".len();
+        let path = shared.join(format!("{}.kdbx", "v".repeat(stem)));
+        assert_eq!(units(&path), 130);
+        fs::write(&path, include_bytes!("../tests/fixtures/kdbx40.kdbx")).unwrap();
+        let mut vault = Vault::open(&path, PASSWORD).unwrap();
+        vault.upgrade().unwrap();
+        vault
+            .add(ApiKeyInput::new("Fake first", "fake-first-value"))
+            .unwrap();
+        vault
+            .add(ApiKeyInput::new("Fake second", "fake-second-value"))
+            .unwrap();
+        let warnings = vault.take_warning_records();
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| warning.kind != VaultWarningKind::FilePermissions),
+            "{warnings:?}"
+        );
+        let (mut checked, mut long) = (0, 0);
+        for entry in fs::read_dir(&shared).unwrap() {
+            let file = entry.unwrap().path();
+            let name = file.file_name().unwrap().to_string_lossy().into_owned();
+            if name.ends_with(".lock") {
+                continue;
+            }
+            crate::private_fs::check_private(&file)
+                .unwrap_or_else(|error| panic!("{name} is not private: {error}"));
+            checked += 1;
+            if units(&file) > 260 {
+                long += 1;
+            }
+        }
+        // The vault, the .bak copy and the dated backups of the three saves.
+        assert_eq!((checked, long), (5, 3));
+    }
+
+    /// FV-21: on a volume that keeps Windows permissions, a failed private creation fails the
+    /// save. A plain file there would take the folder's permissions. Nothing is written: the
+    /// vault keeps its bytes and the folder gets no new file.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_private_creation_on_a_volume_that_keeps_permissions_fails_the_save() {
+        use crate::private_fs::testing::{set, Mode};
+        let (dir, path, mut vault) = fixture_vault();
+        let names = |dir: &Path| {
+            let mut names: Vec<_> = fs::read_dir(dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            names.sort();
+            names
+        };
+        let (before, files) = (fs::read(&path).unwrap(), names(dir.path()));
+        set(Mode::CreateFails);
+        let refused = vault.add(ApiKeyInput::new("Fake refused", "fake-refused-value"));
+        set(Mode::Normal);
+        let error = refused.expect_err("the save is refused").to_string();
+        assert!(error.contains("private to your account"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(names(dir.path()), files);
+        let reopened = Vault::open(&path, PASSWORD).unwrap();
+        assert!(reopened
+            .list()
+            .iter()
+            .all(|key| key.title != "Fake refused"));
+    }
+
     /// FR-05: a file system that cannot keep private permissions does not stop the save.
     /// The save succeeds and a typed warning says why the files are not private. Both ways
-    /// to fail are covered: the create call fails, and the file system ignores the
-    /// descriptor (the warning then comes from the real permissions check).
+    /// to fail are covered: the create call fails on a volume that reports no persistent
+    /// permissions, and the file system ignores the descriptor (the warning then comes from
+    /// the real permissions check).
     #[cfg(windows)]
     #[test]
     fn a_save_on_a_file_system_without_private_files_succeeds_and_warns() {
         use crate::private_fs::testing::{set, Mode};
-        for mode in [Mode::CreateFails, Mode::DescriptorIgnored] {
+        for mode in [
+            Mode::CreateFailsOnVolumeWithoutPermissions,
+            Mode::DescriptorIgnored,
+        ] {
             let (dir, path, mut vault) = fixture_vault();
             vault.take_warning_records();
             set(mode);
@@ -2077,6 +2184,7 @@ mod tests {
         let cases = [
             (crafted::argon2(true, 1 << 40, 3, 4), "4 GiB"),
             (crafted::argon2(false, 64 << 20, u64::MAX, 4), "100000"),
+            (crafted::argon2(true, 4 << 30, 100_000, 4), "64 GiB-passes"),
             (crafted::argon2(true, 64 << 20, 3, u32::MAX), "256"),
             (crafted::aes4(u64::MAX), "2000000000"),
             (crafted::aes3(3_000_000_000), "2000000000"),
@@ -2259,10 +2367,10 @@ mod tests {
         match std::os::windows::fs::symlink_file(&target, &link) {
             Ok(()) => {}
             Err(error) if error.raw_os_error() == Some(1314) => {
-                eprintln!(
-                    "NOT RUN: a_lock_held_through_a_file_symlink_refuses_its_target_and_back: Windows error 1314, no privilege to make a file symbolic link"
+                return not_run(
+                    "a_lock_held_through_a_file_symlink_refuses_its_target_and_back",
+                    "Windows error 1314, no privilege to make a file symbolic link",
                 );
-                return;
             }
             Err(error) => panic!("could not make the file link: {error}"),
         }
@@ -2272,6 +2380,161 @@ mod tests {
         let held = acquire_lock(&target).unwrap();
         assert!(matches!(acquire_lock(&link), Err(Error::Locked)));
         drop(held);
+    }
+
+    /// Prints that a test did not run. It writes past the test harness's capture, so the line
+    /// shows also when the test passes (CORE-C-02).
+    pub(crate) fn not_run(test: &str, why: &str) {
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), "NOT RUN: {test}: {why}");
+    }
+
+    #[cfg(windows)]
+    fn make_junction(junction: &Path, target: &Path) {
+        let made = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(junction)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+    }
+
+    /// FV-03, with no privilege: the link check refuses a path whose last part is a link (a
+    /// junction stands in for a file symbolic link here), and passes a plain file, a plain
+    /// file in a folder reached through a junction, and a path that does not exist.
+    #[cfg(windows)]
+    #[test]
+    fn the_link_check_refuses_only_a_link_as_the_last_part_of_the_vault_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("Real");
+        fs::create_dir(&real).unwrap();
+        fs::write(real.join("vault.kdbx"), b"fake vault bytes").unwrap();
+        let folder = dir.path().join("folder-link");
+        make_junction(&folder, &real);
+        let last = dir.path().join("last-link.kdbx");
+        make_junction(&last, &real);
+        refuse_link(&real.join("vault.kdbx")).unwrap();
+        refuse_link(&folder.join("vault.kdbx")).unwrap();
+        refuse_link(&dir.path().join("missing.kdbx")).unwrap();
+        let text = refuse_link(&last).unwrap_err().to_string();
+        assert!(text.contains("symbolic link"), "{text}");
+        assert!(text.contains("real path"), "{text}");
+        let _ = fs::remove_dir(&folder);
+        let _ = fs::remove_dir(&last);
+    }
+
+    /// FV-03: a vault in a folder that is reached through a junction keeps working. The save
+    /// replaces the file in the real folder, and the junction stays.
+    #[cfg(windows)]
+    #[test]
+    fn a_vault_in_a_folder_reached_through_a_junction_saves_in_the_real_folder() {
+        let (dir, real_path, vault) = fixture_vault();
+        drop(vault);
+        let outer = tempfile::tempdir().unwrap();
+        let junction = outer.path().join("junction");
+        make_junction(&junction, dir.path());
+        let through = junction.join(real_path.file_name().unwrap());
+        let mut vault = Vault::open(&through, PASSWORD).unwrap();
+        vault
+            .add(ApiKeyInput::new("Fake junction", "fake-junction-value"))
+            .unwrap();
+        let reopened = Vault::open(&real_path, PASSWORD).unwrap();
+        assert!(reopened
+            .list()
+            .iter()
+            .any(|key| key.title == "Fake junction"));
+        assert!(fs::symlink_metadata(&junction)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let _ = fs::remove_dir(&junction);
+    }
+
+    /// FV-03: a save refuses a vault path that is a link, when it opens the file and again
+    /// just before the replacement. A junction swapped in at the last moment is refused by
+    /// the second check, with no privilege; the vault file it replaced is gone, so nothing
+    /// else can be compared here (the file-link test below compares the target).
+    #[cfg(windows)]
+    #[test]
+    fn a_link_swapped_in_just_before_the_replacement_is_refused() {
+        let (dir, path, mut vault) = fixture_vault();
+        let elsewhere = dir.path().join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        on_save(SaveStage::BeforeReplace, move |_, vault_path| {
+            fs::remove_file(vault_path).unwrap();
+            make_junction(vault_path, &elsewhere);
+        });
+        let text = vault
+            .add(ApiKeyInput::new("Fake late", "fake-late-value"))
+            .expect_err("the save is refused")
+            .to_string();
+        assert!(text.contains("symbolic link"), "{text}");
+        let _ = fs::remove_dir(&path);
+    }
+
+    /// FV-03 on the real file system: a vault opened through a file symbolic link can be
+    /// read, and a save refuses it and changes nothing. A link swapped in just before the
+    /// replacement is refused too, and its target keeps its bytes. Making a file link needs
+    /// the symbolic-link privilege or Developer Mode; without it Windows returns error 1314,
+    /// and the test prints a NOT RUN line that shows in every run.
+    #[cfg(windows)]
+    #[test]
+    fn a_save_through_a_file_symbolic_link_is_refused_and_changes_nothing() {
+        let (dir, target, vault) = fixture_vault();
+        drop(vault);
+        let other = dir.path().join("other");
+        fs::create_dir(&other).unwrap();
+        let link = other.join("link.kdbx");
+        match std::os::windows::fs::symlink_file(&target, &link) {
+            Ok(()) => {}
+            Err(error) if error.raw_os_error() == Some(1314) => {
+                return not_run(
+                    "a_save_through_a_file_symbolic_link_is_refused_and_changes_nothing",
+                    "Windows error 1314, no privilege to make a file symbolic link",
+                );
+            }
+            Err(error) => panic!("could not make the file link: {error}"),
+        }
+        let listing = |folder: &Path| fs::read_dir(folder).unwrap().count();
+        let (bytes, files, linked) = (
+            fs::read(&target).unwrap(),
+            listing(dir.path()),
+            listing(&other),
+        );
+        let mut through = Vault::open(&link, PASSWORD).unwrap();
+        let keys = through.list().len();
+        let text = through
+            .add(ApiKeyInput::new("Fake linked", "fake-linked-value"))
+            .expect_err("the save is refused")
+            .to_string();
+        assert!(
+            text.contains("symbolic link") && text.contains("real path"),
+            "{text}"
+        );
+        assert_eq!(fs::read(&target).unwrap(), bytes);
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!((listing(dir.path()), listing(&other)), (files, linked));
+        assert_eq!(Vault::open(&target, PASSWORD).unwrap().list().len(), keys);
+
+        let mut direct = Vault::open(&target, PASSWORD).unwrap();
+        let kept = other.join("kept.kdbx");
+        on_save(SaveStage::BeforeReplace, move |_, vault_path| {
+            fs::copy(vault_path, &kept).unwrap();
+            fs::remove_file(vault_path).unwrap();
+            std::os::windows::fs::symlink_file(&kept, vault_path).unwrap();
+        });
+        let text = direct
+            .add(ApiKeyInput::new("Fake late", "fake-late-value"))
+            .expect_err("the save is refused")
+            .to_string();
+        assert!(text.contains("symbolic link"), "{text}");
+        assert_eq!(fs::read(other.join("kept.kdbx")).unwrap(), bytes);
     }
 
     /// Core review 1, finding 9: a vault that does not exist yet. While one spelling holds the

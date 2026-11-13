@@ -206,6 +206,7 @@ fn with_leftover(error: Error, pending: &Path) -> Error {
 }
 
 /// A record to append. The chain adds the sequence number, the time and the links.
+#[derive(Clone, Copy)]
 pub(crate) struct NewRecord<'a> {
     pub action: &'a str,
     pub key_id: Option<&'a str>,
@@ -307,6 +308,137 @@ impl Store for PrivateStore {
     }
 }
 
+/// Keeps the damaged file at `path` aside under a dated name, byte for byte, and puts the
+/// bytes that `fresh` makes from the kept file and its name in its place: a journal chain
+/// (FR-14) or the mapping (FV-01). The caller holds the lock of the file and checked that it
+/// is damaged. `damaged` is the file, open to read.
+///
+/// The order is what keeps the old file usable as evidence after every failure. The new
+/// bytes are written and synced to a file of their own first. Then the damaged file is
+/// renamed, and only then the new file takes its name. A failure before the first rename
+/// leaves the damaged file where it was. A failure of the second rename puts the damaged
+/// file back. Only a failure of both leaves the name free, and the error says so. Only a
+/// file that this call created is ever removed.
+pub(crate) fn set_aside(
+    path: &Path,
+    damaged: File,
+    now: DateTime<Utc>,
+    create_new: impl FnOnce(&Path) -> Result<File>,
+    fresh: impl FnOnce(&Recovery, &str) -> Result<Vec<u8>>,
+) -> Result<Recovery> {
+    let (bytes, sha256) = fingerprint(damaged)?;
+    let kept = free_kept_path(path, now)?;
+    let kept_name = kept
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let recovery = Recovery {
+        kept,
+        bytes,
+        sha256,
+    };
+    let new_bytes = fresh(&recovery, &kept_name)?;
+    let kept = &recovery.kept;
+
+    let mut name = path.as_os_str().to_os_string();
+    name.push(format!(".recovering-{}", uuid::Uuid::new_v4().simple()));
+    let pending = PathBuf::from(name);
+    reach(RecoveryStep::CreateNew)?;
+    let mut created = create_new(&pending)?;
+    // From here the pending file is ours, and only this call removes it.
+    let written = reach(RecoveryStep::SyncNew)
+        .and_then(|()| Ok(created.write_all(&new_bytes)?))
+        .and_then(|()| Ok(created.sync_data()?));
+    drop(created);
+    if let Err(error) = written {
+        return Err(with_leftover(error, &pending));
+    }
+
+    // Every move below refuses a taken destination (`move_new`): the kept name was chosen by
+    // an absence check, and the name of the file is free only because the damaged file moved
+    // away, so another writer can take either name in between (core review 1, finding 8). The
+    // new bytes already name the kept file, so a taken name refuses.
+    let aside = reach(RecoveryStep::RenameAside)
+        .and_then(|()| private_fs::move_new(path, kept).map_err(Error::from));
+    if let Err(error) = aside {
+        return Err(with_leftover(
+            Error::Journal(format!(
+                "the damaged file could not be kept aside as {kept_name}, so nothing was changed; try again ({error})"
+            )),
+            &pending,
+        ));
+    }
+    let installed = reach(RecoveryStep::Install)
+        .and_then(|()| private_fs::move_new(&pending, path).map_err(Error::from));
+    if let Err(error) = installed {
+        let restored = reach(RecoveryStep::Restore)
+            .and_then(|()| private_fs::move_new(kept, path).map_err(Error::from));
+        return Err(match restored {
+            Ok(()) => with_leftover(
+                Error::Journal(format!(
+                    "the new file could not be put in place, so the damaged file was put back ({error})"
+                )),
+                &pending,
+            ),
+            Err(restore) => Error::Journal(format!(
+                "the new file could not be put in place ({error}) and the damaged file could not be put back ({restore}). The damaged file is kept as {}. The new file is {}. Move one of them to {} to continue",
+                kept.display(),
+                pending.display(),
+                path.display()
+            )),
+        });
+    }
+    Ok(recovery)
+}
+
+/// The refusal of a recovery whose damaged file is not the one that the person approved.
+pub(crate) fn not_approved(damaged: &Path) -> Error {
+    Error::Journal(format!(
+        "the damaged file is now {}, not the file that you approved, so nothing was changed. Try again",
+        damaged.display()
+    ))
+}
+
+/// The size and the SHA-256 of a file.
+fn fingerprint(file: File) -> Result<(u64, String)> {
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut bytes = 0u64;
+    let mut block = [0u8; 8192];
+    loop {
+        let read = std::io::Read::read(&mut reader, &mut block)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&block[..read]);
+        bytes += read as u64;
+    }
+    Ok((bytes, hex::encode(hasher.finalize())))
+}
+
+/// `<file>.damaged-<UTC time>`, with a number added if that name is taken. The name does not
+/// end in `.jsonl` or `.json`, so nothing reads it as a journal or a mapping.
+fn free_kept_path(path: &Path, now: DateTime<Utc>) -> Result<PathBuf> {
+    let stamp = now.format("%Y%m%dT%H%M%SZ");
+    for number in 1..=100u32 {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(if number == 1 {
+            format!(".damaged-{stamp}")
+        } else {
+            format!(".damaged-{stamp}-{number}")
+        });
+        let candidate = PathBuf::from(name);
+        match fs::symlink_metadata(&candidate) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(candidate),
+            Err(error) => return Err(error.into()),
+            Ok(_) => {}
+        }
+    }
+    Err(Error::Journal(
+        "too many kept files have the same time stamp".into(),
+    ))
+}
+
 fn genesis(journal_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"akm-journal-v1\n");
@@ -346,17 +478,31 @@ impl ChainFile {
     }
 
     pub fn append(&self, action: &str, key_id: Option<&str>, detail: Option<&str>) -> Result<()> {
-        self.append_all(&[NewRecord {
-            action,
-            key_id,
-            detail,
-        }])
+        self.append_all(
+            None,
+            &[NewRecord {
+                action,
+                key_id,
+                detail,
+            }],
+        )
     }
 
-    pub(crate) fn append_all(&self, records: &[NewRecord<'_>]) -> Result<()> {
+    /// `opening` goes first when the chain has no record yet.
+    pub(crate) fn append_all(
+        &self,
+        opening: Option<NewRecord<'_>>,
+        records: &[NewRecord<'_>],
+    ) -> Result<()> {
         let _lock = self.store.lock(true)?;
-        let (seq, prev) = self.tail()?.unwrap_or((0, self.genesis.clone()));
-        let bytes = self.encode(records, &prev, seq, Utc::now())?;
+        let tail = self.tail()?;
+        let records: Vec<_> = opening
+            .filter(|_| tail.is_none())
+            .into_iter()
+            .chain(records.iter().copied())
+            .collect();
+        let (seq, prev) = tail.unwrap_or((0, self.genesis.clone()));
+        let bytes = self.encode(&records, &prev, seq, Utc::now())?;
         let mut file = self.store.append()?;
         file.write_all(&bytes)?;
         #[cfg(test)]
@@ -510,15 +656,8 @@ impl ChainFile {
     }
 
     /// Keeps a damaged chain file aside under a dated name, byte for byte, and starts a new
-    /// chain in its place. The first record of the new chain states the gap and the SHA-256 of
-    /// the kept file; `then` follows it. The chain file must be damaged.
-    ///
-    /// The order is what keeps the old journal usable as evidence after every failure. The
-    /// new chain is written and synced to a file of its own first. Then the damaged file is
-    /// renamed, and only then the new file takes its name. A failure before the first
-    /// rename leaves the damaged file where it was. A failure of the second rename puts the
-    /// damaged file back. Only a failure of both leaves the name free, and the error says so.
-    /// Only a file that this call created is ever removed.
+    /// chain in its place (`set_aside`). The first record of the new chain states the gap and
+    /// the SHA-256 of the kept file; `then` follows it. The chain file must be damaged.
     pub(crate) fn recover(&self, now: DateTime<Utc>, then: &[NewRecord<'_>]) -> Result<Recovery> {
         let _lock = self.store.lock(true)?;
         let Some(file) = self.store.read()? else {
@@ -531,127 +670,30 @@ impl ChainFile {
                 "The activity journal is not damaged, so nothing was moved.".into(),
             ));
         }
-        let (bytes, sha256) = self.fingerprint()?;
-        let kept = self.free_kept_path(now)?;
-        let kept_name = kept
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let detail = format!(
-            "history before this record cannot be proved complete; the damaged journal ({bytes} bytes, SHA-256 {sha256}) is kept as {kept_name}"
-        );
-        let mut records = vec![NewRecord {
-            action: RECOVERED,
-            key_id: None,
-            detail: Some(&detail),
-        }];
-        records.extend(then.iter().map(|record| NewRecord {
-            action: record.action,
-            key_id: record.key_id,
-            detail: record.detail,
-        }));
-        let new_chain = self.encode(&records, &self.genesis, 0, now)?;
-
-        let pending = self.pending_path();
-        reach(RecoveryStep::CreateNew)?;
-        let mut created = self.store.create_new(&pending)?;
-        // From here the pending file is ours, and only this call removes it.
-        let written = reach(RecoveryStep::SyncNew)
-            .and_then(|()| Ok(created.write_all(&new_chain)?))
-            .and_then(|()| Ok(created.sync_data()?));
-        drop(created);
-        if let Err(error) = written {
-            return Err(with_leftover(error, &pending));
-        }
-
-        // Every move below refuses a taken destination (`move_new`): the kept name was chosen
-        // by an absence check, and the journal name is free only because the damaged journal
-        // moved away, so another writer can take either name in between (core review 1,
-        // finding 8). The new chain already names the kept file, so a taken name refuses.
-        let aside = reach(RecoveryStep::RenameAside)
-            .and_then(|()| private_fs::move_new(&self.path, &kept).map_err(Error::from));
-        if let Err(error) = aside {
-            return Err(with_leftover(
-                Error::Journal(format!(
-                    "the damaged journal could not be kept aside as {kept_name}, so nothing was changed; try again ({error})"
-                )),
-                &pending,
-            ));
-        }
-        let installed = reach(RecoveryStep::Install)
-            .and_then(|()| private_fs::move_new(&pending, &self.path).map_err(Error::from));
-        if let Err(error) = installed {
-            let restored = reach(RecoveryStep::Restore)
-                .and_then(|()| private_fs::move_new(&kept, &self.path).map_err(Error::from));
-            return Err(match restored {
-                Ok(()) => with_leftover(
-                    Error::Journal(format!(
-                        "the new journal could not be started, so the damaged journal was put back ({error})"
-                    )),
-                    &pending,
-                ),
-                Err(restore) => Error::Journal(format!(
-                    "the new journal could not be started ({error}) and the damaged journal could not be put back ({restore}). The damaged journal is kept as {}. The new journal is {}. Move one of them to {} to continue",
-                    kept.display(),
-                    pending.display(),
-                    self.path.display()
-                )),
-            });
-        }
-        Ok(Recovery {
-            kept,
-            bytes,
-            sha256,
-        })
-    }
-
-    /// The size and the SHA-256 of the file as it is now.
-    fn fingerprint(&self) -> Result<(u64, String)> {
-        let Some(file) = self.store.read()? else {
-            return Err(Error::Journal("the journal file disappeared".into()));
-        };
-        let mut reader = BufReader::new(file);
-        let mut hasher = Sha256::new();
-        let mut bytes = 0u64;
-        let mut block = [0u8; 8192];
-        loop {
-            let read = std::io::Read::read(&mut reader, &mut block)?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&block[..read]);
-            bytes += read as u64;
-        }
-        Ok((bytes, hex::encode(hasher.finalize())))
-    }
-
-    /// `<journal>.damaged-<UTC time>`, with a number added if that name is taken. The name does
-    /// not end in `.jsonl`, so nothing reads it as a journal.
-    fn free_kept_path(&self, now: DateTime<Utc>) -> Result<PathBuf> {
-        let stamp = now.format("%Y%m%dT%H%M%SZ");
-        for number in 1..=100u32 {
-            let mut name = self.path.as_os_str().to_os_string();
-            name.push(if number == 1 {
-                format!(".damaged-{stamp}")
-            } else {
-                format!(".damaged-{stamp}-{number}")
-            });
-            let candidate = PathBuf::from(name);
-            match fs::symlink_metadata(&candidate) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(candidate),
-                Err(error) => return Err(error.into()),
-                Ok(_) => {}
-            }
-        }
-        Err(Error::Journal(
-            "too many kept journals have the same time stamp".into(),
-        ))
-    }
-
-    fn pending_path(&self) -> PathBuf {
-        let mut name = self.path.as_os_str().to_os_string();
-        name.push(format!(".recovering-{}", uuid::Uuid::new_v4().simple()));
-        PathBuf::from(name)
+        let damaged = self
+            .store
+            .read()?
+            .ok_or_else(|| Error::Journal("the journal file disappeared".into()))?;
+        let create_new = |pending: &Path| self.store.create_new(pending);
+        set_aside(
+            &self.path,
+            damaged,
+            now,
+            create_new,
+            |recovery, kept_name| {
+                let detail = format!(
+                "history before this record cannot be proved complete; the damaged journal ({} bytes, SHA-256 {}) is kept as {kept_name}",
+                recovery.bytes, recovery.sha256
+            );
+                let opening = NewRecord {
+                    action: RECOVERED,
+                    key_id: None,
+                    detail: Some(&detail),
+                };
+                let records: Vec<_> = [opening].into_iter().chain(then.iter().copied()).collect();
+                self.encode(&records, &self.genesis, 0, now)
+            },
+        )
     }
 
     // The caller holds the exclusive lock.
@@ -739,7 +781,12 @@ impl AuditLog {
                 key_id,
                 detail,
             });
-            chain.append_all(&records)?;
+            let opening = placement.opening.as_deref().map(|detail| NewRecord {
+                action: RECOVERED,
+                key_id: None,
+                detail: Some(detail),
+            });
+            chain.append_all(opening, &records)?;
             Ok(placement.lineage_unconfirmed)
         })
     }
@@ -752,24 +799,44 @@ impl AuditLog {
         self.snapshot(0)?.verification()
     }
 
-    /// A deliberate recovery from a damaged journal. It touches the journal of this vault and
-    /// no other file of the folder. The damaged file is kept under a dated name beside the
-    /// journal, byte for byte, and a new journal starts with one record that states the gap and
-    /// the SHA-256 of the kept file. Appends and disclosure work again after that. A journal
-    /// that is not damaged is refused. A failure at any step leaves the damaged journal as
-    /// evidence, in place.
+    /// A deliberate recovery from a damaged mapping of the folder (FV-01), else from a damaged
+    /// journal of this vault (FR-14). It touches that one file and no other file of the
+    /// folder. The damaged file is kept under a dated name beside it, byte for byte. A
+    /// damaged journal is replaced by a new journal with one record that states the gap and
+    /// the SHA-256 of the kept file. A damaged mapping is replaced by an empty one, and each
+    /// vault's new journal starts with that record. Appends and disclosure work again after
+    /// that. When nothing is damaged, the recovery is refused. A failure at any step leaves
+    /// the damaged file as evidence, in place.
     pub fn recover_damaged(&self) -> Result<Recovery> {
-        self.recover_damaged_at(Utc::now())
+        self.recover_at(Utc::now(), None)
+    }
+
+    /// Like [`AuditLog::recover_damaged`], for the file that the person approved, from
+    /// [`AuditLog::damaged_file`]. When another file is damaged now, it refuses and nothing
+    /// moves (class B).
+    pub fn recover_damaged_file(&self, approved: &Path) -> Result<Recovery> {
+        self.recover_at(Utc::now(), Some(approved))
     }
 
     pub fn recover_damaged_at(&self, now: DateTime<Utc>) -> Result<Recovery> {
+        self.recover_at(now, None)
+    }
+
+    fn recover_at(&self, now: DateTime<Utc>, approved: Option<&Path>) -> Result<Recovery> {
         let Some(folder) = self.root.open()? else {
             return Err(Error::Journal("there is no journal to recover".into()));
         };
+        if let Some(recovery) = journal::recover_mapping(&folder, now, approved)? {
+            return Ok(recovery);
+        }
         // A recovery reports no lineage warning, so it leaves an unseen version unsettled
         // for the next record.
         journal::record(&folder, &self.evidence, false, |placement| {
-            let chain = ChainFile::private(folder.journal_file(&placement.id), &placement.id);
+            let path = folder.journal_file(&placement.id);
+            if approved.is_some_and(|approved| approved != path) {
+                return Err(not_approved(&path));
+            }
+            let chain = ChainFile::private(path, &placement.id);
             let owed = placement.owes_rollback.then_some(NewRecord {
                 action: "vault-rolled-back",
                 key_id: None,
@@ -777,6 +844,19 @@ impl AuditLog {
             });
             chain.recover(now, owed.as_slice())
         })
+    }
+
+    /// The file that a recovery would keep aside: the mapping of the folder when it is
+    /// damaged, else the journal of this vault when it is damaged. Changes nothing.
+    pub fn damaged_file(&self) -> Result<Option<PathBuf>> {
+        let Some(folder) = self.root.open()? else {
+            return Ok(None);
+        };
+        if let Some(mapping) = journal::damaged_mapping_file(&folder)? {
+            return Ok(Some(mapping));
+        }
+        let snapshot = self.snapshot(0)?;
+        Ok((snapshot.state == AuditState::Corrupt).then_some(snapshot.location))
     }
 
     /// Reads the journal and the notices about it. Creates nothing and changes nothing.
@@ -1222,6 +1302,291 @@ mod recovery_tests {
                 .to_string_lossy()
                 .contains(".recovering-")),
             "no pending file is left"
+        );
+    }
+
+    // ---- FV-01: a damaged mapping ----
+
+    const KEPT_MAPPING: &str = "mapping.json.damaged-20261109T101500Z";
+
+    fn folder_of(directory: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut files: Vec<_> = fs::read_dir(directory.join("journal"))
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.file_name().to_string_lossy().into_owned(),
+                    fs::read(entry.path()).unwrap_or_default(),
+                )
+            })
+            .collect();
+        files.sort();
+        files
+    }
+
+    /// Cuts the mapping of the folder in half, and returns the bytes that are left.
+    fn damage_mapping(directory: &Path) -> Vec<u8> {
+        let mapping = directory.join("journal").join("mapping.json");
+        let bytes = fs::read(&mapping).unwrap();
+        fs::write(&mapping, &bytes[..bytes.len() / 2]).unwrap();
+        fs::read(&mapping).unwrap()
+    }
+
+    /// Two fake vault files that share one journal folder, with the evidence of an unlocked
+    /// vault and one record each.
+    struct TwoLogs {
+        directory: tempfile::TempDir,
+        logs: Vec<AuditLog>,
+    }
+
+    impl TwoLogs {
+        fn new() -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let logs = ["a.kdbx", "b.kdbx"]
+                .into_iter()
+                .map(|name| {
+                    let vault = directory.path().join(name);
+                    let bytes = format!("fake vault bytes of {name}");
+                    fs::write(&vault, &bytes).unwrap();
+                    let log = AuditLog::new(
+                        JournalRoot::at(directory.path().join("journal")),
+                        VaultEvidence::unlocked(
+                            &vault,
+                            Some(hex::encode(Sha256::digest(bytes))),
+                            format!("fake-vault-id-{name}"),
+                        ),
+                    );
+                    log.append("add-completed", None, None).unwrap();
+                    log
+                })
+                .collect();
+            Self { directory, logs }
+        }
+    }
+
+    fn reveal(vault: &crate::Vault, key: &crate::ApiKey) -> Result<()> {
+        vault
+            .disclose_key(crate::KeyDisclosure::Reveal, key, None)
+            .map(|_| ())
+    }
+
+    fn lineage_warnings(vault: &mut crate::Vault) -> usize {
+        vault
+            .take_warning_records()
+            .iter()
+            .filter(|warning| {
+                warning.kind == crate::vault::VaultWarningKind::JournalLineageUnconfirmed
+            })
+            .count()
+    }
+
+    /// FV-01, the reviewer's probe: a damaged mapping stops the reveals of two vaults, and
+    /// nothing recovers by itself. A deliberate recovery keeps the damaged bytes under a new
+    /// name and touches no journal file. Both vaults then reveal again. The new journal of
+    /// each one starts with a record that states the gap, and its first record warns that
+    /// the lineage is unconfirmed.
+    #[test]
+    fn fv01_a_recovery_of_a_damaged_mapping_resumes_both_vaults_and_states_the_gap() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut vaults: Vec<_> = ["a.kdbx", "b.kdbx"]
+            .into_iter()
+            .map(|name| {
+                let mut vault = crate::Vault::create_in(
+                    directory.path().join(name),
+                    "fake-mapping-password",
+                    None,
+                    JournalRoot::at(directory.path().join("journal")),
+                )
+                .unwrap();
+                let key = vault
+                    .add(crate::ApiKeyInput::new("Fake", "fake-mapping-value"))
+                    .unwrap();
+                reveal(&vault, &key).unwrap();
+                assert_eq!(lineage_warnings(&mut vault), 0);
+                (vault, key)
+            })
+            .collect();
+        let journals: Vec<_> = vaults
+            .iter()
+            .map(|(vault, _)| {
+                let path = vault.audit_log().journal_path().unwrap().unwrap();
+                let bytes = fs::read(&path).unwrap();
+                (path, bytes)
+            })
+            .collect();
+        let damaged = damage_mapping(directory.path());
+        let mapping = directory.path().join("journal").join("mapping.json");
+        for (vault, key) in &vaults {
+            let refused = reveal(vault, key).unwrap_err().to_string();
+            assert!(refused.contains("mapping"), "{refused}");
+        }
+        assert_eq!(
+            fs::read(&mapping).unwrap(),
+            damaged,
+            "nothing recovers by itself"
+        );
+
+        let recovery = vaults[0].0.audit_log().recover_damaged_at(then()).unwrap();
+
+        assert_eq!(recovery.kept, mapping.with_file_name(KEPT_MAPPING));
+        assert_eq!(
+            fs::read(&recovery.kept).unwrap(),
+            damaged,
+            "kept byte for byte"
+        );
+        assert_eq!(recovery.bytes, damaged.len() as u64);
+        assert_eq!(recovery.sha256, hex::encode(Sha256::digest(&damaged)));
+        for (vault, key) in &mut vaults {
+            reveal(vault, key).unwrap();
+            assert_eq!(lineage_warnings(vault), 1, "the first record warns");
+            reveal(vault, key).unwrap();
+            assert_eq!(lineage_warnings(vault), 0, "and only the first");
+            let entries = vault.audit_log().read(10).unwrap();
+            let actions: Vec<_> = entries.iter().map(|entry| entry.action.as_str()).collect();
+            assert_eq!(actions, [RECOVERED, "reveal-requested", "reveal-requested"]);
+            let detail = entries[0].detail.as_deref().unwrap();
+            for fact in [
+                "cannot be proved complete",
+                recovery.sha256.as_str(),
+                KEPT_MAPPING,
+            ] {
+                assert!(detail.contains(fact), "{fact}: {detail}");
+            }
+        }
+        for (path, bytes) in journals {
+            assert_eq!(fs::read(&path).unwrap(), bytes, "{}", path.display());
+        }
+    }
+
+    /// FV-01, classes C and F: a failure at any step of a mapping recovery leaves the folder
+    /// as it was, and disclosure stays blocked. A retry then ends in the state of a recovery
+    /// that never failed (`None`): the damaged bytes under the dated name, an empty mapping
+    /// that states the gap, every journal file as it was, and a first record of each vault
+    /// that warns.
+    #[test]
+    fn fv01_a_failed_mapping_recovery_changes_nothing_and_a_retry_ends_the_same() {
+        for step in [
+            None,
+            Some(RecoveryStep::CreateNew),
+            Some(RecoveryStep::SyncNew),
+            Some(RecoveryStep::RenameAside),
+            Some(RecoveryStep::Install),
+        ] {
+            let f = TwoLogs::new();
+            let damaged = damage_mapping(f.directory.path());
+            let before = folder_of(f.directory.path());
+            if let Some(step) = step {
+                fail_recovery_at(step);
+                let error = f.logs[0].recover_damaged_at(then()).unwrap_err();
+                assert!(error.to_string().contains("injected"), "{step:?}: {error}");
+                assert_eq!(folder_of(f.directory.path()), before, "{step:?}");
+                assert!(
+                    f.logs[1].append("reveal-requested", None, None).is_err(),
+                    "{step:?}: disclosure stays blocked"
+                );
+            }
+
+            f.logs[0].recover_damaged_at(then()).unwrap();
+
+            let mut after = folder_of(f.directory.path());
+            let fresh = after.remove(
+                after
+                    .iter()
+                    .position(|(name, _)| name == "mapping.json")
+                    .expect("a new mapping"),
+            );
+            let sha256 = hex::encode(Sha256::digest(&damaged));
+            let mut expected: Vec<_> = before
+                .into_iter()
+                .filter(|(name, _)| name != "mapping.json")
+                .chain([(KEPT_MAPPING.to_string(), damaged)])
+                .collect();
+            expected.sort();
+            assert_eq!(after, expected, "{step:?}");
+            let fresh: serde_json::Value = serde_json::from_slice(&fresh.1).unwrap();
+            assert_eq!(fresh["journals"], serde_json::json!([]), "{step:?}");
+            let gap = fresh["recovered"].as_str().unwrap();
+            for fact in ["cannot be proved complete", sha256.as_str(), KEPT_MAPPING] {
+                assert!(gap.contains(fact), "{step:?}: {fact}: {gap}");
+            }
+            for log in &f.logs {
+                assert!(
+                    log.append_reporting("reveal-requested", None, None, true)
+                        .unwrap(),
+                    "{step:?}: the first record warns"
+                );
+            }
+        }
+    }
+
+    /// FV-01, class B: the person approves a recovery of one damaged file. The recovery moves
+    /// that file only, and refuses with nothing moved when another one is damaged now. A
+    /// mapping of another version is no damage. Before its first record, the journal of a
+    /// vault says that the mapping was started again.
+    #[test]
+    fn fv01_a_recovery_approved_for_one_file_moves_no_other() {
+        let f = TwoLogs::new();
+        let journal = f.logs[0].journal_path().unwrap().unwrap();
+        let mapping = f.directory.path().join("journal").join("mapping.json");
+        damage_mapping(f.directory.path());
+        assert_eq!(f.logs[0].damaged_file().unwrap(), Some(mapping.clone()));
+        let before = folder_of(f.directory.path());
+
+        let refused = f.logs[0].recover_damaged_file(&journal).unwrap_err();
+
+        assert!(
+            refused.to_string().contains("nothing was changed"),
+            "{refused}"
+        );
+        assert_eq!(folder_of(f.directory.path()), before);
+        f.logs[0].recover_damaged_file(&mapping).unwrap();
+        assert_eq!(f.logs[0].damaged_file().unwrap(), None);
+        let snapshot = f.logs[1].snapshot(10).unwrap();
+        assert_eq!(snapshot.state, AuditState::Absent);
+        assert!(
+            snapshot
+                .notices
+                .iter()
+                .any(|notice| notice.message.contains("started again")),
+            "{:?}",
+            snapshot.notices
+        );
+        let before = folder_of(f.directory.path());
+        assert!(f.logs[0].recover_damaged_file(&mapping).is_err());
+        assert_eq!(folder_of(f.directory.path()), before, "not damaged now");
+
+        fs::write(&mapping, br#"{"version": 99, "journals": []}"#).unwrap();
+        let before = folder_of(f.directory.path());
+        assert!(f.logs[0].damaged_file().is_err());
+        assert!(f.logs[0].recover_damaged().is_err());
+        assert_eq!(folder_of(f.directory.path()), before, "another version");
+    }
+
+    /// FV-01, class C: the first record of a vault after a mapping recovery fails at its sync.
+    /// The retry warns again, because the version was not settled, and the new journal states
+    /// the gap once, first.
+    #[test]
+    fn fv01_a_failed_first_record_after_a_mapping_recovery_warns_again_on_the_retry() {
+        let f = TwoLogs::new();
+        damage_mapping(f.directory.path());
+        f.logs[0].recover_damaged_at(then()).unwrap();
+        let reveal = || f.logs[0].append_reporting("reveal-requested", None, None, true);
+
+        fail_next_sync();
+        assert!(reveal().is_err(), "the injected failure");
+
+        assert!(reveal().unwrap(), "the retry warns");
+        assert!(!reveal().unwrap(), "and the next record does not");
+        let actions: Vec<_> = f.logs[0]
+            .read(10)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.action)
+            .collect();
+        assert_eq!(actions[0], RECOVERED);
+        assert_eq!(
+            actions.iter().filter(|action| *action == RECOVERED).count(),
+            1
         );
     }
 }

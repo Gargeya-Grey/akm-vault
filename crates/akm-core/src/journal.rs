@@ -329,6 +329,10 @@ pub(crate) struct Binding {
 pub(crate) struct Mapping {
     pub version: u32,
     pub journals: Vec<Binding>,
+    /// The detail of the record that starts each journal after a recovery of a damaged
+    /// mapping (FV-01). It states the gap and names the kept mapping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovered: Option<String>,
 }
 
 impl Mapping {
@@ -336,6 +340,7 @@ impl Mapping {
         Self {
             version: MAPPING_VERSION,
             journals: Vec::new(),
+            recovered: None,
         }
     }
 }
@@ -746,24 +751,32 @@ fn mapping_notices(
 
 fn damaged_mapping(path: &Path) -> Error {
     journal_error(format!(
-        "the mapping file {} is damaged. Its bytes were kept. No record is written until you move or repair it",
+        "the mapping file {} is damaged. Its bytes were kept. No record is written until it is repaired, moved, or recovered",
         path.display()
     ))
 }
 
-fn load(folder: &Folder) -> Result<Mapping> {
+/// A mapping, or the error of a mapping that is damaged: no mapping, or longer than AKM
+/// reads. Only a damaged mapping may be recovered (FV-01). A mapping of another version is
+/// no damage, and stays where it is.
+enum Loaded {
+    Usable(Mapping),
+    Damaged(Error),
+}
+
+fn read_mapping(folder: &Folder) -> Result<Loaded> {
     let path = folder.file(MAPPING);
     let Some(mut file) = private_fs::open_file(&path, OpenMode::Read)? else {
-        return Ok(Mapping::empty());
+        return Ok(Loaded::Usable(Mapping::empty()));
     };
     let bytes = match private_fs::read_bounded(&mut file, MAX_MAPPING_BYTES as u64) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
-            return Err(journal_error(format!(
-                "the mapping file {} is longer than the {} MiB that AKM reads. Its bytes were kept. No record is written until you move or repair it",
+            return Ok(Loaded::Damaged(journal_error(format!(
+                "the mapping file {} is longer than the {} MiB that AKM reads. Its bytes were kept. No record is written until it is repaired, moved, or recovered",
                 path.display(),
                 MAX_MAPPING_BYTES >> 20
-            )))
+            ))))
         }
         Err(error) => {
             return Err(journal_error(format!(
@@ -772,7 +785,9 @@ fn load(folder: &Folder) -> Result<Mapping> {
             )))
         }
     };
-    let mapping: Mapping = serde_json::from_slice(&bytes).map_err(|_| damaged_mapping(&path))?;
+    let Ok(mapping) = serde_json::from_slice::<Mapping>(&bytes) else {
+        return Ok(Loaded::Damaged(damaged_mapping(&path)));
+    };
     if mapping.version != MAPPING_VERSION {
         return Err(journal_error(format!(
             "the mapping file {} has version {}, which this AKM cannot use",
@@ -780,7 +795,64 @@ fn load(folder: &Folder) -> Result<Mapping> {
             mapping.version
         )));
     }
-    Ok(mapping)
+    Ok(Loaded::Usable(mapping))
+}
+
+fn load(folder: &Folder) -> Result<Mapping> {
+    match read_mapping(folder)? {
+        Loaded::Usable(mapping) => Ok(mapping),
+        Loaded::Damaged(error) => Err(error),
+    }
+}
+
+/// The mapping file, if it is damaged. Changes nothing.
+pub(crate) fn damaged_mapping_file(folder: &Folder) -> Result<Option<PathBuf>> {
+    let _lock = lock_mapping(folder, false)?;
+    Ok(matches!(read_mapping(folder)?, Loaded::Damaged(_)).then(|| folder.file(MAPPING)))
+}
+
+/// A deliberate recovery of a damaged mapping (FV-01). `None`: the mapping is not damaged.
+/// Under the mapping lock, the damaged mapping is kept beside it under a dated name, byte for
+/// byte, and an empty mapping takes its place (`audit::set_aside`). No journal file is
+/// touched. Each vault then binds a new journal, which starts with a record that states the
+/// gap, and its first record warns that the lineage is unconfirmed (`load_for_write`).
+/// `approved`: the file that the person approved; when another file is damaged now, or none,
+/// the recovery refuses and nothing moves.
+pub(crate) fn recover_mapping(
+    folder: &Folder,
+    now: DateTime<Utc>,
+    approved: Option<&Path>,
+) -> Result<Option<crate::audit::Recovery>> {
+    let _lock = lock_mapping(folder, true)?;
+    let path = folder.file(MAPPING);
+    if let Loaded::Usable(_) = read_mapping(folder)? {
+        if approved == Some(path.as_path()) {
+            return Err(journal_error(
+                "the journal mapping is not damaged, so nothing was moved",
+            ));
+        }
+        return Ok(None);
+    }
+    if approved.is_some_and(|approved| approved != path) {
+        return Err(crate::audit::not_approved(&path));
+    }
+    let damaged = private_fs::open_file(&path, OpenMode::Read)?
+        .ok_or_else(|| journal_error("the mapping file disappeared"))?;
+    let create_new = |pending: &Path| {
+        private_fs::open_file(pending, OpenMode::CreateNew)?
+            .ok_or_else(|| journal_error("cannot create the new mapping file"))
+    };
+    crate::audit::set_aside(&path, damaged, now, create_new, |recovery, kept_name| {
+        let recovered = format!(
+            "history before this record cannot be proved complete; the damaged journal mapping ({} bytes, SHA-256 {}) is kept as {kept_name}, and the journals from before it are kept, linked to no vault",
+            recovery.bytes, recovery.sha256
+        );
+        Ok(serde_json::to_vec_pretty(&Mapping {
+            recovered: Some(recovered),
+            ..Mapping::empty()
+        })?)
+    })
+    .map(Some)
 }
 
 fn store(folder: &Folder, mapping: &Mapping) -> Result<()> {
@@ -887,6 +959,9 @@ pub(crate) struct Placement {
     /// The vault went back to a version that this device saw. The record of that is owed
     /// before the requested record.
     pub owes_rollback: bool,
+    /// After a recovery of a damaged mapping: the detail of the record that starts a journal
+    /// with no record yet (FV-01).
+    pub opening: Option<String>,
 }
 
 fn superseded() -> Error {
@@ -982,6 +1057,7 @@ fn decide(mut mapping: Mapping, observation: &Observation) -> Result<Decision> {
             id
         }
     };
+    let opening = mapping.recovered.clone();
     Ok(Decision {
         mapping,
         changed,
@@ -989,8 +1065,25 @@ fn decide(mut mapping: Mapping, observation: &Observation) -> Result<Decision> {
             id,
             lineage_unconfirmed,
             owes_rollback,
+            opening,
         },
     })
+}
+
+/// The mapping for a write. After a recovery of a damaged mapping (FV-01), a vault without a
+/// binding can own one of the journals from before it, and nothing says which. Its new
+/// binding starts with no recorded version, so its version is unseen: the record warns that
+/// the lineage is unconfirmed (row 3 of `resolve`), and only a record that passes the warning
+/// on settles it. The binding is stored before the record, like every binding.
+fn load_for_write(folder: &Folder, observation: &Observation) -> Result<Mapping> {
+    let mut mapping = load(folder)?;
+    if mapping.recovered.is_some() && resolve(&mapping.journals, observation) == Resolution::New {
+        let mut binding = new_binding(observation);
+        binding.seen.clear();
+        mapping.journals.push(binding);
+        store(folder, &mapping)?;
+    }
+    Ok(mapping)
 }
 
 /// Runs `write` for the journal that a record about this vault goes to, with the mapping
@@ -1013,7 +1106,8 @@ pub(crate) fn record<T>(
     write: impl FnOnce(&Placement) -> Result<T>,
 ) -> Result<T> {
     let lock = lock_mapping(folder, true)?;
-    let decision = decide(load(folder)?, &evidence.observe())?;
+    let observation = evidence.observe();
+    let decision = decide(load_for_write(folder, &observation)?, &observation)?;
     let placement = &decision.placement;
     if placement.owes_rollback || placement.lineage_unconfirmed {
         let written = write(placement)?;
@@ -1034,7 +1128,8 @@ pub(crate) fn record<T>(
 /// when a rollback record or a lineage warning is owed, the mapping is left as it is.
 pub(crate) fn place(folder: &Folder, evidence: &VaultEvidence) -> Result<String> {
     let _lock = lock_mapping(folder, true)?;
-    let decision = decide(load(folder)?, &evidence.observe())?;
+    let observation = evidence.observe();
+    let decision = decide(load_for_write(folder, &observation)?, &observation)?;
     let placement = &decision.placement;
     if decision.changed && !placement.owes_rollback && !placement.lineage_unconfirmed {
         store(folder, &decision.mapping)?;
@@ -1095,6 +1190,13 @@ pub(crate) fn locate(root: &JournalRoot, evidence: &VaultEvidence) -> Result<Loc
         }
         Resolution::Superseded => {
             notices.push(unconfirmed_notice());
+            (None, Identity::Unconfirmed)
+        }
+        Resolution::New if mapping.recovered.is_some() => {
+            notices.push(Notice {
+                kind: NoticeKind::IdentityUnconfirmed,
+                message: "The journal mapping of this device was damaged and was started again. The journals from before it are kept in the journal folder, linked to no vault, so this vault's history before the recovery is not shown. The next change or disclosure starts a new journal that states the gap, with a warning. Nothing was changed.".into(),
+            });
             (None, Identity::Unconfirmed)
         }
         Resolution::Replaced { .. } | Resolution::New => (None, Identity::Confirmed),
@@ -1522,6 +1624,7 @@ mod tests {
             let mapping = Mapping {
                 version: MAPPING_VERSION,
                 journals: bound.to_vec(),
+                recovered: None,
             };
             let decided = decide(mapping, &observation)
                 .ok()

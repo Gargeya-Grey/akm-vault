@@ -27,39 +27,53 @@ fn work(steps: usize) {
 ///
 /// Single-quoted values are literal. Double-quoted values support the escapes
 /// this module writes, so `parse` round-trips whatever `line` produces.
+///
+/// The line is written into one buffer of its exact length, so the value is never copied
+/// into a buffer that is freed without clearing: no intermediate string, and no old buffer of
+/// a string that grew (FV-10). The caller clears the line that it gets.
 pub fn line(name: &str, value: &str) -> String {
     let safe = !value.is_empty()
         && value.chars().all(|ch| {
             ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':' | '@' | '+')
         });
-
+    let double = !safe && value.contains(['\'', '"', '\\', '\n', '\r']);
+    let escape = |ch: char| match ch {
+        '\\' => Some("\\\\"),
+        '"' => Some("\\\""),
+        '\n' => Some("\\n"),
+        '\r' => Some("\\r"),
+        '\t' => Some("\\t"),
+        _ => None,
+    };
+    let value_length: usize = if double {
+        value
+            .chars()
+            .map(|ch| escape(ch).map_or(ch.len_utf8(), str::len))
+            .sum()
+    } else {
+        value.len()
+    };
+    let quotes = if safe { 0 } else { 2 };
+    let mut out = String::with_capacity(name.len() + 1 + quotes + value_length);
+    out.push_str(name);
+    out.push('=');
     if safe {
-        return format!("{name}={value}");
-    }
-
-    if value.contains('\'')
-        || value.contains('"')
-        || value.contains('\\')
-        || value.contains('\n')
-        || value.contains('\r')
-    {
-        let mut escaped = String::with_capacity(value.len() + 2);
-        escaped.push('"');
+        out.push_str(value);
+    } else if double {
+        out.push('"');
         for ch in value.chars() {
-            match ch {
-                '\\' => escaped.push_str("\\\\"),
-                '"' => escaped.push_str("\\\""),
-                '\n' => escaped.push_str("\\n"),
-                '\r' => escaped.push_str("\\r"),
-                '\t' => escaped.push_str("\\t"),
-                _ => escaped.push(ch),
+            match escape(ch) {
+                Some(text) => out.push_str(text),
+                None => out.push(ch),
             }
         }
-        escaped.push('"');
-        format!("{name}={escaped}")
+        out.push('"');
     } else {
-        format!("{name}='{value}'")
+        out.push('\'');
+        out.push_str(value);
+        out.push('\'');
     }
+    out
 }
 
 /// Parse a dotenv document with the AKM profile (docs/design/unit3.md, section 2).
