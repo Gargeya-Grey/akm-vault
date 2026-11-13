@@ -3,7 +3,7 @@ import { invoke, rawInvoke } from "./native";
 import { adoptReservation, beginNativeOpen, confirmNativeLock, endNativeOpen, invalidateNativeView, nativeCancellation, nativeOwner, releaseNativeOwner } from "./nativeSession";
 import { sessionGeneration } from "./sessionBoundary";
 import { acknowledgeNotices } from "./operationNotices";
-import type { Dispatched, ImportReport, JournalRecovery, KeyDraft, KeyView, ReminderStatus, RotationReceipt, Status } from "./types";
+import type { Dispatched, ImportReport, JournalRecovery, KeyDraft, KeyView, ReminderStatus, RotationReceipt, Sealed, Status } from "./types";
 
 export { errorKind, errorText } from "./errors";
 
@@ -74,9 +74,10 @@ export const api = {
     acknowledgeNotices(ids);
   },
 
-  // A decline in the native window rejects with kind "declined": no value was shown.
-  reveal: async (id: string) => {
-    const value = await invoke<string | null>("key_reveal", { id });
+  // A decline in the native window rejects with kind "declined": no value was shown. The value
+  // arrives sealed: only `plaintext.tsx` draws it (U2-R1-04).
+  reveal: async (id: string): Promise<Sealed> => {
+    const value = await invoke<Sealed | null>("key_reveal", { id });
     if (value === null) throw declined("No value was shown.");
     return value;
   },
@@ -97,7 +98,7 @@ export const api = {
   recoverJournal: () => invoke<JournalRecovery | null>("audit_recover"),
   // Native shows the scope and the names and asks first. null means that the user declined there.
   exportEnv: (project: string | null, environment: string | null) =>
-    invoke<string | null>("env_export", { project, environment, all: false }),
+    invoke<Sealed | null>("env_export", { project, environment, all: false }),
   copyEnv: (project: string | null, environment: string | null) =>
     invoke<number | null>("env_copy", { project, environment, all: false }),
   saveEnv: (

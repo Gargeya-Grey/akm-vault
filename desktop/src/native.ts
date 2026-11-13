@@ -1,8 +1,10 @@
 import { invoke as nativeInvoke } from "@tauri-apps/api/core";
 import { errorText } from "./errors";
-import { beginOutcome, completedWhileLocked, reportCompletion, sessionGeneration, settleOutcome } from "./sessionBoundary";
+import { beginOutcome, changeData, completedWhileLocked, reportCompletion, sessionGeneration, settleOutcome } from "./sessionBoundary";
 import { acknowledgeNotices, receiveWarnings } from "./operationNotices";
 import { acceptNativeStatus, invalidateNativeView, nativeNoticeStamp, nativeOwner } from "./nativeSession";
+import { plaintextScope } from "./plaintext";
+import { seal, stampFor } from "./sealed";
 import { NATIVE_ERROR_KINDS, type AuditReport, type BackupInfo, type HistoryVersion, type KeyView, type NativeError, type NativeErrorKind, type RecycledKey, type ReminderStatus, type Status, type TransportFailure, type WarningReport, type Dispatched } from "./types";
 
 /**
@@ -11,13 +13,27 @@ import { NATIVE_ERROR_KINDS, type AuditReport, type BackupInfo, type HistoryVers
  * and the count notifier. A view reads native state only through `useNativeRead`.
  */
 
-const mutations = new Set(["vault_create", "vault_upgrade", "key_add", "key_update", "key_remove", "key_rotate", "key_restore", "key_purge", "env_import", "env_save", "env_launch_terminal", "audit_recover"]);
+export const mutations: ReadonlySet<string> = new Set(["vault_create", "vault_upgrade", "key_add", "key_update", "key_remove", "key_rotate", "key_restore", "key_purge", "env_import", "env_save", "env_launch_terminal", "audit_recover"]);
 // A request that the user can still decline in a native window answers null when they do.
 // The disclosing commands are on the list too: a page can read its session ID, so native asks the
 // user before it shows or copies a value (the bulk commands always, the single-key commands once a
 // session is over its budget). A decline gives no value and writes nothing to the clipboard.
 const declinable = new Set(["env_import", "env_save", "env_launch_terminal", "key_reveal", "key_copy", "env_export", "env_copy", "audit_recover"]);
 const statusReplies = new Set(["vault_status", "vault_unlock", "vault_create", "vault_upgrade", "vault_reload"]);
+// The commands that change the data of the vault. Each one makes every plaintext that the page
+// holds stale, when it leaves and again when it ends, so no reply asked for before it shows
+// (U2-R1-04). A save to a file, a terminal and a journal recovery change no key.
+export const DATA_CHANGES: ReadonlySet<string> = new Set(["vault_create", "vault_upgrade", "vault_reload", "key_add", "key_update", "key_remove", "key_rotate", "key_restore", "key_purge", "env_import"]);
+
+/**
+ * The commands that answer with plaintext from the vault, with the scope that a request of each
+ * names (U2-R1-04, contract 4). Their replies reach a caller sealed under the stamp that the
+ * request took when it left: its session, the generation of the vault data and its scope.
+ */
+export const PLAINTEXT_COMMANDS: Readonly<Record<string, (args: Record<string, unknown>) => string>> = {
+  key_reveal: (args) => plaintextScope.reveal(String(args.id)),
+  env_export: (args) => plaintextScope.export(args.project as string | null, args.environment as string | null),
+};
 
 // Every command that reads or changes the open vault, or renews its idle deadline, names the
 // session in which the page made the request. Native refuses a request for a session that is not
@@ -56,7 +72,13 @@ export function invoke<T>(command: string, args?: Record<string, unknown>, expec
   const outcome = command === "env_import" ? beginOutcome("import", generation, operation)
     : command === "env_launch_terminal" ? beginOutcome("terminal", generation, operation)
     : command === "env_save" ? beginOutcome("export", generation) : undefined;
-  return Object.assign(call<T>(command, args, expectedOwner, operation, generation, outcome), { receipt: outcome ?? null });
+  const stamp = Object.hasOwn(PLAINTEXT_COMMANDS, command) ? stampFor(PLAINTEXT_COMMANDS[command](args ?? {})) : null;
+  const changes = DATA_CHANGES.has(command);
+  if (changes) changeData();
+  let reply = call<T>(command, args, expectedOwner, operation, generation, outcome);
+  if (stamp !== null) reply = reply.then((text) => (text === null ? text : (seal(String(text), stamp) as T)));
+  if (changes) reply = reply.finally(changeData);
+  return Object.assign(reply, { receipt: outcome ?? null });
 }
 
 async function call<T>(command: string, args: Record<string, unknown> | undefined, expectedOwner: string | undefined, operation: string | undefined, generation: number, outcome: number | undefined): Promise<T> {

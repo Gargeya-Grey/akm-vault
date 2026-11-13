@@ -62,7 +62,7 @@ function promisesNothing(text: string) {
 
 test("the key copy text says that cleanup is an attempt and that the copy may remain", async () => {
   respond();
-  render(<KeyDetail item={key} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
+  render(<KeyDetail current item={key} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Copy" }));
   expect(await screen.findByText(COPY_TEXT)).toBeTruthy();
   promisesNothing(document.body.textContent ?? "");

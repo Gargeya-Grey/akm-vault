@@ -3,6 +3,7 @@ import { api, errorText } from "../api";
 import { clipboardCopyText } from "../clipboardText";
 import { nativeReads, useNativeRead } from "../nativeRead";
 import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
+import { Plaintext, plaintextScope, useSealed } from "../plaintext";
 import { receiptState, useReceipts, waitingReceipt, type Outcome } from "../sessionBoundary";
 import { plural } from "../format";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
@@ -16,8 +17,6 @@ interface Message {
   text: string;
 }
 
-type Scope = { project: string; environment: string };
-type ExportPreview = Scope & { text: string };
 /** A request that this view dispatched, with the receipt that owns its state (U2-R1-03). */
 type Tracked = { receipt: number; request: number };
 
@@ -48,7 +47,6 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
   const keys = read.state.status === "ready" ? read.state.data : null;
   const [chosenProject, setProject] = useState("");
   const [chosenEnvironment, setEnvironment] = useState("");
-  const [preview, setPreview] = useState<ExportPreview | null>(null);
   const exportRequest = useRef(0);
   const sideEffectRequest = useRef(0);
   const importRequest = useRef(0);
@@ -75,11 +73,32 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
   const importBusy = waitingReceipt("import") !== null;
   const working = busy ?? (launching ? "launch" : saving ? "save" : null);
 
+  const projects = useMemo(
+    () => uniqueOptions((keys ?? []).map((key) => key.project)),
+    [keys],
+  );
+  // A choice counts only while its option is on screen. A refresh that removes it, or a read that
+  // failed, leaves no scope, so no control acts on a scope that the screen does not show.
+  const project = projects.some((option) => option.value === chosenProject) ? chosenProject : "";
+  const environments = useMemo(
+    () => uniqueOptions((keys ?? []).filter((key) => key.project === project).map((key) => key.environment)),
+    [keys, project],
+  );
+  const environment = environments.some((option) => option.value === chosenEnvironment) ? chosenEnvironment : "";
+  const scoped = Boolean(project && environment);
+  const matchCount = (keys ?? []).filter((key) => key.project === project && key.environment === environment).length;
+  // The preview is plaintext. It shows only under the scope of its request, while the list read
+  // that gave that scope holds: a read that fails or starts again names no scope (U2-R1-04).
+  const previewScope = keys !== null && !read.busy && scoped ? plaintextScope.export(project, environment) : null;
+  const preview = useSealed(previewScope);
+  const holdPreview = preview.hold;
+  const [previewLines, setPreviewLines] = useState(0);
+
   const hidePreview = useCallback(() => {
     exportRequest.current += 1;
-    setPreview(null);
+    holdPreview(null);
     setBusy((current) => current === "preview" ? null : current);
-  }, []);
+  }, [holdPreview]);
 
   const editImport = useCallback(() => {
     importRequest.current += 1;
@@ -159,10 +178,10 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
   }, [receiptsVersion, importOperation, reloadKeys]);
 
   useEffect(() => {
-    if (preview === null) return;
+    if (preview.value === null) return;
     const timer = window.setTimeout(hidePreview, 30_000);
     return () => window.clearTimeout(timer);
-  }, [preview, hidePreview]);
+  }, [preview.value, hidePreview]);
 
   useEffect(() => {
     if (!importing) return;
@@ -173,30 +192,12 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [importing, importBusy, closeImport]);
 
-  const projects = useMemo(
-    () => uniqueOptions((keys ?? []).map((key) => key.project)),
-    [keys],
-  );
-  // A choice counts only while its option is on screen. A refresh that removes it, or a read that
-  // failed, leaves no scope, so no control acts on a scope that the screen does not show.
-  const project = projects.some((option) => option.value === chosenProject) ? chosenProject : "";
-  const environments = useMemo(
-    () => uniqueOptions((keys ?? []).filter((key) => key.project === project).map((key) => key.environment)),
-    [keys, project],
-  );
-  const environment = environments.some((option) => option.value === chosenEnvironment) ? chosenEnvironment : "";
-  const scoped = Boolean(project && environment);
-  const matchCount = (keys ?? []).filter((key) => key.project === project && key.environment === environment).length;
-  // A preview shows only under the scope that it belongs to (fault class B).
-  const shownPreview = preview !== null && preview.project === project && preview.environment === environment ? preview : null;
-
   function chooseProject(value: string) {
     hidePreview();
     sideEffectRequest.current += 1;
     setBusy(null);
     setProject(value);
     setEnvironment("");
-    setPreview(null);
     setMessage(null);
   }
 
@@ -205,7 +206,6 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     sideEffectRequest.current += 1;
     setBusy(null);
     setEnvironment(value);
-    setPreview(null);
     setMessage(null);
   }
 
@@ -216,15 +216,19 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     setBusy("preview");
     setMessage(null);
     try {
-      const text = await api.exportEnv(scope.project, scope.environment);
+      const token = await api.exportEnv(scope.project, scope.environment);
       if (currentRequest !== exportRequest.current || document.hidden) return;
-      if (text === null) {
-        setPreview(null);
+      if (token === null) {
+        holdPreview(null);
         setMessage({ tone: "ok", text: "Cancelled. No values were shown." });
         return;
       }
-      setPreview({ ...scope, text });
-      const lines = text.split("\n").filter((line) => line.trim()).length;
+      const lines = holdPreview(token);
+      if (lines === null) {
+        setMessage({ tone: "ok", text: "The keys changed before the preview arrived, so it is not shown. Select Preview again to see the current values." });
+        return;
+      }
+      setPreviewLines(lines);
       setMessage({
         tone: "ok",
         text:
@@ -455,7 +459,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
           )}
 
           <div className="raised env-preview">
-            {shownPreview === null ? (
+            {!preview.shown ? (
               <div className="empty-state">
                 <h3>No preview yet.</h3>
                 <p>
@@ -466,16 +470,11 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
             ) : (
               <>
                 <div className="preview-head">
-                  <p className="label">Preview: {shownPreview.project} / {shownPreview.environment}</p>
-                  <p className="label">
-                    {plural(
-                      shownPreview.text.split("\n").filter((line) => line.trim()).length,
-                      "line",
-                    )}
-                  </p>
+                  <p className="label">Preview: {project} / {environment}</p>
+                  <p className="label">{plural(previewLines, "line")}</p>
                 </div>
                 <pre className="mono env-lines">
-                  {shownPreview.text.trim() || "# No keys match this project and environment."}
+                  <Plaintext value={preview.value} scope={previewScope} trim empty="# No keys match this project and environment." />
                 </pre>
               </>
             )}

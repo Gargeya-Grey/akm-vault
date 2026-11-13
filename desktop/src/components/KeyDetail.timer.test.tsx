@@ -36,7 +36,7 @@ async function reveal() {
 
 // Owner decision, 1 Nov 2026: the "Hides in N seconds" text is the only timer. There is no bar.
 test("the countdown text is the only timer, and it resets on each reveal", async () => {
-  render(<KeyDetail item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
+  render(<KeyDetail current item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
   await reveal();
   expect(screen.getByText("fake-timer-value")).toBeTruthy();
   expect(document.body.textContent).toContain("Hides in 30 seconds");
@@ -57,7 +57,7 @@ test("the countdown text is the only timer, and it resets on each reveal", async
 // P3-REVEAL-CLOCK: the countdown follows a monotonic clock, so a wall clock moved back does not
 // keep a revealed secret on screen.
 test("a wall clock moved back 40 seconds does not keep the secret past 30 seconds", async () => {
-  render(<KeyDetail item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
+  render(<KeyDetail current item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
   await reveal();
   expect(screen.getByText("fake-timer-value")).toBeTruthy();
 
@@ -73,7 +73,7 @@ test("a wall clock moved back 40 seconds does not keep the secret past 30 second
 });
 
 test("a wall clock moved forward does not hide the secret early", async () => {
-  render(<KeyDetail item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
+  render(<KeyDetail current item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
   await reveal();
   act(() => vi.advanceTimersByTime(5_000));
   vi.setSystemTime(Date.now() + 3_600_000);

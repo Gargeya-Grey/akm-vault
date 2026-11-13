@@ -46,7 +46,28 @@ export function acknowledgeCompletions(ids: number[]) {
 }
 
 export function sessionGeneration() { return generation; }
-export function invalidateSession() { generation += 1; }
+export function invalidateSession() {
+  generation += 1;
+  stalePlaintext();
+}
+
+/** Every plaintext that the page holds goes stale on this event (U2-R1-04, contract 4). */
+export const PLAINTEXT_EVENT = "akm-plaintext-stale";
+// The generation of the vault data. A change of the data, when it leaves and when it ends, makes
+// every plaintext that the page holds stale. `sealed.ts` binds each plaintext to it.
+let data = 0;
+let plaintext = 0;
+function stalePlaintext() {
+  plaintext += 1;
+  window.dispatchEvent(new CustomEvent(PLAINTEXT_EVENT));
+}
+export function dataGeneration() { return data; }
+export function changeData() {
+  data += 1;
+  stalePlaintext();
+}
+/** One number per event that can make a plaintext stale, so a view renders again on it. */
+export function plaintextVersion() { return plaintext; }
 
 export function completedWhileLocked() {
   return { kind: "completedWhileLocked", message: COMPLETION_MESSAGE };
@@ -107,6 +128,8 @@ export function settleNativeOutcome(nativeOperation: string, { operation, outcom
   const id = nativeOperations.get(nativeOperation);
   const receipt = id === undefined ? undefined : receipts.get(id);
   if (id === undefined || receipt?.outcome !== "pending" || receipt.operation !== operation) return false;
+  // An import record settles what the reply would have settled, and the vault data changed too.
+  if (operation === "import") changeData();
   settleOutcome(id, outcome, "record");
   return true;
 }

@@ -7,6 +7,8 @@ import { RecycleBin } from "./components/RecycleBin";
 import { Settings } from "./components/Settings";
 import { UseKeys } from "./components/UseKeys";
 import { beginOutcome, invalidateSession, sessionGeneration, settleOutcome } from "./sessionBoundary";
+import { plaintextScope } from "./plaintext";
+import { seal, stampFor } from "./sealed";
 import { held, type Held } from "./testing/held";
 import type { KeyView } from "./types";
 
@@ -167,7 +169,8 @@ test("Use keys: a scope chosen before a refresh that removes it no longer enable
 
 test("Use keys: a preview stays hidden once a refresh removes its scope", async () => {
   const calls = holdReads(api.keys);
-  (api as Record<string, ReturnType<typeof vi.fn>>).exportEnv = vi.fn(async () => "FAKE_KEY=fake-preview-value");
+  // As native.ts does: the preview arrives sealed under the scope of its request (U2-R1-04).
+  (api as Record<string, ReturnType<typeof vi.fn>>).exportEnv = vi.fn(async (project: string, environment: string) => seal("FAKE_KEY=fake-preview-value", stampFor(plaintextScope.export(project, environment))));
   render(<UseKeys />);
   await act(async () => calls[0].resolve([key({ project: "demo", environment: "dev" })]));
   fireEvent.change(screen.getByLabelText("Project"), { target: { value: "demo" } });

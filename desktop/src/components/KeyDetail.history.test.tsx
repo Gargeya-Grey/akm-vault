@@ -38,7 +38,7 @@ afterEach(() => {
 });
 
 function open(overrides: Partial<KeyView> = {}) {
-  const view = render(<KeyDetail item={{ ...item, ...overrides }} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
+  const view = render(<KeyDetail current item={{ ...item, ...overrides }} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
   return view;
 }
 
@@ -115,7 +115,7 @@ test("a history that belongs to one key is gone when the drawer shows another ke
   fireEvent.click(screen.getByRole("button", { name: SHOW }));
   await act(async () => {});
   expect(screen.getByRole("list", { name: "Earlier versions" })).toBeTruthy();
-  view.rerender(<KeyDetail item={{ ...item, id: "fake-other-key" }} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
+  view.rerender(<KeyDetail current item={{ ...item, id: "fake-other-key" }} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
   expect(screen.queryByRole("list", { name: "Earlier versions" })).toBeNull();
 });
 

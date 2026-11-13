@@ -206,6 +206,47 @@ from. This is the contract for the native unit.
   change, and `completedWhileLocked` after a lock. `timeout` comes from a deadline around a call.
   None of them passes through this rule.
 
+## Plaintext that the page holds (U2-R1-04, contract 4)
+
+Fault class: a stale value. Before, Use keys bound its export preview to the project and the
+environment only. An import changed the values, a list read failed and a retry succeeded, and the
+old preview came back without a new request.
+
+Now one mechanism holds every plaintext that comes from the vault.
+
+- `native.ts` seals the reply of each command in `PLAINTEXT_COMMANDS` (the reveal of one key and
+  the export preview). The seal is a frozen token with no fields. It carries a stamp that the
+  request took when it left: the session, the generation of the vault data, and the scope (the
+  key, or the project and the environment).
+- `sealed.ts` keeps the text beside the token. Only `native.ts` and `plaintext.tsx` may reach it.
+- A view keeps a token in `useSealed(scope)` and draws it with `<Plaintext>`, both in
+  `plaintext.tsx`. The text shows only while the session, the data generation and the scope are
+  those of the stamp. A value that fails this check is dropped from `sealed.ts` at once, so it
+  never shows again. Only a new request shows plaintext again.
+- These events make held plaintext stale: a lock or a new session (`invalidateSession`); a change
+  of vault data (each command in `DATA_CHANGES`, when it leaves and again when it ends, and an
+  import record that settles its receipt); a scope change; a list read that fails or starts
+  again, because the view then names no scope; a hide; the 30-second timer; an unmount.
+- A reply asked for before such an event arrives stale and does not show. Use keys then says
+  that the keys changed before the preview arrived.
+- `plaintextGuard.test.ts` keeps the class closed. It reads the Rust commands, and every command
+  whose reply holds a `String` must be in `PLAINTEXT_COMMANDS` or named as not plaintext (a session
+  reservation, a saved path). It checks that each plaintext reply reaches its caller sealed, that
+  only the two files reach `sealed.ts` (by the import graph, as the read guard does), that
+  `plaintext.tsx` exports no function that returns the text, and that each mutation is in
+  `DATA_CHANGES` or named as one that changes no key. A view therefore never gets the text, so it
+  cannot keep it in its own state.
+- Tests: `plaintext.test.tsx` tests the holder. `Plaintext.views.test.tsx` runs the review's
+  sequence, a preview reply delayed across an import, a preview asked for while an import is on
+  its way, the 30-second hide with fake timers, a revealed secret across a rotation, a reveal
+  delayed across a rotation, a reveal asked for while a rotation is on its way, and a lock.
+
+The sweep of the class: the reveal and the preview were the two holders, and both use the
+mechanism. A copy writes the clipboard in native code and answers a time or a count. A file save
+answers a path. The journal, the history and the notices hold no values. The text that the user
+types (the import text, the secret of a new key or a rotation, the vault password) does not come
+from the vault, so it is not under the mechanism. Each form clears it when it closes or sends it.
+
 ## Smaller findings and their guards
 
 - FR-11: the unlock screen names KDBX 4.1, AES-256 and Argon2id only in create mode. In unlock
@@ -275,6 +316,14 @@ Each decision takes the option that removes state or removes a promise.
     wording, and the owner may want other words.
 15. The secret field of the Add key form says "Encrypted inside the KDBX entry." Before, it also
     said "It is never written to settings or logs." No test proves that sentence.
+16. A form waits for its receipt also after a hide, a view expiry or a new mount (U2-R1-03).
+    Before, a hide ended the wait while the native window was still open, so the user could start
+    a second request. Now Save .env… says "Saving…" and Import .env… stays disabled until the
+    reply, the record or a transport failure settles the receipt.
+17. A preview or a revealed secret goes when the vault data changes: an add, an edit, a rotation,
+    a removal, a restore, a purge, an import, an upgrade or a reload, by any view (U2-R1-04).
+    Before, only a scope change, a hide, the timer and an unmount hid them. A preview that arrives
+    after such a change does not show, and Use keys says that the keys changed before it arrived.
 
 ## Limits
 
@@ -294,6 +343,13 @@ Each decision takes the option that removes state or removes a promise.
   the renewal, which are varied.
 - A project named "All keys" or "Needs attention" gives its shelf the same page title as that
   shelf. The shelf buttons stay apart by their place under "Projects". This is not fixed here.
+- The plaintext mechanism decides what the page shows. It cannot take back a value that native
+  code already put on the screen, and it does not wipe memory: a dropped string stays in memory
+  until the JavaScript engine frees it, as before.
+- In today's screens a list read starts again only after a change of vault data, which already
+  makes held plaintext stale. So the rule that a list read that starts again names no scope has no
+  test of its own on a screen. `plaintext.test.tsx` tests that a view that names no scope drops its
+  value. Two mutants of that rule (Use keys and the key drawer) pass every test for this reason.
 - Until unit 1 maps the two core warnings to their own kinds, native still sends them as
   `backupRetention` and `journal`, and the page shows those texts.
 - The Edge tests use a mocked native boundary. They prove the page side of the contract. The

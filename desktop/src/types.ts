@@ -188,6 +188,13 @@ export interface NativeError {
  */
 export type Dispatched<T> = Promise<T> & { readonly receipt: number | null };
 
+declare const sealedBrand: unique symbol;
+/**
+ * Plaintext from the vault, sealed at the boundary (U2-R1-04). It holds no text that a view can
+ * read: only `plaintext.tsx` draws it, and only while its session, the vault data and its scope hold.
+ */
+export type Sealed = { readonly [sealedBrand]: true };
+
 /** A rejection that no native command sent: the page cannot know what the request did. */
 export interface TransportFailure {
   kind: "transport";

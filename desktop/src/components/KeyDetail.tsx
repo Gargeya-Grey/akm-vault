@@ -3,6 +3,7 @@ import { api, errorText } from "../api";
 import { clipboardCopyText } from "../clipboardText";
 import { formatDate, formatDateTime, isExpired, keyState, plural, rotationLabel, secretChangeLabel } from "../format";
 import { nativeReads, useNativeRead } from "../nativeRead";
+import { Plaintext, plaintextScope, useSealed } from "../plaintext";
 import type { HistoryVersion, KeyView } from "../types";
 import { KeyCut } from "./glyphs";
 import { Icon } from "./Icon";
@@ -15,6 +16,11 @@ interface Props {
   item: KeyView;
   /** The ID that the key's row shows, when another row looks the same. */
   shownId?: string;
+  /**
+   * True while the list read that gave `item` holds. A read that fails or starts again makes it
+   * false, and a revealed secret then goes (U2-R1-04).
+   */
+  current: boolean;
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -66,9 +72,12 @@ function EarlierVersions({ id }: { id: string }) {
   );
 }
 
-export function KeyDetail({ item, shownId, onClose, onEdit, onDelete, onRotate, readOnly = false }: Props) {
+export function KeyDetail({ item, shownId, current, onClose, onEdit, onDelete, onRotate, readOnly = false }: Props) {
   const dialogRef = useDialogFocus<HTMLDivElement>();
-  const [secret, setSecret] = useState<string | null>(null);
+  // The secret is plaintext: it shows only for this key, while the read and the vault data hold.
+  const secretScope = current ? plaintextScope.reveal(item.id) : null;
+  const secret = useSealed(secretScope);
+  const holdSecret = secret.hold;
   const [seconds, setSeconds] = useState(HIDE_SECONDS);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +90,7 @@ export function KeyDetail({ item, shownId, onClose, onEdit, onDelete, onRotate, 
   useEffect(() => {
     const expire = () => {
       presentation.current += 1;
-      setSecret(null); setBusy(false); setError(null); setCopied(null);
+      holdSecret(null); setBusy(false); setError(null); setCopied(null);
       setHistoryFor(null);
     };
     expire();
@@ -93,7 +102,7 @@ export function KeyDetail({ item, shownId, onClose, onEdit, onDelete, onRotate, 
       window.removeEventListener(PROTECTED_VIEW_EXPIRY_EVENT, expire);
       document.removeEventListener("visibilitychange", hidden);
     };
-  }, [item.id]);
+  }, [item.id, holdSecret]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -104,14 +113,14 @@ export function KeyDetail({ item, shownId, onClose, onEdit, onDelete, onRotate, 
   }, [onClose]);
 
   useEffect(() => {
-    if (!secret) return;
+    if (secret.value === null) return;
     setSeconds(HIDE_SECONDS);
     // A monotonic clock: a wall clock that moves back must not keep the secret on screen.
     const started = performance.now();
     timer.current = window.setInterval(() => {
       const left = HIDE_SECONDS - Math.floor((performance.now() - started) / 1000);
       if (left <= 0) {
-        setSecret(null);
+        holdSecret(null);
         if (timer.current !== null) window.clearInterval(timer.current);
         timer.current = null;
       } else {
@@ -122,7 +131,7 @@ export function KeyDetail({ item, shownId, onClose, onEdit, onDelete, onRotate, 
       if (timer.current !== null) window.clearInterval(timer.current);
       timer.current = null;
     };
-  }, [secret]);
+  }, [secret.value, holdSecret]);
 
   useEffect(() => {
     if (!copied) return;
@@ -140,7 +149,7 @@ export function KeyDetail({ item, shownId, onClose, onEdit, onDelete, onRotate, 
         // Reset the countdown in the same render as the secret, so the
         // "Hides in N seconds" text never starts from an earlier reveal's value.
         setSeconds(HIDE_SECONDS);
-        setSecret(value);
+        holdSecret(value);
       }
     } catch (cause) {
       if (view === presentation.current) setError(errorText(cause));
@@ -150,7 +159,7 @@ export function KeyDetail({ item, shownId, onClose, onEdit, onDelete, onRotate, 
   }
 
   function hide() {
-    setSecret(null);
+    holdSecret(null);
   }
 
   async function copy() {
@@ -310,11 +319,11 @@ export function KeyDetail({ item, shownId, onClose, onEdit, onDelete, onRotate, 
         <div className="drawer-body">
         <section className="secret-stage" aria-label="Secret value">
           <span className="label">Secret</span>
-          <code className={`mono secret-value${secret ? "" : " masked"}`}>
-            {secret ?? "••••••••••••••••••••••••"}
+          <code className={`mono secret-value${secret.shown ? "" : " masked"}`}>
+            <Plaintext value={secret.value} scope={secretScope} fallback="••••••••••••••••••••••••" />
           </code>
           <div className="secret-actions">
-            {secret ? (
+            {secret.shown ? (
               <button type="button" className="text-button" onClick={hide}>
                 <Icon name="eyeOff" />
                 Hide
@@ -336,7 +345,7 @@ export function KeyDetail({ item, shownId, onClose, onEdit, onDelete, onRotate, 
               Copy
             </button>
           </div>
-          {secret && (
+          {secret.shown && (
             <p className="secret-note">
               Hides in <span className="mono">{seconds}</span> seconds. Revealing
               is written to the activity log.

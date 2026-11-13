@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { api } from "./api";
 import { reads } from "./native";
+import { plaintextScope } from "./plaintext";
+import { openFor } from "./sealed";
 import { adoptReservation, nativeOwner, releaseNativeOwner } from "./nativeSession";
 import { acknowledgeNotices, retainedOperationNotices } from "./operationNotices";
 import { acknowledgeCompletions, COMPLETION_EVENT, invalidateSession, retainedCompletions, sessionGeneration, SESSION_LOSS_EVENT } from "./sessionBoundary";
@@ -475,12 +477,13 @@ test("a declined bulk export or copy answers null, never a value or a number", a
   native.invoke.mockResolvedValueOnce(null);
   expect(await api.copyEnv("fake-scope", "fake-env")).toBeNull();
   native.invoke.mockResolvedValueOnce("TOKEN=fake-approved\n");
-  expect(await api.exportEnv("fake-scope", "fake-env")).toBe("TOKEN=fake-approved\n");
+  // The value arrives sealed, and opens under the scope of its request (U2-R1-04).
+  expect(openFor(await api.exportEnv("fake-scope", "fake-env"), plaintextScope.export("fake-scope", "fake-env"))).toBe("TOKEN=fake-approved\n");
 });
 
 test("an approved single reveal and copy still answer the value and the clear time", async () => {
   native.invoke.mockResolvedValueOnce("fake-approved-value");
-  expect(await api.reveal("fake-id")).toBe("fake-approved-value");
+  expect(openFor(await api.reveal("fake-id"), plaintextScope.reveal("fake-id"))).toBe("fake-approved-value");
   native.invoke.mockResolvedValueOnce(30);
   expect(await api.copy("fake-id")).toBe(30);
 });

@@ -395,6 +395,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
         <KeyDetail
           item={selected}
           shownId={shownIds.get(selected.id)}
+          current={read.state.status === "ready" && !read.busy}
           readOnly={readOnly}
           onClose={() => setSelectedId(null)}
           onEdit={() => {
