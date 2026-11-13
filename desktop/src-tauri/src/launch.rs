@@ -1580,19 +1580,6 @@ mod tests {
     }
 
     #[test]
-    fn case_5_a_reserved_variable_name_is_refused_before_any_dialog() {
-        for reserved in ["PATH", "PYTHONSTARTUP", "HTTPS_PROXY", "AKM_PASSWORD"] {
-            let fixture =
-                fake_vault(&[DEV[0], ("Process control", reserved, "app", "dev", "fake")]);
-            let host = FakeHost::choosing(fixture.directory.path());
-            let error = launch(&fixture, &host).expect_err(reserved);
-            assert!(error.message.contains("reserved"), "{}", error.message);
-            assert!(!error.message.contains("fake-"), "{}", error.message);
-            assert_nothing_happened(&fixture, &host, &[]);
-        }
-    }
-
-    #[test]
     fn case_6_an_empty_scope_and_a_scope_too_big_to_list_are_refused_before_any_dialog() {
         let fixture = fake_vault(&DEV);
         let host = FakeHost::choosing(fixture.directory.path());

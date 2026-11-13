@@ -57,7 +57,7 @@ Each mutant is one change to the code. The named test must fail on it. All of th
 
 Read, tested, attacked and broken with mutants.
 
-- A page can call `audit_recover`, but the recovery asks in a native window first. A structure test holds the order (`fr14_the_command_is_registered_and_takes_the_session_and_the_native_window`).
+- A page can call `audit_recover`, but the recovery asks in a native window first. The recovery step of `desktop/src-tauri/tests/ipc_dispatch.rs` holds the order through the real handlers: a decline changes nothing, and an approval moves only the damaged file.
 - A decline, a lock while the window is open, a failed window and a hidden window move nothing (`fr14_a_decline_moves_nothing_and_disclosure_stays_blocked`, `fr14_a_lock_while_the_window_is_open_moves_nothing`, `fr14_a_window_that_fails_is_an_error_and_moves_nothing`, `fr14_a_hidden_window_shows_no_dialog_and_moves_nothing`).
 - A hide while the window is open does not revoke the approval (P2R2-02, `fr14_a_hide_while_the_window_is_open_does_not_revoke_what_the_user_approved`).
 - Defect fixed in stage B: a lock after the journal moved answered `locked`, which said that nothing moved. It now answers `completedWhileLocked` (`fr14_a_lock_after_the_journal_moved_answers_completed_while_locked`).

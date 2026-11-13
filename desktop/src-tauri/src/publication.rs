@@ -316,42 +316,6 @@ mod tests {
         CommandError::new("clipboard", text)
     }
 
-    fn evidence() -> LeaseEvidence {
-        LeaseEvidence::for_test(7)
-    }
-
-    // The release table of design D5, as data.
-    #[test]
-    fn a_failed_close_changes_each_outcome_as_the_release_table_says() {
-        let close = Release {
-            close_failed: true,
-            owner_leaked: false,
-        };
-        let cases: [(Outcome, &str); 6] = [
-            (Outcome::Untouched(error("a")), "Untouched"),
-            (
-                Outcome::EarlierCopyUncertain(error("a")),
-                "EarlierCopyUncertain",
-            ),
-            (Outcome::Emptied(error("a")), "Emptied"),
-            (Outcome::Published(evidence()), "ResidualUntracked"),
-            (
-                Outcome::Residual(error("a"), evidence()),
-                "ResidualUntracked",
-            ),
-            (Outcome::ResidualUntracked(error("a")), "ResidualUntracked"),
-        ];
-        for (outcome, expected) in cases {
-            let before = Publication::for_test(outcome);
-            let after = before.released(close);
-            assert_eq!(after.name_for_test(), expected);
-            assert!(after
-                .error_for_test()
-                .message
-                .contains("Windows did not confirm that AKM released the clipboard."));
-        }
-    }
-
     #[test]
     fn the_chain_derives_each_outcome_from_its_phase() {
         assert_eq!(

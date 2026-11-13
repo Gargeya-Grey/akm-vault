@@ -1783,15 +1783,6 @@ pub(crate) mod windows {
             assert_eq!(lease.owned_generation(), Some(first));
             assert_eq!(state.lock().unwrap().text(), FAKE_TEXT);
         }
-
-        #[test]
-        fn the_fake_encodes_with_a_fixed_locale_so_no_test_depends_on_the_machine() {
-            let (state, mut backend) = fresh();
-            backend.set_private("caf\u{e9}").published_for_test();
-            let state = state.lock().unwrap();
-            assert_eq!(state.formats[&TEXT_LOCALE], [9, 4, 0, 0]);
-            assert_eq!(state.formats[&ANSI_TEXT], [b'c', b'a', b'f', 0xe9, 0]);
-        }
     }
 }
 

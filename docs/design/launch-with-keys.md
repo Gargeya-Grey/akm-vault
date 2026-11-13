@@ -102,14 +102,14 @@ The tests are in `desktop/src-tauri/src/launch.rs` and `process.rs`, apart from 
 | 2a | Journal stall against a lock | `a_held_journal_lock_does_not_delay_a_lock_and_the_launch_then_starts_nothing` |
 | 3 | The user declines the review | `case_3_declining_in_the_review_records_nothing_and_starts_nothing` |
 | 4 | The folder picker is cancelled | `case_4_cancelling_the_folder_picker_shows_no_review_and_records_nothing` |
-| 5 | A reserved variable name | `case_5_a_reserved_variable_name_is_refused_before_any_dialog`, `a_variable_that_the_command_prompt_prints_is_refused_before_any_dialog`, `t_r3_02_every_reserved_class_and_every_shell_name_is_refused_at_the_launch_boundary` |
+| 5 | A reserved variable name | `a_variable_that_the_command_prompt_prints_is_refused_before_any_dialog`, `t_r3_02_every_reserved_class_and_every_shell_name_is_refused_at_the_launch_boundary` |
 | 6 | Empty scope, or too many names | `case_6_an_empty_scope_and_a_scope_too_big_to_list_are_refused_before_any_dialog` |
 | 7 | Child environment | `case_7_the_child_environment_holds_the_selected_variables_and_no_akm_variable`, `a_real_child_gets_the_folder_and_the_selected_variables_and_no_akm_variable`, `the_block_holds_the_selected_variables_and_no_removed_name_and_ends_in_two_zeros` |
 | 7a | The suspended start | `a_resumed_child_writes_its_marker_and_a_terminated_child_never_does` |
 | 8 | Stale session id | `case_8_a_stale_or_malformed_session_is_refused_without_a_dialog` |
 | 9 | Review text | `case_9_the_review_lists_the_scope_the_folder_and_each_name_but_no_value`, `hostile_scope_text_cannot_pass_for_a_line_of_the_review`, `names_that_differ_only_after_80_characters_read_differently_in_both_reviews`, `a_real_control_character_and_its_literal_text_read_differently_in_both_reviews`, `two_different_names_never_give_the_same_review_text`, `a_name_too_long_to_show_in_full_is_refused_before_any_dialog`, `a_folder_that_a_review_could_not_show_exactly_is_refused_before_the_review` |
 | 9a | The review window fails | `a_failed_review_window_is_an_error_and_starts_nothing`, `only_the_confirm_button_approves_and_escape_cancel_and_close_decline`, `the_real_window_config_has_cancel_as_its_default_button` |
-| 10 | IPC | `the_launch_command_takes_a_session_and_a_scope_and_nothing_that_names_a_program` and the launch section of `desktop/src-tauri/tests/ipc_dispatch.rs` |
+| 10 | IPC | The launch section of `desktop/src-tauri/tests/ipc_dispatch.rs` |
 | 11 | An outcome record on every way out | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` and the outcome section of `desktop/src-tauri/tests/ipc_dispatch.rs` |
 
 The vault is released before the start: `the_vault_is_released_before_the_terminal_starts`. No step can fail after the start, so a start is never reported as a failure.

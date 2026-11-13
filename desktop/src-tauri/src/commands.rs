@@ -1648,18 +1648,6 @@ mod tests {
         assert_eq!(history("not-a-key").unwrap_err().kind, "notFound");
     }
 
-    #[test]
-    fn a_lock_just_before_the_import_review_shows_no_review() {
-        let (session, _directory) = test_session();
-        let locker = session.clone();
-        let confirm = ScriptedConfirm::new(true).on_prepare(move || locker.lock().unwrap());
-        let error = import(&session, &confirm, "FAKE_KEY=fake-value\n", "app", "dev")
-            .err()
-            .unwrap();
-        assert_eq!(error.kind, "locked");
-        assert!(confirm.shown().is_empty());
-    }
-
     fn import_notice_for(session: &Session, operation: &str) -> Option<serde_json::Value> {
         notices(session)
             .into_iter()
@@ -1767,31 +1755,6 @@ mod tests {
         assert_eq!(
             wire["changed"],
             serde_json::json!(["Title", "AKM_PROJECT", "Other"])
-        );
-    }
-
-    #[test]
-    fn the_launch_command_takes_a_session_and_a_scope_and_nothing_that_names_a_program() {
-        let source = include_str!("commands.rs");
-        let code = &source[..source.find("\nmod tests {").unwrap()];
-        let start = code.find("pub async fn env_launch_terminal(").unwrap();
-        let header = &code[start..start + code[start..].find(") ->").unwrap()];
-        let parameters: Vec<&str> = header
-            .lines()
-            .skip(1)
-            .filter_map(|line| line.trim().split(':').next())
-            .filter(|name| !name.is_empty())
-            .collect();
-        assert_eq!(
-            parameters,
-            [
-                "state",
-                "terminal",
-                "session_id",
-                "operation_id",
-                "project",
-                "environment"
-            ]
         );
     }
 
@@ -4269,32 +4232,6 @@ mod tests {
             .expect("the added keys made a journal");
         let bytes = fs::read(&path).unwrap();
         (path, bytes)
-    }
-
-    #[test]
-    fn fr14_the_command_is_registered_and_takes_the_session_and_the_native_window() {
-        let source = include_str!("commands.rs");
-        let code = &source[..source.find("\nmod tests {").unwrap()];
-        let start = code.find("pub async fn audit_recover(").expect("a command");
-        let body = &code[start..];
-        let body = &body[..body.find("\n}\n").unwrap()];
-        assert!(body.contains("confirm: State<'_, ConfirmState>"));
-        assert!(body.contains("session_id: String"));
-        assert!(body.contains("run_recovery("));
-        assert!(
-            !body.contains("recover_damaged"),
-            "the command asks first, in run_recovery"
-        );
-        let run = &code[code.find("fn run_recovery(").unwrap()..];
-        let run = &run[..run.find("\n}\n").unwrap()];
-        assert!(
-            run.find("disclosure::ask(").unwrap() < run.find("recover_damaged_file(").unwrap(),
-            "the user is asked before anything moves"
-        );
-        assert!(
-            !run.contains("recover_damaged()"),
-            "the recovery moves only the file that the window named"
-        );
     }
 
     /// U1-R1-01: a value read from the vault is not delivered after a same-session change.

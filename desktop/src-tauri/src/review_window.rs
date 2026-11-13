@@ -333,15 +333,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_confirm_button_approves_and_it_is_not_the_default() {
-        assert!(approved(CONFIRM_BUTTON));
-        for button in [CANCEL_BUTTON, ESCAPE_OR_CLOSE, 0, 1] {
-            assert!(!approved(button), "{button}");
-        }
-        assert!(!approved(DEFAULT_BUTTON));
-    }
-
-    #[test]
     fn only_the_confirm_button_approves_and_escape_cancel_and_close_decline() {
         assert_eq!(answer_for(Ok(CONFIRM_BUTTON)), ReviewAnswer::Approved);
         for button in [CANCEL_BUTTON, ESCAPE_OR_CLOSE] {
