@@ -49,7 +49,7 @@ From phase two review 1 ([FINDINGS.md](docs/FINDINGS.md), P2R1 rows) and the col
 
 | Class | Guard |
 |---|---|
-| A. A check, then an act after the gate is released | Run a session-scoped effect through `Session::while_current` or `Session::while_session`; the effect takes the `Held` witness. Where the act cannot run under the gate (a modal dialog), check again after it. Test: a barrier between the check and the act. |
+| A. A check, then an act after the gate is released | Run a session-scoped effect through `Session::commit` ([design/commit-point.md](docs/design/commit-point.md)); the act takes the `Held` witness. Where the act cannot run under the gate (a modal dialog), check again after it. Tests: a barrier between the check and the act, and `every_session_scoped_act_goes_through_the_commit_point`. |
 | B. A capability or snapshot used outside its source | Bind it to its source (vault, journal, session, fingerprint) and check that binding where it is used. |
 | C. State advanced before its record is durable | Write the record first; advance the state only after the write succeeds. Test: fail the write, then retry. |
 | D. A doc that names a stale test or behaviour | `python tools/check_docs.py`. |
@@ -60,3 +60,6 @@ From phase two review 1 ([FINDINGS.md](docs/FINDINGS.md), P2R1 rows) and the col
 | I. A stacking context traps a dialog below a sibling | Every dialog must cover every control outside it. Test: `look-guards.spec.ts` hit-tests the rail through each dialog, in both themes. |
 | J. A boundary, a mark or a state drawn only with a shadow or a fill | Forced colours remove both. Add the element to the forced-colours block at the end of `styles.css`. Test: the `forced colours` group in `look-guards.spec.ts`. |
 | K. Text from the vault or the page in a native review | Pass it through `review_name` or `review_path`. Show it with `review_names`, with Cancel as its default button (`review_window.rs`). A failed window is an error, never a decline. Under the owner's option (a) a names-only window can appear just after a lock: nothing that discloses or starts may follow it without a new session check. FINDINGS.md T-R rows call this class I. Test: a name with a newline and a directional mark stays on its line. |
+| N. An exit after dispatch that leaves no outcome | A request whose effect outlives the page runs through `outcome::dispatched`: one guard records one outcome on every way out, also a panic. Test: `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record`. |
+| P. An effect that cannot be taken back, after a check | Prepare outside the gate, commit one short act under it (`Session::commit`), revoke after a refusal. A terminal starts suspended and is resumed or ended at the commit. Test: the state table of [design/commit-point.md](docs/design/commit-point.md), row by row. |
+| Q. A wait for an event that must happen, with a bound that a loaded run exceeds | Use the one bound `PATIENCE` (`test_support.rs`). A wait that proves promptness or absence keeps its own short bound. Test: `class_q_every_wait_for_an_event_that_must_happen_uses_the_shared_patience`. |
