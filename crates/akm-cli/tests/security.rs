@@ -207,6 +207,59 @@ fn password_argument_is_not_accepted_or_echoed() {
     }
 }
 
+/// A child process with this input on its stdin.
+fn output_with_stdin(command: &mut Command, input: &str) -> Output {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+// FV-11: a secret on a command line stays in the process list and the shell history, so
+// `add` takes no secret argument. The refusal prints no part of the value.
+#[test]
+fn add_takes_no_secret_as_an_argument_and_prints_no_part_of_it() {
+    const VALUE: &str = "fv11q7z9k3m5x8w2";
+    let fixture = Fixture::new();
+    let before = fs::read(&fixture.vault).unwrap();
+    let joined = format!("--secret={VALUE}");
+    for args in [
+        vec!["add", "Argument key", "--secret", VALUE],
+        vec!["add", "Argument key", joined.as_str()],
+        vec!["add", "--secret", VALUE, "Argument key"],
+    ] {
+        let output = fixture.cli().args(&args).output().unwrap();
+        assert!(!output.status.success(), "{args:?} was accepted");
+        let shown = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            stderr(&output)
+        );
+        for part in VALUE.as_bytes().windows(4) {
+            let part = std::str::from_utf8(part).unwrap();
+            assert!(!shown.contains(part), "{args:?} printed {part:?}: {shown}");
+        }
+        assert_eq!(fs::read(&fixture.vault).unwrap(), before, "{args:?}");
+    }
+    let output = output_with_stdin(
+        fixture
+            .cli()
+            .args(["add", "Argument key", "--secret-stdin"]),
+        &format!("{VALUE}\n"),
+    );
+    assert_success(&output);
+    assert_eq!(stored_secret(&fixture.vault, "Argument key"), VALUE);
+}
+
 #[test]
 fn unscoped_export_is_rejected_before_opening_the_vault() {
     let directory = temporary_directory();
@@ -816,13 +869,14 @@ fn newly_reserved_names_are_refused_by_add_export_and_run_with_the_vault_bytes_u
             vec!["add", "A harmless title", "--env-var", name],
             vec!["add", title.as_str()],
         ] {
-            let output = fixture
-                .cli()
-                .args(&add)
-                .args(["--secret", "fake-new-secret", "--project", "demo"])
-                .args(["--env", "dev"])
-                .output()
-                .unwrap();
+            let output = output_with_stdin(
+                fixture
+                    .cli()
+                    .args(&add)
+                    .args(["--secret-stdin", "--project", "demo"])
+                    .args(["--env", "dev"]),
+                "fake-new-secret\n",
+            );
             let text = stderr(&output);
             assert!(!output.status.success(), "{add:?} accepted {name}");
             assert!(
@@ -1699,10 +1753,10 @@ fn older_formats_remain_readable_and_only_upgrade_with_explicit_confirmation() {
         assert_success(&output);
         assert_eq!(fs::read(&path).unwrap(), *bytes);
 
-        let output = command()
-            .args(["add", "New fake key", "--secret", "fake-upgrade-secret"])
-            .output()
-            .unwrap();
+        let output = output_with_stdin(
+            command().args(["add", "New fake key", "--secret-stdin"]),
+            "fake-upgrade-secret\n",
+        );
         assert!(!output.status.success());
         assert!(
             stderr(&output).contains("akm upgrade"),

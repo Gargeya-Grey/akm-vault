@@ -118,7 +118,9 @@ screen-capture path.
 
 Commands below assume a freshly built `akm.exe` is on PATH. Without `AKM_PASSWORD`,
 the CLI prompts for the master password. There is no password argument because
-command lines are observable by other processes.
+command lines are observable by other processes. For the same reason, a key's secret
+never comes from an argument: `add` and `rotate` read it from a hidden prompt, or from
+stdin with `--secret-stdin`.
 
 ```powershell
 akm init --name "Personal API keys"

@@ -5,6 +5,15 @@ There is no `--password` argument. A prompt is safer because other local process
 may inspect an environment. New vaults require at least 12 password characters.
 Existing vaults with shorter passwords can still be opened.
 
+`add` and `rotate` read a key's secret from a hidden prompt, or from stdin with
+`--secret-stdin`. There is no `--secret` argument: the process list and the shell
+history keep a command line.
+
+```text
+akm add "OpenAI dev" --project demo --env dev    # prompts for the secret
+echo fake-value | akm add "CI key" --project demo --env ci --secret-stdin
+```
+
 ## Select keys explicitly
 
 Both `run` and `export` require a non-empty project and environment, or `--all`

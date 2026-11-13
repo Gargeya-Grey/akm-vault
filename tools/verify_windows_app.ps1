@@ -253,11 +253,11 @@ function Wait-Text([string]$pattern, [int]$milliseconds = 15000) {
   return $false
 }
 
-function Invoke-TestCli([string[]]$words) {
+function Invoke-TestCli([string[]]$words, [string]$standardInput) {
   $previous = [Environment]::GetEnvironmentVariable('AKM_PASSWORD', 'Process')
   try {
     [Environment]::SetEnvironmentVariable('AKM_PASSWORD', $password, 'Process')
-    $result = & $cli --vault $vault @words
+    $result = if ($PSBoundParameters.ContainsKey('standardInput')) { $standardInput | & $cli --vault $vault @words } else { & $cli --vault $vault @words }
     if ($LASTEXITCODE -ne 0) { throw "Fake-vault CLI failed: $($words[0])" }
     return $result
   } finally { [Environment]::SetEnvironmentVariable('AKM_PASSWORD', $previous, 'Process') }
@@ -791,7 +791,7 @@ try {
   Write-Output ([AkmProofClipboard]::DesktopDescription())
   if ($RemainingOnly -or $JournalOnly) {
     Invoke-TestCli @('init', '--name', 'Remaining native proof') | Out-Null
-    Invoke-TestCli @('add', 'OpenAI prod proof', '--project', 'demo', '--env', 'prod', '--env-var', 'OPENAI_API_KEY', '--secret', 'fake-prod-must-stay') | Out-Null
+    Invoke-TestCli @('add', 'OpenAI prod proof', '--project', 'demo', '--env', 'prod', '--env-var', 'OPENAI_API_KEY', '--secret-stdin') 'fake-prod-must-stay' | Out-Null
     if ($JournalOnly) {
       $vault = $secondVault
       Invoke-TestCli @('init', '--name', 'Second fake vault') | Out-Null
@@ -993,7 +993,7 @@ try {
   Find-Control 'Add key' ([System.Windows.Automation.ControlType]::Button) | Out-Null
   Assert-Proof (Test-Path -LiteralPath $vault) 'the GUI created its fake vault'
 
-  Invoke-TestCli @('add', 'OpenAI prod proof', '--project', 'demo', '--env', 'prod', '--env-var', 'OPENAI_API_KEY', '--secret', 'fake-prod-must-stay') | Out-Null
+  Invoke-TestCli @('add', 'OpenAI prod proof', '--project', 'demo', '--env', 'prod', '--env-var', 'OPENAI_API_KEY', '--secret-stdin') 'fake-prod-must-stay' | Out-Null
   Click-Control 'Add key'
   Set-Field 'Title' 'Phantom must not exist'
   Set-Field 'Secret' 'fake-unsaved-value'

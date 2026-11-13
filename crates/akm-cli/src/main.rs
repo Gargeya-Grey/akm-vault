@@ -112,10 +112,6 @@ struct AddArgs {
     /// Read the secret from stdin (single line, trailing newline stripped)
     #[arg(long)]
     secret_stdin: bool,
-
-    /// Pass the secret as an argument. Visible in the process list; avoid.
-    #[arg(long, value_parser = parse_secret)]
-    secret: Option<Secret>,
 }
 
 #[derive(Subcommand)]
@@ -126,7 +122,7 @@ enum Commands {
         name: Option<String>,
     },
 
-    /// Add a key (prompts for the secret unless --secret-stdin is used)
+    /// Add a key (the secret comes from the prompt or from stdin, never from an argument)
     Add(Box<AddArgs>),
 
     /// List keys (secrets are never printed)
@@ -343,12 +339,11 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                 rotation_days,
                 username,
                 secret_stdin,
-                secret,
             } = *args;
             let password = master_password(false)?;
             let mut vault = open_vault(&path, &password)?;
             drop(password);
-            let secret = secret_value(secret, secret_stdin)?;
+            let secret = secret_value(secret_stdin)?;
 
             let input = ApiKeyInput {
                 title,
@@ -500,7 +495,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
             let mut vault = open_vault(&path, &password)?;
             drop(password);
             let key = select(&vault, &query)?;
-            let secret = secret_value(None, secret_stdin)?;
+            let secret = secret_value(secret_stdin)?;
             let rotation = vault.rotate(&key.id, secret)?;
             print_warnings(io, &mut vault);
             status!(
@@ -1026,19 +1021,10 @@ fn master_password(confirm: bool) -> Result<Zeroizing<String>> {
 /// this size, so no growth leaves an unzeroed copy of a partial secret behind.
 const SECRET_STDIN_LIMIT: usize = 1024 * 1024;
 
-/// `--secret`: the value is held in a `Secret` (zeroized on drop, never printed) from the
-/// moment it leaves the parser (FR-08).
-fn parse_secret(value: &str) -> std::result::Result<Secret, String> {
-    Ok(Secret::new(value))
-}
-
 /// Every secret string in this program is a `Secret` or a `Zeroizing` buffer from its first
-/// read. Nothing here keeps a plain `String` or `Vec<u8>` copy of it (FR-08).
-fn secret_value(given: Option<Secret>, from_stdin: bool) -> Result<Secret> {
-    if let Some(secret) = given {
-        return Ok(secret);
-    }
-
+/// read. Nothing here keeps a plain `String` or `Vec<u8>` copy of it (FR-08). A secret never
+/// comes from an argument, which the process list and the shell history keep (FV-11).
+fn secret_value(from_stdin: bool) -> Result<Secret> {
     if from_stdin {
         return Ok(read_secret(std::io::stdin())?.into_secret());
     }
@@ -1343,23 +1329,9 @@ mod tests {
     /// first read. These lines stop compiling if a path returns a plain `String` again.
     #[test]
     fn secret_paths_return_zeroizing_types_not_plain_strings() {
-        let _: fn(Option<Secret>, bool) -> Result<Secret> = secret_value;
-        let _: fn(&str) -> std::result::Result<Secret, String> = parse_secret;
+        let _: fn(bool) -> Result<Secret> = secret_value;
         let _: fn(&[u8]) -> Result<SecretText> = |bytes| read_secret(bytes);
         let _: fn(bool) -> Result<Zeroizing<String>> = master_password;
-        // The parsed `--secret` value is a `Secret`: it prints as redacted text.
-        let Ok(cli) = Cli::try_parse_from(["akm", "add", "Fake title", "--secret", "fake-arg"])
-        else {
-            panic!("the add command does not parse");
-        };
-        let Commands::Add(args) = cli.command else {
-            panic!("not an add command");
-        };
-        let shown = format!("{:?}", args.secret);
-        assert!(
-            shown.contains("redacted") && !shown.contains("fake-arg"),
-            "{shown}"
-        );
     }
 
     /// FR-08: the production code reads no secret with a plain `String` buffer.
