@@ -1799,7 +1799,7 @@ mod tests {
                     snapshot,
                     || {
                         let prepared = crate::private_export::prepare_private(
-                            &path,
+                            crate::private_export::choose(&path).unwrap(),
                             "TOKEN=fake-view-export\n",
                             &[],
                             &[],
@@ -1857,7 +1857,7 @@ mod tests {
                     snapshot,
                     || {
                         let prepared = crate::private_export::prepare_private(
-                            &path,
+                            crate::private_export::choose(&path).unwrap(),
                             "TOKEN=fake-refused\n",
                             &[],
                             &[],
@@ -3348,7 +3348,7 @@ mod tests {
                 snapshot,
                 || {
                     let prepared = crate::private_export::prepare_private(
-                        &path,
+                        crate::private_export::choose(&path).unwrap(),
                         "TOKEN=fake\n",
                         &[],
                         &[],
@@ -3391,7 +3391,7 @@ mod tests {
                 snapshot,
                 || {
                     crate::private_export::prepare_private(
-                        &path,
+                        crate::private_export::choose(&path).unwrap(),
                         "TOKEN=fake\n",
                         &[],
                         &[],
