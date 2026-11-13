@@ -151,7 +151,8 @@ pub trait CommitGate: Send + Sync {
 
 struct ImportPlan {
     preview: ImportPreview,
-    replacements: Vec<(EntryId, String)>,
+    /// Cleared when dropped, also by a preview, which writes none of them (FW-09).
+    replacements: Vec<(EntryId, Zeroizing<String>)>,
     additions: Vec<ApiKeyInput>,
 }
 
@@ -792,7 +793,7 @@ impl Vault {
                     plan.preview.unchanged += 1;
                     (existing.title.clone(), "unchanged")
                 } else {
-                    plan.replacements.push((id, secret.clone()));
+                    plan.replacements.push((id, Zeroizing::new(secret.clone())));
                     plan.preview.updated += 1;
                     (existing.title.clone(), "update")
                 }
@@ -830,14 +831,14 @@ impl Vault {
         }
         let mut candidate = self.db.clone();
         let now = self.clock.now();
-        for (id, secret) in plan.replacements {
+        for (id, mut secret) in plan.replacements {
             let mut entry = candidate
                 .entry_mut(id)
                 .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
             let before: Entry = (*entry).clone();
             let stamp = next_stamp(now, &before)?;
             keep_version(&mut entry, before);
-            entry.set_protected(fields::PASSWORD, secret);
+            entry.set_protected(fields::PASSWORD, std::mem::take(&mut *secret));
             entry.set_unprotected(META_SECRET_CHANGED, format_secret_change(stamp));
             entry.times.last_modification = Some(stamp);
         }
@@ -956,7 +957,8 @@ impl Vault {
     /// The variables of a plan, with their values. `proof` must be the record of this plan.
     pub fn env_vars(&self, plan: &EnvPlan, proof: &Disclosure) -> Result<Vec<(String, String)>> {
         proof.redeem_env(self.stamp(), plan)?;
-        let mut out = Vec::with_capacity(plan.len());
+        // Cleared if a later key is refused (FW-09).
+        let mut out = Zeroizing::new(Vec::with_capacity(plan.len()));
         for (id, name) in plan.entries() {
             let entry = self
                 .find_entry_id(id)
@@ -971,7 +973,7 @@ impl Vault {
             validate_process_var(name, &value)?;
             out.push((name.to_string(), (*value).clone()));
         }
-        Ok(out)
+        Ok(std::mem::take(&mut *out))
     }
 
     /// An input that holds a key's stored metadata and secret, for an update that keeps
