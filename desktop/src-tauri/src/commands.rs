@@ -329,7 +329,7 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T, CommandError> {
     tauri::async_runtime::spawn_blocking(operation)
         .await
-        .map_err(|_| CommandError::internal("A native step failed. Try again."))?
+        .map_err(|_| CommandError::failed_step())?
 }
 
 #[tauri::command]
@@ -1245,6 +1245,7 @@ fn run_import(
                     }
                     let (added, updated) =
                         vault.import_env(&entries.0, project.as_deref(), environment.as_deref())?;
+                    confirm.imported();
                     Ok(ImportReport { added, updated })
                 })
                 .and_then(|stamped| session.finish(Access::Write, stamped))
@@ -1478,7 +1479,11 @@ mod tests {
         }));
         let error = answer.unwrap_err();
         assert_eq!(error.kind, "internal");
-        assert_eq!(error.message, "A native step failed. Try again.");
+        assert_eq!(error.message, CommandError::failed_step().message);
+        assert!(
+            !error.message.contains("Try again"),
+            "the step may have finished, so the text does not invite a retry (U1-R1-04)"
+        );
         let source = include_str!("commands.rs");
         let production = &source[..source.find("\nmod tests {").unwrap()];
         assert_eq!(production.matches("spawn_blocking(").count(), 1);
@@ -4208,5 +4213,59 @@ mod tests {
             run.find("disclosure::ask(").unwrap() < run.find("recover_damaged()").unwrap(),
             "the user is asked before anything moves"
         );
+    }
+
+    /// U1-R1-01: a value read from the vault is not delivered after a same-session change.
+    /// Between the read and the delivery, a rotate, a remove or a reload moves the revision.
+    /// Each of the four delivery paths then refuses with stalePreview, and the clipboard keeps
+    /// the user's own text.
+    #[test]
+    fn u1_r1_01_a_value_that_left_the_vault_is_refused_after_a_same_session_change() {
+        for change in ["rotate", "remove", "reload"] {
+            for path in ["single reveal", "single copy", "bulk preview", "bulk copy"] {
+                let f = disclosing();
+                f.clipboard.lock().unwrap().text = "fake-user-value".into();
+                let expected = f.session.snapshot().unwrap();
+                let scope =
+                    ExportScope::new(Some("app".into()), Some("dev".into()), false).unwrap();
+                let stamped = if path.starts_with("single") {
+                    requested_key_at(&f.session, expected, &f.keys[0], KeyDisclosure::Reveal)
+                        .unwrap()
+                } else {
+                    extract_export_at(&f.session, expected, &scope, "fake target").unwrap()
+                };
+                let id = f.keys[0].clone();
+                match change {
+                    "rotate" => drop(
+                        f.session
+                            .access(Access::Write, None, |vault| {
+                                rotate_key(vault, &id, "fake-rotated-value".into())
+                            })
+                            .unwrap(),
+                    ),
+                    "remove" => drop(
+                        f.session
+                            .access(Access::Write, None, |vault| Ok(vault.remove(&id)?))
+                            .unwrap(),
+                    ),
+                    _ => drop(
+                        f.session
+                            .access(Access::Reload, None, |vault| Ok(vault.reload()?))
+                            .unwrap(),
+                    ),
+                }
+                let delivered = if path.ends_with("copy") {
+                    f.session.copy_stamped(stamped).map(|()| String::new())
+                } else {
+                    f.session.reveal(stamped)
+                };
+                assert_eq!(
+                    delivered.unwrap_err().kind,
+                    "stalePreview",
+                    "{change}, {path}: the old value is refused"
+                );
+                assert_eq!(clipboard_text(&f), "fake-user-value", "{change}, {path}");
+            }
+        }
     }
 }

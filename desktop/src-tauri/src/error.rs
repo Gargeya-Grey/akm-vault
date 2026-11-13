@@ -33,6 +33,16 @@ impl CommandError {
     pub fn internal(error: impl std::fmt::Display) -> Self {
         Self::new("internal", error.to_string())
     }
+
+    /// A native step stopped in a way that leaves its result unknown: it panicked, and the
+    /// panic text can name a path or hold a value, so it is not shown. The text never invites a
+    /// retry, because the step may have finished (U1-R1-04).
+    pub fn failed_step() -> Self {
+        Self::new(
+            "internal",
+            "A native step failed, so AKM cannot say whether it finished. Check the result before you try again.",
+        )
+    }
 }
 
 impl From<Error> for CommandError {

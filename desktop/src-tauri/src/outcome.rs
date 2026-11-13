@@ -7,8 +7,9 @@
 //! session of the request and one fixed kind: no name, no value, no path.
 //!
 //! One guard is made when the request passes its session check. It records once, whatever way
-//! the request ends: a reply, an early return through `?`, or a panic that unwinds through it.
-//! The default is "failed".
+//! the request ends: a reply, an early return through `?`, or a panic, which `dispatched`
+//! catches. The default is "failed". After the effect, no reply invites a retry: the session
+//! ends, and the reply is `completedWhileLocked` (U1-R1-04).
 
 use std::cell::Cell;
 
@@ -94,10 +95,21 @@ impl Drop for Outcome<'_> {
     }
 }
 
-/// Runs a request that leaves an outcome record. The operation ID must be a UUID: a malformed
-/// one is refused before anything runs. A request whose session is not the current one is
-/// refused with no record, because nothing ran and the reply says so. From the session check
-/// on, the request records exactly once.
+/// The one accepted spelling of an operation ID: the canonical UUID, lower case with hyphens,
+/// as `crypto.randomUUID()` makes it. Every other spelling (upper case, braces, no hyphens, a
+/// URN) is refused, so the ID of a record is always the exact text that the page acknowledges
+/// (U1-R1-07). Dispatch and acknowledgement both use this function.
+pub fn parse_operation_id(text: &str) -> Result<&str, CommandError> {
+    match uuid::Uuid::parse_str(text) {
+        Ok(parsed) if parsed.hyphenated().to_string() == text => Ok(text),
+        _ => Err(CommandError::new("invalid", "The request is malformed.")),
+    }
+}
+
+/// Runs a request that leaves an outcome record. The operation ID must be a canonical UUID
+/// (`parse_operation_id`): any other text is refused before anything runs, with no record. A
+/// request whose session is not the current one is refused with no record, because nothing ran
+/// and the reply says so. From the session check on, the request records exactly once.
 pub fn dispatched<T>(
     session: &Session,
     operation: Operation,
@@ -105,9 +117,7 @@ pub fn dispatched<T>(
     session_id: &str,
     run: impl FnOnce(&Outcome<'_>, Snapshot) -> Result<Option<T>, CommandError>,
 ) -> Result<Option<T>, CommandError> {
-    let id = uuid::Uuid::parse_str(operation_id)
-        .map_err(|_| CommandError::new("invalid", "The request is malformed."))?
-        .to_string();
+    let id = parse_operation_id(operation_id)?.to_string();
     let expected = session.snapshot_for(session_id)?;
     let outcome = Outcome {
         session,
@@ -116,9 +126,16 @@ pub fn dispatched<T>(
         origin: expected.ticket,
         fact: Cell::new(Fact::Failed),
     };
-    let reply = run(&outcome, expected);
+    let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&outcome, expected)))
+        .unwrap_or_else(|_| Err(CommandError::failed_step()));
     outcome.settle(&reply);
-    reply
+    match reply {
+        Err(error) if outcome.fact.get() == Fact::Done && error.kind != "completedWhileLocked" => {
+            let _ = session.lock();
+            Err(CommandError::completed_while_locked())
+        }
+        reply => reply,
+    }
 }
 
 #[cfg(test)]
@@ -190,24 +207,30 @@ mod tests {
 
     type Run = fn(&Session, &Outcome<'_>) -> Result<Option<u8>, CommandError>;
 
+    /// Each way out: the reply ("1", "null" or the error kind), and the record of an import and
+    /// of a launch. A panic never unwinds out of `dispatched`. After the effect, no reply invites
+    /// a retry: the session ends and the reply is `completedWhileLocked` (U1-R1-04).
     #[test]
     fn class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record() {
-        let ways: [(&str, Run, &str, &str); 9] = [
+        let ways: [(&str, Run, &str, &str, &str); 9] = [
             (
                 "a value",
                 |_, _| Ok(Some(1)),
+                "1",
                 "importApplied",
                 "terminalStarted",
             ),
             (
                 "null",
                 |_, _| Ok(None),
+                "null",
                 "importDeclined",
                 "terminalDeclined",
             ),
             (
                 "an error",
                 |_, _| Err(CommandError::locked()),
+                "locked",
                 "importFailed",
                 "terminalFailed",
             ),
@@ -217,6 +240,7 @@ mod tests {
                     failing_step()?;
                     Ok(Some(1))
                 },
+                "invalid",
                 "importFailed",
                 "terminalFailed",
             ),
@@ -226,12 +250,14 @@ mod tests {
                     session.lock().unwrap();
                     Err(CommandError::completed_while_locked())
                 },
+                "completedWhileLocked",
                 "importSessionEnded",
                 "terminalSessionEnded",
             ),
             (
                 "a panic before the effect",
                 |_, _| panic!("a fake fault before the effect"),
+                "internal",
                 "importFailed",
                 "terminalFailed",
             ),
@@ -241,8 +267,9 @@ mod tests {
                     outcome.done();
                     panic!("a fake fault after the effect")
                 },
-                "importApplied",
-                "terminalStarted",
+                "completedWhileLocked",
+                "importSessionEnded",
+                "terminalSessionEnded",
             ),
             (
                 "an error after the effect",
@@ -250,8 +277,9 @@ mod tests {
                     outcome.done();
                     Err(CommandError::internal("a fake error after the effect"))
                 },
-                "importApplied",
-                "terminalStarted",
+                "completedWhileLocked",
+                "importSessionEnded",
+                "terminalSessionEnded",
             ),
             (
                 "a lock after the effect, then a value",
@@ -260,11 +288,12 @@ mod tests {
                     session.lock().unwrap();
                     Ok(Some(1))
                 },
+                "1",
                 "importSessionEnded",
                 "terminalSessionEnded",
             ),
         ];
-        for (way, run, import, terminal) in ways {
+        for (way, run, answer, import, terminal) in ways {
             for (operation, expected) in
                 [(Operation::Import, import), (Operation::Terminal, terminal)]
             {
@@ -278,11 +307,14 @@ mod tests {
                         run(&session, outcome)
                     })
                 }));
-                assert_eq!(
-                    reply.is_err(),
-                    way.starts_with("a panic"),
-                    "{way}: only a panic unwinds"
-                );
+                let reply = match reply.expect("no panic unwinds out of dispatched") {
+                    Ok(value) => serde_json::to_value(value).unwrap().to_string(),
+                    Err(error) => {
+                        assert!(!error.message.contains("Try again"), "{way}");
+                        error.kind
+                    }
+                };
+                assert_eq!(reply, answer, "{way}, {operation:?}");
                 assert_eq!(
                     records(&f.session, &id),
                     [(ticket.0.to_string(), expected.to_string())],
@@ -362,6 +394,71 @@ mod tests {
             records(&f.session, &b_id),
             [(b_before.ticket.0.to_string(), "terminalStarted".to_string())],
             "dismissing A's record leaves B's"
+        );
+    }
+
+    /// U1-R1-07: one spelling of an operation ID. Every other spelling of a valid UUID is
+    /// refused at dispatch, with nothing run and no record, and at acknowledgement, with nothing
+    /// dismissed. The canonical spelling round-trips exactly.
+    #[test]
+    fn u1_r1_07_an_operation_id_has_one_spelling_at_dispatch_and_at_acknowledgement() {
+        let f = opened();
+        let canonical = uuid::Uuid::new_v4();
+        let text = canonical.to_string();
+        let others = [
+            ("upper case", text.to_uppercase()),
+            ("braces", format!("{{{text}}}")),
+            ("no hyphens", canonical.simple().to_string()),
+            ("URN", canonical.urn().to_string()),
+        ];
+        for (spelling, other) in &others {
+            assert!(
+                uuid::Uuid::parse_str(other).is_ok(),
+                "{spelling} is a valid UUID"
+            );
+            let ran = std::cell::Cell::new(false);
+            let reply = dispatched(&f.session, Operation::Import, other, &f.owner, |_, _| {
+                ran.set(true);
+                Ok(Some(1u8))
+            });
+            assert_eq!(reply.unwrap_err().kind, "invalid", "{spelling}: refused");
+            assert!(!ran.get(), "{spelling}: nothing ran");
+        }
+        let report = serde_json::to_value(f.session.warnings().unwrap()).unwrap();
+        assert_eq!(report["operations"], serde_json::json!([]), "no record");
+
+        let reply = dispatched(&f.session, Operation::Import, &text, &f.owner, |_, _| {
+            Ok(Some(1u8))
+        });
+        assert_eq!(reply.unwrap(), Some(1));
+        let ticket = f.session.snapshot().unwrap().ticket;
+        let record = [(ticket.0.to_string(), "importApplied".to_string())];
+        assert_eq!(
+            records(&f.session, &text),
+            record,
+            "the record ID is the supplied text"
+        );
+        for (spelling, other) in &others {
+            assert_eq!(
+                f.session
+                    .dismiss_warnings(&[other.clone(), text.clone()])
+                    .unwrap_err()
+                    .kind,
+                "invalid",
+                "{spelling}: an acknowledgement in another spelling is refused"
+            );
+            assert_eq!(
+                records(&f.session, &text),
+                record,
+                "{spelling}: nothing dismissed"
+            );
+        }
+        f.session
+            .dismiss_warnings(std::slice::from_ref(&text))
+            .unwrap();
+        assert!(
+            records(&f.session, &text).is_empty(),
+            "the canonical ID round-trips"
         );
     }
 }

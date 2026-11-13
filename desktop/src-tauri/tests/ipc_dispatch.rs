@@ -107,6 +107,8 @@ struct Dialog {
     /// How many windows opened, and the text of the last one.
     opened: AtomicUsize,
     last: Mutex<String>,
+    /// The next import panics right after it replaced the vault file (U1-R1-04).
+    fault_after_import: AtomicBool,
 }
 impl Dialog {
     fn new() -> Arc<Self> {
@@ -116,6 +118,7 @@ impl Dialog {
             hold: Mutex::new(None),
             opened: AtomicUsize::new(0),
             last: Mutex::new(String::new()),
+            fault_after_import: AtomicBool::new(false),
         })
     }
 
@@ -133,6 +136,11 @@ impl import_review::ImportConfirm for Dialog {
     }
     fn window_live(&self) -> bool {
         self.window_live.load(Ordering::SeqCst)
+    }
+    fn imported(&self) {
+        if self.fault_after_import.swap(false, Ordering::SeqCst) {
+            panic!("a fake fault right after the import replaced the vault file");
+        }
     }
 }
 impl review_window::ReviewDialog for &Dialog {
@@ -168,6 +176,8 @@ struct Terminal {
     approve: AtomicBool,
     live: AtomicBool,
     fail_prepare: AtomicBool,
+    /// The next start panics right after the resume, under the gate (U1-R1-04).
+    fault_after_resume: AtomicBool,
     reviews: AtomicUsize,
     hold: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     step: Mutex<Option<Step>>,
@@ -180,6 +190,7 @@ impl Terminal {
             approve: AtomicBool::new(true),
             live: AtomicBool::new(true),
             fail_prepare: AtomicBool::new(false),
+            fault_after_resume: AtomicBool::new(false),
             reviews: AtomicUsize::new(0),
             hold: Mutex::default(),
             step: Mutex::default(),
@@ -230,22 +241,32 @@ impl launch::TerminalHost for Terminal {
         Ok(Box::new(FakeStart {
             started: &self.started,
             request: Some((request.folder.clone(), request.secrets.to_vec())),
+            fault: self.fault_after_resume.swap(false, Ordering::SeqCst),
         }))
     }
 }
 
-/// A prepared start: the commit records it, a revoke drops it.
+/// A prepared start: the commit records it, a revoke drops it. With `fault`, the act panics
+/// right after the start, and the revoke ends that start, as the real revoke terminates the
+/// process.
 struct FakeStart<'a> {
     started: &'a Mutex<Started>,
     request: Option<(std::path::PathBuf, Vec<(String, String)>)>,
+    fault: bool,
 }
 impl session::Effect for FakeStart<'_> {
     type Output = ();
     fn act(&mut self, _: &Held<'_>) -> Result<(), error::CommandError> {
         self.started.lock().unwrap().extend(self.request.take());
+        if self.fault {
+            panic!("a fake fault right after the resume");
+        }
         Ok(())
     }
     fn revoke(&mut self) -> Result<(), String> {
+        if self.fault {
+            self.started.lock().unwrap().pop();
+        }
         self.request = None;
         Ok(())
     }
@@ -774,6 +795,7 @@ fn main() {
     every_dispatched_launch_leaves_one_record(webview, &session, &terminal, directory.path());
     a_core_warning_reaches_the_page_with_its_own_kind(webview, directory.path());
     a_hidden_window_at_the_import_check_leaves_a_failed_record(webview, &dialog, directory.path());
+    a_fault_after_the_import_replacement_leaves_a_true_record(webview, &dialog, directory.path());
     the_history_command_answers_times_and_field_names(webview, directory.path());
     a_foreign_entry_with_history_shows_only_known_field_names(webview, directory.path());
     a_page_that_holds_the_session_id_cannot_disclose_without_the_user(
@@ -1360,20 +1382,63 @@ fn every_dispatched_launch_leaves_one_record(
         assert_eq!(started(), before, "{case}: nothing started");
     }
 
-    // A start, and a fault after it: the record says that the terminal started.
+    // A start, and a fault after it: the record says that the terminal started. After the
+    // fault, no reply invites a retry: the session ends, and the reply says that the launch
+    // completed (U1-R1-04).
     for case in ["a start", "a fault after the start"] {
         let operation = uuid::Uuid::new_v4().to_string();
-        if case == "a fault after the start" {
+        let fault = case == "a fault after the start";
+        if fault {
             terminal.at(LaunchStep::Started, || {
                 panic!("a fake fault after the start")
             });
         }
         let before = started();
         let lost = call(webview, "env_launch_terminal", scope(&operation));
-        assert_eq!(lost.is_ok(), case == "a start", "{case}");
-        only_record(&operation, "terminalStarted", case);
+        match lost {
+            Ok(count) => assert!(!fault && count == serde_json::json!(1), "{case}"),
+            Err(error) => assert!(fault && error["kind"] == "completedWhileLocked", "{case}"),
+        }
+        let kind = if fault {
+            "terminalSessionEnded"
+        } else {
+            "terminalStarted"
+        };
+        only_record(&operation, kind, case);
         assert_eq!(started(), before + 1, "{case}");
     }
+    assert_eq!(
+        call(webview, "vault_status", serde_json::json!({})).unwrap()["unlocked"],
+        false,
+        "the fault after the start ended the session"
+    );
+
+    // A fault right after the resume, under the gate: the gate is not poisoned, the start is
+    // revoked, the record says failed, the reply does not invite a retry, and the session ends.
+    fresh("outcome-resume.kdbx");
+    let operation = uuid::Uuid::new_v4().to_string();
+    terminal.fault_after_resume.store(true, Ordering::SeqCst);
+    let before = started();
+    let lost = call(webview, "env_launch_terminal", scope(&operation));
+    assert!(
+        !terminal.fault_after_resume.load(Ordering::SeqCst),
+        "the start was prepared"
+    );
+    let error = lost.unwrap_err();
+    assert_eq!(error["kind"], "internal");
+    assert!(!error["message"].as_str().unwrap().contains("Try again"));
+    only_record(
+        &operation,
+        "terminalFailed",
+        "a fault right after the resume",
+    );
+    assert_eq!(started(), before, "the revoke ended the start");
+    assert_eq!(
+        call(webview, "vault_status", serde_json::json!({})).unwrap()["unlocked"],
+        false,
+        "the fault under the gate ended the session"
+    );
+    fresh("outcome-after-resume.kdbx");
 
     // A page load while the review is open, then the approval: the page that replaced the one
     // that sent the request finds the start in the record.
@@ -1509,6 +1574,44 @@ fn a_hidden_window_at_the_import_check_leaves_a_failed_record(
     )
     .unwrap();
     println!("PASS: env_import with a hidden window opened no dialog, wrote nothing and left one importFailed record.");
+}
+
+/// U1-R1-04, through the production handlers. A fault right after the import replaced the vault
+/// file leaves one importSessionEnded record, and the reply says that the import completed. The
+/// session ends, the file holds the import, and the next opening works.
+fn a_fault_after_the_import_replacement_leaves_a_true_record(
+    webview: &tauri::Webview<MockRuntime>,
+    dialog: &Arc<Dialog>,
+    directory: &std::path::Path,
+) {
+    let (owner, path) = open_new(webview, directory, "fault-import.kdbx");
+    let operation = uuid::Uuid::new_v4().to_string();
+    dialog.fault_after_import.store(true, Ordering::SeqCst);
+    let lost = call(
+        webview,
+        "env_import",
+        import_args(&owner, &operation, "TOKEN=fake-imported\n"),
+    );
+    assert!(
+        !dialog.fault_after_import.load(Ordering::SeqCst),
+        "the fault was reached"
+    );
+    assert_eq!(lost.unwrap_err()["kind"], "completedWhileLocked");
+    assert_eq!(record_kinds(webview, &operation), ["importSessionEnded"]);
+    assert_eq!(
+        call(webview, "vault_status", serde_json::json!({})).unwrap()["unlocked"],
+        false,
+        "the session ended"
+    );
+    assert!(!demo_dev_is_empty(&path), "the file holds the import");
+    call(
+        webview,
+        "vault_dismiss_warnings",
+        serde_json::json!({"ids": [operation]}),
+    )
+    .unwrap();
+    open_new(webview, directory, "after-fault-import.kdbx");
+    println!("PASS: env_import with a fault right after the vault replacement left one importSessionEnded record, answered completedWhileLocked, ended the session, kept the import in the file, and the next opening worked.");
 }
 
 /// FR-12 and FR-05, through the production handlers. A vault file that an unseen clone replaced

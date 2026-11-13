@@ -23,11 +23,11 @@ Every effect in `desktop/src-tauri/src` that acts for a session. "Before" is the
 | 1 | Replace the vault file (every write: add, update, rotate, remove, restore, purge, import, upgrade) | `session.rs` `access_checked`; core `Vault::commit` | Session and revision | The session was checked at the start of the access and at its end. The file was replaced between them with no gate (T-R3-04). | The core calls the installed `CommitGate` just before the replacement. The gate runs the replacement in `Session::commit`. The revision moves at the commit, under the gate. |
 | 2 | Start the terminal | `launch.rs` `run_launch` | Session and revision that the user reviewed | `while_current` held the gate while `CreateProcessW` ran, so a lock waited for process creation. | The process is created suspended, outside the gate (`process.rs`). `Session::commit` checks and resumes it. A refusal terminates it. |
 | 3 | Copy the launch values out of the vault | `launch.rs` `disclose_for_launch` | Session and revision | `while_current` around `env_vars`. | `Session::commit` around `env_vars`. Nothing to revoke: the copy is in memory and is zeroed on drop. |
-| 4 | Save the last vault path | `settings.rs` `save_vault_path`, called from `commands.rs` `open_vault` | The ticket of the opening | `while_current` around a whole write: folder creation, temporary file, rename. | The temporary file is written outside the gate. `Session::commit` renames it. After a refusal, a failed rename or a panic, the drop of the prepared file deletes it. |
+| 4 | Save the last vault path | `settings.rs` `save_vault_path`, called from `commands.rs` `open_vault` | The ticket of the opening | `while_current` around a whole write: folder creation, temporary file, rename. | The temporary file is written outside the gate, under a new random name with `create_new` (`write_beside`, U1-R1-05). `Session::commit` renames it. After a refusal, a failed rename or a panic, the drop of the prepared file deletes it. |
 | 5 | Show a notification | `reminders.rs` `notify` | The session that the page names | `while_session` around a file read, a permission query and the hand-over. | The file read and the permission query run outside the gate. `Session::commit` does the hand-over only. |
-| 6 | Copy to the clipboard | `session.rs` `copy_value` | Session and presentation | Check, act outside the gate, check again, clean up when the second check fails (unit 1h, D1). | Not changed. See decision 3. |
+| 6 | Copy to the clipboard | `session.rs` `copy_value` | Session, revision and presentation | Check, act outside the gate, check again (unit 1h, D1). The checks did not bind the revision, and a refusal at the second check took the copy back only after a lock. | Both checks bind the revision (U1-R1-01). Every refusal at the second check takes the published copy back (U1-R1-02). See decision 3. |
 | 7 | Publish an exported file | `session.rs` `publish`, `commands.rs` `env_save` | Session and revision | Check, prepare, check, publish outside the gate. Contract 9: publication may finish after a lock and reports it. | Not changed. See decision 4. |
-| 8 | Reveal a value to the page | `session.rs` `reveal` | Session and presentation | The check and the hand-back of the value share one gate hold. | Not changed. It has no outside effect: the value goes back in the reply. |
+| 8 | Reveal a value to the page | `session.rs` `reveal` | Session, revision and presentation | The check and the hand-back of the value share one gate hold. The check did not bind the revision. | The check also binds the revision (U1-R1-01). It has no outside effect: the value goes back in the reply. |
 | 9 | Journal records (`run-requested`, export, recovery) | core `disclose_env`, `AuditLog` | Session, checked before | Outside the gate, because the journal takes a blocking file lock. | Not changed. Owner's option (a): a lock during the record is prompt, and the record can exist for an act that never happened. |
 | 10 | Recover a damaged journal | `commands.rs` `run_recovery` | Session and revision | A read access. A lock after the recovery answered `locked`. | Not changed by the commit point. The rename of the journal runs with no gate. A lock after the rename answers `completedWhileLocked` (section 9.2). See limit 4. |
 
@@ -116,6 +116,8 @@ Gone with this unit: the copies in `std::process::Command` (its environment map 
 3. A lock waits for one notification hand-over to Windows that is in progress.
 4. The recovery of a damaged journal renames files in the journal folder with no gate. The core hook in this unit is in the vault save path only. A lock during the rename is prompt. The answer after it is `completedWhileLocked`, because the journal moved.
 5. Not verified: whether Windows shows the new console window of a suspended process before it is resumed. If it does, a refused start shows a console that closes at once. It needs the owner present to watch.
+6. A clipboard take-back that fails (decision 3) is not tried again in the same call. After a lock, the next tick or lock tries again. After a revision or view change, the lease's own expiry tries again, at most 30 seconds later.
+7. The settings and reminder files delete their temporary file by its random name, not by a handle (U1-R1-05). Another program that renamed that file and put its own at the name would lose it. No program is known to do that.
 
 ## 7. Tests
 
@@ -134,10 +136,13 @@ Gone with this unit: the copies in `std::process::Command` (its environment map 
 | 4.2, the real Win32 calls | `a_resumed_child_writes_its_marker_and_a_terminated_child_never_does`, `a_suspended_child_that_is_dropped_is_terminated`, `a_real_child_gets_the_folder_and_the_selected_variables_and_no_akm_variable` |
 | 5, the environment block | `the_block_holds_the_selected_variables_and_no_removed_name_and_ends_in_two_zeros`, `an_empty_block_is_two_zeros` |
 | 4.3, the settings write | `a_ticket_that_no_longer_owns_the_session_writes_nothing`, `review1_2_a_retiring_opening_cannot_interleave_between_the_ownership_check_and_the_settings_write` |
+| Inventory 4, a temporary file that AKM did not create (U1-R1-05) | `u1_r1_05_a_sentinel_at_the_old_fixed_name_survives_every_way_a_preparation_ends`, `u1_r1_05_two_interleaved_stores_each_publish_their_own_content` |
 | 4.3, the notification | `review1_7_lock_and_a_new_opening_wait_for_a_notification_that_passed_validation`, `review1_7_a_request_made_for_an_older_session_shows_nothing` |
+| Inventory 6 and 8, the revision of the read | `u1_r1_01_a_value_that_left_the_vault_is_refused_after_a_same_session_change` |
+| Decision 3, the take-back of a refused copy | `u1_r1_02_a_copy_refused_after_its_publication_is_taken_back_row_by_row` |
 | 1, the structural guard | `every_session_scoped_act_goes_through_the_commit_point` |
 
-The structural guard reads every file in `desktop/src-tauri/src` and the save path of the core. It fails when:
+The structural guard reads every file in `desktop/src-tauri/src` and the save path of the core. It is a tripwire for the usual spelling, not a proof: it matches source text, so a renamed import (`use std::process::Command as Child`), a re-export or a macro passes it (U1-R1-06). The compiler enforces only the `Held` witness. The guard fails when:
 
 - a second place makes a `Held`, or the one place is not `commit_point`;
 - a function that is not an act (`act`, `resume`, `show`) takes a `Held`;
@@ -163,6 +168,7 @@ Each mutant is one change to the code. The named test must fail on it. All of th
 | A dropped suspended process is not terminated | `a_suspended_child_that_is_dropped_is_terminated` |
 | A selected variable does not replace an inherited one | `the_block_holds_the_selected_variables_and_no_removed_name_and_ends_in_two_zeros` |
 | The prepared settings file is not deleted on drop | `a_ticket_that_no_longer_owns_the_session_writes_nothing` |
+| A copy refused at the second check is not taken back | `u1_r1_02_a_copy_refused_after_its_publication_is_taken_back_row_by_row` (row "lock, TakeBackFails") |
 | A second `Held::new()` in `session.rs` | `every_session_scoped_act_goes_through_the_commit_point` |
 | A `Held::new()` in `launch.rs` | Does not compile: the constructor is private to `session.rs`. |
 | A `std::process::Command` in `launch.rs` | `every_session_scoped_act_goes_through_the_commit_point` |
@@ -174,7 +180,7 @@ Each mutant is one change to the code. The named test must fail on it. All of th
 
 1. **The revision moves at the commit, not when the access ends.** It removes the gap in which a launch could start with values that the file no longer holds.
 2. **A closed gate on the stored vault.** Any replacement outside a write access is refused. It removes the promise that a future caller remembers to use `access`.
-3. **The clipboard stays outside this mechanism.** Its act can wait for another program's clipboard lock, and unit 1h decision D1 keeps it outside the gate for that reason. It keeps its pattern: check, act, check again, revoke by cleanup.
+3. **The clipboard stays outside this mechanism.** Its act can wait for another program's clipboard lock, and unit 1h decision D1 keeps it outside the gate for that reason. It keeps its pattern: check, act, check again. Each check binds the session, the revision and the presentation of the read. When the second check refuses, the call takes the published copy back at once, with the ownership-aware cleanup: a newer copy of the user, also one with the same text, stays. That take-back is the one cleanup attempt of the call. If it fails, the reply has the cleanup's error kind and both texts. The state table is the doc comment of `copy_held`, and `u1_r1_02_a_copy_refused_after_its_publication_is_taken_back_row_by_row` tests it row by row. Before U1-R1-02, the take-back happened only when a lock owed a cleanup, so a copy refused for an expired view stayed on the clipboard.
 4. **File export stays outside this mechanism.** Contract 9 lets a publication finish after a lock and report it truthfully. Moving the rename under the gate would change that contract, which this unit may not do.
 5. **A write that returns success but replaced nothing answers `locked` when the session ended during it.** Before this unit, it answered `completedWhileLocked`. Nothing was written, so `locked` is the true answer.
 6. **The terminal no longer inherits handles.** `CreateProcessW` runs with `bInheritHandles` false. The console gets its own standard handles.
@@ -186,7 +192,7 @@ Each mutant is one change to the code. The named test must fail on it. All of th
 12. **The launch keeps its own check of reserved names.** The core refuses a reserved name first, so the check in `check_names` is a second guard, as in the command line. Veto effect: delete that branch and its own test. The launch boundary does not change.
 13. **The desktop list of the command prompt names is deleted.** The core class `ShellStartup` holds `PROMPT`, `DIRCMD` and `COPYCMD`, and the table test asserts it. One list remains.
 14. **One bound for every wait for an event that must happen, 120 seconds (class Q).** A broken run takes longer to fail. A loaded run no longer fails.
-15. **A panic in a native step answers the fixed text "A native step failed. Try again."** The panic message can name a path or hold a value, so it never reaches the page.
+15. **A panic in a native step answers a fixed text that invites no retry.** The panic message can name a path or hold a value, so it never reaches the page. The text is "A native step failed, so AKM cannot say whether it finished. Check the result before you try again." Before U1-R1-04, the text was "A native step failed. Try again.", which invited a retry of a step that may have finished. A panic is caught at three places, so that what is known about the effect survives it (section 9.1): in the act under the gate, in the vault access, and in `dispatched`. A caught panic ends the session, because memory may no longer match the file or the process.
 16. **Three error texts keep a path.** `notFound` names the vault path that the page sent. The FR-04 warning names the remnant, which the user must delete. A `journal` error names the journal file, which the user must act on. No error text holds a secret value. Veto effect: fixed texts, and the user no longer sees where to act.
 
 ## 9. An outcome for every dispatched request
@@ -197,7 +203,10 @@ Fault class N: a request whose effect outlives the page must leave a true record
 
 - `outcome::dispatched` runs `env_import` and `env_launch_terminal`. The page makes the operation ID, a UUID, for each request.
 - A malformed operation ID is refused with `invalid`, and a session that is not the current one with `locked`. Both leave no record: nothing ran, and the reply says so.
-- From the session check on, one guard (`Outcome`) records exactly once, in its drop. So a reply, an early return through `?` and a panic that unwinds all leave one record. The default is "failed".
+- From the session check on, one guard (`Outcome`) records exactly once, in its drop. So a reply, an early return through `?` and a panic all leave one record. `dispatched` catches a panic in the request, so no panic unwinds past it. The default is "failed".
+- The commit is marked where it happens. A vault write marks it in `VaultCommit` (`CommitLog::committed`), and the vault access catches a panic in its operation, so it always reads that mark. The launch marks it with `Outcome::done` right after the resume. A panic in the act itself, under the gate, is caught there: the gate is not poisoned, the effect is revoked, and the answer is the fixed text of decision 15.
+- After the mark, no reply invites a retry. An error or a panic after a vault replacement, or after `done`, ends the session, and the reply is `completedWhileLocked`. The page then shows the locked screen, and the record says "session ended".
+- `Session::record_operation` writes into a poisoned gate too, so a record is never skipped.
 - The reply decides the kind. A value: applied or started. `null`: declined. `completedWhileLocked`: session ended. Any other error: failed.
 - `Outcome::done` marks an effect that happened. The launch calls it right after the resume. A fault after that point records the start, and no later error turns the record into "failed".
 - "Session ended" means that the effect happened and that the session of the request was no longer the current one when the record was written. The check is the same as a status read: it does not count as activity, and it changes nothing in the session that is current. The record holds the session of the request, so a record of session A never names session B.
@@ -215,19 +224,22 @@ Fault class N: a request whose effect outlives the page must leave a true record
 
 ### 9.3 Limits
 
-6. A panic inside the core after the vault replacement and before the import returns records `importFailed`, though the file holds the import. The vault file and the journal show the truth. No code in that path is known to panic.
+6. A gate that some other code poisons still takes a record, but `vault_warnings` then refuses, as every other gate user does, so the page cannot read the record until AKM restarts. Since U1-R1-04 the act under the gate cannot poison it, and no other code under the gate is known to panic.
 7. Records live in memory until the page acknowledges them or AKM quits. A record does not survive a restart.
+8. A panic in an act under the gate (U1-R1-04) records "failed". For a terminal, the revoke has ended the process. For a vault replacement, the file may hold the change; the `importFailed` text says that a failure does not confirm that nothing was saved.
 
 ### 9.4 Tests
 
 | Rule | Test |
 |---|---|
-| One record on each way out, for both operations: a value, `null`, an error, `?`, `completedWhileLocked`, a panic before and after `done`, an error after `done`, a lock after `done` | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` |
+| One record and one reply on each way out, for both operations: a value, `null`, an error, `?`, `completedWhileLocked`, a panic before and after `done`, an error after `done`, a lock after `done` | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` |
+| A panic under the gate leaves a working gate; a poisoned gate still takes a record (U1-R1-04) | `u1_r1_04_a_panic_under_the_gate_leaves_a_working_gate_and_no_record_is_skipped` |
+| An error or a panic after the vault replacement answers `completedWhileLocked` (U1-R1-04) | `u1_r1_04_an_access_that_fails_after_its_replacement_answers_completed_while_locked` |
 | No record before the session check | `class_n_a_malformed_operation_or_another_session_runs_nothing_and_leaves_no_record` |
 | A record of session A changes nothing in session B | `class_n_a_record_of_session_a_changes_nothing_in_session_b` |
 | A hidden window at the import check leaves a failed record (T-R3-05) | `t_r3_05_a_window_that_is_not_shown_gets_no_dialog_and_leaves_a_failed_record` |
 | A recovery that moved the journal answers `completedWhileLocked` after a lock | `fr14_a_lock_after_the_journal_moved_answers_completed_while_locked` |
-| Through the production handlers: each way out of a launch with the reply dropped, a page load while the review is open and then an approval, a hidden window at the window check, a lock at three steps, sessions A and B, and a hidden window at the import check | the outcome section of `desktop/src-tauri/tests/ipc_dispatch.rs` |
+| Through the production handlers: each way out of a launch with the reply dropped, a fault after the start and right after the resume, a page load while the review is open and then an approval, a hidden window at the window check, a lock at three steps, sessions A and B, a hidden window at the import check, and a fault right after the import's replacement | the outcome section of `desktop/src-tauri/tests/ipc_dispatch.rs` |
 
 ### 9.5 Mutants
 
@@ -244,3 +256,6 @@ Each mutant is one change to the code. The named test must fail on it. All of th
 | A malformed operation ID is accepted | `class_n_a_malformed_operation_or_another_session_runs_nothing_and_leaves_no_record` |
 | The record names the current session, not the session of the request | `class_n_a_record_of_session_a_changes_nothing_in_session_b` |
 | An error after the start turns the record into "failed" | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` |
+| The vault access does not catch a panic in its operation | `u1_r1_04_an_access_that_fails_after_its_replacement_answers_completed_while_locked` |
+| The commit point does not catch a panic in the act | `u1_r1_04_a_panic_under_the_gate_leaves_a_working_gate_and_no_record_is_skipped` |
+| `dispatched` keeps an error reply after the effect | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` |

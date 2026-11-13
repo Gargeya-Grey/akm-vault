@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -128,6 +129,28 @@ pub fn settings_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, C
     Ok(dir.join("settings.json"))
 }
 
+/// Writes `body` to a new file beside `path` and returns its name. The name is random and the
+/// file is created with `create_new`, so the write never opens a file that exists, and the
+/// later rename or delete uses a name that no other writer chose (fault class F, U1-R1-05).
+pub(crate) fn write_beside(path: &Path, body: &[u8]) -> Result<PathBuf, CommandError> {
+    let io = |error: std::io::Error| CommandError::new("io", error.to_string());
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(io)?;
+    }
+    let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .map_err(io)?;
+    if let Err(error) = file.write_all(body) {
+        drop(file);
+        let _ = fs::remove_file(&tmp);
+        return Err(io(error));
+    }
+    Ok(tmp)
+}
+
 /// The settings file, written beside its place. The commit renames it into place. A drop
 /// before the rename deletes it, so a refusal, a failed rename and a panic leave no temporary
 /// file. The file holds only the vault path.
@@ -140,20 +163,13 @@ struct PreparedSettings {
 
 impl PreparedSettings {
     fn write(path: &Path, settings: &Settings) -> Result<Self, CommandError> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| CommandError::new("io", error.to_string()))?;
-        }
         let body = serde_json::to_vec_pretty(settings).map_err(CommandError::internal)?;
-        let prepared = Self {
-            tmp: path.with_extension("json.tmp"),
+        Ok(Self {
+            tmp: write_beside(path, &body)?,
             path: path.to_path_buf(),
             attempted: false,
             placed: false,
-        };
-        fs::write(&prepared.tmp, body)
-            .map_err(|error| CommandError::new("io", error.to_string()))?;
-        Ok(prepared)
+        })
     }
 }
 
@@ -260,7 +276,7 @@ mod tests {
         );
         assert!(!file.exists());
         assert!(
-            !file.with_extension("json.tmp").exists(),
+            folder_names(directory.path()).is_empty(),
             "a refused commit deletes the prepared file"
         );
         assert_eq!(
@@ -286,5 +302,105 @@ mod tests {
             store.save_vault_path(Ticket(4), &owned, "b.kdbx").unwrap(),
             PreferenceSave::Saved
         );
+    }
+
+    fn folder_names(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// U1-R1-05 (class F): a file at the old fixed name belongs to someone else. A committed, a
+    /// refused, a failed and a panic-dropped preparation each leave it as it was, and leave no
+    /// temporary file of their own.
+    #[test]
+    fn u1_r1_05_a_sentinel_at_the_old_fixed_name_survives_every_way_a_preparation_ends() {
+        type Fence = fn(&mut dyn Effect<Output = ()>) -> Result<(), CommandError>;
+        let panics: Fence = |_| panic!("a fake fault after the preparation");
+        let ways: [(&str, Fence); 4] = [
+            ("committed", owned),
+            ("refused", not_owned),
+            ("failed", owned),
+            ("panic-dropped", panics),
+        ];
+        for (way, fence) in ways {
+            let directory = tempfile::tempdir().unwrap();
+            let file = directory.path().join("settings.json");
+            if way == "failed" {
+                fs::create_dir(&file).unwrap();
+            }
+            let sentinel = file.with_extension("json.tmp");
+            fs::write(&sentinel, "fake-file-of-another-process").unwrap();
+            let store = FilePreferences::new(Some(file.clone()), None);
+            let saved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                store.save_vault_path(Ticket(1), &fence, "fake.kdbx")
+            }));
+            match way {
+                "committed" => assert_eq!(saved.unwrap().unwrap(), PreferenceSave::Saved),
+                "refused" => assert_eq!(saved.unwrap().unwrap(), PreferenceSave::Superseded),
+                "failed" => assert!(saved.unwrap().is_err()),
+                _ => assert!(saved.is_err(), "{way}: the panic unwound"),
+            }
+            assert_eq!(
+                fs::read_to_string(&sentinel).unwrap(),
+                "fake-file-of-another-process",
+                "{way}: the file at the old fixed name is unchanged"
+            );
+            let expected: &[&str] = match way {
+                "committed" | "failed" => &["settings.json", "settings.json.tmp"],
+                _ => &["settings.json.tmp"],
+            };
+            assert_eq!(
+                folder_names(directory.path()),
+                expected,
+                "{way}: no temporary file remains"
+            );
+        }
+    }
+
+    /// U1-R1-05: two preference stores (two AKM processes) prepare at once. Each renames its own
+    /// temporary file into place, so the last rename wins with its own content, in either order.
+    #[test]
+    fn u1_r1_05_two_interleaved_stores_each_publish_their_own_content() {
+        for a_moves_first in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let file = directory.path().join("settings.json");
+            let a = FilePreferences::new(Some(file.clone()), None);
+            let b = FilePreferences::new(Some(file.clone()), None);
+            let inner = |effect: &mut dyn Effect<Output = ()>| -> Result<(), CommandError> {
+                if a_moves_first {
+                    owned(effect)?;
+                }
+                // B prepares and renames while A's temporary file waits.
+                assert_eq!(
+                    b.save_vault_path(Ticket(1), &owned, "fake-b.kdbx").unwrap(),
+                    PreferenceSave::Saved
+                );
+                assert_eq!(saved(&file).as_deref(), Some("fake-b.kdbx"));
+                if a_moves_first {
+                    Ok(())
+                } else {
+                    owned(effect)
+                }
+            };
+            assert_eq!(
+                a.save_vault_path(Ticket(1), &inner, "fake-a.kdbx").unwrap(),
+                PreferenceSave::Saved
+            );
+            let last = if a_moves_first {
+                "fake-b.kdbx"
+            } else {
+                "fake-a.kdbx"
+            };
+            assert_eq!(
+                saved(&file).as_deref(),
+                Some(last),
+                "a_moves_first: {a_moves_first}"
+            );
+            assert_eq!(folder_names(directory.path()), ["settings.json"]);
+        }
     }
 }
