@@ -84,25 +84,26 @@ The CLI is complete and proved. The desktop app is the product that the owner wi
 
 ## Last full check run
 
-On `20b9359`, the head of `gate/integration` with the fix round and the test audit (2026-11-13, fake data only, Rust builds in `<build>`).
+On `4436dee`, the head of `gate/integration` after fix round 3 (2026-11-13, fake data only, Rust builds in `<build>`). Every step of the run exited 0.
 
-- Rust: `cargo fmt --check` and Clippy (`-D warnings`) clean. `cargo test --workspace --offline --locked --no-fail-fast`: 698 passed, 0 failed, 2 ignored. Three tests that need a real symbolic link printed NOT RUN: this account has no symbolic-link privilege.
-- Frontend: `npm run build` exit 0; `npm test` 738 passed in 43 files; `npm run test:ui` 157 passed in headless Edge (mocked native boundary). The Tauri release build exit 0; the setup program was built and not installed.
-- Security checks: `check_no_network.py` and its test PASS. `check_dependencies.ps1` PASS when run alone. Inside the full run it failed twice, because `cargo audit` could not finish its lookup of yanked crates in time; the tool counts an unfinished lookup as a failure.
+- Rust: `cargo fmt --check` and Clippy (`-D warnings`) clean. `cargo test --workspace --offline --locked --no-fail-fast`: 713 passed, 0 failed, 2 ignored. Three tests that need a real symbolic link printed NOT RUN: this account has no symbolic-link privilege.
+- Frontend: `npm run build` exit 0; `npm test` 788 passed in 46 files; `npm run test:ui` 192 passed in headless Edge (mocked native boundary). The Tauri release build exit 0; the setup program was built and not installed.
+- Security checks: `check_no_network.py` and its test PASS. `check_dependencies.ps1` PASS inside the full run. In two earlier runs it failed there, because `cargo audit` could not finish its lookup of yanked crates in time; the tool counts an unfinished lookup as a failure.
 - Real readers on the `akm.exe` below: KeePassXC 2.8.0 interchange PASS; kdbxweb interchange PASS.
-- CLI on the release build, through the verification skill's helper: 37 steps PASS (the 32 earlier steps, and `edit`, `get` with a username, and the refused `add --secret`).
-- Tools: `check_docs.py` PASS in the fast mode and in the full mode. The five Python tool tests, the notices check and its test, and the five PowerShell tool tests: all exit 0.
-- Native GUI proofs on the builds below: `-JournalOnly` 27 checks PASS; `-JournalExportOnly` 8 checks PASS. No clipboard access, no minimize. The settings file was byte-identical afterwards (`dacba49a…9115`), and no `akm-desktop` process remained. The transcripts are local, in the ignored folder `.scratch\gate\proofs`.
+- CLI on the release build, through the verification skill's helper: 37 steps PASS.
+- Tools: `check_docs.py` PASS in the fast mode and in the full mode. The five Python tool tests, the notices check and its test, and the five PowerShell tool tests: all exit 0. The publication scan of the tree is clean.
+- Native GUI proofs on the builds below: `-JournalOnly` 28 checks PASS (one more than before: the proof refreshed its view of the start screen once, and says so); `-JournalExportOnly` 8 checks PASS. No clipboard access, no minimize. The settings file was byte-identical afterwards (`dacba49a…9115`), and no `akm-desktop` process remained. The transcripts are local, in the ignored folder `.scratch\gate`.
+- One test of fix round 2 passed its full run by chance (C3-01 in [FINDINGS.md](FINDINGS.md)); it is repaired, and it ran 30 times in a row without a failure.
 - CI: not run. GitHub Actions has not run since 8 Nov 2026 (billing). The branch is not pushed.
-- Not run: R4-04, the real clipboard test, the full native GUI proof, the native import dialog, the terminal window of a real launch, a real window hide, a real OS lock, suspend and idle wait, install on a clean computer, real high-contrast themes and a real screen reader. They need the owner present ([FIRST_USE.md](FIRST_USE.md)).
+- Not run: R4-04, the real clipboard test, the full native GUI proof, the native import dialog, the terminal window of a real launch, a real window hide, a real OS lock, suspend and idle wait, a real lock while a copy stalls, the replace prompt of the real save window, Windows text at 150 and 200 percent, install on a clean computer, real high-contrast themes and a real screen reader. They need the owner present ([FIRST_USE.md](FIRST_USE.md)).
 
 ## Builds under test
 
-Builds of `20b9359`, all unsigned and not installed by an agent, SHA-256. They are in `<build>\release`.
+Builds of `4436dee`, all unsigned and not installed by an agent, SHA-256. They are in `<build>\release`.
 
-- `akm-desktop.exe` `411881ab91bd93520ff9f4c4006f4d74450297adcae812be2743b84aba50823f`
-- `akm.exe` `f0acb4b9ee636dee08c1225988c7c7c82945bbe0beb99a3e1f9fe1c84b0a602c`
-- `AKM_0.1.0_x64-setup.exe` `83ae22757ce42b06736a78a321f70907b9d83f7e6a2f56ff55f4b1f12576584c`, in `<build>\release\bundle\nsis`
+- `akm-desktop.exe` `6f1648f53a428466e9b1c59ade5c6cbe41cabacc03457c51d41740d07d8991c1`
+- `akm.exe` `50883615ad58ca527d6188ab8294d7a8f6f5ae5f51e98189becd37a1466ba391`
+- `AKM_0.1.0_x64-setup.exe` `bc3c3fc087eed482ca602344550c3b819e63bad4cd6612f43bbb10dc05651773`, in `<build>\release\bundle\nsis`
 
 Each CI run uploads its own build with a `SHA256SUMS.txt`, and keeps it for 90 days. No CI run exists for these builds.
 
@@ -201,7 +202,7 @@ One class is new in review 2: work without a bound on bytes that are not authent
 
 ## Next action
 
-The path is in "Destination, measures and path" above. The one next action: finish fix round 3 (merge the page branch, then every check on the final tree), then the third full review.
+The path is in "Destination, measures and path" above. The one next action: the third full review, on the builds of `4436dee` ([brief](reviews/2026-11-14-full-review-3-brief.md)). Fix round 3 is merged, and every check passed on its final tree ("Last full check run").
 
 **The diff review of fix round 2 failed (13 Nov 2026): 7 P2 and 7 P3** ([review](reviews/2026-11-13-diff-review-round2.md); the D2A, D2B and C3 rows of [FINDINGS.md](FINDINGS.md)). It is a cheap gate before the six reviewers of a full review, and it gives no score. Every check passed on the reviewed commit `bc28959` (710 Rust tests, 754 page tests, 182 browser tests, the CLI workflows, the two journal proofs on the built app), so the checks did not see these defects. Decisions of the planner for this round, for the owner's veto:
 
