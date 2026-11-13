@@ -564,11 +564,17 @@ impl Vault {
     }
 
     /// A recycled key by native UUID, then by exact title in any letter case (the same rule as
-    /// [`Vault::find`]).
+    /// [`Vault::find`]). The UUID is compared as a parsed value, so its letter case does not
+    /// matter (FW-04).
     pub fn find_recycled(&self, query: &str) -> Result<RecycledKey> {
         let all = self.recycled();
-        if let Some(found) = all.iter().find(|item| item.key.id == query) {
-            return Ok(found.clone());
+        if let Ok(wanted) = Uuid::parse_str(query) {
+            let found = all
+                .iter()
+                .find(|item| Uuid::parse_str(&item.key.id).is_ok_and(|id| id == wanted));
+            if let Some(found) = found {
+                return Ok(found.clone());
+            }
         }
         let wanted = crate::model::caseless(query);
         let exact: Vec<_> = all

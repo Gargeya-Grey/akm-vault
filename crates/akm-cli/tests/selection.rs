@@ -355,6 +355,52 @@ fn a_partial_word_cannot_restore_purge_or_show_the_history_of_a_recycled_key() {
     assert!(fixture.run(&["restore", "gamma"]).status.success());
 }
 
+/// FW-04: a recycled key is selected by its id in any letter case, by the same rule as a live
+/// key. Its history, its restore and its purge take the id in upper case and in mixed case.
+#[test]
+fn a_recycled_key_is_selected_by_its_id_in_any_letter_case() {
+    let fixture = Fixture::new(&KEYS);
+    let gamma = fixture.id_of("Gamma");
+    let alpha = fixture.id_of("Alpha");
+    for id in [&gamma, &alpha] {
+        assert!(fixture.run(&["rm", id, "--yes"]).status.success());
+    }
+    let upper = gamma.to_uppercase();
+    let mut letters = 0;
+    let mixed: String = alpha
+        .chars()
+        .map(|ch| {
+            letters += usize::from(ch.is_ascii_alphabetic());
+            if letters % 2 == 1 {
+                ch.to_ascii_uppercase()
+            } else {
+                ch
+            }
+        })
+        .collect();
+    assert!(
+        mixed.chars().any(|ch| ch.is_ascii_uppercase())
+            && mixed.chars().any(|ch| ch.is_ascii_lowercase()),
+        "{mixed}"
+    );
+
+    let history = fixture.run(&["history", &upper]);
+    assert!(history.status.success(), "{}", err(&history));
+    assert!(out(&history).contains(&gamma), "{}", out(&history));
+    let restored = fixture.run(&["restore", &upper]);
+    assert!(restored.status.success(), "{}", err(&restored));
+    let get = fixture.run(&["get", "Gamma", "--field", "secret"]);
+    assert_eq!(out(&get), "fake-secret-gamma\n");
+    let purged = fixture.run(&["purge", &mixed, "--yes"]);
+    assert!(purged.status.success(), "{}", err(&purged));
+    let bin = fixture.run(&["bin"]);
+    assert!(
+        out(&bin).contains("The Recycle Bin is empty."),
+        "{}",
+        out(&bin)
+    );
+}
+
 // ---------------------------------------------------------------------- FR-17: letter case
 
 const UNICODE_KEYS: [Key; 4] = [
