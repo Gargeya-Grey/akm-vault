@@ -3,7 +3,7 @@ use std::ops::Deref;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-use akm_core::model::{name_class, NameClass};
+use akm_core::model::reserved_class;
 use akm_core::{Error, Result};
 use zeroize::Zeroize;
 
@@ -42,7 +42,7 @@ pub fn validate(envs: &[(String, String)]) -> Result<()> {
 
 pub fn validate_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<()> {
     for name in names {
-        if let NameClass::Reserved(class) = name_class(name) {
+        if let Some(class) = reserved_class(name) {
             return Err(Error::Invalid(format!(
                 "a selected key uses the reserved variable {name:?}: {}",
                 class.reason()
@@ -59,7 +59,7 @@ pub fn inject(command: &mut Command, envs: &[(String, String)]) -> Result<()> {
 }
 
 /// The desktop test `the_akm_name_rule_mirrors_the_one_of_the_command_line` pins this text,
-/// and the test below holds it to `name_class`.
+/// and the test below holds it to `reserved_class`.
 fn is_akm_name(name: &OsStr) -> bool {
     name.to_string_lossy()
         .get(..4)
@@ -137,9 +137,10 @@ mod tests {
     use super::*;
     use akm_core::model::ReservedClass;
 
-    /// The inherited variables that a child loses are the AkmInternal class of `name_class`.
+    /// The inherited variables that a child loses are the AkmInternal class of
+    /// `reserved_class`.
     #[test]
-    fn the_akm_name_rule_is_the_akm_internal_class_of_name_class() {
+    fn the_akm_name_rule_is_the_akm_internal_class_of_reserved_class() {
         for name in [
             "AKM_PASSWORD",
             "akm_password",
@@ -154,7 +155,7 @@ mod tests {
         ] {
             assert_eq!(
                 is_akm_name(OsStr::new(name)),
-                name_class(name) == NameClass::Reserved(ReservedClass::AkmInternal),
+                reserved_class(name) == Some(ReservedClass::AkmInternal),
                 "{name:?}"
             );
         }

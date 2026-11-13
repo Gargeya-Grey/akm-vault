@@ -245,7 +245,7 @@ impl ApiKeyInput {
             .env_var
             .clone()
             .unwrap_or_else(|| derive_env_var(&self.title));
-        if let NameClass::Reserved(class) = name_class(&resolved) {
+        if let Some(class) = reserved_class(&resolved) {
             return Err(crate::Error::Invalid(format!(
                 "{resolved:?} is reserved: {}; set a different env var name for this key",
                 class.reason()
@@ -311,22 +311,7 @@ pub enum ReservedClass {
     TrafficRedirect,
     UserLocation,
     OutputCapture,
-}
-
-/// The class of a variable name. [`name_class`] is the one rule that decides it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NameClass {
-    Reserved(ReservedClass),
-    Credential,
-    Other,
-}
-
-impl ImportChange {
-    /// The class of the variable name of this change. The import confirmation shows the
-    /// names that are not credential names apart.
-    pub fn name_class(&self) -> NameClass {
-        name_class(&self.name)
-    }
+    SettingsFile,
 }
 
 impl ReservedClass {
@@ -343,6 +328,9 @@ impl ReservedClass {
             Self::UserLocation => "it moves the folders where programs keep settings and files",
             Self::OutputCapture => {
                 "it makes a program write what it does or holds in memory to a file"
+            }
+            Self::SettingsFile => {
+                "it names a file that a program reads its settings or its credentials from"
             }
         }
     }
@@ -362,7 +350,7 @@ struct Rule {
 }
 
 /// Names inside a reserved prefix family that the tool itself documents as a credential.
-/// They are not reserved; their credential word makes them credential names.
+/// They are free: AKM hands them over as stored, as every name that no rule reserves.
 fn is_registry_credential(upper: &str) -> bool {
     const REGISTRIES: &str = "CARGO_REGISTRIES_";
     const TOKEN: &str = "_TOKEN";
@@ -1108,6 +1096,83 @@ const RESERVED: &[Rule] = &[
         ],
         prefixes: &["TF_CLI_ARGS_"],
     },
+    // CORE-R2-02: files that a program reads its credentials or its settings from, and the
+    // services that hand out credentials. The `FILE` and `CONFIG` shapes in `ENDINGS` cover
+    // most of them (AWS_SHARED_CREDENTIALS_FILE, AWS_WEB_IDENTITY_TOKEN_FILE,
+    // AZURE_FEDERATED_TOKEN_FILE, GIT_CONFIG); these are the names that the shapes miss.
+    // From the documentation of each tool; not re-checked online in this unit.
+    Rule {
+        doc: "https://googleapis.dev/python/google-auth/latest/reference/google.auth.environment_vars.html",
+        class: ReservedClass::SettingsFile,
+        exact: &["GOOGLE_APPLICATION_CREDENTIALS"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://googleapis.dev/python/google-auth/latest/reference/google.auth.environment_vars.html",
+        class: ReservedClass::TrafficRedirect,
+        exact: &["GCE_METADATA_HOST", "GCE_METADATA_IP", "GCE_METADATA_ROOT"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://cloud.google.com/iam/docs/workload-identity-federation-with-other-providers",
+        class: ReservedClass::HelperProgram,
+        // It lets a credential file make the library run a program.
+        exact: &["GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://cloud.google.com/sdk/docs/properties",
+        class: ReservedClass::TrafficRedirect,
+        // gcloud reads every property from CLOUDSDK_<SECTION>_<PROPERTY>: endpoints,
+        // proxies, certificate files and credential files among them.
+        exact: &[],
+        prefixes: &["CLOUDSDK_"],
+    },
+    Rule {
+        doc: "https://cloud.google.com/sdk/docs/configurations",
+        class: ReservedClass::UserLocation,
+        exact: &["CLOUDSDK_CONFIG"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://kubernetes.io/docs/concepts/configuration/organize-cluster-access-kubeconfig/",
+        class: ReservedClass::SettingsFile,
+        exact: &["KUBECONFIG"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_diff/",
+        class: ReservedClass::HelperProgram,
+        exact: &["KUBECTL_EXTERNAL_DIFF"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html",
+        class: ReservedClass::TrafficRedirect,
+        exact: &[
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+            "AWS_EC2_METADATA_SERVICE_ENDPOINT",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://learn.microsoft.com/en-us/python/api/overview/azure/identity-readme",
+        class: ReservedClass::TrafficRedirect,
+        exact: &[
+            "AZURE_AUTHORITY_HOST",
+            "IDENTITY_ENDPOINT",
+            "IMDS_ENDPOINT",
+            "MSI_ENDPOINT",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://docs.docker.com/reference/cli/docker/",
+        class: ReservedClass::TrafficRedirect,
+        exact: &["DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "BUILDKIT_HOST"],
+        prefixes: &[],
+    },
 ];
 
 const BUILD_VARIABLE_BASES: &[&str] = &[
@@ -1156,7 +1221,8 @@ fn is_build_variable(upper: &str) -> bool {
 /// For example GIT_PAGER and GH_PAGER, RUSTC_WRAPPER, CMAKE_<LANG>_COMPILER_LAUNCHER,
 /// CARGO_TARGET_<triple>_RUNNER and _LINKER, GIT_SSH_COMMAND, TF_CLI_ARGS, JAVA_OPTS,
 /// NODE_OPTIONS, DOTNET_STARTUP_HOOKS, NODE_PATH, NUGET_PLUGIN_PATHS, CARGO_HOME, CMake's
-/// <PackageName>_ROOT, DENO_DIR, XDG_CONFIG_DIRS and curl's <scheme>_PROXY.
+/// <PackageName>_ROOT, DENO_DIR, XDG_CONFIG_DIRS, curl's <scheme>_PROXY, and the settings and
+/// credential files AWS_SHARED_CREDENTIALS_FILE, AWS_WEB_IDENTITY_TOKEN_FILE and GIT_CONFIG.
 const ENDINGS: &[(&str, ReservedClass)] = &[
     ("PAGER", ReservedClass::HelperProgram),
     ("EDITOR", ReservedClass::HelperProgram),
@@ -1178,6 +1244,8 @@ const ENDINGS: &[(&str, ReservedClass)] = &[
     ("DIR", ReservedClass::UserLocation),
     ("DIRS", ReservedClass::UserLocation),
     ("PROXY", ReservedClass::TrafficRedirect),
+    ("FILE", ReservedClass::SettingsFile),
+    ("CONFIG", ReservedClass::SettingsFile),
 ];
 
 /// The flags of a tool: a last token that ends in FLAGS and is longer, as in CFLAGS,
@@ -1216,51 +1284,15 @@ fn reserved_rule(upper: &str) -> Option<ReservedClass> {
         .map(|(_, class)| *class)
 }
 
-/// The credential words. A name is a credential name when one of its `_`-separated tokens
-/// is one of these words, whole: `ASKPASS`, `KEYBOARD` and `MONKEY` are not.
-const CREDENTIAL_WORDS: &[&str] = &[
-    "KEY",
-    "KEYS",
-    "APIKEY",
-    "TOKEN",
-    "TOKENS",
-    "SECRET",
-    "SECRETS",
-    "PASSWORD",
-    "PASSWD",
-    "PASSPHRASE",
-    "PASS",
-    "CREDENTIAL",
-    "CREDENTIALS",
-];
-
-/// The class of a variable name: the one rule for every path that stores, imports, plans or
-/// hands over a variable (FR-02, CORE-R1-02). Windows compares variable names without regard
-/// to case, so this does too. The reserved rules decide first, in this order: a whole name
-/// of the table, a registry credential, the longest prefix of the table, the build-variable
-/// shape, and the shape of the last token. A name that no rule reserves is a credential name
-/// when a whole token is a credential word, and another name when none is.
-pub fn name_class(name: &str) -> NameClass {
-    let upper = name.to_ascii_uppercase();
-    if let Some(class) = reserved_rule(&upper) {
-        return NameClass::Reserved(class);
-    }
-    if upper
-        .split('_')
-        .any(|token| CREDENTIAL_WORDS.contains(&token))
-    {
-        NameClass::Credential
-    } else {
-        NameClass::Other
-    }
-}
-
-/// The reserved class of a name, or `None`: the reserved part of [`name_class`].
+/// The reserved class of a variable name, or `None` when the name is free: the one rule for
+/// every path that stores, imports, plans or hands over a variable (FR-02, CORE-R1-02,
+/// CORE-R2-02). Windows compares variable names without regard to case, so this does too.
+/// The rules decide in this order: a whole name of the table, a registry credential (free),
+/// the longest prefix of the table, the build-variable shape, the flags shape, and the shape
+/// of the last token. The table is finite and is not complete. A free name is handed over as
+/// stored, whatever words it holds: AKM has no credential class.
 pub fn reserved_class(name: &str) -> Option<ReservedClass> {
-    match name_class(name) {
-        NameClass::Reserved(class) => Some(class),
-        NameClass::Credential | NameClass::Other => None,
-    }
+    reserved_rule(&name.to_ascii_uppercase())
 }
 
 pub(crate) fn validate_process_var(name: &str, value: &str) -> crate::Result<()> {
@@ -1269,7 +1301,7 @@ pub(crate) fn validate_process_var(name: &str, value: &str) -> crate::Result<()>
             "{name:?} is not a valid environment variable name"
         )));
     }
-    if let NameClass::Reserved(class) = name_class(name) {
+    if let Some(class) = reserved_class(name) {
         return Err(crate::Error::Invalid(format!(
             "{name:?} is reserved: {}",
             class.reason()
@@ -1322,7 +1354,7 @@ mod tests {
     }
 
     /// Each family names the documentation that its names come from, and holds only names
-    /// and prefixes in the upper-case form that `name_class` compares against.
+    /// and prefixes in the upper-case form that `reserved_class` compares against.
     #[test]
     fn every_rule_names_its_documentation_and_holds_upper_case_names() {
         for rule in RESERVED {
@@ -1342,7 +1374,6 @@ mod tests {
         for word in BUILD_VARIABLE_BASES
             .iter()
             .chain(ENDINGS.iter().map(|(word, _)| word))
-            .chain(CREDENTIAL_WORDS)
         {
             assert!(upper_name_part(word), "{word}");
         }
@@ -1369,7 +1400,7 @@ mod tests {
     fn every_whole_name_of_the_table_has_the_class_of_its_rule() {
         for rule in RESERVED {
             for name in rule.exact {
-                assert_eq!(name_class(name), NameClass::Reserved(rule.class), "{name}");
+                assert_eq!(reserved_class(name), Some(rule.class), "{name}");
             }
         }
     }
