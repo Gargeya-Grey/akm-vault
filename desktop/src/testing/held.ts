@@ -1,3 +1,5 @@
+import { readSource } from "../nativeRead";
+
 /** A reply that a test finishes by hand, so that it can order two replies as it wants. */
 export interface Held<T> {
   promise: Promise<T>;
@@ -15,10 +17,10 @@ export function held<T>(): Held<T> {
 /** A read whose every call returns a new held reply. `calls[n]` is the reply of call n. */
 export function heldReads<T>() {
   const calls: Held<T>[] = [];
-  const read = () => {
+  const read = readSource(() => {
     const reply = held<T>();
     calls.push(reply);
     return reply.promise;
-  };
+  });
   return { calls, read };
 }

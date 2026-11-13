@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
 import { api } from "./api";
+import { reads } from "./native";
 import { retainedApplicationWarnings, retainedOperationNotices } from "./operationNotices";
 import { acknowledgeCompletions, beginOutcome, retainedCompletions, sessionGeneration } from "./sessionBoundary";
 
@@ -34,12 +35,12 @@ for (const delayed of [false, true]) {
     });
     render(<App />);
     await screen.findByText("Unlocked region");
-    const oldReply = delayed ? api.warnings().catch((error: unknown) => error) : undefined;
+    const oldReply = delayed ? reads.warnings().catch((error: unknown) => error) : undefined;
     act(() => { native.active = false; native.onLock?.({ payload: { sessionId: native.owner } }); });
     fireEvent.change(screen.getByLabelText("Master password"), { target: { value: "fake-password-for-b" } });
     fireEvent.click(screen.getByRole("button", { name: "Unlock vault" }));
     await screen.findByText("Unlocked region");
-    await act(async () => { if (delayed) { resolveWarning(report); await oldReply; } else { await api.warnings(); } });
+    await act(async () => { if (delayed) { resolveWarning(report); await oldReply; } else { await reads.warnings(); } });
     expect(screen.getByRole("region", { name: "Saved-operation notices" }).textContent).toContain("A vault change was saved");
     expect(screen.getByText("Unlocked region")).toBeTruthy();
     expect(native.active).toBe(true);
@@ -61,7 +62,7 @@ test("a delayed notice arriving between root mounts is replayed without locking 
   const first = render(<App />);
   await screen.findByText("Unlocked region");
   native.invoke.mockImplementationOnce(() => new Promise((done) => { deliver = done; }));
-  const pending = api.warnings();
+  const pending = reads.warnings();
   first.unmount();
   await act(async () => {
     deliver({ application: [], operations: [{ id: "between-mounts", originSession: "A", kind: "journal" }] });
@@ -84,7 +85,7 @@ test("a one-shot application safety warning delivered between roots remains unti
   await screen.findByText("Unlocked region");
   let deliver!: (report: unknown) => void;
   native.invoke.mockImplementationOnce(() => new Promise((done) => { deliver = done; }));
-  const pending = api.warnings();
+  const pending = reads.warnings();
   a.unmount();
   await act(async () => { deliver({ application: [{ id: "app-monitor-warning", message: "Fake Windows monitor safety warning" }], operations: [] }); await pending; });
   render(<App />);
@@ -121,12 +122,12 @@ test("application-warning dismissal retains new recurrence IDs and rejects stale
   await screen.findByText(/Could not dismiss these warnings/);
   let deliver!: (report: unknown) => void;
   native.invoke.mockImplementationOnce(() => new Promise((done) => { deliver = done; }));
-  const oldPoll = api.warnings();
+  const oldPoll = reads.warnings();
   failDismiss = false;
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Dismiss warnings" })); });
   await act(async () => { deliver({ application: [first], operations: [] }); await oldPoll; });
   expect(screen.queryByText(first.message)).toBeNull();
-  await act(() => api.warnings());
+  await act(() => reads.warnings());
   expect(screen.getByText(first.message)).toBeTruthy();
   expect(retainedApplicationWarnings()).toEqual([recurrence]);
   expect(screen.getByText("Unlocked region")).toBeTruthy();
@@ -142,7 +143,7 @@ for (const kinds of [["backupRefresh"], ["journal"], ["backupRefresh", "journal"
     });
     render(<App />);
     await screen.findByText("Unlocked region");
-    await act(() => api.warnings());
+    await act(() => reads.warnings());
     const notice = screen.getByRole("region", { name: "Saved-operation notices" }).textContent!;
     expect(notice.includes("activity entry could not be confirmed")).toBe(kinds.includes("journal"));
     expect(notice.includes("backup could not be refreshed")).toBe(kinds.includes("backupRefresh"));
@@ -173,7 +174,7 @@ test("a file-permission notice says who can copy the vault and claims nothing ab
   serve([{ id: "fixed-permissions", originSession: "A", kind: "filePermissions" }]);
   render(<App />);
   await screen.findByText("Unlocked region");
-  await act(() => api.warnings());
+  await act(() => reads.warnings());
   const text = savedNotices().textContent!;
   expect(text).toContain("AKM could not make its files private to your account");
   expect(text).toContain("Anyone who can read its folder can copy the encrypted vault and its backups");
@@ -185,7 +186,7 @@ test("a lineage notice says that the vault changed outside AKM and does not clai
   serve([{ id: "fixed-lineage", originSession: "A", kind: "journalLineageUnconfirmed" }]);
   render(<App />);
   await screen.findByText("Unlocked region");
-  await act(() => api.warnings());
+  await act(() => reads.warnings());
   const text = savedNotices().textContent!;
   expect(text).toContain("A vault file changed outside AKM, so AKM cannot confirm that it is the same vault");
   expect(text).toContain("continues in the existing journal");
@@ -206,7 +207,7 @@ for (const [kind, holdsKeys] of TERMINAL_RECORDS) {
     serve([{ id: `terminal-${kind}`, originSession: "A", kind }]);
     render(<App />);
     await screen.findByText("Unlocked region");
-    await act(() => api.warnings());
+    await act(() => reads.warnings());
     const text = savedNotices().textContent!;
     expect(text).toMatch(/^A terminal /);
     expect(text.includes("keeps the keys until you close it, even after AKM locks")).toBe(holdsKeys);
@@ -220,12 +221,12 @@ test("terminal notices are dismissed by their IDs and an old poll cannot bring t
   serve(records);
   const root = render(<App />);
   await screen.findByText("Unlocked region");
-  await act(() => api.warnings());
+  await act(() => reads.warnings());
   expect(savedNotices().querySelectorAll(".notice").length).toBe(4);
   let deliver!: (value: unknown) => void;
   const answer = native.invoke.getMockImplementation()!;
   native.invoke.mockImplementationOnce(() => new Promise((done) => { deliver = done; }));
-  const oldPoll = api.warnings();
+  const oldPoll = reads.warnings();
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Dismiss saved-operation notices" })); });
   expect(native.invoke).toHaveBeenCalledWith("vault_dismiss_warnings", { ids: records.map(({ id }) => id) });
   await act(async () => { deliver({ application: [], operations: records }); await oldPoll; });
@@ -234,7 +235,7 @@ test("terminal notices are dismissed by their IDs and an old poll cannot bring t
   root.unmount();
   render(<App />);
   await screen.findByText("Unlocked region");
-  await act(() => api.warnings());
+  await act(() => reads.warnings());
   expect(screen.queryByText(/A terminal /)).toBeNull();
 });
 
@@ -247,7 +248,7 @@ for (const [origin, staysOpen] of [["an older", true], ["the current", false]] a
     const operation = crypto.randomUUID();
     act(() => { beginOutcome("terminal", staysOpen ? sessionGeneration() - 1 : sessionGeneration(), operation); });
     serve([{ id: operation, originSession: "A", kind: "terminalSessionEnded" }]);
-    await act(() => api.warnings());
+    await act(() => reads.warnings());
     expect(screen.getByRole("region", { name: "Operation outcomes" }).textContent).toContain("A terminal opened with keys. It keeps them until you close it, even after AKM locks.");
     expect(screen.queryByRole("region", { name: "Saved-operation notices" })).toBeNull();
     expect(screen.queryByText("Unlocked region") !== null).toBe(staysOpen);
@@ -279,10 +280,10 @@ test("only explicitly dismissed IDs disappear; an old poll cannot resurrect them
   expect(screen.getByText(/its activity entry could not be confirmed/)).toBeTruthy();
   let deliver!: (value: unknown) => void;
   native.invoke.mockImplementationOnce(() => new Promise((done) => { deliver = done; }));
-  const oldPoll = api.warnings();
+  const oldPoll = reads.warnings();
   failDismiss = false;
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Dismiss saved-operation notices" })); });
-  await act(async () => { deliver({ application: [], operations: [first] }); await oldPoll; await api.warnings(); });
+  await act(async () => { deliver({ application: [], operations: [first] }); await oldPoll; await reads.warnings(); });
   expect(screen.queryByText(/its activity entry could not be confirmed/)).toBeNull();
   expect(screen.getByText(/backup could not be refreshed/)).toBeTruthy();
   root.unmount();

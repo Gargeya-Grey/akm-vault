@@ -3,7 +3,10 @@ import { api, errorText } from "../api";
 import { clipboardCopyText } from "../clipboardText";
 import { nativeReads, useNativeRead } from "../nativeRead";
 import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
+import { Plaintext, plaintextScope, useSealed } from "../plaintext";
+import { receiptState, useReceipts, waitingReceipt, type Outcome } from "../sessionBoundary";
 import { plural } from "../format";
+import { drawnText } from "../rowFacts";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
@@ -15,20 +18,42 @@ interface Message {
   text: string;
 }
 
-type Scope = { project: string; environment: string };
-type ExportPreview = Scope & { text: string };
+/** A request that this view dispatched, with the receipt that owns its state (U2-R1-03). */
+type Tracked = { receipt: number; request: number };
+
+// What the form shows when the native record, or a failure in transport, settled the launch. A
+// reply that settled it shows its own text.
+const LAUNCH_SETTLED: Record<Exclude<Outcome, "pending">, Message> = {
+  completed: { tone: "ok", text: "A terminal opened with keys. That window keeps them until you close it, even after AKM locks." },
+  completedWhileLocked: { tone: "ok", text: "A terminal opened with keys, but its session ended before the result arrived. That window keeps them until you close it, even after AKM locks." },
+  cancelled: { tone: "ok", text: "Nothing was opened. You cancelled in the folder window or the confirmation window." },
+  reportedError: { tone: "error", text: "The terminal launch failed. No terminal from that request runs." },
+  unconfirmed: { tone: "error", text: "A terminal launch could not be confirmed after the session changed. A terminal may hold keys. Check for an open terminal before you try again." },
+  lost: { tone: "error", text: "A terminal launch sent no answer to this window. A terminal may hold keys. A saved-operation notice gives the outcome when AKM recorded one. Check for an open terminal before you try again." },
+};
+const IMPORT_SAVED = "The import was saved. This window did not receive the counts, so check the keys before you import again.";
+const IMPORT_SESSION_ENDED = "The import was saved, but its session ended before the result arrived. Do not repeat it. Open the vault and check the keys.";
+const IMPORT_DECLINED = "Nothing was imported. You declined it in the confirmation window.";
+const IMPORT_FAILED = "The import reported an error. This does not confirm that nothing was saved. Check the keys before you try again.";
+const IMPORT_LOST = "The import sent no answer to this window. This does not confirm that nothing was saved. A saved-operation notice gives the outcome when AKM recorded one.";
+const IMPORT_UNCONFIRMED = "The import could not be confirmed after the session changed. Check the keys before you try again.";
+
+/** True when nothing but the reply settled the receipt, so the reply is the outcome to show. */
+function replySettled(receipt: number | null): boolean {
+  return receipt === null || receiptState(receipt)?.by === "reply";
+}
 
 export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
   const read = useNativeRead(nativeReads.keys);
   const keys = read.state.status === "ready" ? read.state.data : null;
   const [chosenProject, setProject] = useState("");
   const [chosenEnvironment, setEnvironment] = useState("");
-  const [preview, setPreview] = useState<ExportPreview | null>(null);
   const exportRequest = useRef(0);
   const sideEffectRequest = useRef(0);
   const importRequest = useRef(0);
   const mounted = useRef(true);
-  const [busy, setBusy] = useState<string | null>(null);
+  // A preview and a copy have no receipt, so their wait stays here.
+  const [busy, setBusy] = useState<"preview" | "copy" | null>(null);
   const [message, setMessage] = useState<Message | null>(null);
 
   const [importing, setImporting] = useState(false);
@@ -36,21 +61,50 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
   const [importText, setImportText] = useState("");
   const [importProject, setImportProject] = useState("");
   const [importEnvironment, setImportEnvironment] = useState("");
-  const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importNote, setImportNote] = useState<string | null>(null);
+  const [launch, setLaunch] = useState<Tracked | null>(null);
+  const [importOperation, setImportOperation] = useState<Tracked | null>(null);
+
+  // A form waits while a receipt of its operation waits in this session. The receipt is the one
+  // owner: a hide, an expiry or a new mount of this view does not end the wait (U2-R1-03).
+  const receiptsVersion = useReceipts();
+  const launching = waitingReceipt("terminal") !== null;
+  const saving = waitingReceipt("export") !== null;
+  const importBusy = waitingReceipt("import") !== null;
+  const working = busy ?? (launching ? "launch" : saving ? "save" : null);
+
+  const projects = useMemo(
+    () => uniqueOptions((keys ?? []).map((key) => key.project)),
+    [keys],
+  );
+  // A choice counts only while its option is on screen. A refresh that removes it, or a read that
+  // failed, leaves no scope, so no control acts on a scope that the screen does not show.
+  const project = projects.some((option) => option.value === chosenProject) ? chosenProject : "";
+  const environments = useMemo(
+    () => uniqueOptions((keys ?? []).filter((key) => key.project === project).map((key) => key.environment)),
+    [keys, project],
+  );
+  const environment = environments.some((option) => option.value === chosenEnvironment) ? chosenEnvironment : "";
+  const scoped = Boolean(project && environment);
+  const matchCount = (keys ?? []).filter((key) => key.project === project && key.environment === environment).length;
+  // The preview is plaintext. It shows only under the scope of its request, while the list read
+  // that gave that scope holds: a read that fails or starts again names no scope (U2-R1-04).
+  const previewScope = keys !== null && !read.busy && scoped ? plaintextScope.export(project, environment) : null;
+  const preview = useSealed(previewScope);
+  const holdPreview = preview.hold;
+  const [previewLines, setPreviewLines] = useState(0);
 
   const hidePreview = useCallback(() => {
     exportRequest.current += 1;
-    setPreview(null);
+    holdPreview(null);
     setBusy((current) => current === "preview" ? null : current);
-  }, []);
+  }, [holdPreview]);
 
   const editImport = useCallback(() => {
     importRequest.current += 1;
     setImportError(null);
     setImportNote(null);
-    setImportBusy(false);
   }, []);
 
   const closeImport = useCallback(() => {
@@ -89,11 +143,46 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     };
   }, [hidePreview, closeImport]);
 
+  // A launch that the record or a transport failure settled: the form shows that outcome.
   useEffect(() => {
-    if (preview === null) return;
+    if (launch === null) return;
+    const state = receiptState(launch.receipt);
+    if (state?.outcome === "pending") return;
+    setLaunch(null);
+    if (state === null || state.by === "reply" || launch.request !== sideEffectRequest.current) return;
+    setMessage(LAUNCH_SETTLED[state.outcome as Exclude<Outcome, "pending">]);
+  }, [receiptsVersion, launch]);
+
+  // An import changed the vault whoever settled it, so the list reads again. When the record or a
+  // transport failure settled it, the form shows that outcome.
+  const reloadKeys = read.reload;
+  useEffect(() => {
+    if (importOperation === null) return;
+    const state = receiptState(importOperation.receipt);
+    if (state?.outcome === "pending") return;
+    setImportOperation(null);
+    if (state === null) return;
+    const saved = state.outcome === "completed" || state.outcome === "completedWhileLocked";
+    if (saved) reloadKeys();
+    if (state.by === "reply" || importOperation.request !== importRequest.current) return;
+    if (saved) {
+      setImporting(false);
+      setImportText("");
+      setMessage({ tone: "ok", text: state.outcome === "completed" ? IMPORT_SAVED : IMPORT_SESSION_ENDED });
+    } else if (state.outcome === "cancelled") {
+      setImportNote(IMPORT_DECLINED);
+    } else {
+      const text = state.outcome === "lost" ? IMPORT_LOST : state.outcome === "unconfirmed" ? IMPORT_UNCONFIRMED : IMPORT_FAILED;
+      setImportError(text);
+      setMessage({ tone: "error", text });
+    }
+  }, [receiptsVersion, importOperation, reloadKeys]);
+
+  useEffect(() => {
+    if (preview.value === null) return;
     const timer = window.setTimeout(hidePreview, 30_000);
     return () => window.clearTimeout(timer);
-  }, [preview, hidePreview]);
+  }, [preview.value, hidePreview]);
 
   useEffect(() => {
     if (!importing) return;
@@ -104,30 +193,12 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [importing, importBusy, closeImport]);
 
-  const projects = useMemo(
-    () => uniqueOptions((keys ?? []).map((key) => key.project)),
-    [keys],
-  );
-  // A choice counts only while its option is on screen. A refresh that removes it, or a read that
-  // failed, leaves no scope, so no control acts on a scope that the screen does not show.
-  const project = projects.some((option) => option.value === chosenProject) ? chosenProject : "";
-  const environments = useMemo(
-    () => uniqueOptions((keys ?? []).filter((key) => key.project === project).map((key) => key.environment)),
-    [keys, project],
-  );
-  const environment = environments.some((option) => option.value === chosenEnvironment) ? chosenEnvironment : "";
-  const scoped = Boolean(project && environment);
-  const matchCount = (keys ?? []).filter((key) => key.project === project && key.environment === environment).length;
-  // A preview shows only under the scope that it belongs to (fault class B).
-  const shownPreview = preview !== null && preview.project === project && preview.environment === environment ? preview : null;
-
   function chooseProject(value: string) {
     hidePreview();
     sideEffectRequest.current += 1;
     setBusy(null);
     setProject(value);
     setEnvironment("");
-    setPreview(null);
     setMessage(null);
   }
 
@@ -136,7 +207,6 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     sideEffectRequest.current += 1;
     setBusy(null);
     setEnvironment(value);
-    setPreview(null);
     setMessage(null);
   }
 
@@ -147,15 +217,19 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     setBusy("preview");
     setMessage(null);
     try {
-      const text = await api.exportEnv(scope.project, scope.environment);
+      const token = await api.exportEnv(scope.project, scope.environment);
       if (currentRequest !== exportRequest.current || document.hidden) return;
-      if (text === null) {
-        setPreview(null);
+      if (token === null) {
+        holdPreview(null);
         setMessage({ tone: "ok", text: "Cancelled. No values were shown." });
         return;
       }
-      setPreview({ ...scope, text });
-      const lines = text.split("\n").filter((line) => line.trim()).length;
+      const lines = holdPreview(token);
+      if (lines === null) {
+        setMessage({ tone: "ok", text: "The keys changed before the preview arrived, so it is not shown. Select Preview again to see the current values." });
+        return;
+      }
+      setPreviewLines(lines);
       setMessage({
         tone: "ok",
         text:
@@ -190,38 +264,35 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
   }
 
   async function saveEnv() {
-    if (!scoped) return;
+    if (!scoped || working !== null) return;
     const currentRequest = ++sideEffectRequest.current;
     setMessage(null);
-    setBusy("save");
     try {
       const savedPath = await api.saveEnv(project, environment);
       if (currentRequest !== sideEffectRequest.current) return;
       if (savedPath) setMessage({ tone: "ok", text: `Saved plaintext secrets to ${savedPath}. Keep this file out of source control and cloud sharing.` });
     } catch (cause) {
       if (currentRequest === sideEffectRequest.current) setMessage({ tone: "error", text: errorText(cause) });
-    } finally {
-      if (currentRequest === sideEffectRequest.current) setBusy(null);
     }
   }
 
   async function openTerminal() {
-    if (!scoped) return;
+    if (!scoped || working !== null) return;
     const currentRequest = ++sideEffectRequest.current;
     setMessage(null);
-    setBusy("launch");
+    const reply = api.launchTerminal(project, environment);
+    const receipt = reply.receipt;
+    if (receipt !== null) setLaunch({ receipt, request: currentRequest });
     try {
-      const count = await api.launchTerminal(project, environment);
-      if (currentRequest !== sideEffectRequest.current) return;
+      const count = await reply;
+      if (currentRequest !== sideEffectRequest.current || !replySettled(receipt)) return;
       setMessage(
         count === null
           ? { tone: "ok", text: "Nothing was opened. You cancelled in the folder window or the confirmation window." }
           : { tone: "ok", text: `Opened a terminal with ${plural(count, "key")}. That window keeps them until you close it, even after AKM locks.` },
       );
     } catch (cause) {
-      if (currentRequest === sideEffectRequest.current) setMessage({ tone: "error", text: errorText(cause) });
-    } finally {
-      if (currentRequest === sideEffectRequest.current) setBusy(null);
+      if (currentRequest === sideEffectRequest.current && replySettled(receipt)) setMessage({ tone: "error", text: errorText(cause) });
     }
   }
 
@@ -250,12 +321,14 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     }
 
     const currentRequest = ++importRequest.current;
-    setImportBusy(true);
+    const reply = api.importEnv(importText, importProject.trim(), importEnvironment.trim());
+    const receipt = reply.receipt;
+    if (receipt !== null) setImportOperation({ receipt, request: currentRequest });
     try {
-      const report = await api.importEnv(importText, importProject.trim(), importEnvironment.trim());
-      if (currentRequest !== importRequest.current) return;
+      const report = await reply;
+      if (currentRequest !== importRequest.current || !replySettled(receipt)) return;
       if (report === null) {
-        setImportNote("Nothing was imported. You declined it in the confirmation window.");
+        setImportNote(IMPORT_DECLINED);
         return;
       }
       setImporting(false);
@@ -264,14 +337,11 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
         tone: "ok",
         text: `Imported: ${report.added} added, ${report.updated} updated.`,
       });
-      read.reload();
     } catch (cause) {
-      if (currentRequest === importRequest.current) {
+      if (currentRequest === importRequest.current && replySettled(receipt)) {
         setImportError(errorText(cause));
         setMessage({ tone: "error", text: errorText(cause) });
       }
-    } finally {
-      if (currentRequest === importRequest.current) setImportBusy(false);
     }
   }
 
@@ -313,7 +383,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
               placeholder="Choose a project"
               options={projects}
               onChange={chooseProject}
-              disabled={keys === null || busy === "save" || busy === "copy" || busy === "launch"}
+              disabled={keys === null || working === "save" || working === "copy" || working === "launch"}
             />
             <FilterSelect
               id="env-environment"
@@ -322,7 +392,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
               placeholder="Choose an environment"
               options={environments}
               onChange={chooseEnvironment}
-              disabled={keys === null || busy === "save" || busy === "copy" || busy === "launch"}
+              disabled={keys === null || working === "save" || working === "copy" || working === "launch"}
             />
           </div>
 
@@ -331,36 +401,36 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
               type="button"
               className="btn"
               onClick={() => void saveEnv()}
-              disabled={busy !== null || !scoped}
-              aria-busy={busy === "save" || undefined}
+              disabled={working !== null || !scoped}
+              aria-busy={working === "save" || undefined}
             >
               <Icon name="download" />
-              {busy === "save" ? "Saving…" : "Save .env…"}
+              {working === "save" ? "Saving…" : "Save .env…"}
             </button>
             <button
               type="button"
               className="btn-secondary"
               onClick={() => void runPreview()}
-              disabled={busy !== null || !scoped}
-              aria-busy={busy === "preview" || undefined}
+              disabled={working !== null || !scoped}
+              aria-busy={working === "preview" || undefined}
             >
-              {busy === "preview" ? "Previewing…" : "Preview"}
+              {working === "preview" ? "Previewing…" : "Preview"}
             </button>
             <button
               type="button"
               className="btn-secondary"
               onClick={() => void copyEnv()}
-              disabled={busy !== null || !scoped}
-              aria-busy={busy === "copy" || undefined}
+              disabled={working !== null || !scoped}
+              aria-busy={working === "copy" || undefined}
             >
-              {busy === "copy" ? "Copying…" : "Copy to clipboard"}
+              {working === "copy" ? "Copying…" : "Copy to clipboard"}
             </button>
             <button
               type="button"
               className="btn-secondary"
               onClick={() => void openTerminal()}
-              disabled={busy !== null || !scoped}
-              aria-busy={busy === "launch" || undefined}
+              disabled={working !== null || !scoped}
+              aria-busy={working === "launch" || undefined}
             >
               Open terminal with keys…
             </button>
@@ -371,13 +441,13 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
               ? "Reading the projects in this vault…"
               : read.state.status === "failed"
               ? "Export needs the project list. Read it again first."
-              : scoped ? `${plural(matchCount, "key")} selected in ${project} / ${environment}.` : "Choose a project and environment to enable export."}
+              : scoped ? `${plural(matchCount, "key")} selected in ${drawnText(project)} / ${drawnText(environment)}.` : "Choose a project and environment to enable export."}
           </p>
           <p className="field-note">
             Open terminal starts a command prompt in a folder that you choose. Every program you run there can read these keys until you close it.
           </p>
 
-          {busy === "launch" && (
+          {working === "launch" && (
             <Notice tone="info">
               Choose the folder and answer the confirmation window. Nothing opens until you confirm there.
             </Notice>
@@ -390,7 +460,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
           )}
 
           <div className="raised env-preview">
-            {shownPreview === null ? (
+            {!preview.shown ? (
               <div className="empty-state">
                 <h3>No preview yet.</h3>
                 <p>
@@ -401,16 +471,11 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
             ) : (
               <>
                 <div className="preview-head">
-                  <p className="label">Preview: {shownPreview.project} / {shownPreview.environment}</p>
-                  <p className="label">
-                    {plural(
-                      shownPreview.text.split("\n").filter((line) => line.trim()).length,
-                      "line",
-                    )}
-                  </p>
+                  <p className="label">Preview: <bdi>{drawnText(project)}</bdi> / <bdi>{drawnText(environment)}</bdi></p>
+                  <p className="label">{plural(previewLines, "line")}</p>
                 </div>
                 <pre className="mono env-lines">
-                  {shownPreview.text.trim() || "# No keys match this project and environment."}
+                  <Plaintext value={preview.value} scope={previewScope} trim empty="# No keys match this project and environment." />
                 </pre>
               </>
             )}
@@ -434,6 +499,9 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
               Import .env…
             </button>
             {readOnly && <p className="field-note">Upgrade the vault format before importing.</p>}
+            {importBusy && !importing && (
+              <Notice tone="info">An import is waiting for your answer in the AKM confirmation window. Nothing is saved until you confirm there.</Notice>
+            )}
           </div>
         </aside>
       </div>

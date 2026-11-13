@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, errorText } from "../api";
 import { nativeReads, useNativeRead } from "../nativeRead";
 import { formatDateTime } from "../format";
+import { journalKeyFacts, useShortIds } from "../rowFacts";
 import type { AuditReport, JournalRecovery } from "../types";
 import { EmptyPage } from "./glyphs";
 import { Notice } from "./Notice";
@@ -38,11 +39,6 @@ const DAMAGE: Record<NonNullable<AuditReport["damage"]>, string> = {
   hashMismatch: "a record does not match its hash",
 };
 
-function keyLabel(keyTitle: string | null, keyId: string | null): string {
-  if (keyTitle !== null) return keyTitle;
-  return keyId === null ? "Vault" : `Key ${keyId.slice(0, 8)}`;
-}
-
 export function Activity() {
   const read = useNativeRead(nativeReads.journal);
   // A failed read drops the snapshot, so no state badge outlives the read that gave it.
@@ -68,6 +64,7 @@ export function Activity() {
   }
 
   const entries = report ? [...report.entries].reverse() : [];
+  const shortId = useShortIds(entries.flatMap((entry) => (entry.keyId === null ? [] : [entry.keyId])));
 
   return (
     <main className="view">
@@ -187,7 +184,9 @@ export function Activity() {
           </div>
         ) : (
           <ol className="audit-rows">
-            {entries.map((entry) => (
+            {entries.map((entry) => {
+              const named = journalKeyFacts(entry, shortId);
+              return (
               <li className="audit-row" key={entry.seq}>
                 <span className="audit-seq mono">
                   {String(entry.seq).padStart(3, "0")}
@@ -197,16 +196,14 @@ export function Activity() {
                   {Object.hasOwn(ACTIONS, entry.action) ? ACTIONS[entry.action] : `Legacy ${entry.action} (outcome unknown)`}
                 </span>
                 <span className="audit-key">
-                  <span>{keyLabel(entry.keyTitle, entry.keyId)}</span>
-                  <span className="key-sub">
-                    {[entry.project, entry.environment]
-                      .filter(Boolean)
-                      .join(" · ") || "—"}
-                  </span>
+                  <bdi>{named.name}</bdi>
+                  {named.id !== null && <span className="key-sub key-id mono">ID {named.id}</span>}
+                  <span className="key-sub">{named.scope}</span>
                 </span>
                 <span className="audit-detail" data-empty={entry.detail ? undefined : true}>{entry.detail ?? "—"}</span>
               </li>
-            ))}
+              );
+            })}
           </ol>
         )}
 

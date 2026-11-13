@@ -160,3 +160,43 @@ export interface ReminderStatus {
 
 export type View = "keys" | "use" | "bin" | "activity" | "settings";
 export type Theme = "light" | "dark";
+
+/**
+ * The kinds of a native error reply: the contract with native code (U2-R1-07). A native command
+ * rejects only with a `CommandError`, a plain object `{ kind, message }` whose kind is on this list.
+ * `native.ts` treats a rejection of any other shape as a transport failure. `nativeErrorKinds.test.ts`
+ * compares this list with the kinds that the native sources build.
+ */
+export const NATIVE_ERROR_KINDS = [
+  "ambiguous", "busy", "changedOnDisk", "clipboard", "clipboardLost", "clipboardNotReleased", "clipboardUncertain",
+  "completedWhileLocked", "config", "internal", "invalid", "invalidPath", "io", "journal", "launch", "locked",
+  "notFound", "open", "reviewFailed", "save", "sessionUnavailable", "stalePreview", "tooLarge", "upgradeRequired",
+  "viewChanged",
+] as const;
+
+export type NativeErrorKind = (typeof NATIVE_ERROR_KINDS)[number];
+
+/** An error reply from a native command. */
+export interface NativeError {
+  kind: NativeErrorKind;
+  message: string;
+}
+
+/**
+ * The reply of a request that has a receipt (U2-R1-03): an import, a terminal launch or a file
+ * export. `receipt` names it in sessionBoundary.ts, which owns its state.
+ */
+export type Dispatched<T> = Promise<T> & { readonly receipt: number | null };
+
+declare const sealedBrand: unique symbol;
+/**
+ * Plaintext from the vault, sealed at the boundary (U2-R1-04). It holds no text that a view can
+ * read: only `plaintext.tsx` draws it, and only while its session, the vault data and its scope hold.
+ */
+export type Sealed = { readonly [sealedBrand]: true };
+
+/** A rejection that no native command sent: the page cannot know what the request did. */
+export interface TransportFailure {
+  kind: "transport";
+  message: string;
+}

@@ -3,7 +3,7 @@ import { api, errorText } from "../api";
 import { nativeReads, useNativeRead } from "../nativeRead";
 import { needsAttention, plural, rotationUsed, statusDescription } from "../format";
 import { attentionOf } from "../reminders";
-import { keyRowDescription, keyRowFacts, lookalikeIds, NO_PROJECT, type KeyRowFacts } from "../rowFacts";
+import { keyRowDescription, keyRowFacts, namedKey, NO_PROJECT, searchText, useShortIds, type KeyRowFacts } from "../rowFacts";
 import type { KeyView, RotationReceipt } from "../types";
 import { useNow } from "../useNow";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
@@ -14,7 +14,7 @@ import { Icon } from "./Icon";
 import { KeyForm } from "./KeyForm";
 import { RotateDialog } from "./RotateDialog";
 import { ConfirmDialog, Notice } from "./Notice";
-import { FactList, keyIdentityFacts } from "./FactList";
+import { KeyTarget } from "./FactList";
 import { ReadFailure } from "./ReadFailure";
 
 interface SummaryControl {
@@ -31,10 +31,15 @@ type Shelf =
 const ALL_KEYS: Shelf = { kind: "all" };
 const NO_KEYS: KeyView[] = [];
 
-function shelfTitle(shelf: Shelf): string {
+/**
+ * The page title of a shelf. A project shelf says "Project" before the name, so a project named
+ * "All keys" or "Needs attention" never draws or reads like that shelf.
+ */
+function shelfTitle(shelf: Shelf) {
   if (shelf.kind === "all") return "All keys";
   if (shelf.kind === "attention") return "Needs attention";
-  return shelf.name;
+  if (shelf.name === NO_PROJECT) return NO_PROJECT;
+  return <><span className="title-kind">Project</span> <bdi>{shelf.name}</bdi></>;
 }
 
 const NO_FACTS = new Map<string, KeyRowFacts>();
@@ -71,9 +76,10 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     return () => window.clearTimeout(id);
   }, [flash]);
 
-  // What each row draws. Every shelf, group, filter, search and look-alike check reads these.
-  const factsById = useMemo(() => (all.length === 0 ? NO_FACTS : new Map(all.map((key) => [key.id, keyRowFacts(key, now)]))), [all, now]);
-  const factsOf = (key: KeyView) => factsById.get(key.id) ?? keyRowFacts(key, now);
+  // What each row draws. Every shelf, group, filter and search reads these.
+  const shortId = useShortIds(all.map((key) => key.id));
+  const factsById = useMemo(() => (all.length === 0 ? NO_FACTS : new Map(all.map((key) => [key.id, keyRowFacts(key, now, shortId)]))), [all, now, shortId]);
+  const factsOf = (key: KeyView) => factsById.get(key.id) ?? keyRowFacts(key, now, shortId);
 
   const attention = attentionOf(all, now);
   // A shelf empties when its last key leaves. The view then falls back, so nobody is stranded on it.
@@ -84,11 +90,11 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
       : chosenShelf;
 
   const projects = useMemo(
-    () => uniqueOptions([...factsById.values()].map((facts) => facts.project.text)).filter((option) => option.value !== NO_PROJECT),
+    () => uniqueOptions([...factsById.values()].map((facts) => facts.project.text), (text) => text).filter((option) => option.value !== NO_PROJECT),
     [factsById],
   );
   const environments = useMemo(
-    () => uniqueOptions([...factsById.values()].map((facts) => facts.environment.text)),
+    () => uniqueOptions([...factsById.values()].map((facts) => facts.environment.text), (text) => text),
     [factsById],
   );
   const unfiled = [...factsById.values()].filter((facts) => facts.project.text === NO_PROJECT).length;
@@ -103,21 +109,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
         if (shelf.kind === "project" && facts.project.text !== shelf.name) return false;
         if (environment && facts.environment.text !== environment) return false;
         if (!needle) return true;
-        return [
-          facts.title,
-          facts.issuer.text,
-          facts.project.text,
-          facts.environment.text,
-          facts.variable.text,
-          key.url,
-          key.notes,
-          ...key.scopes,
-          ...key.tags,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase()
-          .includes(needle);
+        return searchText(key, facts).includes(needle);
       })
       .sort((a, b) => a.title.localeCompare(b.title));
   }, [all, factsById, query, shelf, environment, now]);
@@ -134,12 +126,10 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
   // On a project shelf the page title names it.
   const showGroupNames = shelf.kind !== "project";
 
-  // Two rows that match in every drawn fact both show their short unique ID (LOOK-R4-01, LOOK-R4-03).
-  const shownIds = useMemo(() => lookalikeIds(all, (key) => key.id, (key) => factsById.get(key.id) ?? {}), [all, factsById]);
-
   const find = (id: string | null) => (id === null ? null : all.find((key) => key.id === id) ?? null);
   const selected = find(selectedId);
   const deleting = find(deletingId);
+  const deletingFacts = deleting && factsOf(deleting);
   const rotating = find(rotatingId);
   const showSummary = keys !== null && attention.total > 0 && !(summary?.dismissed ?? summaryDismissed);
 
@@ -153,7 +143,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     read.apply((current) => [...current.filter((key) => key.id !== item.id), item]);
     setSelectedId(item.id);
     setFormItem(undefined);
-    setFlash(`Saved “${item.title}”. The vault file has been rewritten.`);
+    setFlash(`Saved ${namedKey(factsOf(item))}. The vault file has been rewritten.`);
   }
 
   function rotated(receipt: RotationReceipt) {
@@ -161,20 +151,21 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     setSelectedId(receipt.key.id);
     setRotatingId(null);
     setFlash(
-      `Rotated “${receipt.key.title}”. The old secret stays in the vault history. Rotating here does not change the secret at the provider.`,
+      `Rotated ${namedKey(factsOf(receipt.key))}. The old secret stays in the vault history. Rotating here does not change the secret at the provider.`,
     );
   }
 
   async function remove() {
     if (!deleting) return;
     const target = deleting;
+    const name = namedKey(factsOf(target));
     setDeletingBusy(true);
     setDeleteError(null);
     try {
       await api.remove(target.id);
       read.apply((current) => current.filter((key) => key.id !== target.id));
       setSelectedId((current) => (current === target.id ? null : current));
-      setFlash(`Moved “${target.title}” to the Recycle Bin. Restore it there, or delete it for good. Check backup notices before you rely on encrypted backups.`);
+      setFlash(`Moved ${name} to the Recycle Bin. Restore it there, or delete it for good. Check backup notices before you rely on encrypted backups.`);
       setDeletingId(null);
     } catch (cause) {
       setDeleteError(errorText(cause));
@@ -185,7 +176,6 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
 
   function renderRow(item: KeyView) {
     const facts = factsOf(item);
-    const shownId = shownIds.get(item.id);
     const used = rotationUsed(item, now);
     return (
       <li className="key-line" key={item.id}>
@@ -193,17 +183,17 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           type="button"
           className="key-row"
           onClick={() => setSelectedId(item.id)}
-          aria-label={`Open ${item.title}`}
+          aria-label={`Open ${facts.title}`}
           aria-describedby={`${statusId}-${item.id}`}
         >
           <KeyCut id={item.id} />
           <span className="key-ident">
             <span className="key-title">{facts.title}</span>
             <span className="key-sub">
-              {facts.issuer.text}
+              <bdi>{facts.issuer.text}</bdi>
               {facts.scopes.set && ` · ${facts.scopes.text}`}
             </span>
-            {shownId !== undefined && <span className="key-sub key-id mono">ID {shownId}</span>}
+            <span className="key-sub key-id mono">ID {facts.id.text}</span>
           </span>
           <span className="key-ident">
             <span className="key-var mono">{facts.variable.text}</span>
@@ -225,7 +215,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           </span>
         </button>
         <span className="sr-only" id={`${statusId}-${item.id}`}>
-          {keyRowDescription(facts, shownId)} {statusDescription(item, now)}
+          {keyRowDescription(facts)} {statusDescription(item, now)}
         </span>
       </li>
     );
@@ -235,8 +225,15 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     candidate.kind === shelf.kind &&
     (candidate.kind !== "project" || (shelf.kind === "project" && candidate.name === shelf.name));
 
+  // A project button reads "Project" before its name, as the page title of its shelf does.
   const shelfButton = (target: Shelf, label: string, count: number) => (
-    <button type="button" className="shelf-item" aria-pressed={isShelf(target)} onClick={() => setChosenShelf(target)}>
+    <button
+      type="button"
+      className="shelf-item"
+      aria-pressed={isShelf(target)}
+      aria-label={target.kind === "project" && target.name !== NO_PROJECT ? `Project ${label}` : undefined}
+      onClick={() => setChosenShelf(target)}
+    >
       <span>{label}</span>
       <span className="num" aria-hidden="true">{count}</span>
     </button>
@@ -284,6 +281,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
         {showSummary && (
           <AttentionSummary
             attention={attention}
+            nameOf={(key) => namedKey(factsOf(key))}
             onDismiss={summary?.onDismiss ?? (() => setSummaryDismissed(true))}
           />
         )}
@@ -381,7 +379,8 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
               <section className="key-group" key={`project:${name}`}>
                 {showGroupNames && (
                   <h2 className="group-head">
-                    {name} <span className="num" aria-hidden="true">{items.length}</span>
+                    {name !== NO_PROJECT && <><span className="sr-only">Project</span> </>}
+                    <bdi>{name}</bdi> <span className="num" aria-hidden="true">{items.length}</span>
                   </h2>
                 )}
                 <ul className="key-rows">{items.map(renderRow)}</ul>
@@ -394,7 +393,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
       {selected && (
         <KeyDetail
           item={selected}
-          shownId={shownIds.get(selected.id)}
+          current={read.state.status === "ready" && !read.busy}
           readOnly={readOnly}
           onClose={() => setSelectedId(null)}
           onEdit={() => {
@@ -424,13 +423,12 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
       {rotating && (
         <RotateDialog
           item={rotating}
-          shownId={shownIds.get(rotating.id)}
           onRotated={rotated}
           onClose={() => { setSelectedId(rotating.id); setRotatingId(null); }}
         />
       )}
 
-      {deleting && (
+      {deleting && deletingFacts && (
         <ConfirmDialog
           title="Move this key to the Recycle Bin?"
           confirmLabel="Move to Recycle Bin"
@@ -440,11 +438,11 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           onCancel={() => { setSelectedId(deleting.id); setDeletingId(null); }}
         >
           <p>
-            <strong>{deleting.title}</strong> leaves the key list and moves to the Recycle Bin
+            <strong><bdi>{deletingFacts.title}</bdi></strong> leaves the key list and moves to the Recycle Bin
             inside the vault. Its secret, history and group are kept. Open the Recycle Bin to
             restore it, or to delete it for good. Nothing is deleted for good until you ask.
           </p>
-          <FactList facts={keyIdentityFacts(deleting, shownIds.get(deleting.id))} />
+          <KeyTarget facts={deletingFacts} />
           {deleteError && <Notice tone="error">{deleteError}</Notice>}
         </ConfirmDialog>
       )}

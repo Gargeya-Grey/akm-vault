@@ -45,9 +45,12 @@ export function summaryHeading(total: number): string {
   return `${plural(total, "key")} ${total === 1 ? "needs" : "need"} attention`;
 }
 
-/** One line of the summary: the state, the count and up to five titles. Titles only, never a value. */
-export function summaryLine(label: string, keys: readonly KeyView[]): string {
-  const shown = keys.slice(0, SUMMARY_TITLES_PER_GROUP).map((key) => key.title);
+/**
+ * One line of the summary: the state, the count and up to five keys, each named by `nameOf` (its
+ * drawn title and its short ID, `namedKey`). Names only, never a value.
+ */
+export function summaryLine(label: string, keys: readonly KeyView[], nameOf: (key: KeyView) => string): string {
+  const shown = keys.slice(0, SUMMARY_TITLES_PER_GROUP).map(nameOf);
   const rest = keys.length - shown.length;
   return `${label} (${keys.length}): ${shown.join(", ")}${rest > 0 ? `, and ${rest} more` : ""}`;
 }

@@ -62,6 +62,38 @@ for (const theme of ["light", "dark"]) {
     expect(errors).toEqual([]);
   });
 
+  test(`${theme}: a record that settles a lost reply also ends the wait of the form`, async ({ page }) => {
+    const errors = await open(page, theme, { terminal: "hold" });
+    const { operationId } = await launch(page);
+    const button = page.getByRole("button", { name: "Open terminal with keys…" });
+    await expect(button).toBeDisabled();
+    await expect(page.getByText("Choose the folder and answer the confirmation window.")).toBeVisible();
+    await record(page, { id: operationId, originSession: "A", kind: "terminalStarted" });
+    await expect(page.getByText("A terminal opened with keys. That window keeps them until you close it, even after AKM locks.")).toBeVisible({ timeout: 8000 });
+    await expect(button).toBeEnabled();
+    await expect(page.getByText("Choose the folder and answer the confirmation window.")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
+  test(`${theme}: an import record ends the wait of the import form, and the form closes`, async ({ page }) => {
+    const errors = await open(page, theme, { importReply: "hold" });
+    await page.getByRole("button", { name: "Use keys", exact: true }).click();
+    await page.getByRole("button", { name: "Import .env…" }).click();
+    await page.getByLabel("Paste the .env contents").fill("FAKE_TOKEN=fake-browser-import-value");
+    await page.getByLabel("Target project").fill("demo");
+    await page.getByLabel("Target environment").fill("dev");
+    await page.getByRole("button", { name: "Review import" }).click();
+    await expect(page.getByRole("button", { name: "Waiting for confirmation…" })).toBeDisabled();
+    const call = await page.waitForFunction(() => window.__akmTest.calls.find((each) => each.command === "env_import")?.args);
+    const { operationId } = (await call.jsonValue()) as { operationId: string };
+    await record(page, { id: operationId, originSession: "A", kind: "importApplied" });
+    await expect(page.getByText("The import was saved. This window did not receive the counts, so check the keys before you import again.")).toBeVisible({ timeout: 8000 });
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Import .env…" })).toBeEnabled();
+    expect(await page.locator("body").textContent()).not.toContain("fake-browser-import-value");
+    expect(errors).toEqual([]);
+  });
+
   test(`${theme}: after a reload during the native review, the record is the only truth and its notice names the terminal`, async ({ page }) => {
     const errors = await open(page, theme, { terminal: "hold" });
     const { operationId } = await launch(page);
@@ -79,6 +111,22 @@ for (const theme of ["light", "dark"]) {
     await expect(page.getByRole("button", { name: "Add key", exact: true })).toBeVisible();
     await page.evaluate(() => new Promise((done) => setTimeout(done, 3500)));
     await expect(notices).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
+  test(`${theme}: a reply lost in transport keeps the native record, and after a reload the record is the truth`, async ({ page }) => {
+    const errors = await open(page, theme, { terminal: "transport" });
+    await launch(page);
+    const outcomes = page.getByRole("region", { name: "Operation outcomes" });
+    const notices = page.getByRole("region", { name: "Saved-operation notices" });
+    const started = "A terminal opened with keys, but this window did not receive its result.";
+    await expect(outcomes).toContainText("A terminal launch sent no answer to this window. A terminal may hold keys.");
+    await expect(notices).toContainText(started, { timeout: 8000 });
+    expect(await dismissals(page)).toEqual([]);
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Add key", exact: true })).toBeVisible();
+    await expect(notices).toContainText(started, { timeout: 8000 });
+    await expect(outcomes).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 

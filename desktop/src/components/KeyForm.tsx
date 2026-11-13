@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { api, errorText } from "../api";
+import { useKeyRowFacts } from "../rowFacts";
 import { dateOnlyExpiry } from "../schedule";
 import type { KeyDraft, KeyView } from "../types";
+import { KeyTarget } from "./FactList";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { useDialogFocus } from "./useDialogFocus";
@@ -11,6 +13,20 @@ interface Props {
   item?: KeyView;
   onSaved: (item: KeyView) => void;
   onClose: () => void;
+}
+
+/** The key that the edit form changes, as its row draws it (U2-R1-02). */
+function EditTarget({ item, id }: { item: KeyView; id: string }) {
+  const facts = useKeyRowFacts(item);
+  return (
+    <section className="form-group" aria-labelledby="form-group-target">
+      <h3 id="form-group-target">This key</h3>
+      <div id={id}>
+        <p className="key-title"><bdi>{facts.title}</bdi></p>
+        <KeyTarget facts={facts} />
+      </div>
+    </section>
+  );
 }
 
 function splitList(value: string): string[] {
@@ -25,6 +41,7 @@ function splitList(value: string): string[] {
 export function KeyForm({ item, onSaved, onClose }: Props) {
   const editing = item !== undefined;
   const dialogRef = useDialogFocus<HTMLDivElement>();
+  const targetId = useId();
 
   const [title, setTitle] = useState(item?.title ?? "");
   const [secret, setSecret] = useState("");
@@ -123,6 +140,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="form-title"
+        aria-describedby={editing ? targetId : undefined}
       >
         <header className="modal-head">
           <div>
@@ -142,6 +160,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
 
         <form onSubmit={submit}>
           <div className="drawer-body">
+            {editing && <EditTarget item={item} id={targetId} />}
             <section className="form-group" aria-labelledby="form-group-key">
               <h3 id="form-group-key">The key</h3>
               <div className="form-grid">

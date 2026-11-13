@@ -38,8 +38,10 @@ afterEach(() => {
   native.invoke.mockReset();
 });
 
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Every row reads its short ID after its identity facts (U2-R1-01).
 const row = (name: string, description: string, identity = "Project demo, environment dev, variable FAKE_KEY, no issuer.") =>
-  screen.getByRole("button", { name, description: `${identity} ${description}` });
+  screen.getByRole("button", { name, description: new RegExp(`^${escape(identity.replace(/\.$/, ""))}, ID [^ ,]+\\. ${escape(description)}$`) });
 
 test("two keys with one title differ in their accessible description", async () => {
   await show([key({ id: "a", title: "Twin", project: "alpha", environment: "dev", resolvedEnvVar: "TWIN_A" }), key({ id: "b", title: "Twin", project: null, environment: null, resolvedEnvVar: "TWIN_B" })]);
@@ -53,13 +55,13 @@ test("two keys that differ only by issuer differ in their accessible description
   row("Open Twin", "No expiry date. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, issuer Globex.");
 });
 
-test("two key rows that match in every shown fact show their short unique IDs, and read them", async () => {
+test("every key row shows its short unique ID, and reads it", async () => {
   await show([key({ id: "first-unique-id", title: "Twin" }), key({ id: "second-unique-id", title: "Twin" }), key({ id: "other-unique-id", title: "Single" })]);
   const shownIds = [...document.querySelectorAll(".key-row .key-id")].map((node) => node.textContent);
-  expect(shownIds.sort()).toEqual(["ID first-un", "ID second-u"]);
-  row("Open Twin", "No expiry date. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, no issuer, ID first-un.");
-  row("Open Twin", "No expiry date. No rotation interval.", "Project demo, environment dev, variable FAKE_KEY, no issuer, ID second-u.");
-  row("Open Single", "No expiry date. No rotation interval.");
+  expect(shownIds.sort()).toEqual(["ID first-un", "ID other-un", "ID second-u"]);
+  for (const [name, id] of [["Open Twin", "first-un"], ["Open Twin", "second-u"], ["Open Single", "other-un"]]) {
+    screen.getByRole("button", { name, description: `Project demo, environment dev, variable FAKE_KEY, no issuer, ID ${id}. No expiry date. No rotation interval.` });
+  }
 });
 
 test("a vault with no projects counts zero projects", async () => {
@@ -102,8 +104,8 @@ test("a failed read does not say that the vault is empty, and it can be tried ag
 test("a search that leaves one project still names that project", async () => {
   await show([key({ id: "a", title: "Alpha", project: "alpha-project" }), key({ id: "b", title: "Beta", project: "beta-project" })]);
   await act(async () => { fireEvent.change(screen.getByRole("searchbox"), { target: { value: "Alpha" } }); });
-  screen.getByRole("heading", { name: "alpha-project" });
-  expect(screen.queryByRole("heading", { name: "beta-project" })).toBeNull();
+  screen.getByRole("heading", { name: "Project alpha-project" });
+  expect(screen.queryByRole("heading", { name: "Project beta-project" })).toBeNull();
 });
 
 test("a vault with no projects still says that its keys have no project", async () => {

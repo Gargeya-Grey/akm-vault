@@ -1,16 +1,19 @@
 import { summaryHeading, summaryLine } from "../reminders";
 import type { Attention } from "../reminders";
+import type { KeyView } from "../types";
 
 interface Props {
   attention: Attention;
+  /** The name of a key in a line: its drawn title and its short ID, as the Keys screen gives them. */
+  nameOf: (key: KeyView) => string;
   onDismiss: () => void;
 }
 
 /**
- * The unlock summary. It holds counts and key titles only. It is not a dialog and takes no focus;
+ * The unlock summary. It holds counts and key names (title and short ID) only. It is not a dialog and takes no focus;
  * dismissing it moves focus to the view's fallback target.
  */
-export function AttentionSummary({ attention, onDismiss }: Props) {
+export function AttentionSummary({ attention, nameOf, onDismiss }: Props) {
   const lines: [string, typeof attention.expired][] = [
     ["Expired", attention.expired],
     ["Rotation overdue", attention.overdue],
@@ -34,7 +37,7 @@ export function AttentionSummary({ attention, onDismiss }: Props) {
       </div>
       <ul>
         {lines.filter(([, keys]) => keys.length > 0).map(([label, keys]) => (
-          <li key={label}>{summaryLine(label, keys)}</li>
+          <li key={label}>{summaryLine(label, keys, nameOf)}</li>
         ))}
       </ul>
     </section>

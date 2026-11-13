@@ -1,14 +1,18 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { Activity } from "./Activity";
 import { KeysView } from "./KeysView";
 import { RecycleBin } from "./RecycleBin";
 import { cutsOf } from "./glyphs";
+import { invalidateSession } from "../sessionBoundary";
 import type { KeyView, RecycledKey } from "../types";
 
-// Fault classes M (two different things drawn the same) and H. A row, its look-alike check, its
-// accessible description and every dialog that names it draw from one function (rowFacts.ts).
+// Fault class M (two different things drawn the same, U2-R1-01) and class H. Every key row, every
+// place that names a key, and its accessible description show the key's short ID: the shortest
+// prefix of 8 or more characters that no other key the page knows starts with. One function builds
+// a row's facts (rowFacts.ts). A value draws so that it cannot imitate the structure of a row.
 
-const native = vi.hoisted(() => ({ invoke: vi.fn(), sent: [] as { command: string; id?: string }[] }));
+const native = vi.hoisted(() => ({ invoke: vi.fn(), sent: [] as { command: string; args?: Record<string, unknown> }[] }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 
@@ -24,27 +28,37 @@ function key(overrides: Partial<KeyView> = {}): KeyView {
   };
 }
 
-function serve(keys: KeyView[], recycled: RecycledKey[] = []) {
+interface Served { keys?: KeyView[]; recycled?: RecycledKey[]; journal?: { keyTitle: string | null; keyId: string | null; project?: string | null; environment?: string | null }[] }
+
+function serve({ keys = [], recycled = [], journal = [] }: Served) {
   native.sent.length = 0;
-  native.invoke.mockImplementation(async (command: string, args?: { id?: string }) => {
-    native.sent.push({ command, id: args?.id });
+  native.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+    native.sent.push({ command, args });
     if (command === "keys_list") return keys;
     if (command === "recycled_list") return recycled;
-    if (command === "key_remove" || command === "key_purge") return undefined;
+    if (command === "audit_read") {
+      const entries = journal.map((entry, index) => ({ seq: String(index + 1), ts: "2026-06-01T10:00:00Z", action: "add-completed", detail: null, project: null, environment: null, ...entry }));
+      return { path: "C:/fake/journal/j-0.jsonl", entries, state: "consistent", damage: null, identity: "confirmed", notices: [], brokenAt: null, problemLine: null, totalEntries: entries.length };
+    }
+    if (command === "key_update") return { ...keys.find((each) => each.id === args?.id)!, ...(args?.draft as object) };
     if (command === "vault_status") return { sessionId: "fake", path: "C:/fake/a.kdbx", exists: true, unlocked: true, keyCount: keys.length, vaultName: "A", needsUpgrade: false };
     throw new Error(`unexpected command ${command}`);
   });
 }
 
-async function showKeys(keys: KeyView[]) {
-  serve(keys);
-  await act(async () => { render(<KeysView />); });
+async function show(view: React.ReactElement, served: Served) {
+  serve(served);
+  await act(async () => { render(view); });
   await act(async () => {});
 }
+
+const showKeys = (keys: KeyView[]) => show(<KeysView />, { keys });
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
+  // A new session: the page knows no key IDs yet.
+  invalidateSession();
 });
 afterEach(() => {
   cleanup();
@@ -52,142 +66,179 @@ afterEach(() => {
   native.invoke.mockReset();
 });
 
-// Any drawn text in a row that starts with "ID", whatever element holds it.
-const shownIds = () => [...document.querySelectorAll(".key-row *")].filter((node) => node.children.length === 0 && /^ID /.test(node.textContent ?? "")).map((node) => node.textContent);
-const descriptions = () => screen.getAllByRole("button", { name: /^Open / }).map((row) => document.getElementById(row.getAttribute("aria-describedby") ?? "")?.textContent ?? "");
-/** What a screen reader hears about each row: its name, then its description. */
-const spoken = () => screen.getAllByRole("button", { name: /^Open / }).map((row, index) => `${row.getAttribute("aria-label")} ${descriptions()[index]}`);
-/** What each row draws, with the group heading that names its project. */
-const drawings = () => [...document.querySelectorAll(".key-row")].map((row) => `${row.closest(".key-group")?.querySelector(".group-head")?.textContent ?? ""} ${row.textContent}`);
+const rows = () => screen.getAllByRole("button", { name: /^Open / });
+const descriptionOf = (node: Element) => (node.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
+/** What a screen reader hears about a row: its name, then its description. */
+const spoken = (row: Element) => `${row.getAttribute("aria-label")} | ${descriptionOf(row)}`;
+/** The short ID that a row draws, as the text on screen. */
+const idOf = (row: Element) => row.querySelector(".key-id")?.textContent ?? null;
 
-// Each drawn fact, and a key that differs from the base key in that fact alone.
-const VARIATIONS: [string, Partial<KeyView>][] = [
-  ["title", { title: "Other title" }],
-  ["issuer", { issuer: "Acme" }],
-  ["scope count", { scopes: ["read"] }],
-  ["variable", { resolvedEnvVar: "OTHER_KEY" }],
-  ["environment", { environment: "prod" }],
-  ["project", { project: "other-project" }],
-  ["renewal", { rotationDays: 90, secretChange: "known", secretChangedAt: inDays(-30), rotationDueAt: inDays(60) }],
-  ["expiry", { expiresAt: inDays(200) }],
+// Fake IDs whose key glyphs are the same (`cutsOf`), so only the drawn ID can tell the rows apart.
+const ID = {
+  a1: "7b3e9f20-0000-4000-8000-000000000085", a2: "7b3e9f21-0000-4000-8000-000000000066",
+  b1: "9e8d7c6b-0000-4000-8000-000000000005", b2: "5a6b7c8d-0000-4000-8000-000000000027",
+  c1: "2c3d4e5f-0000-4000-8000-000000000001", c2: "1a2b3c4d-0000-4000-8000-000000000085",
+  d1: "3f4e5d6c-0000-4000-8000-000000000001", d2: "6d5c4b3a-0000-4000-8000-000000000027",
+  e1: "0fa1c0de-0000-4000-8000-000000000001", e2: "0fa1c0de-0001-4000-8000-000000000019",
+  f1: "c4d2e8a1-0000-4000-8000-000000000087", f2: "c4d2e8a1-1000-4000-8000-000000000002",
+};
+
+const PAIRS: [string, Partial<KeyView>, Partial<KeyView>, [string, string]][] = [
+  ["issuers that differ by a repeated space (the review's first pair)", { id: ID.a1, issuer: "Acme  Cloud" }, { id: ID.a2, issuer: "Acme Cloud" }, ["7b3e9f20", "7b3e9f21"]],
+  ["an issuer that spells a scope count, and a real scope (the review's second pair)", { id: ID.b1, issuer: "Acme · 1 scope" }, { id: ID.b2, issuer: "Acme", scopes: ["read"] }, ["9e8d7c6b", "5a6b7c8d"]],
+  ["titles that differ by a look-alike letter", { id: ID.c1, title: "Acme key" }, { id: ID.c2, title: "\u0410cme key" }, ["2c3d4e5f", "1a2b3c4d"]],
+  ["titles that differ by a zero-width space", { id: ID.d1, title: "Twin" }, { id: ID.d2, title: "Twin\u200B" }, ["3f4e5d6c", "6d5c4b3a"]],
+  ["identical facts", { id: ID.e1 }, { id: ID.e2 }, ["0fa1c0de-0000", "0fa1c0de-0001"]],
+  ["IDs that share their first 8 characters", { id: ID.f1 }, { id: ID.f2 }, ["c4d2e8a1-0", "c4d2e8a1-1"]],
 ];
-// The state is not in this table: it comes from the expiry and the renewal, which are.
 
-for (const [fact, change] of VARIATIONS) {
-  test(`two rows that differ only in ${fact} show no ID, and differ on screen and to a screen reader`, async () => {
-    await showKeys([key({ id: "first-unique-id" }), key({ id: "second-unique-id", ...change })]);
-    expect(shownIds()).toEqual([]);
-    const drawn = drawings();
-    expect(drawn).toHaveLength(2);
-    expect(drawn[0]).not.toBe(drawn[1]);
-    const [one, two] = spoken();
-    expect(one).not.toBe(two);
-  });
-}
-
-test("two rows that match in every drawn fact both show their short ID, and read it", async () => {
-  await showKeys([key({ id: "first-unique-id" }), key({ id: "second-unique-id" })]);
-  expect(shownIds().sort()).toEqual(["ID first-un", "ID second-u"]);
-  const [one, two] = descriptions();
-  expect(one).not.toBe(two);
-  expect([one, two].join(" ")).toMatch(/ID first-un\..*ID second-u\.|ID second-u\..*ID first-un\./);
+test("the fixture pairs draw the same key glyph", () => {
+  for (const [, one, two] of PAIRS) expect(cutsOf(one.id!).join(), `${one.id} ${two.id}`).toBe(cutsOf(two.id!).join());
 });
 
-// An unset fact draws its fallback. A literal value that reads like the fallback draws the same,
-// so the two rows are look-alikes and need their IDs (LOOK-R4-01).
-const FALLBACKS: [string, keyof KeyView, string][] = [
-  ["issuer", "issuer", "No issuer"],
-  ["environment", "environment", "No environment"],
-  ["project", "project", "No project"],
-];
-
-for (const [name, field, fallback] of FALLBACKS) {
-  test(`an unset ${name} and the literal ${name} "${fallback}" draw the same, so both rows show their ID`, async () => {
-    await showKeys([key({ id: "unset-value-id", [field]: null }), key({ id: "literal-value-id", [field]: fallback })]);
-    const [one, two] = drawings().map((text) => text.replace(/ID \S+/, ""));
-    expect(one).toBe(two);
-    expect(shownIds().sort()).toEqual(["ID literal-", "ID unset-va"]);
+for (const [name, one, two, [short1, short2]] of PAIRS) {
+  test(`two keys with ${name}: each row draws its own short ID, and the rows differ on screen and to a screen reader`, async () => {
+    await showKeys([key(one), key(two)]);
+    expect(rows().map(idOf).sort()).toEqual([`ID ${short1}`, `ID ${short2}`].sort());
+    const [first, second] = [short1, short2].map((short) => rows().find((row) => idOf(row) === `ID ${short}`)!);
+    expect(first.textContent).not.toBe(second.textContent);
+    expect(spoken(first)).not.toBe(spoken(second));
+    expect(descriptionOf(first)).toContain(`, ID ${short1}.`);
+    expect(descriptionOf(second)).toContain(`, ID ${short2}.`);
   });
 }
 
-test("an unset project and the literal project \"No project\" share one shelf and one group heading", async () => {
-  await showKeys([key({ id: "unset-value-id", project: null }), key({ id: "literal-value-id", project: "No project" })]);
+test("a key that looks like no other still draws its short ID, and reads it", async () => {
+  await showKeys([key({ id: ID.a1, issuer: "Acme", scopes: ["read", "write"] })]);
+  const [row] = rows();
+  expect(idOf(row)).toBe("ID 7b3e9f20");
+  expect(descriptionOf(row)).toMatch(/^Project demo, environment dev, variable FAKE_KEY, issuer Acme, 2 scopes, ID 7b3e9f20\. /);
+});
+
+test("a value draws its invisible, directional and repeated-space characters as code points, and the row structure stays its own", async () => {
+  await showKeys([
+    key({ id: ID.a1, title: "Twin\u200B", issuer: "Acme  Cloud " }),
+    key({ id: ID.b1, title: "Line\nbreak", issuer: "Acme · 1 scope", project: "\u202Edemo" }),
+  ]);
+  const twin = screen.getByRole("button", { name: "Open Twin⟨U+200B⟩" });
+  expect(twin.querySelector(".key-title")?.textContent).toBe("Twin⟨U+200B⟩");
+  expect(twin.querySelector(".key-sub")?.textContent).toBe("Acme ⟨U+0020⟩Cloud⟨U+0020⟩");
+  const line = screen.getByRole("button", { name: "Open Line⟨U+000A⟩break" });
+  expect(line.querySelector(".key-sub")?.textContent).toBe("Acme ⟨U+00B7⟩ 1 scope");
+  expect(screen.getByRole("heading", { name: "Project ⟨U+202E⟩demo" })).toBeTruthy();
+});
+
+test("the edit form and the search use the stored value, not the drawn one", async () => {
+  await showKeys([key({ id: ID.a1, title: "Spaced", issuer: "Acme  Cloud" }), key({ id: ID.a2, title: "Plain", issuer: "Acme Cloud" })]);
+  fireEvent.change(screen.getByRole("searchbox"), { target: { value: "acme  cloud" } });
+  expect(rows().map((row) => row.getAttribute("aria-label"))).toEqual(["Open Spaced"]);
+  fireEvent.click(rows()[0]);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect((screen.getByLabelText("Issuer") as HTMLInputElement).value).toBe("Acme  Cloud");
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save changes" })); });
+  const update = native.sent.find((call) => call.command === "key_update");
+  expect(update?.args?.id).toBe(ID.a1);
+  expect((update?.args?.draft as { issuer: string }).issuer).toBe("Acme  Cloud");
+});
+
+test("the key drawer draws its title, issuer and details by the rule, and its notes keep their lines", async () => {
+  await showKeys([key({ id: ID.a1, title: "Twin\u200B", issuer: "Acme  Cloud", url: "https://example.invalid/\u202Efdp", tags: ["tag "], scopes: ["read\u200B"], notes: "line one\nline\u200Btwo" })]);
+  fireEvent.click(rows()[0]);
+  const drawer = screen.getByRole("dialog", { name: "Twin⟨U+200B⟩" });
+  expect(drawer.querySelector(".drawer-ident .label")?.textContent).toBe("Acme ⟨U+0020⟩Cloud");
+  const detail = (label: string) => within(drawer).getByText(label, { selector: ".fact-key" }).nextElementSibling?.textContent;
+  expect(detail("URL")).toBe("https://example.invalid/⟨U+202E⟩fdp");
+  expect(detail("Tags")).toBe("tag⟨U+0020⟩");
+  expect(detail("Scope names")).toBe("read⟨U+200B⟩");
+  expect(detail("ID")).toBe("7b3e9f20");
+  const notes = drawer.querySelector(".detail-notes p")!;
+  expect(notes.querySelectorAll("br")).toHaveLength(1);
+  expect(notes.textContent).toBe("line oneline⟨U+200B⟩two");
+});
+
+test("a recycled key that the page knows makes a live key's short ID longer", async () => {
+  await show(<RecycleBin />, { recycled: [{ deletedAt: "2026-06-01T10:00:00Z", key: key({ id: ID.f2 }) }] });
+  expect(screen.getByText(`ID ${ID.f2}`)).toBeTruthy();
+  cleanup();
+  await showKeys([key({ id: ID.f1 })]);
+  expect(idOf(rows()[0])).toBe("ID c4d2e8a1-0");
+});
+
+test("a new session forgets the IDs of the last one", async () => {
+  await show(<RecycleBin />, { recycled: [{ deletedAt: "2026-06-01T10:00:00Z", key: key({ id: ID.f2 }) }] });
+  cleanup();
+  invalidateSession();
+  await showKeys([key({ id: ID.f1 })]);
+  expect(idOf(rows()[0])).toBe("ID c4d2e8a1");
+});
+
+test("a short ID grows when the list gains a key that shares its start", async () => {
+  await showKeys([key({ id: ID.f1 })]);
+  expect(idOf(rows()[0])).toBe("ID c4d2e8a1");
+  cleanup();
+  await showKeys([key({ id: ID.f1 }), key({ id: ID.f2, title: "Other" })]);
+  expect(idOf(screen.getByRole("button", { name: "Open Twin" }))).toBe("ID c4d2e8a1-0");
+});
+
+test("Activity names each key with its short ID, and draws the values of a record", async () => {
+  await show(<Activity />, { journal: [
+    { keyTitle: "Twin", keyId: ID.e1, project: "demo", environment: null },
+    { keyTitle: "Twin", keyId: ID.e2, project: "demo\u200B", environment: null },
+    { keyTitle: null, keyId: ID.f1 },
+    { keyTitle: null, keyId: null },
+  ] });
+  const keys = [...document.querySelectorAll(".audit-key")].map((node) => node.textContent);
+  // Newest first.
+  expect(keys).toEqual([
+    "Vault—",
+    "KeyID c4d2e8a1—",
+    "TwinID 0fa1c0de-0001demo⟨U+200B⟩",
+    "TwinID 0fa1c0de-0000demo",
+  ]);
+});
+
+test("the unlock summary names each key with its short ID", async () => {
+  await showKeys([key({ id: ID.e1, expiresAt: inDays(-2) }), key({ id: ID.e2, expiresAt: inDays(-2) })]);
+  const summary = screen.getByRole("region", { name: "Keys needing attention" });
+  expect(within(summary).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Expired (2): “Twin” (ID 0fa1c0de-0000), “Twin” (ID 0fa1c0de-0001)"]);
+});
+
+test("an environment option draws its value, and the filter keeps the stored value apart", async () => {
+  await showKeys([key({ id: ID.a1, title: "Spaced", environment: "dev " }), key({ id: ID.a2, title: "Plain", environment: "dev" })]);
+  const options = [...screen.getByLabelText("Environment").querySelectorAll("option")].map((option) => option.textContent);
+  expect(options).toEqual(["All environments", "dev", "dev⟨U+0020⟩"]);
+});
+
+for (const shelf of ["All keys", "Needs attention"]) {
+  test(`a project named "${shelf}" has a page title and a shelf button that differ from the "${shelf}" shelf, on screen and by name`, async () => {
+    await showKeys([key({ id: ID.a1, title: "Named", project: shelf, expiresAt: inDays(-2) }), key({ id: ID.a2, title: "Other", project: "demo" })]);
+    const nav = screen.getByRole("navigation", { name: "Projects" });
+    fireEvent.click(shelf === "All keys" ? within(nav).getAllByRole("button")[0] : nav.querySelector(".shelf-attention")!);
+    const fixed = screen.getByRole("heading", { level: 1 });
+    expect(fixed.textContent).toMatch(new RegExp(`^${shelf} \\d+$`));
+    const fixedName = `${fixed.textContent}`;
+    fireEvent.click(within(nav).getByRole("button", { name: `Project ${shelf}` }));
+    const title = screen.getByRole("heading", { level: 1 });
+    expect(title.textContent).toBe(`Project ${shelf} 1`);
+    expect(screen.getByRole("heading", { level: 1, name: `Project ${shelf} 1` })).toBe(title);
+    expect(title.textContent).not.toBe(fixedName);
+    expect(within(nav).queryAllByRole("button", { name: shelf })).toHaveLength(shelf === "All keys" ? 1 : 0);
+  });
+}
+
+test("an unset project and the literal project \"No project\" share one shelf and one group heading, and their rows differ by ID", async () => {
+  await showKeys([key({ id: ID.e1, project: null }), key({ id: ID.e2, project: "No project" })]);
   expect(screen.getAllByRole("button", { name: /^No project/ })).toHaveLength(1);
   expect(screen.getAllByRole("heading", { name: /^No project/ })).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: /^No project/ }));
-  expect(screen.getAllByRole("button", { name: "Open Twin" })).toHaveLength(2);
+  const [one, two] = rows();
+  expect(idOf(one)).not.toBe(idOf(two));
+  expect(spoken(one)).not.toBe(spoken(two));
 });
 
-test("a search for a fallback finds the rows that draw it", async () => {
-  await showKeys([key({ id: "unset-value-id", title: "Unset", issuer: null }), key({ id: "set-value-id", title: "Set", issuer: "Acme" })]);
-  fireEvent.change(screen.getByRole("searchbox"), { target: { value: "no issuer" } });
-  expect(screen.getAllByRole("button", { name: /^Open / }).map((row) => row.getAttribute("aria-label"))).toEqual(["Open Unset"]);
-});
-
-test("the key glyph is not a fact: rows with one glyph and rows with two glyphs both show IDs", async () => {
-  const base = "fake-glyph-0";
-  let twin = 1;
-  while (cutsOf(`fake-glyph-${twin}`).join() !== cutsOf(base).join()) twin += 1;
-  await showKeys([key({ id: base }), key({ id: `fake-glyph-${twin}` })]);
-  expect(shownIds()).toHaveLength(2);
-  cleanup();
-  await showKeys([key({ id: "fake-glyph-a" }), key({ id: "fake-glyph-b" })]);
-  expect(cutsOf("fake-glyph-a").join()).not.toBe(cutsOf("fake-glyph-b").join());
-  expect(shownIds()).toHaveLength(2);
-});
-
-test("the delete confirmation of a look-alike key names its facts and its ID, and removes that key", async () => {
-  await showKeys([key({ id: "first-unique-id" }), key({ id: "second-unique-id" })]);
-  fireEvent.click(screen.getByRole("button", { name: "Open Twin", description: /ID second-u\./ }));
-  const drawer = screen.getByRole("dialog", { name: "Twin" });
-  expect(within(drawer).getByText("ID", { selector: ".fact-key" }).nextElementSibling?.textContent).toBe("second-u");
-  fireEvent.click(within(drawer).getByRole("button", { name: "Move to Recycle Bin" }));
-  const confirm = screen.getByRole("dialog", { name: "Move this key to the Recycle Bin?" });
-  expect(confirm.getAttribute("aria-describedby")).toBeTruthy();
-  const described = document.getElementById(confirm.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
-  for (const text of ["demo", "dev", "FAKE_KEY", "No issuer", "second-u"]) expect(described).toContain(text);
-  expect(described).not.toContain("first-un");
-  await act(async () => { fireEvent.click(within(confirm).getByRole("button", { name: "Move to Recycle Bin" })); });
-  expect(native.sent.filter((call) => call.command === "key_remove").map((call) => call.id)).toEqual(["second-unique-id"]);
-});
-
-test("the delete confirmation of a key that looks like no other names its facts and no ID", async () => {
-  await showKeys([key({ id: "only-unique-id", issuer: "Acme", scopes: ["read", "write"] })]);
-  fireEvent.click(screen.getByRole("button", { name: "Open Twin" }));
-  fireEvent.click(screen.getByRole("button", { name: "Move to Recycle Bin" }));
-  const facts = screen.getByRole("dialog", { name: "Move this key to the Recycle Bin?" }).querySelector(".fact-list")?.textContent ?? "";
-  for (const text of ["demo", "dev", "FAKE_KEY", "Acme", "2 scopes"]) expect(facts).toContain(text);
-  expect(facts).not.toContain("ID");
-});
-
-test("the rotate dialog of a look-alike key names its facts and its ID", async () => {
-  await showKeys([key({ id: "first-unique-id" }), key({ id: "second-unique-id" })]);
-  fireEvent.click(screen.getByRole("button", { name: "Open Twin", description: /ID first-un\./ }));
-  fireEvent.click(screen.getByRole("button", { name: "Rotate secret" }));
-  const dialog = screen.getByRole("dialog", { name: "Rotate secret" });
-  expect(dialog.querySelector(".fact-list")?.textContent).toContain("first-un");
-  expect(dialog.querySelector(".fact-list")?.textContent).not.toContain("second-u");
-});
-
-function binned(id: string): RecycledKey {
-  return { deletedAt: "2026-06-01T10:00:00Z", key: key({ id, issuer: "Acme" }) };
-}
-
-test("two Recycle Bin entries with one issuer that differ only by ID: each confirmation names its own ID, and the chosen one is deleted", async () => {
-  serve([], [binned("bin-entry-aaaa-1"), binned("bin-entry-bbbb-2")]);
-  await act(async () => { render(<RecycleBin />); });
-  await act(async () => {});
-  for (const [id, other] of [["bin-entry-aaaa-1", "bin-entry-bbbb-2"], ["bin-entry-bbbb-2", "bin-entry-aaaa-1"]]) {
-    const button = screen.getByRole("button", { name: "Delete Twin for good", description: new RegExp(`ID ${id},`) });
+test("Recycle Bin rows keep the full ID, and each button reads it", async () => {
+  await show(<RecycleBin />, { recycled: [{ deletedAt: "2026-06-01T10:00:00Z", key: key({ id: ID.e1 }) }, { deletedAt: "2026-06-01T10:00:00Z", key: key({ id: ID.e2 }) }] });
+  for (const id of [ID.e1, ID.e2]) {
+    expect(screen.getByText(`ID ${id}`)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Restore Twin", description: new RegExp(`ID ${id},`) })).toBeTruthy();
-    fireEvent.click(button);
-    const dialog = screen.getByRole("dialog", { name: "Delete this key for good?" });
-    const described = document.getElementById(dialog.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
-    expect(described).toContain(id);
-    expect(described).toContain("Acme");
-    expect(described).not.toContain(other);
-    if (id === "bin-entry-aaaa-1") fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   }
-  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Delete for good" })); });
-  expect(native.sent.filter((call) => call.command === "key_purge").map((call) => call.id)).toEqual(["bin-entry-bbbb-2"]);
 });

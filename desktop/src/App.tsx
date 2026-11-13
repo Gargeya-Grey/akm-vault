@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, errorText } from "./api";
+import { reads } from "./native";
 import { Activity } from "./components/Activity";
 import { AttentionNotifier } from "./components/AttentionNotifier";
 import { KeysView } from "./components/KeysView";
@@ -48,6 +49,7 @@ const TERMINAL_OUTCOMES: Record<OperationOutcome["outcome"], string> = {
   cancelled: "A terminal launch was cancelled in a native window. No terminal from that request runs.",
   reportedError: "A terminal launch reported an error. This does not confirm that no terminal runs. Check for an open terminal before you try again.",
   unconfirmed: "A terminal launch could not be confirmed after the session changed. A terminal may hold keys. Check for an open terminal before you try again.",
+  lost: "A terminal launch sent no answer to this window. A terminal may hold keys. A saved-operation notice gives the outcome when AKM recorded one. Check for an open terminal before you try again.",
 };
 
 function outcomeMessage({ operation, outcome }: OperationOutcome) {
@@ -59,6 +61,7 @@ function outcomeMessage({ operation, outcome }: OperationOutcome) {
     case "cancelled": return operation === "import" ? "Import was declined in the confirmation window. No keys were changed by this request." : "File export was cancelled. No file was saved by this request.";
     case "reportedError": return `${name} reported an error. This does not confirm that nothing was saved. Inspect the relevant vault or export before retrying.`;
     case "unconfirmed": return `${name} outcome could not be confirmed after the session changed. Inspect the relevant vault or export before retrying.`;
+    case "lost": return `${name} sent no answer to this window. This does not confirm that nothing was saved. A saved-operation notice gives the outcome when AKM recorded one. Inspect the relevant vault or export before retrying.`;
     case "completedWhileLocked": return COMPLETION_MESSAGE;
   }
 }
@@ -177,8 +180,8 @@ export function App() {
     window.addEventListener(WARNING_EVENT, receive);
     setWarnings(retainedApplicationWarnings());
     setOperationNotices(retainedOperationNotices());
-    void api.warnings().catch(() => {});
-    const poll = window.setInterval(() => { void api.warnings().catch(() => {}); }, 3000);
+    void reads.warnings().catch(() => {});
+    const poll = window.setInterval(() => { void reads.warnings().catch(() => {}); }, 3000);
     return () => { window.removeEventListener(WARNING_EVENT, receive); window.clearInterval(poll); };
   }, []);
 
@@ -206,7 +209,7 @@ export function App() {
     const currentTransition = transition.current;
     const current = () => !nativeOpening() && currentRequest === request.current && currentEpoch === epoch.current && currentTransition === transition.current;
     try {
-      const next = await api.status();
+      const next = await reads.status();
       if (currentEpoch === epoch.current && currentTransition === transition.current && next.unlocked) lastAccepted.current = Date.now();
       if (!current()) return;
       if (!next.unlocked) showLocked();
@@ -343,7 +346,7 @@ export function App() {
 
       <div className="stage">
       {completions.length > 0 && <section className="session-notices" aria-label="Operation outcomes">
-        {completions.map((record) => <Notice key={record.id} tone={record.outcome === "reportedError" || record.outcome === "unconfirmed" ? "error" : "info"}>{outcomeMessage(record)}</Notice>)}
+        {completions.map((record) => <Notice key={record.id} tone={record.outcome === "reportedError" || record.outcome === "unconfirmed" || record.outcome === "lost" ? "error" : "info"}>{outcomeMessage(record)}</Notice>)}
         <button type="button" className="text-button" disabled={completions.every(({ outcome }) => outcome === "pending")} onClick={() => acknowledgeCompletions(completions.filter(({ outcome }) => outcome !== "pending").map(({ id }) => id))}>Dismiss operation outcomes</button>
       </section>}
 

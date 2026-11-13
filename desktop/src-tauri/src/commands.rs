@@ -1413,9 +1413,9 @@ mod tests {
             );
         }
 
-        // The page side: api.ts adds the session to exactly the commands that Rust expects it
-        // for, apart from the ones the page sets by hand.
-        let page = include_str!("../../src/api.ts");
+        // The page side: native.ts adds the session to exactly the commands that Rust expects
+        // it for, apart from the ones the page sets by hand.
+        let page = include_str!("../../src/native.ts");
         let list = &page[page.find("const sessionScoped = new Set([").unwrap()..];
         let list = &list[..list.find("]);").unwrap()];
         let mut scoped: Vec<&str> = list.split('"').skip(1).step_by(2).collect();
@@ -1430,7 +1430,7 @@ mod tests {
         expected.sort_unstable();
         assert_eq!(
             scoped, expected,
-            "api.ts sessionScoped matches the commands"
+            "native.ts sessionScoped matches the commands"
         );
     }
 

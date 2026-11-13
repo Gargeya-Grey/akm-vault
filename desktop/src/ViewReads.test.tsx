@@ -6,7 +6,9 @@ import { KeysView } from "./components/KeysView";
 import { RecycleBin } from "./components/RecycleBin";
 import { Settings } from "./components/Settings";
 import { UseKeys } from "./components/UseKeys";
-import { invalidateSession } from "./sessionBoundary";
+import { beginOutcome, invalidateSession, sessionGeneration, settleOutcome } from "./sessionBoundary";
+import { plaintextScope } from "./plaintext";
+import { seal, stampFor } from "./sealed";
 import { held, type Held } from "./testing/held";
 import type { KeyView } from "./types";
 
@@ -17,6 +19,8 @@ const api = vi.hoisted(() => ({
   keys: vi.fn(), recycled: vi.fn(), audit: vi.fn(), backup: vi.fn(), remindersStatus: vi.fn(),
   importEnv: vi.fn(), history: vi.fn(),
 }));
+// The views read through native.ts; the import goes through api.ts. One mock serves both.
+vi.mock("./native", () => ({ reads: api }));
 vi.mock("./api", () => ({
   api,
   errorText: (error: unknown) => (error && typeof error === "object" && "message" in error ? String((error as { message: unknown }).message) : String(error)),
@@ -104,7 +108,12 @@ for (const { name, view, read, empty, failed } of VIEWS) {
 
 // LOOK-R4-02: Use keys had no request identity on its list read.
 function importOnce() {
-  api.importEnv.mockResolvedValueOnce({ added: 1, updated: 0 });
+  // As native.ts does: the import has a receipt, and its reply settles it (U2-R1-03).
+  api.importEnv.mockImplementationOnce(() => {
+    const receipt = beginOutcome("import", sessionGeneration());
+    const reply = Promise.resolve({ added: 1, updated: 0 }).then((report) => { settleOutcome(receipt, "completed"); return report; });
+    return Object.assign(reply, { receipt });
+  });
   fireEvent.click(screen.getByRole("button", { name: "Import .env…" }));
   for (const [label, value] of [["Paste the .env contents", "TOKEN=fake"], ["Target project", "demo"], ["Target environment", "dev"]]) {
     fireEvent.change(screen.getByLabelText(label), { target: { value } });
@@ -160,7 +169,8 @@ test("Use keys: a scope chosen before a refresh that removes it no longer enable
 
 test("Use keys: a preview stays hidden once a refresh removes its scope", async () => {
   const calls = holdReads(api.keys);
-  (api as Record<string, ReturnType<typeof vi.fn>>).exportEnv = vi.fn(async () => "FAKE_KEY=fake-preview-value");
+  // As native.ts does: the preview arrives sealed under the scope of its request (U2-R1-04).
+  (api as Record<string, ReturnType<typeof vi.fn>>).exportEnv = vi.fn(async (project: string, environment: string) => seal("FAKE_KEY=fake-preview-value", stampFor(plaintextScope.export(project, environment))));
   render(<UseKeys />);
   await act(async () => calls[0].resolve([key({ project: "demo", environment: "dev" })]));
   fireEvent.change(screen.getByLabelText("Project"), { target: { value: "demo" } });

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import type { DependencyList } from "react";
-import { api, errorText } from "./api";
+import { errorText } from "./errors";
+import { reads } from "./native";
 import { sessionGeneration } from "./sessionBoundary";
 
 /**
  * Every read of native state that a view shows goes through `useNativeRead` (fault classes K and
- * L, docs/design/frontend-reads-and-rows.md). A view never calls a read of `api` itself:
- * `readGuard.test.ts` fails when one does.
+ * L, docs/design/frontend-reads-and-rows.md). The reads live in native.ts, which a view cannot
+ * import (`readGuard.test.ts`), and each entry of `nativeReads` is a token that only this hook runs.
  *
  * - Only the newest request can set the state. A late success or a late failure of an older
  *   request changes nothing.
@@ -32,14 +33,34 @@ export interface NativeRead<T> {
   apply: (change: (data: T) => T) => void;
 }
 
-/** The reads of native state that views show. A view names one of these and never `api` itself. */
+/** A read that a view names. It is a token: only `useNativeRead` can run it, so a view cannot call it. */
+export interface ReadSource<T> {
+  readonly __reads?: T;
+}
+
+const runners = new WeakMap<object, () => Promise<unknown>>();
+
+/** Makes a token for a read. The function runs only inside `useNativeRead`. */
+export function readSource<T>(run: () => Promise<T>): ReadSource<T> {
+  const token = Object.freeze({});
+  runners.set(token, run);
+  return token as ReadSource<T>;
+}
+
+function runnerOf<T>(source: ReadSource<T>): () => Promise<T> {
+  const run = runners.get(source);
+  if (run === undefined) throw new Error("useNativeRead takes a token from readSource or nativeReads.");
+  return run as () => Promise<T>;
+}
+
+/** The reads of native state that views show. A view names one of these, and only the hook runs it. */
 export const nativeReads = {
-  keys: () => api.keys(),
-  recycled: () => api.recycled(),
-  journal: () => api.audit(500),
-  backup: () => api.backup(),
-  reminders: () => api.remindersStatus(),
-  history: (id: string) => () => api.history(id),
+  keys: readSource(() => reads.keys()),
+  recycled: readSource(() => reads.recycled()),
+  journal: readSource(() => reads.audit(500)),
+  backup: readSource(() => reads.backup()),
+  reminders: readSource(() => reads.remindersStatus()),
+  history: (id: string) => readSource(() => reads.history(id)),
 };
 
 interface Model<T> {
@@ -51,7 +72,7 @@ interface Model<T> {
  * Reads when the view mounts and again when one of `deps` changes. A change of `deps` drops the
  * data, because it belonged to the old value.
  */
-export function useNativeRead<T>(read: () => Promise<T>, deps: DependencyList = []): NativeRead<T> {
+export function useNativeRead<T>(read: ReadSource<T>, deps: DependencyList = []): NativeRead<T> {
   const model = useRef<Model<T>>({ state: { status: "loading" }, busy: true });
   const [, render] = useReducer((count: number) => count + 1, 0);
   // The newest function, so that a retry never calls one from an earlier render.
@@ -72,7 +93,7 @@ export function useNativeRead<T>(read: () => Promise<T>, deps: DependencyList = 
     const owns = () => live.current && request === newest.current && generation === sessionGeneration();
     let reply: Promise<T>;
     try {
-      reply = Promise.resolve(source.current());
+      reply = Promise.resolve(runnerOf(source.current)());
     } catch (cause) {
       reply = Promise.reject(cause);
     }

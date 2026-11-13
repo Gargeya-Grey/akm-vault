@@ -1,19 +1,16 @@
 import { useId, useState } from "react";
 import { api, errorText } from "../api";
 import { nativeReads, useNativeRead } from "../nativeRead";
-import { binRowDescription, binRowFacts } from "../rowFacts";
-import type { RecycledKey } from "../types";
+import { binFactList, binRowDescription, binRowFacts, namedKey, useShortIds } from "../rowFacts";
+import type { KeyView, RecycledKey } from "../types";
+import { useNow } from "../useNow";
 import { FactList } from "./FactList";
 import { EmptyBin, KeyCut } from "./glyphs";
 import { Icon } from "./Icon";
 import { ConfirmDialog, Notice } from "./Notice";
 import { ReadFailure } from "./ReadFailure";
 
-/** The facts that the permanent-delete confirmation lists: the row's facts, in the row's words. */
-function purgeFacts(entry: RecycledKey) {
-  const facts = binRowFacts(entry);
-  return [facts.project, facts.environment, facts.variable, facts.issuer, facts.id, { label: "Removed", text: facts.removed, set: true }, ...(facts.history ? [{ label: "History", text: facts.history, set: true }] : [])];
-}
+const NO_KEYS: KeyView[] = [];
 
 /**
  * Keys that were removed from the key list. Nothing here is deleted until the user asks:
@@ -31,6 +28,9 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
   const purging = items?.find((entry) => entry.key.id === purgingId) ?? null;
   const [purgeError, setPurgeError] = useState<string | null>(null);
   const factsId = useId();
+  const now = useNow(items?.map((entry) => entry.key) ?? NO_KEYS);
+  // The bin's IDs join the IDs that the page knows, so no live key's short ID is the start of one.
+  useShortIds(items?.map((entry) => entry.key.id) ?? []);
 
   async function restore(item: RecycledKey) {
     setBusyId(item.key.id);
@@ -38,7 +38,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
     try {
       const key = await api.restore(item.key.id);
       read.apply((current) => current.filter((entry) => entry.key.id !== item.key.id));
-      setFlash(`Restored “${key.title}” to the key list.`);
+      setFlash(`Restored ${namedKey(binRowFacts({ ...item, key }, now))} to the key list.`);
     } catch (cause) {
       setActionError(errorText(cause));
     } finally {
@@ -49,12 +49,13 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
   async function purge() {
     if (!purging) return;
     const target = purging;
+    const name = namedKey(binRowFacts(target, now));
     setBusyId(target.key.id);
     setPurgeError(null);
     try {
       await api.purge(target.key.id);
       read.apply((current) => current.filter((entry) => entry.key.id !== target.key.id));
-      setFlash(`Deleted “${target.key.title}” for good.`);
+      setFlash(`Deleted ${name} for good.`);
       setPurgingId(null);
     } catch (cause) {
       setPurgeError(errorText(cause));
@@ -111,7 +112,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
         ) : (
           <ul className="key-rows">
             {read.state.data.map((item) => {
-              const facts = binRowFacts(item);
+              const facts = binRowFacts(item, now);
               return (
               <li className="bin-row" key={item.key.id}>
                 <KeyCut id={item.key.id} />
@@ -121,7 +122,10 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
                   <span className="key-sub">{facts.environment.text}</span>
                   <span className="key-sub mono">{facts.variable.text}</span>
                   <span className="key-sub">{facts.issuer.text}</span>
-                  <span className="key-sub mono">ID {facts.id.text}</span>
+                  <span className="key-sub">
+                    {facts.renewal} · <span className={item.key.expiresAt ? "mono" : undefined}>{facts.expiry}</span>
+                  </span>
+                  <span className="key-sub key-id mono">ID {facts.id.text}</span>
                   <span className="key-sub">
                     Removed <span className="mono">{facts.removed}</span>
                     {facts.history && ` · ${facts.history}`}
@@ -134,7 +138,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
                     className="btn-secondary"
                     onClick={() => void restore(item)}
                     disabled={readOnly || busyId !== null}
-                    aria-label={`Restore ${item.key.title}`}
+                    aria-label={`Restore ${facts.title}`}
                     aria-describedby={`${factsId}-${item.key.id}`}
                   >
                     <Icon name="refresh" />
@@ -145,7 +149,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
                     className="text-button danger-text"
                     onClick={() => { setPurgeError(null); setPurgingId(item.key.id); }}
                     disabled={readOnly || busyId !== null}
-                    aria-label={`Delete ${item.key.title} for good`}
+                    aria-label={`Delete ${facts.title} for good`}
                     aria-describedby={`${factsId}-${item.key.id}`}
                   >
                     <Icon name="trash" />
@@ -168,12 +172,12 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
           onCancel={() => setPurgingId(null)}
         >
           <p>
-            <strong>{purging.key.title}</strong> will be removed from the vault, with its history.
+            <strong><bdi>{binRowFacts(purging, now).title}</bdi></strong> will be removed from the vault, with its history.
             This cannot be undone from inside the app. Older copies of the vault and older encrypted
             backups can still hold the key. AKM records the deletion, but a KeePassXC merge with an
             older copy may bring the key back.
           </p>
-          <FactList facts={purgeFacts(purging)} />
+          <FactList facts={binFactList(binRowFacts(purging, now))} />
           {purgeError && <Notice tone="error">{purgeError}</Notice>}
         </ConfirmDialog>
       )}
