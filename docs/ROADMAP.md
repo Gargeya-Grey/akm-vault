@@ -92,6 +92,7 @@ Acceptance: expired, overdue, unknown-date and no-key states; locked and hidden 
 - Run a new full review over all nine areas of the baseline rubric, with independent security, architecture and premise, and correctness reviewers. Count each root cause once. State how many reviewers ran.
 - Done on 2026-11-09: five independent reviewers scored `c0a7d3b` at 66.25/100 ([record](reviews/2026-11-09-full-rescore.md)). The kdbxweb and KeePassXC suites passed on that build. The open work is the FR rows in [FINDINGS.md](FINDINGS.md). A later score needs a new full review.
 - Done on 2026-11-13: six independent reviewers scored `1d5cc82` at 83.5/100 ([record](reviews/2026-11-13-full-review.md)). The open work is the FV rows in [FINDINGS.md](FINDINGS.md).
+- Done on 2026-11-13, after one fix round and a test audit: six new independent reviewers scored `51cbb0e` at 87.5/100 ([record](reviews/2026-11-13-full-review-2.md)). The open work is the FW rows in [FINDINGS.md](FINDINGS.md).
 
 ## Security proposals (not authorized)
 
