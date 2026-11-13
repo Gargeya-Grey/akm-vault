@@ -16,6 +16,8 @@ cargo build --release -p akm-cli --offline --locked
 python tools/check_docs.py
 ```
 
+Give each checkout its own `CARGO_TARGET_DIR`. Cargo names a workspace member's build output without the checkout's path, and it judges freshness by file times, so two checkouts that share one build folder can run each other's library.
+
 `check_docs.py` fails when a tracked Markdown file names a test that is not a `fn` in the Rust sources, or holds a control character. For docs/CLAIMS.md it also resolves each named proof to files that exist, a workflow job and its run command, a frontend test title, or a Rust test (docs/CLAIMS.md, "Named proofs"). It has two modes. Both read each workflow with PyYAML: a job is a key of `jobs`, and a command is the `run` value of one of the job's steps, so a command in an `env` value is not a command.
 
 - **Fast mode** (the default) needs no build. It reads Rust as code, so a declaration in a comment or a string is not a fn. A `#[cfg(...)]` on a test, on a `mod` block around it or on its file turns the test off when the condition is false for a Windows test build, or when fast mode cannot evaluate it. An `#[ignore]` test is not evidence by itself. It reads a frontend test file with its comments and the inside of its strings blanked: a title only in a string, a test in a skipped `describe` group and every test of a file with an `.only(` call do not count. Fast mode does not prove that a test runs, and its output says so.

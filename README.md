@@ -71,7 +71,10 @@ Dropbox or Syncthing folder.
   older one only while the file still holds the bytes that the list records. It
   never deletes a backup that the list does not name: one from an AKM version
   before the list, one that a crash left during a save, or one from before the
-  vault was renamed. Those stay until you remove them.
+  vault was renamed. Those stay until you remove them. A copy of the vault
+  folder carries the list, so AKM rotates the listed backups in the copy too.
+- A vault file with two names (hard links) can be read, but AKM does not save
+  it. Copy the vault to a new file, open the copy, and save there.
 
 **This is not a distributed lock or an atomic compare-and-swap with your sync
 provider.** KeePassXC and cloud clients do not honor AKM's lock. An external writer
@@ -143,8 +146,9 @@ until you pass the id.
 `run` and `export` require **both** project and environment, or an explicit `--all`
 without filters. The GUI deliberately offers only scoped exports. No-match and
 duplicate-variable cases fail rather than silently launching with the wrong
-credentials. Reserved process-control names such as `PATH`, `NODE_OPTIONS` and
-`AKM_*` cannot be injected.
+credentials. Reserved names cannot be injected: process-control names such as `PATH`,
+`NODE_OPTIONS` and `AKM_*`, and settings-file names such as `KUBECONFIG` and
+`GOOGLE_APPLICATION_CREDENTIALS`.
 
 `run` removes every inherited `AKM_*` variable from the child, including
 `AKM_PASSWORD`, and releases the vault before launch. Normal parent environment

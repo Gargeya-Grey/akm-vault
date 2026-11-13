@@ -1338,7 +1338,7 @@ mod tests {
             ),
             (
                 "no binding at this path",
-                stale(r"C:\V.kdbx", "old", Some("r1")),
+                stale(r"C:\V\b.kdbx", "old", Some("r1")),
                 Resolution::Superseded,
             ),
             (
