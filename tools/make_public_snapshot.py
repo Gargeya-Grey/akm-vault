@@ -63,9 +63,22 @@ OUTPUT. On a hit it prints a locator and the rule, never the matched text. The l
 `<path>:<line>`, or `file #<N> (path SHA-256 <12 hex digits>)` when the path itself holds a hit,
 where N is the file's position in `git ls-tree -r <commit>`. Then it exits 1 and writes nothing.
 
-WRITING. It refuses a patterns file that Git tracks, an output folder that exists, and an output
-folder inside the source repository. It reads the source repository with plumbing commands only
-(ls-tree, cat-file, rev-parse, config, ls-files) and never changes it. Every Git call goes through
+READING THE SOURCE. The tool never runs Git on the source repository (findings U4-R1-01, U4-R2-01).
+git_child.source_copy reads the source's Git folder as files (for a linked worktree, the folders
+that its .git file and commondir name) and copies only the objects, the references without
+refs/replace/ and HEAD into a new temporary folder, with a configuration that the tool writes.
+git_child.py lists what it leaves out and why: the source's configuration, hooks, alternates,
+promisor and partial-clone state, grafts, the shallow file, attributes and every index. Git runs on
+that copy only, with lazy fetching off and every transport refused. A revision whose objects are not
+all in the copy (a partial clone, an object that only an alternate store holds, a commit past a
+shallow cut) is refused, and nothing is fetched. The copy needs as much free disk space as the
+source's objects folder, and it is removed at the end, also on failure. The identity rule reads
+user.name and user.email from the source's own configuration files and from the user's global
+configuration; a value that only an includeIf section gives is not found (put it in the patterns
+file).
+
+WRITING. It refuses a patterns file that the commit holds, an output folder that exists, and an
+output folder inside the source's work tree or its Git folders. Every Git call goes through
 tools/git_child.py, so no inherited GIT_ variable reaches Git, and the new repository sees no user
 configuration, template or hook. It writes the files into a new folder `.<out>.incomplete-<id>`
 beside --out, builds the commit from the exact list of tracked entries (hash-object, update-index
@@ -158,7 +171,7 @@ def tracked(source, commit):
 
 
 def read_blobs(source, entries):
-    """Fill each blob entry's bytes with one `git cat-file --batch`."""
+    """Fill each blob entry's bytes with one `git cat-file --batch` on the source copy."""
     blobs = [entry for entry in entries if entry.kind == "blob"]
     if not blobs:
         return
@@ -166,7 +179,10 @@ def read_blobs(source, entries):
     position = 0
     for entry in blobs:
         end = output.index(b"\n", position)
-        oid, kind, size = output[position:end].decode("ascii").split()
+        header = output[position:end].decode("ascii").split()
+        if len(header) != 3:
+            raise Refused(f"the object {entry.oid} is missing from the source repository; the tool fetches nothing")
+        oid, kind, size = header
         if oid != entry.oid or kind != "blob":
             raise Refused(f"cat-file returned {oid} {kind} for {entry.oid}")
         entry.data = output[end + 1:end + 1 + int(size)]
@@ -201,27 +217,27 @@ def list_lines(entries_by_path, path):
 # The rules.
 
 def identity_patterns(source):
-    """The repository user's own name and address, and the Windows user name: (rule, compiled) pairs."""
+    """The repository user's own names and addresses, and the Windows user name: (rule, compiled) pairs."""
     found = []
-    for key, rule in (("user.email", "the git user's e-mail address"), ("user.name", "the git user's name")):
-        value = source.completed("config", "--get", key).stdout.decode("utf-8", errors="replace").strip()
-        if len(value) >= 4:
-            found.append((rule, re.compile(re.escape(value), re.IGNORECASE)))
+    rules = {"user.email": "the git user's e-mail address", "user.name": "the git user's name"}
+    for key, value in dict.fromkeys(source.identity()):
+        if len(value.strip()) >= 4:
+            found.append((rules[key], re.compile(re.escape(value.strip()), re.IGNORECASE)))
     user = os.environ.get("USERNAME", "")
     if len(user) >= 4:
         found.append(("the Windows user name", re.compile(r"(?<![A-Za-z0-9])" + re.escape(user) + r"(?![A-Za-z0-9])", re.IGNORECASE)))
     return found
 
 
-def extra_patterns(source, path, entries_by_path):
+def extra_patterns(path, entries_by_path, work_tree):
     if path is None:
         return []
     inside = path.resolve()
     try:
-        relative = inside.relative_to(source.work_tree).as_posix()
+        relative = inside.relative_to(work_tree).as_posix()
     except ValueError:
         relative = None
-    if relative is not None and (relative in entries_by_path or source.run("ls-files", "--", relative).strip()):
+    if relative is not None and relative in entries_by_path:
         raise Refused(f"the patterns file {relative} is tracked by Git, so its private words would be published")
     if not path.is_file():
         print(f"NOTE: no extra patterns file at {relative or path.name}; only the built-in rules apply.")
@@ -301,12 +317,12 @@ def path_locator(entry):
     return f"file #{entry.index} (path SHA-256 {hashlib.sha256(entry.raw_path).hexdigest()[:12]})"
 
 
-def scan(source, commit, patterns_path):
+def scan(source, commit, patterns_path, work_tree):
     """(entries, hits, unscannable). A hit is (file locator, line or 0, rule); unscannable is a list of (entry, reason)."""
     entries = tracked(source, commit)
     read_blobs(source, entries)
     by_path = {entry.path: entry for entry in entries if entry.path is not None}
-    patterns = identity_patterns(source) + extra_patterns(source, patterns_path, by_path)
+    patterns = identity_patterns(source) + extra_patterns(patterns_path, by_path, work_tree)
     public = {line.casefold() for _number, line in list_lines(by_path, PUBLIC_LIST) + list_lines(by_path, NOTICE_LIST)}
     opaque = {}
     hits = []
@@ -457,10 +473,26 @@ def main():
     parser.add_argument("--suggest-opaque", action="store_true", help=f"print '<sha256>  <path>' for each file that cannot be scanned, for {OPAQUE_LIST}; write nothing")
     arguments = parser.parse_args()
     try:
-        source = git_child.existing(arguments.repo)
+        folders = git_child.git_folders(arguments.repo)
+        with git_child.source_copy(arguments.repo) as source:
+            return snapshot(arguments, source, folders)
+    except (Refused, git_child.GitError) as error:
+        print(f"REFUSED: {error}. Nothing was written.")
+        return 1
+
+
+def snapshot(arguments, source, folders):
+    """Scan the commit in the source copy, then report, or write the snapshot. `folders` are the source's
+    work tree, Git folder and common Git folder, which the tool never writes into."""
+    work_tree = folders[0]
+    try:
         commit = source.completed("rev-parse", "--verify", "--quiet", "--end-of-options", f"{arguments.rev}^{{commit}}").stdout.decode("ascii").strip()
         if not commit:
-            raise Refused(f"{arguments.rev} is not a commit of {source.work_tree}")
+            raise Refused(f"{arguments.rev} is not a commit of {work_tree}, or its commit object is missing from the source repository (a shallow cut, a partial clone or an alternate store); the tool fetches nothing")
+        missing = source.missing(commit)
+        if missing:
+            count = f"{len(missing)} object of {arguments.rev} is" if len(missing) == 1 else f"{len(missing)} objects of {arguments.rev} are"
+            raise Refused(f"{count} missing from the source repository's own object store (a partial clone, an object that only an alternate store holds, or damage); the tool fetches nothing")
         tree = source.run("rev-parse", f"{commit}^{{tree}}").decode("ascii").strip()
         writing = not (arguments.scan_only or arguments.suggest_opaque)
         out = None
@@ -472,11 +504,12 @@ def main():
             out = arguments.out.resolve()
             if out.exists():
                 raise Refused(f"{out} exists. The tool writes only into a new folder that it creates")
-            if out == source.work_tree or source.work_tree in out.parents:
-                raise Refused(f"{out} is inside the source repository {source.work_tree}")
+            for folder in dict.fromkeys(folders):
+                if out == folder or folder in out.parents:
+                    raise Refused(f"{out} is inside the source repository's folder {folder}")
             if not out.parent.is_dir():
                 raise Refused(f"the parent folder {out.parent} does not exist")
-        entries, hits, unscannable = scan(source, commit, arguments.patterns or source.work_tree / DEFAULT_PATTERNS)
+        entries, hits, unscannable = scan(source, commit, arguments.patterns or work_tree / DEFAULT_PATTERNS, work_tree)
     except (Refused, git_child.GitError) as error:
         print(f"REFUSED: {error}. Nothing was written.")
         return 1

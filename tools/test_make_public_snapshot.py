@@ -330,10 +330,6 @@ with tempfile.TemporaryDirectory(prefix="akm-snapshot-test-") as folder:
     root.mkdir()
     repo = make_source(root, CLEAN)
     (root / "sentinel.txt").write_text("sentinel\n", encoding="utf-8")
-    source = git_child.existing(repo)
-    commit = source.run("rev-parse", "HEAD").decode().strip()
-    tree = source.run("rev-parse", "HEAD^{tree}").decode().strip()
-    entries, hits, _unscannable = tool.scan(source, commit, None)
     original = git_child.Repository.run
 
     def failing(self, *arguments, **options):
@@ -341,14 +337,18 @@ with tempfile.TemporaryDirectory(prefix="akm-snapshot-test-") as folder:
             raise git_child.GitError("injected failure in write-tree")
         return original(self, *arguments, **options)
 
-    git_child.Repository.run = failing
-    try:
-        tool.export(source, commit, tree, entries, root / "public", PUBLIC_AUTHOR)
-        raised = False
-    except git_child.GitError:
-        raised = True
-    finally:
-        git_child.Repository.run = original
+    with git_child.source_copy(repo) as source:
+        commit = source.run("rev-parse", "HEAD").decode().strip()
+        tree = source.run("rev-parse", "HEAD^{tree}").decode().strip()
+        entries, hits, _unscannable = tool.scan(source, commit, None, repo)
+        git_child.Repository.run = failing
+        try:
+            tool.export(source, commit, tree, entries, root / "public", PUBLIC_AUTHOR)
+            raised = False
+        except git_child.GitError:
+            raised = True
+        finally:
+            git_child.Repository.run = original
     case("a failed export raises, creates no output folder and removes its own unfinished folder", raised and not hits and not (root / "public").exists() and not list(root.glob(".public.incomplete-*")))
     case("a failed export keeps the sentinel beside it", (root / "sentinel.txt").read_text(encoding="utf-8") == "sentinel\n")
 

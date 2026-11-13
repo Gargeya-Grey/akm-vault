@@ -55,7 +55,9 @@ jobs:
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_install_binding.ps1
       - name: Public-snapshot tool refuses private data and writes only its own new folder
         run: python tools/test_make_public_snapshot.py
-      - name: Every Git call of the tools ignores inherited GIT_ variables
+      - name: Public-snapshot tool never runs Git on the source and fetches nothing
+        run: python tools/test_snapshot_source.py
+      - name: Every Git call of the tools ignores inherited GIT_ variables, fetches nothing and starts no transport
         run: python tools/test_git_child.py
       - name: Install frontend dependencies
         working-directory: desktop

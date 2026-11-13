@@ -385,20 +385,21 @@ def run_past(fixture):
 
 
 failures = 0
-here = git_child.existing(Path.cwd())
-for fixture in PAST:
-    run = run_past(fixture)
-    ok = run.returncode == 1 and fixture["expected"] in run.stdout
-    print(f"{'ok  ' if ok else 'FAIL'} the check fails on {fixture['origin']} ({fixture['name']}) with: {fixture['expected']}")
-    failures += not ok
-    commit, path, number = fixture["origin"].split(":")
-    if here.completed("cat-file", "-e", f"{commit}^{{commit}}").returncode != 0:
-        print(f"skip the copy of {fixture['origin']} is not compared: commit {commit} is not in this history (for example a public snapshot)")
-        continue
-    past_line = here.run("show", f"{commit}:{path}").decode("utf-8").split("\n")[int(number) - 1].removesuffix("\r")
-    ok = past_line == fixture["line"]
-    print(f"{'ok  ' if ok else 'FAIL'} the fixture is an exact copy of {fixture['origin']}")
-    failures += not ok
+# The past commits are read from a copy of this repository's Git data (git_child.source_copy, class F).
+with git_child.source_copy(Path.cwd()) as here:
+    for fixture in PAST:
+        run = run_past(fixture)
+        ok = run.returncode == 1 and fixture["expected"] in run.stdout
+        print(f"{'ok  ' if ok else 'FAIL'} the check fails on {fixture['origin']} ({fixture['name']}) with: {fixture['expected']}")
+        failures += not ok
+        commit, path, number = fixture["origin"].split(":")
+        if here.completed("cat-file", "-e", f"{commit}:{path}").returncode != 0:
+            print(f"skip the copy of {fixture['origin']} is not compared: commit {commit} is not in this history (for example a public snapshot)")
+            continue
+        past_line = here.run("cat-file", "blob", f"{commit}:{path}").decode("utf-8").split("\n")[int(number) - 1].removesuffix("\r")
+        ok = past_line == fixture["line"]
+        print(f"{'ok  ' if ok else 'FAIL'} the fixture is an exact copy of {fixture['origin']}")
+        failures += not ok
 
 for name, markdown, expected, *rest in SYNTHETIC:
     run = run_synthetic(markdown, *rest)

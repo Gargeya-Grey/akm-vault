@@ -29,6 +29,7 @@ CHECKS = [
     ("docs check test", PYTHON + ["tools/test_check_docs.py"]),
     ("git_child helper test", PYTHON + ["tools/test_git_child.py"]),
     ("public-snapshot tool test", PYTHON + ["tools/test_make_public_snapshot.py"]),
+    ("public-snapshot source test", PYTHON + ["tools/test_snapshot_source.py"]),
     ("no-network check", PYTHON + ["tools/check_no_network.py"]),
     ("no-network check test", PYTHON + ["tools/test_check_no_network.py"]),
     ("KeePassXC fetch tool test", POWERSHELL + ["tools/test_fetch_keepassxc.ps1"]),
@@ -49,16 +50,16 @@ tool = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = tool
 spec.loader.exec_module(tool)
 
-source = git_child.existing(TOOLS.parent)
-commit = source.run("rev-parse", "HEAD").decode("ascii").strip()
-tree = source.run("rev-parse", "HEAD^{tree}").decode("ascii").strip()
 failures = 0
-with tempfile.TemporaryDirectory(prefix="akm-snapshot-checks-") as folder:
+# The tool reads this repository from a copy of its Git data, as it does for a snapshot (class F).
+with tempfile.TemporaryDirectory(prefix="akm-snapshot-checks-") as folder, git_child.source_copy(TOOLS.parent) as source:
+    commit = source.run("rev-parse", "HEAD").decode("ascii").strip()
+    tree = source.run("rev-parse", "HEAD^{tree}").decode("ascii").strip()
     entries = tool.tracked(source, commit)
     tool.read_blobs(source, entries)
     out = Path(folder) / "snapshot"
     tool.export(source, commit, tree, entries, out, AUTHOR)
-    snapshot = git_child.existing(out)
+    snapshot = git_child.Repository(out / ".git", out, isolated=True)
     count = snapshot.run("rev-list", "--all", "--count").decode().strip()
     print(f"{'ok  ' if count == '1' else 'FAIL'} the snapshot of {commit[:12]} has one commit and no history")
     failures += count != "1"

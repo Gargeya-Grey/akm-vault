@@ -3,6 +3,11 @@
 Usage: python tools/check_docs.py              (the working tree)
        python tools/check_docs.py --rev <rev>  (a commit, for example to show a past mistake)
 
+Git (class F): in the working tree the check lists the tracked files with `git ls-files`, a read of
+this checkout's index through git_child.existing. With --rev it reads the commit from
+git_child.source_copy, a copy of the Git data in a temporary folder, so Git never reads objects of the
+real repository, and a commit whose objects are missing fails plainly instead of being fetched.
+
 A name in backticks that looks like a Rust test (snake_case with at least three underscores, for
 example `a_read_creates_no_folder_and_no_file`) must exist as a test in the tracked Rust sources:
 a `fn <name>` that carries a `#[test]` or `#[<runtime>::test]` attribute. A name that is only a
@@ -88,7 +93,10 @@ PROOFS = {
         ("desktop/src/components/KeyDetail.timer.test.tsx",), BUILD, "verify", ("npm test",),
         title="the countdown text is the only timer, and it resets on each reveal",
     ),
-    "public-snapshot-scan": Proof(("tools/test_make_public_snapshot.py",), BUILD, "verify", ("tools/test_make_public_snapshot.py",)),
+    "public-snapshot-scan": Proof(
+        ("tools/test_make_public_snapshot.py", "tools/test_snapshot_source.py"), BUILD, "verify",
+        ("tools/test_make_public_snapshot.py", "tools/test_snapshot_source.py"),
+    ),
     "third-party-notices-check": Proof(
         ("tools/test_third_party_notices.py", "tools/generate_third_party_notices.py"), BUILD, "verify",
         ("tools/generate_third_party_notices.py --check", "tools/test_third_party_notices.py"),
@@ -102,24 +110,30 @@ PROOFS = {
 }
 
 
-_repository = []
-
-
-def git(*args):
-    """A read of the repository at the current folder, with no inherited GIT_ variable (class F)."""
-    if not _repository:
-        _repository.append(git_child.existing(Path.cwd()))
-    return _repository[0].run(*args).decode("utf-8")
-
-
-def source(rev):
-    """(tracked names, read, exists). In the working tree a tracked file must also be on disk."""
+def source(rev, copy=None):
+    """(tracked names, read, exists). In the working tree a tracked file must also be on disk. A commit
+    is read from `copy`, a git_child.source_copy, with one cat-file for all of its blobs."""
     if rev is None:
-        names = git("ls-files").splitlines()
+        listing = git_child.existing(Path.cwd()).run("ls-files", "-z").decode("utf-8")
+        names = [name for name in listing.split("\0") if name]
         return names, lambda path: Path(path).read_text(encoding="utf-8", errors="replace"), lambda path: Path(path).is_file()
-    names = git("ls-tree", "-r", "--name-only", rev).splitlines()
-    tracked = set(names)
-    return names, lambda path: git("show", f"{rev}:{path}"), lambda path: path in tracked
+    blobs = {}
+    for record in (r for r in copy.run("ls-tree", "-r", "-z", "--full-tree", rev).split(b"\0") if r):
+        meta, path = record.split(b"\t", 1)
+        mode, kind, oid = meta.decode("ascii").split()
+        if kind == "blob":
+            blobs[path.decode("utf-8")] = oid
+    output = copy.run("cat-file", "--batch", input="".join(f"{oid}\n" for oid in blobs.values()).encode("ascii"))
+    texts, position = {}, 0
+    for path, oid in blobs.items():
+        end = output.index(b"\n", position)
+        header = output[position:end].decode("ascii").split()
+        if len(header) != 3:
+            raise git_child.GitError(f"the object of {path} at {rev} is missing; nothing is fetched")
+        size = int(header[2])
+        texts[path] = output[end + 1:end + 1 + size].decode("utf-8", errors="replace")
+        position = end + 1 + size + 1
+    return list(texts), texts.__getitem__, texts.__contains__
 
 
 def lines_of(text):
@@ -408,8 +422,8 @@ def claim_problems(text, tests, names, read, exists):
     return found, len(rows)
 
 
-def problems(rev):
-    names, read, exists = source(rev)
+def problems(rev, copy=None):
+    names, read, exists = source(rev, copy)
     functions = set()
     tests = set()
     custom = harness_free_tests(names, read)
@@ -445,7 +459,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--rev")
     rev = parser.parse_args().rev
-    found, rows = problems(rev)
+    try:
+        if rev is None:
+            found, rows = problems(None)
+        else:
+            with git_child.source_copy(Path.cwd()) as copy:
+                found, rows = problems(rev, copy)
+    except git_child.GitError as error:
+        print(f"RESULT: FAIL ({error})")
+        return 1
     for line in found:
         print(line)
     print(f"RESULT: {'FAIL' if found else 'PASS'} ({len(found)} problems at {rev or 'the working tree'}; {rows} claims checked)")
