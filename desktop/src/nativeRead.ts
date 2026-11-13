@@ -2,7 +2,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import type { DependencyList } from "react";
 import { errorText } from "./errors";
 import { reads } from "./native";
-import { sessionGeneration } from "./sessionBoundary";
+import { IMPORT_APPLIED_EVENT, sessionGeneration } from "./sessionBoundary";
 
 /**
  * Every read of native state that a view shows goes through `useNativeRead` (fault classes K and
@@ -114,6 +114,11 @@ export function useNativeRead<T>(read: ReadSource<T>, deps: DependencyList = [])
   const reload = useCallback(() => {
     if (live.current) start(model.current.state);
   }, [start]);
+
+  useEffect(() => {
+    window.addEventListener(IMPORT_APPLIED_EVENT, reload);
+    return () => window.removeEventListener(IMPORT_APPLIED_EVENT, reload);
+  }, [reload]);
 
   const apply = useCallback((change: (data: T) => T) => {
     if (!live.current) return;

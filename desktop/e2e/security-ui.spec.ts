@@ -3,7 +3,7 @@ import { installNativeBoundaryMock } from "./native-boundary";
 
 declare global {
   interface Window {
-    __akmTest: { calls: { command: string; args: Record<string, unknown> }[]; emitLock: () => void; emitNotice: (sessionId: string) => void; expireView: (sessionId?: string | null, hideId?: string) => string; owner: () => string | null };
+    __akmTest: { calls: { command: string; args: Record<string, unknown> }[]; emitLock: () => void; emitNotice: (sessionId: string) => void; expireView: (sessionId?: string | null, hideId?: string) => string; applyImport: (reply: boolean) => void; owner: () => string | null };
   }
 }
 

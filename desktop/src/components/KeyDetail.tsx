@@ -181,6 +181,7 @@ export function KeyDetail({ item, current, onClose, onEdit, onDelete, onRotate, 
   const details = keyDetails(item);
   const facts: { key: string; value: React.ReactNode; below?: React.ReactNode }[] = [];
 
+  if (details.username) facts.push({ key: "Username", value: details.username });
   if (details.scopes.length > 0) {
     facts.push({
       key: "Scope names",

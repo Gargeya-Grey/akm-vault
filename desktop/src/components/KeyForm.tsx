@@ -45,6 +45,7 @@ const MAX_ROTATION_DAYS = 36500;
 function shownText(item?: KeyView) {
   return {
     title: item?.title ?? "",
+    username: item?.username ?? "",
     issuer: item?.issuer ?? "",
     project: item?.project ?? "",
     environment: item?.environment ?? "",
@@ -68,6 +69,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
   const [shown] = useState(() => shownText(item));
   const [title, setTitle] = useState(shown.title);
   const [secret, setSecret] = useState("");
+  const [username, setUsername] = useState(shown.username);
   const [issuer, setIssuer] = useState(shown.issuer);
   const [project, setProject] = useState(shown.project);
   const [environment, setEnvironment] = useState(shown.environment);
@@ -124,7 +126,8 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
     const draft: KeyDraft = {
       title: field(title, shown.title, item?.title, (now) => now.trim()),
       secret: secret ? secret : null,
-      username: item?.username ?? null,
+      // An empty text clears a stored username: native code keeps the stored one when it gets none.
+      username: field(username, shown.username, item?.username, (now) => now.trim()),
       issuer: field(issuer, shown.issuer, item?.issuer, text),
       project: field(project, shown.project, item?.project, text),
       environment: field(environment, shown.environment, item?.environment, text),
@@ -210,6 +213,19 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
                     onChange={(event) => setIssuer(event.target.value)}
                     placeholder="OpenAI"
                     autoComplete="off"
+                  />
+                </div>
+
+                <div className="field full">
+                  <label htmlFor="key-username">Username</label>
+                  <input
+                    id="key-username"
+                    className="mono"
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
+                    placeholder="Optional, for example an access key ID"
+                    autoComplete="off"
+                    spellCheck={false}
                   />
                 </div>
 

@@ -301,5 +301,24 @@ with tempfile.TemporaryDirectory(prefix="akm-notices-test-") as folder:
     run = check(stale)
     case("--check fails when the plugin-dialog copyright line is removed", run.returncode == 1 and "out of date" in run.stdout, run.stdout + run.stderr)
 
+# Finding FV-20: the setup program and the installed app carry the licence and the notices. The bundle
+# settings name each file as a Tauri resource with its installed name at the top of the install folder.
+CONF = Path("desktop/src-tauri/tauri.conf.json")
+SHIPPED = {"LICENSE": Path("LICENSE"), "THIRD_PARTY_NOTICES.md": NOTICES}
+
+
+def missing_from_bundle(conf):
+    """The files of SHIPPED that the bundle settings do not carry under their own name, or that do not exist."""
+    resources = conf.get("bundle", {}).get("resources", {})
+    carried_files = {target: (CONF.parent / source).resolve() for source, target in resources.items()} if isinstance(resources, dict) else {}
+    return [name for name, path in SHIPPED.items() if carried_files.get(name) != path.resolve() or not path.is_file()]
+
+
+bundle_settings = json.loads(CONF.read_text(encoding="utf-8"))
+case("the bundle settings carry LICENSE and THIRD_PARTY_NOTICES.md, and both files exist", not missing_from_bundle(bundle_settings), str(missing_from_bundle(bundle_settings)))
+lost = json.loads(CONF.read_text(encoding="utf-8"))
+lost.get("bundle", {}).get("resources", {}).pop("../../LICENSE", None)
+case("the packaging check fails when the bundle settings lose the licence", missing_from_bundle(lost) == ["LICENSE"], str(missing_from_bundle(lost)))
+
 print("all cases passed" if not failures else f"{failures} case(s) failed")
 sys.exit(1 if failures else 0)

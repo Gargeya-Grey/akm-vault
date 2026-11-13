@@ -191,6 +191,7 @@ export function keyFactList(facts: KeyRowFacts): DrawnFact[] {
 /** The values of a key that only its drawer shows, drawn. Notes keep their lines. */
 export function keyDetails(key: KeyView) {
   return {
+    username: key.username === null ? null : drawnText(key.username),
     scopes: key.scopes.map(drawnText),
     tags: key.tags.map(drawnText),
     url: key.url === null ? null : drawnText(key.url),

@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex, PoisonError},
 };
 
-use crate::error::CommandError;
+use crate::{error::CommandError, review_window::review_path};
 
 fn invalid(message: &str) -> CommandError {
     CommandError::new("invalidPath", message)
@@ -174,31 +174,57 @@ fn is_reparse(metadata: &fs::Metadata) -> bool {
 /// hold the plaintext keys. The caller of `prepare_private` owns the log and reads it after the
 /// export ended: a drop cannot return an error, so the log is how a failed cleanup is reported.
 #[derive(Clone, Default)]
-pub struct Remnants(Arc<Mutex<Vec<PathBuf>>>);
+pub struct Remnants(Arc<Mutex<Vec<Remnant>>>);
+
+/// The name that AKM wrote, and the name that the owned handle had when the delete failed.
+/// Another process can rename the file and put another file at the written name (FV-07).
+struct Remnant {
+    written: PathBuf,
+    now: Option<PathBuf>,
+}
+
+impl Remnant {
+    fn warning(&self) -> String {
+        match &self.now {
+            Some(now) if *now == self.written => format!(
+                "AKM could not confirm that it deleted the temporary export file \"{}\". It may still hold the plaintext keys. Delete it yourself.",
+                review_path(now)
+            ),
+            Some(now) => format!(
+                "AKM could not confirm that it deleted its temporary export file \"{}\". AKM wrote the file under another name, and the file has this name now. It may still hold the plaintext keys. Delete it yourself.",
+                review_path(now)
+            ),
+            None => format!(
+                "AKM could not confirm that it deleted its temporary export file, and it could not read the name of the file now. AKM wrote the file as \"{}\". The file may have another name now, and a file at that name may be another file. The export file may still hold the plaintext keys.",
+                review_path(&self.written)
+            ),
+        }
+    }
+}
 
 impl Remnants {
-    pub(crate) fn record(&self, path: PathBuf) {
+    pub(crate) fn record(&self, written: PathBuf, now: Option<PathBuf>) {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(path);
+            .push(Remnant { written, now });
     }
 
     /// The text that names each possible remnant, or `None` when every cleanup was confirmed.
-    /// It holds a path and no value.
+    /// It holds a path and no value. It tells the user to delete only a file that the owned
+    /// handle showed under that name.
     pub fn warning(&self) -> Option<String> {
-        let paths = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        if paths.is_empty() {
+        let remnants = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if remnants.is_empty() {
             return None;
         }
-        let list = paths
-            .iter()
-            .map(|path| format!("\"{}\"", path.display()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        Some(format!(
-            "AKM could not confirm that it deleted the temporary export file {list}. It may still hold the plaintext keys. Delete it yourself."
-        ))
+        Some(
+            remnants
+                .iter()
+                .map(Remnant::warning)
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
     }
 }
 
@@ -216,6 +242,16 @@ fn system_discard(_: &File) -> bool {
     false
 }
 
+#[cfg(windows)]
+fn current_path(file: &File) -> Option<PathBuf> {
+    windows::current_path(file)
+}
+
+#[cfg(not(windows))]
+fn current_path(_: &File) -> Option<PathBuf> {
+    None
+}
+
 struct TempFile {
     file: File,
     path: PathBuf,
@@ -227,7 +263,8 @@ struct TempFile {
 impl Drop for TempFile {
     fn drop(&mut self) {
         if !self.published && !(self.discard)(&self.file) {
-            self.remnants.record(self.path.clone());
+            self.remnants
+                .record(self.path.clone(), current_path(&self.file));
         }
     }
 }
@@ -373,7 +410,7 @@ mod windows {
         ffi::c_void,
         mem::{offset_of, size_of},
         os::windows::{
-            ffi::OsStrExt,
+            ffi::{OsStrExt, OsStringExt},
             io::{AsRawHandle, FromRawHandle},
         },
         ptr::{null, null_mut},
@@ -391,11 +428,12 @@ mod windows {
         },
         Storage::FileSystem::{
             CreateFileW, FileDispositionInfo, FileRenameInfo, GetDriveTypeW,
-            GetFileInformationByHandle, GetVolumeInformationW, SetFileInformationByHandle,
-            BY_HANDLE_FILE_INFORMATION, CREATE_NEW, DELETE, FILE_ATTRIBUTE_NORMAL,
-            FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-            FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO,
-            FILE_SHARE_DELETE, FILE_SHARE_READ, OPEN_EXISTING, READ_CONTROL,
+            GetFileInformationByHandle, GetFinalPathNameByHandleW, GetVolumeInformationW,
+            SetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, DELETE,
+            FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO,
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_NAME_NORMALIZED,
+            FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
+            OPEN_EXISTING, READ_CONTROL,
         },
         System::Threading::{GetCurrentProcess, OpenProcessToken},
     };
@@ -557,6 +595,34 @@ mod windows {
                 size_of::<FILE_DISPOSITION_INFO>() as u32,
             ) != 0
         }
+    }
+
+    /// The name of the file behind the handle now, or `None` when Windows does not give it.
+    pub(super) fn current_path(file: &File) -> Option<PathBuf> {
+        let mut buffer = vec![0u16; 512];
+        for _ in 0..2 {
+            let length = unsafe {
+                GetFinalPathNameByHandleW(
+                    file.as_raw_handle(),
+                    buffer.as_mut_ptr(),
+                    buffer.len().try_into().ok()?,
+                    FILE_NAME_NORMALIZED,
+                )
+            } as usize;
+            if length == 0 {
+                return None;
+            }
+            if length < buffer.len() {
+                let name = &buffer[..length];
+                let dos = name.len() > 6
+                    && name[..4] == [b'\\', b'\\', b'?', b'\\'].map(u16::from)
+                    && name[5] == u16::from(b':');
+                let name = if dos { &name[4..] } else { name };
+                return Some(PathBuf::from(std::ffi::OsString::from_wide(name)));
+            }
+            buffer.resize(length, 0);
+        }
+        None
     }
 
     pub(super) fn replace(file: &File, target: &Path) -> Result<(), CommandError> {
@@ -901,6 +967,11 @@ mod tests {
             warning.contains(&left[0].display().to_string()),
             "the warning names the remnant: {warning}"
         );
+        assert!(
+            warning.ends_with("It may still hold the plaintext keys. Delete it yourself.")
+                && !warning.contains("another name"),
+            "the handle shows the name that AKM wrote: {warning}"
+        );
         assert!(!warning.contains("fake-owned"), "{warning}");
     }
 
@@ -980,6 +1051,99 @@ mod tests {
         drop(prepared);
 
         assert_remnant_is_named(directory.path(), &remnants);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fv07_a_refused_delete_after_a_rename_names_the_renamed_file_and_not_the_file_at_the_old_name(
+    ) {
+        let directory = temporary_directory();
+        let target = directory.path().join("out.env");
+        let remnants = Remnants::default();
+        let prepared = prepare_private_with(
+            &target,
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &remnants,
+            &mut DeleteRefused::default(),
+        )
+        .unwrap();
+        let (sentinel, renamed) = displace_temp(directory.path());
+
+        drop(prepared);
+
+        assert_eq!(
+            fs::read(&sentinel).unwrap(),
+            b"unrelated replacement file\n",
+            "the file at the old name is untouched"
+        );
+        assert_eq!(
+            fs::read(&renamed).unwrap(),
+            b"TOKEN=fake-owned\n",
+            "the refused delete leaves the renamed plaintext"
+        );
+        let warning = remnants
+            .warning()
+            .expect("an unconfirmed delete is reported");
+        assert!(
+            warning.contains(&format!("\"{}\"", renamed.display())),
+            "the warning names the renamed file: {warning}"
+        );
+        assert!(
+            !warning.contains(&sentinel.display().to_string()),
+            "the warning does not name the file at the old name: {warning}"
+        );
+        assert!(!warning.contains("fake-owned"), "{warning}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fv07_a_renamed_remnant_with_a_directional_mark_is_named_with_the_mark_made_visible() {
+        let directory = temporary_directory();
+        let target = directory.path().join("out.env");
+        let remnants = Remnants::default();
+        let prepared = prepare_private_with(
+            &target,
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &remnants,
+            &mut DeleteRefused::default(),
+        )
+        .unwrap();
+        let written = temporary_files(directory.path()).remove(0);
+        let renamed = directory.path().join("renamed\u{202e}vne.tmp");
+        fs::rename(&written, &renamed).unwrap();
+
+        drop(prepared);
+
+        let warning = remnants.warning().unwrap();
+        assert!(!warning.contains('\u{202e}'), "{warning}");
+        assert!(
+            warning.contains(&crate::review_window::review_path(&renamed)),
+            "{warning}"
+        );
+        assert!(warning.contains("renamed\\u{202e}vne.tmp"), "{warning}");
+    }
+
+    #[test]
+    fn fv07_a_remnant_whose_name_cannot_be_read_is_named_as_written_and_is_not_called_ours() {
+        let remnants = Remnants::default();
+        let written = PathBuf::from(r"C:\fake-folder\.akm-export-22222222.tmp");
+        remnants.record(written.clone(), None);
+
+        let warning = remnants.warning().unwrap();
+
+        assert!(
+            warning.contains(&format!("AKM wrote the file as \"{}\".", written.display())),
+            "{warning}"
+        );
+        assert!(warning.contains("may have another name now"), "{warning}");
+        assert!(
+            !warning.contains("Delete it yourself"),
+            "AKM cannot show that the file at that name is its own: {warning}"
+        );
     }
 
     #[cfg(windows)]

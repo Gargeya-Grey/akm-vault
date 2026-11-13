@@ -23,7 +23,7 @@ const ROOT = SRC.slice(0, SRC.lastIndexOf("/"));
 const under = (file: string) => `${SRC}/${file}`;
 
 const DRAWN = new Map<string, ReadonlySet<string>>([
-  ["KeyView", new Set(["title", "issuer", "project", "environment", "envVar", "resolvedEnvVar", "url", "notes", "scopes", "tags"])],
+  ["KeyView", new Set(["title", "username", "issuer", "project", "environment", "envVar", "resolvedEnvVar", "url", "notes", "scopes", "tags"])],
   ["AuditEntry", new Set(["keyTitle", "project", "environment"])],
 ]);
 const TITLES = new Map([["KeyRowFacts", "title"], ["BinRowFacts", "title"], ["JournalKeyFacts", "name"]]);
@@ -33,8 +33,8 @@ const DRAWS_ID = new Set(["namedKey", "keyFactList", "binFactList", "keyRowDescr
 const ALLOWED: { file: string; reads: Record<string, number>; why: string }[] = [
   {
     file: "components/KeyForm.tsx",
-    reads: { "KeyView.title": 2, "KeyView.issuer": 2, "KeyView.project": 2, "KeyView.environment": 2, "KeyView.envVar": 2, "KeyView.url": 2, "KeyView.scopes": 2, "KeyView.tags": 2, "KeyView.notes": 2 },
-    why: "the edit form starts from the stored values, and sends an untouched field back as it was stored; its fields draw nothing else",
+    reads: { "KeyView.title": 2, "KeyView.username": 2, "KeyView.issuer": 2, "KeyView.project": 2, "KeyView.environment": 2, "KeyView.envVar": 2, "KeyView.url": 2, "KeyView.scopes": 2, "KeyView.tags": 2, "KeyView.notes": 2 },
+    why: "the edit form starts from the stored values, and sends an untouched field back as it was stored; its fields draw nothing else. The username joined on 13 Nov (FV-12): the drawer draws it through keyDetails",
   },
   {
     file: "components/UseKeys.tsx",

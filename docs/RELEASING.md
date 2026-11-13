@@ -14,7 +14,7 @@ A release is:
 - a tag `vX.Y.Z` on a commit of `main` whose CI run is green;
 - the files of that CI run: the setup program, `akm.exe`, and `SHA256SUMS.txt`, and a signature of `SHA256SUMS.txt`;
 - release notes that name the commit, the CI run and the changes, and say that the setup program can download the WebView2 runtime from Microsoft while it installs (FINDINGS.md SEC-05; the no-network promise covers AKM when it runs, not the setup program);
-- `LICENSE`, `THIRD_PARTY_NOTICES.md` and the source offer for the MPL-2.0 crates (SEC-04), which is in `THIRD_PARTY_NOTICES.md`. The setup program and the app do not hold these files and do not show them, so the release must carry them as files beside the setup program. A person who gets only the setup program does not get the notices.
+- `LICENSE`, `THIRD_PARTY_NOTICES.md` and the source offer for the MPL-2.0 crates (SEC-04), which is in `THIRD_PARTY_NOTICES.md`. The setup program holds both files, as resources of the bundle (`bundle.resources` in `desktop/src-tauri/tauri.conf.json`), and installs them beside `akm-desktop.exe`. `python tools/test_third_party_notices.py` fails when the bundle settings lose one of them. The app does not show them. `akm.exe` is a file of its own, so the release also carries both files beside it.
 
 A release workflow does not exist yet. It would build from the tag exactly as `build.yml` does and upload the files to a draft release. Writing it is a later step; publishing the draft stays an owner gate.
 
@@ -55,7 +55,7 @@ None yet. Step 1 adds it here.
 
 Read from the NSIS template of tauri-bundler 2.10.4 and from `desktop/src-tauri/tauri.conf.json` (`installMode` `currentUser`). The `install-upgrade-uninstall` job of `.github/workflows/native-proof.yml` checks them, and it has never run.
 
-- The setup program installs `akm-desktop.exe` and `uninstall.exe` in `%LOCALAPPDATA%\AKM`, an uninstall entry under `HKCU`, and a Start menu entry. The installed `akm-desktop.exe` is the build with one change by the bundler: its bundle-type mark. The install job checks that the installed program is the hashed build with only that change (`tools/InstallBinding.psm1`).
+- The setup program installs `akm-desktop.exe`, `LICENSE`, `THIRD_PARTY_NOTICES.md` and `uninstall.exe` in `%LOCALAPPDATA%\AKM`, an uninstall entry under `HKCU`, and a Start menu entry. The uninstaller deletes the two text files with the program. The installed `akm-desktop.exe` is the build with one change by the bundler: its bundle-type mark. The install job checks that the installed program is the hashed build with only that change (`tools/InstallBinding.psm1`).
 - The journal is in `%LOCALAPPDATA%\akm\journal`, inside the install folder `%LOCALAPPDATA%\AKM` (the same folder, because Windows ignores case). The uninstaller deletes the program files and the shortcuts, then removes the install folder only when it is empty, so the journal and its folder stay. Only the "Delete app data" box of an interactive uninstall removes more: `%APPDATA%\com.akm.desktop` (the settings) and `%LOCALAPPDATA%\com.akm.desktop` (the WebView2 data), with everything in them. The vault is wherever the user put it; a vault inside one of those two folders goes with them.
 - No earlier release exists, so no upgrade from an older version has been tested. The install job installs one version a second time over an install with user data.
 
