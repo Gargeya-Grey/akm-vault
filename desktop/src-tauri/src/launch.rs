@@ -1792,7 +1792,9 @@ mod tests {
 
     /// A real child process, suspended and then resumed, with no window. It is made by the
     /// function that makes a terminal, with the arguments of a terminal plus the ones that make
-    /// it print what it received.
+    /// it print what it received. T-R1-03: a variable of the parent that AKM did not select,
+    /// here a fake secret, reaches the child, as the review tells the user. No `AKM_` variable
+    /// does.
     #[cfg(windows)]
     #[test]
     fn a_real_child_gets_the_folder_and_the_selected_variables_and_no_akm_variable() {
@@ -1800,6 +1802,8 @@ mod tests {
             std::env::var_os("AKM_JOURNAL_ROOT").is_some(),
             "the test needs one real AKM_ variable to inherit (.cargo/config.toml)"
         );
+        // The name is used by this test only, so no other test reads it.
+        std::env::set_var("FAKE_UNRELATED_PARENT_SECRET", "fake-parent-secret-value");
         let folder = tempfile::tempdir().unwrap();
         let output = tempfile::tempdir().unwrap();
         let printed = output.path().join("child.txt");
@@ -1831,6 +1835,10 @@ mod tests {
         );
         let variables: Vec<&str> = lines.collect();
         assert!(variables.contains(&"OPENAI_API_KEY=fake-openai-value"));
+        assert!(
+            variables.contains(&"FAKE_UNRELATED_PARENT_SECRET=fake-parent-secret-value"),
+            "T-R1-03: the child inherits a parent variable that AKM did not select"
+        );
         assert!(
             variables
                 .iter()
