@@ -312,9 +312,11 @@ fn a_foreign_file_with_a_true_hash_in_an_akm_name_survives_repeated_pruning() {
     let _ = fs::remove_dir(&junction);
 }
 
-/// Core review 1, finding 1: the ledger is in the vault file, so a new session prunes the same
-/// backups and still keeps five. A backup that another writer replaced with other bytes is no
-/// longer AKM's: it leaves the ledger and is never deleted.
+/// Core review 1, finding 1, and the promise of CORE-R2-01: AKM keeps the five newest backups
+/// that the vault's list names beside the vault, and deletes older listed ones. The list is in
+/// the vault file, so a new session prunes the same backups and still keeps five. A file that
+/// the list does not name survives, also with AKM's name format and a true hash. A listed
+/// backup that another writer replaced with other bytes leaves the list and survives.
 #[test]
 fn a_new_session_prunes_by_the_ledger_in_the_file_and_a_replaced_backup_is_kept() {
     let dir = tempfile::tempdir().unwrap();
@@ -331,6 +333,13 @@ fn a_new_session_prunes_by_the_ledger_in_the_file_and_a_replaced_backup_is_kept(
     assert_eq!(first.len(), 2);
     let replaced = first[0].clone();
     fs::write(&replaced, b"another writer replaced this backup").unwrap();
+    let unlisted_bytes = b"a file that the list does not name".to_vec();
+    let unlisted = dir.path().join(format!(
+        "vault.kdbx.bak.20200101T000000000000000Z_{}_{}.kdbx",
+        uuid::Uuid::new_v4(),
+        sha256_hex(&unlisted_bytes)
+    ));
+    fs::write(&unlisted, &unlisted_bytes).unwrap();
     drop(vault);
 
     for session in 0..4 {
@@ -345,12 +354,17 @@ fn a_new_session_prunes_by_the_ledger_in_the_file_and_a_replaced_backup_is_kept(
         }
     }
     assert_eq!(
+        fs::read(&unlisted).ok(),
+        Some(unlisted_bytes),
+        "a file that the list does not name survives"
+    );
+    assert_eq!(
         fs::read(&replaced).unwrap(),
         b"another writer replaced this backup"
     );
     let own: Vec<PathBuf> = dated_files(dir.path())
         .into_iter()
-        .filter(|p| *p != replaced)
+        .filter(|p| *p != replaced && *p != unlisted)
         .collect();
     assert_eq!(own.len(), 5, "{own:?}");
 }
