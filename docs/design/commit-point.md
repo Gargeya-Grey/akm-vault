@@ -140,7 +140,7 @@ Gone with this unit: the copies in `std::process::Command` (its environment map 
 | Decision 3, the take-back of a refused copy | `u1_r1_02_a_copy_refused_after_its_publication_is_taken_back_row_by_row` |
 | 1, the structural guard | `every_session_scoped_act_goes_through_the_commit_point` |
 
-The structural guard reads every file in `desktop/src-tauri/src` and the save path of the core. It fails when:
+The structural guard reads every file in `desktop/src-tauri/src` and the save path of the core. It is a tripwire for the usual spelling, not a proof: it matches source text, so a renamed import (`use std::process::Command as Child`), a re-export or a macro passes it (U1-R1-06). The compiler enforces only the `Held` witness. The guard fails when:
 
 - a second place makes a `Held`, or the one place is not `commit_point`;
 - a function that is not an act (`act`, `resume`, `show`) takes a `Held`;

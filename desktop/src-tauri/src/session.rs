@@ -5467,9 +5467,12 @@ mod tests {
             found
         }
 
-        /// The structural guard: a session-scoped act has one way in. A new caller that checks
-        /// and then acts outside `Session::commit`, a second maker of the witness, or a second
-        /// way to replace the vault file fails this test.
+        /// The structural guard: a tripwire for the usual spelling, not a proof. It reads the
+        /// source text, so a new caller that checks and then acts outside `Session::commit`, a
+        /// second maker of the witness, or a second way to replace the vault file fails it only
+        /// when the code uses the names below. A renamed import (`use std::process::Command as
+        /// Child`), a re-export or a macro passes it (U1-R1-06). The type `Held` is the part that
+        /// the compiler enforces.
         #[test]
         fn every_session_scoped_act_goes_through_the_commit_point() {
             let sources = sources();
