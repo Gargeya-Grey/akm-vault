@@ -81,6 +81,9 @@ pub(crate) enum OpenMode {
     CreateNew,
 }
 
+/// The volume flag that says the file system keeps Windows permissions.
+const FILE_PERSISTENT_ACLS: u32 = 0x0000_0008;
+
 /// The pure part of the storage rule: a local disk that keeps Windows permissions.
 pub(crate) fn storage_allows(
     drive_type: u32,
@@ -89,7 +92,6 @@ pub(crate) fn storage_allows(
     const DRIVE_REMOVABLE: u32 = 2;
     const DRIVE_FIXED: u32 = 3;
     const DRIVE_RAMDISK: u32 = 6;
-    const FILE_PERSISTENT_ACLS: u32 = 0x0000_0008;
     if !matches!(drive_type, DRIVE_REMOVABLE | DRIVE_FIXED | DRIVE_RAMDISK) {
         return Err("the folder is not on a local disk");
     }
@@ -107,8 +109,11 @@ pub(crate) mod testing {
     #[derive(Clone, Copy, PartialEq, Eq)]
     pub(crate) enum Mode {
         Normal,
-        /// The call that creates the file with the descriptor fails.
+        /// The call that creates the file with the descriptor fails, on a volume that keeps
+        /// Windows permissions.
         CreateFails,
+        /// The call fails, and the volume reports that it cannot keep Windows permissions.
+        CreateFailsOnVolumeWithoutPermissions,
         /// The file is created, but the file system ignores the descriptor (FAT, exFAT).
         DescriptorIgnored,
     }
@@ -129,21 +134,29 @@ pub(crate) mod testing {
 /// Creates a new file beside a vault (a temporary vault, a backup) that only the current
 /// user can use: the same protected descriptor as the journal files (FR-05, design D4).
 ///
-/// The save must not fail because a file system cannot keep permissions (exFAT, a network
-/// share). In that case the file is created the plain way and the second value says why it
-/// is not private, so the caller can warn. A file that already exists is always an error.
+/// The save must not fail because a file system cannot keep permissions (FAT, exFAT). There
+/// the file is created the plain way and the second value says why it is not private, so the
+/// caller can warn. A failed private creation on a volume that keeps permissions, or on one
+/// that AKM cannot read, fails: a plain file there would take the folder's permissions
+/// (FV-21). A file that already exists is always an error.
 pub(crate) fn create_new_private(path: &Path) -> std::io::Result<(File, Option<String>)> {
     use std::fs::OpenOptions;
     let plain = || OpenOptions::new().write(true).create_new(true).open(path);
     #[cfg(windows)]
     {
+        #[cfg(test)]
+        use testing::Mode;
         let created = match () {
             #[cfg(test)]
-            () if testing::mode() == testing::Mode::CreateFails => {
+            () if matches!(
+                testing::mode(),
+                Mode::CreateFails | Mode::CreateFailsOnVolumeWithoutPermissions
+            ) =>
+            {
                 Err(std::io::Error::other("test: the call failed"))
             }
             #[cfg(test)]
-            () if testing::mode() == testing::Mode::DescriptorIgnored => plain(),
+            () if testing::mode() == Mode::DescriptorIgnored => plain(),
             () => imp::create_private(path),
         };
         match created {
@@ -152,12 +165,30 @@ pub(crate) fn create_new_private(path: &Path) -> std::io::Result<(File, Option<S
                 Ok((file, note))
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(error),
-            Err(error) => Ok((
-                plain()?,
-                Some(format!(
-                    "the file system refused private permissions ({error})"
-                )),
-            )),
+            Err(error) => {
+                let keeps = match () {
+                    #[cfg(test)]
+                    () if testing::mode() == Mode::CreateFailsOnVolumeWithoutPermissions => {
+                        Some(false)
+                    }
+                    () => imp::volume_keeps_permissions(path),
+                };
+                if keeps != Some(false) {
+                    return Err(std::io::Error::new(
+                        error.kind(),
+                        format!(
+                            "{} could not be created private to your account: {error}",
+                            path.display()
+                        ),
+                    ));
+                }
+                Ok((
+                    plain()?,
+                    Some(format!(
+                        "the file system cannot keep Windows permissions ({error})"
+                    )),
+                ))
+            }
         }
     }
     #[cfg(not(windows))]
@@ -392,12 +423,51 @@ mod imp {
         Ok(true)
     }
 
-    fn wide(path: &Path) -> Result<Vec<u16>> {
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        if wide[..wide.len() - 1].contains(&0) {
+    /// The path for a Win32 call, NUL-terminated. A path of 248 units or more gets the
+    /// verbatim form (`\\?\C:\…`, `\\?\UNC\server\…`), which has no `MAX_PATH` limit, as the
+    /// standard library does for its own calls (FV-21). A shorter path stays as written.
+    pub(super) fn wide(path: &Path) -> Result<Vec<u16>> {
+        const LEGACY_MAX_PATH: usize = 248;
+        let units = |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().collect() };
+        let mut wide = units(path);
+        if wide.contains(&0) {
             return Err(refuse("the path contains a NUL character"));
         }
+        if wide.len() >= LEGACY_MAX_PATH {
+            let absolute = std::path::absolute(path)
+                .map_err(|error| refuse(format!("{}: {error}", path.display())))?;
+            wide = verbatim(units(&absolute));
+        }
+        wide.push(0);
         Ok(wide)
+    }
+
+    /// The verbatim form of an absolute path (`std::path::absolute` has made its separators
+    /// `\` and resolved `.` and `..`, which a verbatim path does not do).
+    fn verbatim(absolute: Vec<u16>) -> Vec<u16> {
+        let starts = |prefix: &str| {
+            absolute
+                .iter()
+                .copied()
+                .take(prefix.len())
+                .eq(prefix.encode_utf16())
+        };
+        let drive = absolute.get(1..3) == Some(&[u16::from(b':'), u16::from(b'\\')][..]);
+        let (prefix, skip) = if starts(r"\\?\") || starts(r"\??\") {
+            ("", 0)
+        } else if starts(r"\\.\") {
+            (r"\\?\", 4)
+        } else if starts(r"\\") {
+            (r"\\?\UNC\", 2)
+        } else if drive {
+            (r"\\?\", 0)
+        } else {
+            ("", 0)
+        };
+        prefix
+            .encode_utf16()
+            .chain(absolute[skip..].iter().copied())
+            .collect()
     }
 
     fn sid_text(sid: *mut c_void) -> Result<String> {
@@ -571,9 +641,10 @@ mod imp {
         Ok(())
     }
 
-    fn check_storage(file: &File, path: &Path) -> Result<()> {
+    fn volume_flags(file: &File) -> Option<u32> {
         let mut flags = 0;
-        if unsafe {
+        // SAFETY: the handle is open, and `flags` lives across the call.
+        let read = unsafe {
             GetVolumeInformationByHandleW(
                 file.as_raw_handle(),
                 null_mut(),
@@ -584,10 +655,28 @@ mod imp {
                 null_mut(),
                 0,
             )
-        } == 0
-        {
-            return Err(os_error("cannot read the volume"));
-        }
+        };
+        (read != 0).then_some(flags)
+    }
+
+    /// Whether the volume of the folder of `path` keeps Windows permissions. `None` when AKM
+    /// cannot tell.
+    pub(crate) fn volume_keeps_permissions(path: &Path) -> Option<bool> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let folder = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let folder = fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(folder)
+            .ok()?;
+        volume_flags(&folder).map(|flags| flags & FILE_PERSISTENT_ACLS != 0)
+    }
+
+    fn check_storage(file: &File, path: &Path) -> Result<()> {
+        let flags = volume_flags(file).ok_or_else(|| os_error("cannot read the volume"))?;
         let wide_path = wide(path)?;
         let mut root = vec![0u16; 32768];
         let drive_type = unsafe {
@@ -669,11 +758,44 @@ mod imp {
         }
     }
 
+    /// `verify`, and the access list is protected: it takes no entry from its folder.
     #[cfg(test)]
     pub(crate) fn check_private(path: &Path) -> Result<()> {
+        use windows_sys::Win32::Security::{GetSecurityDescriptorControl, SE_DACL_PROTECTED};
         let file = open_file(path, OpenMode::Read)?
             .ok_or_else(|| refuse(format!("{} does not exist", path.display())))?;
-        verify(&file, path)
+        verify(&file, path)?;
+        let mut descriptor = null_mut();
+        let status = unsafe {
+            GetSecurityInfo(
+                file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                &mut descriptor,
+            )
+        };
+        if status != 0 {
+            return Err(refuse(format!(
+                "cannot read the permissions of {}",
+                path.display()
+            )));
+        }
+        let descriptor = Local(descriptor);
+        let (mut control, mut revision) = (0u16, 0u32);
+        if unsafe { GetSecurityDescriptorControl(descriptor.0, &mut control, &mut revision) } == 0 {
+            return Err(os_error("cannot read a security descriptor"));
+        }
+        if control & SE_DACL_PROTECTED == 0 {
+            return Err(refuse(format!(
+                "{} takes permissions from its folder",
+                path.display()
+            )));
+        }
+        Ok(())
     }
 
     /// Opens an existing folder for use. `None` when it does not exist.
@@ -813,6 +935,59 @@ mod tests {
         assert!(storage_allows(3, 0)
             .unwrap_err()
             .contains("persistent ACLs"));
+    }
+
+    /// FV-21: a path of 248 units or more gets the verbatim form; a shorter one stays as
+    /// written.
+    #[cfg(windows)]
+    #[test]
+    fn a_long_path_gets_the_verbatim_form_for_win32() {
+        let text = |path: &str| {
+            let wide = super::imp::wide(std::path::Path::new(path)).unwrap();
+            String::from_utf16(&wide[..wide.len() - 1]).unwrap()
+        };
+        let long = "a".repeat(250);
+        assert_eq!(text(r"C:\short\vault.kdbx"), r"C:\short\vault.kdbx");
+        assert_eq!(text(&format!(r"C:\{long}")), format!(r"\\?\C:\{long}"));
+        assert_eq!(text(&format!("C:/{long}/b")), format!(r"\\?\C:\{long}\b"));
+        assert_eq!(text(&format!(r"C:\x\..\{long}")), format!(r"\\?\C:\{long}"));
+        assert_eq!(
+            text(&format!(r"\\server\share\{long}")),
+            format!(r"\\?\UNC\server\share\{long}")
+        );
+        assert_eq!(text(&format!(r"\\?\C:\{long}")), format!(r"\\?\C:\{long}"));
+        assert!(
+            text(&long).starts_with(r"\\?\"),
+            "a relative path is made absolute"
+        );
+        assert!(super::imp::wide(std::path::Path::new("a\0b")).is_err());
+    }
+
+    /// FV-21, the class: every Win32 call of this module that takes a path works past 260
+    /// characters. A private folder, its storage check, a private file, a move without
+    /// replacement and a file ID.
+    #[cfg(windows)]
+    #[test]
+    fn the_private_calls_take_paths_longer_than_260_characters() {
+        use super::{check_private, create_private_dir, file_id, move_new, open_dir, open_file};
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("p".repeat(120)).join("q".repeat(120));
+        std::fs::create_dir_all(&parent).unwrap();
+        let folder = parent.join("journal");
+        create_private_dir(&folder).unwrap();
+        assert!(open_dir(&folder).unwrap().is_some());
+        let first = folder.join("a".repeat(40));
+        assert!(first.as_os_str().len() > 260);
+        drop(
+            open_file(&first, super::OpenMode::CreateNew)
+                .unwrap()
+                .unwrap(),
+        );
+        check_private(&first).unwrap();
+        let second = folder.join("b".repeat(40));
+        move_new(&first, &second).unwrap();
+        assert!(!first.exists() && second.exists());
+        assert!(file_id(&second).is_some());
     }
 
     /// FR-01, core review 1, finding 1: the delete of a pruned backup. A file with the

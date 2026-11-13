@@ -2031,15 +2031,105 @@ mod tests {
         );
     }
 
+    /// FV-21: on a path longer than 260 characters every file of a save is private too. The
+    /// folder grants Everyone read access to what it holds, so a file that took the folder's
+    /// permissions would be readable by Everyone. A vault path of 130 characters gives dated
+    /// backups of 267 characters, as in the reviewer's run.
+    #[cfg(windows)]
+    #[test]
+    fn a_save_on_a_long_path_in_a_shared_folder_keeps_every_file_private() {
+        use std::os::windows::ffi::OsStrExt;
+        let units = |path: &Path| path.as_os_str().encode_wide().count();
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        let granted = std::process::Command::new("icacls")
+            .arg(&shared)
+            .args(["/grant", "*S-1-1-0:(OI)(CI)(R)"])
+            .output()
+            .unwrap();
+        assert!(granted.status.success(), "{granted:?}");
+        let stem = 130 - units(&shared) - 1 - ".kdbx".len();
+        let path = shared.join(format!("{}.kdbx", "v".repeat(stem)));
+        assert_eq!(units(&path), 130);
+        fs::write(&path, include_bytes!("../tests/fixtures/kdbx40.kdbx")).unwrap();
+        let mut vault = Vault::open(&path, PASSWORD).unwrap();
+        vault.upgrade().unwrap();
+        vault
+            .add(ApiKeyInput::new("Fake first", "fake-first-value"))
+            .unwrap();
+        vault
+            .add(ApiKeyInput::new("Fake second", "fake-second-value"))
+            .unwrap();
+        let warnings = vault.take_warning_records();
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| warning.kind != VaultWarningKind::FilePermissions),
+            "{warnings:?}"
+        );
+        let (mut checked, mut long) = (0, 0);
+        for entry in fs::read_dir(&shared).unwrap() {
+            let file = entry.unwrap().path();
+            let name = file.file_name().unwrap().to_string_lossy().into_owned();
+            if name.ends_with(".lock") {
+                continue;
+            }
+            crate::private_fs::check_private(&file)
+                .unwrap_or_else(|error| panic!("{name} is not private: {error}"));
+            checked += 1;
+            if units(&file) > 260 {
+                long += 1;
+            }
+        }
+        // The vault, the .bak copy and the dated backups of the three saves.
+        assert_eq!((checked, long), (5, 3));
+    }
+
+    /// FV-21: on a volume that keeps Windows permissions, a failed private creation fails the
+    /// save. A plain file there would take the folder's permissions. Nothing is written: the
+    /// vault keeps its bytes and the folder gets no new file.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_private_creation_on_a_volume_that_keeps_permissions_fails_the_save() {
+        use crate::private_fs::testing::{set, Mode};
+        let (dir, path, mut vault) = fixture_vault();
+        let names = |dir: &Path| {
+            let mut names: Vec<_> = fs::read_dir(dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            names.sort();
+            names
+        };
+        let (before, files) = (fs::read(&path).unwrap(), names(dir.path()));
+        set(Mode::CreateFails);
+        let refused = vault.add(ApiKeyInput::new("Fake refused", "fake-refused-value"));
+        set(Mode::Normal);
+        let error = refused.expect_err("the save is refused").to_string();
+        assert!(error.contains("private to your account"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(names(dir.path()), files);
+        let reopened = Vault::open(&path, PASSWORD).unwrap();
+        assert!(reopened
+            .list()
+            .iter()
+            .all(|key| key.title != "Fake refused"));
+    }
+
     /// FR-05: a file system that cannot keep private permissions does not stop the save.
     /// The save succeeds and a typed warning says why the files are not private. Both ways
-    /// to fail are covered: the create call fails, and the file system ignores the
-    /// descriptor (the warning then comes from the real permissions check).
+    /// to fail are covered: the create call fails on a volume that reports no persistent
+    /// permissions, and the file system ignores the descriptor (the warning then comes from
+    /// the real permissions check).
     #[cfg(windows)]
     #[test]
     fn a_save_on_a_file_system_without_private_files_succeeds_and_warns() {
         use crate::private_fs::testing::{set, Mode};
-        for mode in [Mode::CreateFails, Mode::DescriptorIgnored] {
+        for mode in [
+            Mode::CreateFailsOnVolumeWithoutPermissions,
+            Mode::DescriptorIgnored,
+        ] {
             let (dir, path, mut vault) = fixture_vault();
             vault.take_warning_records();
             set(mode);
