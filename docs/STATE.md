@@ -16,28 +16,84 @@ Updated 2026-11-13. Replace this file's sections when they change. History lives
 - **The latest measured score is 66.25/100** ([full rescore](reviews/2026-11-09-full-rescore.md), 2026-11-09, on `c0a7d3b`, by five independent GPT-6.1 Terra reviewers at max effort; one duplicate root cause was removed from a raw 64.25). The baseline was 40.5/100. The bar is above 90/100, so real secrets still wait. The new defects are the FR rows in [FINDINGS.md](FINDINGS.md). The scale may differ from the baseline's.
 - **New look on branch `ui/key-cabinet`** (owner, 2026-11-08). The owner gave the design of their product Odicto as the model, and rejected the large brass keys. Every screen now uses glass panels, sunken fields, one accent and the glowing stem. A key is a fine 28 px line drawing. The fonts are the same. The design is in [desktop/DESIGN.md](../desktop/DESIGN.md). New users have [GETTING_STARTED.md](GETTING_STARTED.md). The steps on that page come from the screens and the setup configuration: nobody has run the setup program on a clean computer yet. An open select is now AKM's own list; the real select stays as the field. [Look review 1](reviews/2026-11-08-look-review1.md) failed with 4 P2 and 4 P3 (LOOK-R1 rows); all eight are fixed with tests that failed first and caught mutants. [Look review 2](reviews/2026-11-09-look-review2.md) failed with 2 P2 and 2 P3 (LOOK-R2 rows), so patching stopped (see "Next action"). A screen reader or UI Automation gets the system's list, because those tools could not drive AKM's own list (owner's choice, 2026-11-08). The UI-R2 findings stay open, and the choice between options (a), (b) and (c) in "Next action" stays with the owner. Pull request #10 must take the new `styles.css` in a merge.
 
+## Destination, measures and path (2026-11-13)
+
+The owner said on 2026-11-13 that the score is not the only measure: first check that the score represents the quality and the completion of the project, then work back from the destination to a clear path.
+
+**Destination.** The owner keeps their own API keys in AKM every day, through the desktop app. Later, another person can get AKM and trust it.
+
+**What the score measures.** The planner sorted the 33.75 points that the [9 Nov rescore](reviews/2026-11-09-full-rescore.md) deducted by the kind of each deduction:
+
+| Kind of deduction | Points |
+|---|---:|
+| The code does a wrong or unsafe thing | 15.5 |
+| A design or threat-model choice | 5.5 |
+| A required workflow is missing in the desktop app | 3.0 |
+| Verification and process (tests, CI, reviews not accepted) | 3.0 |
+| The release package (signing, licence, install test, private paths) | 3.5 |
+| A document or screen says more than the code does | 1.75 |
+| A limit that the documents disclose | 1.5 |
+
+So the score is a good measure of one thing: defects that a skilled reader finds in the code and the documents. It is a weak measure of two others:
+
+- **Completion.** The rubric has no list of the required workflows. A missing workflow cost about 1 point, and a removed feature costs nothing.
+- **Behaviour on a real desktop.** No reviewer starts the app. All the tests that need the owner cost 1.25 points together on 9 Nov, whether they would pass or fail.
+
+The score also has an error that nobody measured: one reviewer for each area, and each review finds defects that the review before it did not find.
+
+**Three measures from now on.** None replaces another.
+
+1. Defects: the full review, read by its deductions and their kinds, not only by its total.
+2. Completion: the table below, one row for each required workflow of [PROJECT.md](PROJECT.md).
+3. Real-surface proof: the owner-present tests of [FIRST_USE.md](FIRST_USE.md), or the same tests on a disposable CI runner.
+
+**Completion on the builds of `d3b6fb1`.** "Proved" means that a run on the real build passed on 2026-11-13.
+
+| Required workflow | CLI | Desktop app |
+|---|---|---|
+| Create, unlock, search, inspect and manage keys | Proved | Unlock, the key list and Activity: proved on the real window. Add, edit, reveal and delete: tests with a mocked native side and native tests only |
+| Metadata is kept | Proved; KeePassXC and kdbxweb read the same data | As the row above |
+| Rotation and history | Proved | Never run on a real window |
+| Copy with clipboard privacy and cleanup | The CLI has no copy | Never run on the real clipboard |
+| Reviewed import; scoped export and injection | Export and `run`: proved. The CLI has no import | Save .env: proved on the real window. The import confirmation and Open terminal with keys: never run on a real window |
+| Encrypted backups and a private journal | Journal: proved. Backup rotation: automated tests | Activity: proved on the real window |
+| Sync folders: detect a conflict, refuse a stale write | Automated tests | Automated tests |
+| Lock on idle, on Windows lock and on suspend | Does not apply | Never run on a real Windows session |
+| Install, upgrade, uninstall | Does not apply | Never run |
+
+The CLI is complete and proved. The desktop app is the product that the owner will use, and most of its disclosure flows have never run on a real Windows session. No score can close that gap. The owner-present tests close it in about one hour, and they are now on the main path, not a late gate.
+
+**Path, worked back from the destination.**
+
+1. Done: one integrated tree with every check green (below).
+2. Running: the full review. Each reviewer also tags each deduction with its kind, and answers two questions with no points: would it keep its own keys in this build, and does its score say the same thing. A second reviewer reads the security areas (C and D), so the spread between two reviewers is measured once. The gate number uses the lower of the two security results; both are recorded.
+3. Needs the owner, about one hour, any time from now: the six owner-present tests on the builds below. The planner drives each step and the owner watches. Do this before the fix round, so that one round fixes what the review and the real desktop both show.
+4. One fix round, largest effect first, smallest fix. A missing workflow is weighed against the destination, not against the points.
+5. A second full review. Then the three measures are read together. If only release-package points or disclosed limits keep the total below the bar, the owner decides if own use and sharing get separate bars.
+
+**Mistakes that changed the process.** The gate of each unit was "no P2 finding", and nobody checked that it converged: now the full review is the meter. The score was treated as the only measure: now there are three. The owner-present tests stood at the end of every list: now they are step 3. A feature was removed partly for the score (the Windows notification): from now on a removal is weighed against the required workflows, and it stays the owner's veto.
+
 ## Last full check run
 
-On `5bfaa6d`, the merge of unit 2 fix round 1 on `gate/integration` (2026-11-13, fake data only, Rust builds in `C:\akm-build`). Later commits changed documents only.
+On `d3b6fb1`, the head of `gate/integration` with all four units and the removal of the Windows notification (2026-11-13, fake data only, Rust builds in `C:\akm-build`).
 
-- Rust: `cargo fmt --check` and Clippy (`-D warnings`) clean. `cargo test --workspace --offline --locked --no-fail-fast`: 686 passed, 0 failed, 2 ignored. The IPC harness with the production handlers: 16 checks PASS.
-- Frontend: `npm run build` exit 0; `npm test` 785 passed in 46 files; `npm run test:ui` 156 passed in headless Edge (mocked native boundary). The Tauri release build exit 0; the setup program was built and not installed.
-- Security checks: `check_no_network.py` PASS. `check_dependencies.ps1` ran at `c081c86`, before this merge, which changed no dependency: PASS (`cargo audit`, `cargo deny` and `npm audit --omit=dev`, each exit 0).
+- Rust: `cargo fmt --check` and Clippy (`-D warnings`) clean. `cargo test --workspace --offline --locked --no-fail-fast`: 698 passed, 0 failed, 2 ignored.
+- Frontend: `npm run build` exit 0; `npm test` 775 passed in 45 files; `npm run test:ui` 151 passed in headless Edge (mocked native boundary). The Tauri release build exit 0; the setup program was built and not installed.
+- Security checks: `check_no_network.py` and its test PASS. `check_dependencies.ps1` PASS.
 - Real readers on the `akm.exe` below: KeePassXC 2.8.0 interchange PASS; kdbxweb interchange PASS.
-- Tools: `check_docs.py` PASS (41 claims). The tool tests of unit 4 ran last on `40b651a`.
-- Native GUI proofs on the builds below: `-JournalOnly` 27 checks PASS, with one more line for a start that needed a second look at the window; `-JournalExportOnly` 8 checks PASS (the mode has eight checks in this script). No clipboard access, no minimize. The settings file was byte-identical afterwards (`dacba49a…9115`), no `akm-desktop` process remained, and no real journal folder exists. The transcripts are local, in the ignored folder `.scratch\gate\proofs`. On the earlier builds of `d47e697` the first `-JournalOnly` run failed once at the step after "Lock now" (U1-C-08 and U2-C-01 in [FINDINGS.md](FINDINGS.md)); the proof step changed in `c081c86`.
+- CLI on the release build, through the verification skill's helper: 32 steps PASS (create, add, list, masked view, reveal, audit, scoped export, export to a file with no overwrite, `run` with one scope and no `AKM_` variable, reserved names, rotate, history, Recycle Bin, restore, purge, and a refused reveal when the journal cannot be written).
+- Tools: `check_docs.py` PASS in the fast mode and in the full mode. The five Python tool tests, the notices check and its test, and the five PowerShell tool tests: all exit 0.
+- Native GUI proofs on the builds below: `-JournalOnly` 27 checks PASS; `-JournalExportOnly` 8 checks PASS. No clipboard access, no minimize. The settings file was byte-identical afterwards (`dacba49a…9115`), and no `akm-desktop` process remained. The transcripts are local, in the ignored folder `.scratch\gate\proofs`.
 - CI: not run. GitHub Actions has not run since 8 Nov 2026 (billing). The branch is not pushed.
-- Not run: R4-04, the real clipboard test, the full native GUI proof, the native import dialog, the terminal window of a real launch, the Windows toast, a real window hide, install on a clean computer, real high-contrast themes and a real screen reader. They need the owner present ([FIRST_USE.md](FIRST_USE.md)).
+- Not run: R4-04, the real clipboard test, the full native GUI proof, the native import dialog, the terminal window of a real launch, a real window hide, a real OS lock, suspend and idle wait, install on a clean computer, real high-contrast themes and a real screen reader. They need the owner present ([FIRST_USE.md](FIRST_USE.md)).
 
 ## Builds under test
 
-Builds of `5bfaa6d`, all unsigned and not installed by an agent, SHA-256. They are in `C:\akm-build\release`.
+Builds of `d3b6fb1`, all unsigned and not installed by an agent, SHA-256. They are in `C:\akm-build\release`.
 
-- `akm-desktop.exe` `4b30b828d0e5d6721e85e2a6b44c4f4f3906d5a6f76ef29a3c2c4c9632ef32b1`
-- `akm.exe` `a87a3e245e3adde6f22ce9d082618e0ab00c9dd7441b372db9d33bf8aad53a65` (the same as at `d47e697`: no core or CLI file changed)
-- `AKM_0.1.0_x64-setup.exe` `4602b91f2960ab96e3ddd855ea9734f9da2336c03f03b01dac5c516e8694273d`, in `C:\akm-build\release\bundle\nsis`
-
-Unit 1 review 1 read the builds of `d47e697`: `akm-desktop.exe` `436f3135…2e0271`, kept in `C:\akm-build\review-unit1`.
+- `akm-desktop.exe` `926ac145c18b001a704f635cfc13f3fac23d436a6339b627337cd260dce614b9`
+- `akm.exe` `094b76fbdfc8129aa54e5d45e49234a8b111056254de2d9036b666c53c9c71f5`
+- `AKM_0.1.0_x64-setup.exe` `4a276c32962d097b8b956b318fe0e9f4138619c4c3c341fee3d5a75b0f4818ac`, in `C:\akm-build\release\bundle\nsis`
 
 Each CI run uploads its own build with a `SHA256SUMS.txt`, and keeps it for 90 days. No CI run exists for these builds.
 
@@ -136,11 +192,16 @@ One class is new in review 2: work without a bound on bytes that are not authent
 
 ## Next action
 
-1. Collect the three rounds in flight when each worker reports: unit 1 round 1, unit 3 round 2, unit 4 round 2. Check each against its brief and the directive, merge, and run the full checks, both interchange suites and the two real-app proofs once on the merged tree. Unit 2 round 2 is done by the planner (six small fixes; `npm run build`, `npm test`, `npm run test:ui` and `check_docs.py` ran on them).
-2. Done: the Windows notification is removed (merged as `785748a`). Settings has no Reminders section, AKM never shows a Windows notification, and the unlock summary and the key states stay. A `reminders.json` file from an earlier version stays on disk; AKM does not read, write or delete it. With the plugin, the binding `Binding::Named` went too, because it had no other caller. One deleted test also checked that the configuration holds no autostart, startup, scheduled-task or service entry; no test checks that now.
-3. Narrow the promises in PROJECT.md, THREAT_MODEL.md and CLAIMS.md: backups, reserved names, locks, the journal.
-4. Run one full review with the official brief on the integrated tree. It gives the next measured score. Then fix by the size of each deduction, with the smallest fix.
-5. The owner's gates: CI billing, one sitting for the owner-present proofs, the signing decision.
+The path is in "Destination, measures and path" above. The one next action: collect the full review that runs on this tree. Write the raw reviews to `docs/reviews/`, record the score with each deduction's kind, and compare each reviewer's points with its own answer about keeping keys in this build.
+
+Open with the owner:
+
+1. One hour for the six owner-present tests (step 3 of the path). The owner's yes in chat allows one attempt of each test.
+2. GitHub Actions billing. CI has not run since 8 Nov 2026.
+3. The veto on the decisions of 2026-11-13: the Windows notification is removed (merged as `785748a`; Settings has no Reminders section, and a `reminders.json` file from an earlier version stays on disk untouched), the backup promise is narrower, and AGENTS.md has three changed rules (`git revert 41f96fd` takes them back).
+4. The signing decision.
+
+Small open items: one deleted test checked that the configuration holds no autostart, startup, scheduled-task or service entry, and no test checks that now. `docs/CLAIMS.md` may still need the narrower promises about the journal.
 
 ## Local state outside the repository
 
@@ -148,4 +209,5 @@ One class is new in review 2: work without a bound on bytes that are not authent
 - `W:\AKM-archive\2026-11-01-local-evidence\` keeps the ignored local files that the cleanup moved out. `W:\AKM-archive\2026-11-07-leaked-test-journal\` keeps the 1288 fake journals that tests wrote to the real journal folder before the guard (1B-C-01).
 - `W:\AKM-archive\proofs\` keeps the verification skill's transcripts.
 - The desktop app's settings select the fake vault `%TEMP%\opencode\akm-app-proof-07ee8d95-96d0-40df-bf1c-e24b33600ef2\vault.kdbx` (SHA-256 of the settings file `dacba49a…9115`). The owner's earlier setting is unknown. When the owner opens their own vault, the app replaces this setting. On 2026-11-13 that folder was not on the disk; the cause is not known. The settings file is unchanged.
+- The real journal folder `%LOCALAPPDATA%\akm\journal\` exists since 2026-11-13, 03:19 UTC. It holds two journals of five records each (add, reveal request, rotate; key IDs only) for fake vaults in `%TEMP%\.tmp*` folders, and a mapping file. Some run on that day started a release `akm.exe` without `AKM_JOURNAL_ROOT`; the guard in the journal code covers only a debug build that Cargo started. Which run did it is not known. Nothing was deleted: the owner decides (the earlier leak went to `W:\AKM-archive`).
 - The old builds in `target\debug` and `target\release` were deleted on 2026-11-07 to free disk space; the unit 1a hashes are in Git history.
