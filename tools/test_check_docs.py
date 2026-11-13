@@ -302,6 +302,9 @@ SYNTHETIC = [
         None,
         {"docs/CLAIMS.md": "| Example | What runs |\n|---|---|\n| `made-up-proof` | x |\n\n" + CLAIMS_HEAD.split("\n", 2)[2] + "| A claim. | README.md | `a_real_test_with_four_words` | None. |\n"},
     ),
+    # The generated THIRD_PARTY_NOTICES.md holds third-party READMEs and change logs: their names are not AKM's tests.
+    ("a test-like name in THIRD_PARTY_NOTICES.md passes", "", None, {"THIRD_PARTY_NOTICES.md": "See the test `with_additional_browser_args_of_a_crate`.\n"}),
+    ("a control character in THIRD_PARTY_NOTICES.md still fails", "", "THIRD_PARTY_NOTICES.md:2: control character 0x0b", {"THIRD_PARTY_NOTICES.md": "one\n\x0btwo\n"}),
 ]
 
 

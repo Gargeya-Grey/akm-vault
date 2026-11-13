@@ -14,7 +14,8 @@ a `fn <name>` that carries a `#[test]` or `#[<runtime>::test]` attribute. A name
 plain function fails too, when the line calls it a test (finding FR-24). Every fn in the file of a
 `[[test]]` target with `harness = false` counts as a test, because that file runs its own steps. A production function that
 a doc names as part of an API, on a line that does not say "test", is allowed. Raw reviews in
-docs/reviews/ are exempt, because they are kept unchanged. A line that must keep a removed name (a history record) carries
+docs/reviews/ are exempt, because they are kept unchanged. THIRD_PARTY_NOTICES.md is exempt from this
+name rule only, because it holds the shipped packages' own READMEs and change logs; its control characters are still checked. A line that must keep a removed name (a history record) carries
 `<!-- check-docs: historical: <reason> -->`. The Rust sources are read as code: a declaration inside a
 comment, a string, a raw string or a char literal is not a fn and not a test (finding U4-R1-07).
 
@@ -66,6 +67,8 @@ RAW_STRING = re.compile(r'(?:b|c)?r(#*)"')
 SAYS_TEST = re.compile(r"\btests?\b", re.IGNORECASE)
 HISTORICAL = re.compile(r"<!-- check-docs: historical: \S.*? -->")
 EXEMPT_PREFIXES = ("docs/reviews/",)
+# Generated from the shipped packages' READMEs and change logs: the names in it are not AKM's tests.
+THIRD_PARTY_TEXTS = "THIRD_PARTY_NOTICES.md"
 CLAIMS = "docs/CLAIMS.md"
 EVIDENCE = re.compile(r"`([^`]+)`")
 BUILD = ".github/workflows/build.yml"
@@ -441,7 +444,7 @@ def problems(rev, copy=None):
         for number, line in enumerate(lines_of(read(path)), 1):
             for match in CONTROL.finditer(line):
                 found.append(f"{path}:{number}: control character 0x{ord(match.group()):02x}")
-            if HISTORICAL.search(line):
+            if path == THIRD_PARTY_TEXTS or HISTORICAL.search(line):
                 continue
             for name in TEST_NAME.findall(line):
                 if name not in functions:
