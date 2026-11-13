@@ -71,20 +71,21 @@ The CLI is complete and proved. The desktop app is the product that the owner wi
    - Two reviewers read the security areas. Their totals were close (25 and 23 of 30), and their findings differed: each found defects that the other missed, and every finding counted once gives 21.5 of 30. So a total from one reviewer for each area overstates the product. The gate number uses the lower security result, as written before the review.
    - Four reviewers would keep their own keys in this build with precautions, mostly through the CLI. Two would not use the desktop app yet. Every reviewer wrote that its points overstate the desktop app's readiness, because no points stand for the flows that nobody ran on a real Windows session.
 3. Needs the owner, about one hour, any time from now: the six owner-present tests. The planner drives each step and the owner watches. It is the one step that every reviewer named, and no fix round replaces it.
-4. Running: one fix round for the FV rows of [FINDINGS.md](FINDINGS.md), smallest fix for each. The edit-form defect that three reviewers reproduced is fixed (`f5f55a6`). Planner's decisions for the owner's veto: the CLI gets an `edit` command (a required workflow was incomplete); `akm add --secret <value>` is removed, because a secret on a command line stays in the process list and the shell history (the prompt and `--secret-stdin` stay); the desktop app shows the username; the slow single-key read by a compromised page (FV-09) becomes a disclosed limit and gets no new approval window.
-5. A second full review, again with two reviewers for the security areas. Then the three measures are read together. If only release-package points or disclosed limits keep the total below the bar, the owner decides if own use and sharing get separate bars.
+4. Done: one fix round for the FV rows of [FINDINGS.md](FINDINGS.md), smallest fix for each (three workers and the planner; merged on `gate/integration`). Each fixed row is "Fixed, not accepted" until the second full review judges it. Planner's decisions for the owner's veto: the CLI has an `edit` command (a required workflow was incomplete); `akm add --secret <value>` is removed, because a secret on a command line stays in the process list and the shell history (the prompt and `--secret-stdin` stay); the desktop app and `akm get` show the username; a save refuses a vault path whose last part is a symbolic link (contract 3); the slow single-key read by a script in the page (FV-09) is a disclosed limit and gets no new approval window ([THREAT_MODEL.md](THREAT_MODEL.md)). Not fixed: FV-23 (the history shows no old value), the owner-gated rows (FV-14, FV-17, FV-18, FV-19), and a journal recovery in the CLI.
+5. Done: a test audit, by the owner's rule of 13 Nov 2026: a test stays only when it fails if a behaviour or a stated contract breaks, and still passes when only the internals change. Removed: tests that read source text, wording pins, duplicates, tests of a test helper, and tests that cannot fail. Page: 53 tests (791 to 738). Core and CLI: 20 tests, and 2 new tests of refusals that had none. Desktop native code: 14 tests. Each removal commit lists every test and its reason, so the owner can revert any of them. Kept on purpose: the commit-point scan of fault class A and the class Q scan of the waits in test code. What the removals cost: no test now enforces four rules of the page (only `native.ts` imports the Tauri IPC; only two files reach `sealed.ts`; the page's list of error kinds matches native code; a page file draws a key through the row facts) and four rules of the core and the CLI (a replacing move only at its planned call sites; one variable-name rule; Unicode case mapping only in the caseless rule; no plain `String` for a secret read). A review checks them.
+6. Next: a second full review, again with two reviewers for the security areas. Then the three measures are read together. If only release-package points or disclosed limits keep the total below the bar, the owner decides if own use and sharing get separate bars.
 
-**Mistakes that changed the process.** The gate of each unit was "no P2 finding", and nobody checked that it converged: now the full review is the meter. The score was treated as the only measure: now there are three. The owner-present tests stood at the end of every list: now they are step 3. A feature was removed partly for the score (the Windows notification): from now on a removal is weighed against the required workflows, and it stays the owner's veto.
+**Mistakes that changed the process.** The gate of each unit was "no P2 finding", and nobody checked that it converged: now the full review is the meter. The score was treated as the only measure: now there are three. The owner-present tests stood at the end of every list: now they are step 3. A feature was removed partly for the score (the Windows notification): from now on a removal is weighed against the required workflows, and it stays the owner's veto. The test set grew through the review rounds without a rule for what a test is for: now a test must protect a behaviour or a stated contract (step 5). A text change of a notice was committed after the unit tests only, and it broke a browser test that the next full run found: a change of page text now runs the browser tests before its commit.
 
 ## Last full check run
 
-On `d3b6fb1`, the head of `gate/integration` with all four units and the removal of the Windows notification (2026-11-13, fake data only, Rust builds in `C:\akm-build`).
+On `20b9359`, the head of `gate/integration` with the fix round and the test audit (2026-11-13, fake data only, Rust builds in `C:\akm-build`).
 
-- Rust: `cargo fmt --check` and Clippy (`-D warnings`) clean. `cargo test --workspace --offline --locked --no-fail-fast`: 698 passed, 0 failed, 2 ignored.
-- Frontend: `npm run build` exit 0; `npm test` 775 passed in 45 files; `npm run test:ui` 151 passed in headless Edge (mocked native boundary). The Tauri release build exit 0; the setup program was built and not installed.
-- Security checks: `check_no_network.py` and its test PASS. `check_dependencies.ps1` PASS.
+- Rust: `cargo fmt --check` and Clippy (`-D warnings`) clean. `cargo test --workspace --offline --locked --no-fail-fast`: 698 passed, 0 failed, 2 ignored. Three tests that need a real symbolic link printed NOT RUN: this account has no symbolic-link privilege.
+- Frontend: `npm run build` exit 0; `npm test` 738 passed in 43 files; `npm run test:ui` 157 passed in headless Edge (mocked native boundary). The Tauri release build exit 0; the setup program was built and not installed.
+- Security checks: `check_no_network.py` and its test PASS. `check_dependencies.ps1` PASS when run alone. Inside the full run it failed twice, because `cargo audit` could not finish its lookup of yanked crates in time; the tool counts an unfinished lookup as a failure.
 - Real readers on the `akm.exe` below: KeePassXC 2.8.0 interchange PASS; kdbxweb interchange PASS.
-- CLI on the release build, through the verification skill's helper: 32 steps PASS (create, add, list, masked view, reveal, audit, scoped export, export to a file with no overwrite, `run` with one scope and no `AKM_` variable, reserved names, rotate, history, Recycle Bin, restore, purge, and a refused reveal when the journal cannot be written).
+- CLI on the release build, through the verification skill's helper: 37 steps PASS (the 32 earlier steps, and `edit`, `get` with a username, and the refused `add --secret`).
 - Tools: `check_docs.py` PASS in the fast mode and in the full mode. The five Python tool tests, the notices check and its test, and the five PowerShell tool tests: all exit 0.
 - Native GUI proofs on the builds below: `-JournalOnly` 27 checks PASS; `-JournalExportOnly` 8 checks PASS. No clipboard access, no minimize. The settings file was byte-identical afterwards (`dacba49a…9115`), and no `akm-desktop` process remained. The transcripts are local, in the ignored folder `.scratch\gate\proofs`.
 - CI: not run. GitHub Actions has not run since 8 Nov 2026 (billing). The branch is not pushed.
@@ -92,11 +93,11 @@ On `d3b6fb1`, the head of `gate/integration` with all four units and the removal
 
 ## Builds under test
 
-Builds of `d3b6fb1`, all unsigned and not installed by an agent, SHA-256. They are in `C:\akm-build\release`.
+Builds of `20b9359`, all unsigned and not installed by an agent, SHA-256. They are in `C:\akm-build\release`.
 
-- `akm-desktop.exe` `926ac145c18b001a704f635cfc13f3fac23d436a6339b627337cd260dce614b9`
-- `akm.exe` `094b76fbdfc8129aa54e5d45e49234a8b111056254de2d9036b666c53c9c71f5`
-- `AKM_0.1.0_x64-setup.exe` `4a276c32962d097b8b956b318fe0e9f4138619c4c3c341fee3d5a75b0f4818ac`, in `C:\akm-build\release\bundle\nsis`
+- `akm-desktop.exe` `411881ab91bd93520ff9f4c4006f4d74450297adcae812be2743b84aba50823f`
+- `akm.exe` `f0acb4b9ee636dee08c1225988c7c7c82945bbe0beb99a3e1f9fe1c84b0a602c`
+- `AKM_0.1.0_x64-setup.exe` `83ae22757ce42b06736a78a321f70907b9d83f7e6a2f56ff55f4b1f12576584c`, in `C:\akm-build\release\bundle\nsis`
 
 Each CI run uploads its own build with a `SHA256SUMS.txt`, and keeps it for 90 days. No CI run exists for these builds.
 
@@ -195,16 +196,17 @@ One class is new in review 2: work without a bound on bytes that are not authent
 
 ## Next action
 
-The path is in "Destination, measures and path" above. The one next action: collect the fix round for the FV rows (three workers: core, CLI and desktop; the two tool findings FV-15 and FV-16 are fixed in `15d3a99`). Check each fix against its regression test, merge, run the full checks and the real-surface runs once on the merged tree, and then start the second full review.
+The path is in "Destination, measures and path" above. The one next action: the second full review on the tree of "Last full check run" (six reviewers, two on the security areas; brief: [reviews/2026-11-13-full-review-2-brief.md](reviews/2026-11-13-full-review-2-brief.md)). Record its score and its findings, and read the three measures together.
 
 Open with the owner:
 
 1. One hour for the six owner-present tests (step 3 of the path). The owner's yes in chat allows one attempt of each test.
 2. GitHub Actions billing. CI has not run since 8 Nov 2026.
-3. The veto on the decisions of 2026-11-13: the Windows notification is removed (merged as `785748a`; Settings has no Reminders section, and a `reminders.json` file from an earlier version stays on disk untouched), the backup promise is narrower, and AGENTS.md has three changed rules (`git revert 41f96fd` takes them back).
+3. The veto on the decisions of 2026-11-13: the planner's decisions of step 4; the test removals of step 5; the Windows notification is removed (merged as `785748a`; Settings has no Reminders section, and a `reminders.json` file from an earlier version stays on disk untouched), the backup promise is narrower, and AGENTS.md has three changed rules (`git revert 41f96fd` takes them back).
 4. The signing decision.
+5. The fake journals in the real journal folder (below): archive them, or leave them.
 
-Small open items: one deleted test checked that the configuration holds no autostart, startup, scheduled-task or service entry, and no test checks that now. `docs/CLAIMS.md` may still need the narrower promises about the journal.
+Small open items: one deleted test checked that the configuration holds no autostart, startup, scheduled-task or service entry, and no test checks that now. `docs/CLAIMS.md` may still need the narrower promises about the journal. The CLI has no journal recovery command (FR-14). The audit workers listed behaviours with no test; the largest are that no test runs the real page against the real handlers, and that `list --expiring` has no test with an ordinary count.
 
 ## Local state outside the repository
 
@@ -212,5 +214,5 @@ Small open items: one deleted test checked that the configuration holds no autos
 - `W:\AKM-archive\2026-11-01-local-evidence\` keeps the ignored local files that the cleanup moved out. `W:\AKM-archive\2026-11-07-leaked-test-journal\` keeps the 1288 fake journals that tests wrote to the real journal folder before the guard (1B-C-01).
 - `W:\AKM-archive\proofs\` keeps the verification skill's transcripts.
 - The desktop app's settings select the fake vault `%TEMP%\opencode\akm-app-proof-07ee8d95-96d0-40df-bf1c-e24b33600ef2\vault.kdbx` (SHA-256 of the settings file `dacba49a…9115`). The owner's earlier setting is unknown. When the owner opens their own vault, the app replaces this setting. On 2026-11-13 that folder was not on the disk; the cause is not known. The settings file is unchanged.
-- The real journal folder `%LOCALAPPDATA%\akm\journal\` exists since 2026-11-13, 03:19 UTC. It holds two journals of five records each (add, reveal request, rotate; key IDs only) for fake vaults in `%TEMP%\.tmp*` folders, and a mapping file. Some run on that day started a release `akm.exe` without `AKM_JOURNAL_ROOT`; the guard in the journal code covers only a debug build that Cargo started. Which run did it is not known. Nothing was deleted: the owner decides (the earlier leak went to `W:\AKM-archive`).
+- The real journal folder `%LOCALAPPDATA%\akm\journal\` exists since 2026-11-13, 03:19 UTC. It holds two journals of five records each (add, reveal request, rotate; key IDs only) for fake vaults in `%TEMP%\.tmp*` folders, and a mapping file. The cause is proved: a test run of a release build that Cargo started passed the guard, which held only in a debug build. Commit `472429a` closes it: a build that Cargo started never uses the real folder, in any profile (`a_build_that_cargo_started_never_uses_the_profile_folder_in_any_profile`). Nothing was deleted: the owner decides (the earlier leak went to `W:\AKM-archive`).
 - The old builds in `target\debug` and `target\release` were deleted on 2026-11-07 to free disk space; the unit 1a hashes are in Git history.
