@@ -88,10 +88,32 @@ test("the add form names every field", async () => {
 
 test("a changed list, expiry and rotation are read from the form's text", async () => {
   const draft = await save(stored, () => {
-    type("Scopes", "read, write");
+    type("Scopes", "read\nwrite");
     type("Expires", "2028-01-01");
     type(/Rotat/, "20000");
   });
   // 20000 days is inside the core's bound (36500) and was outside the form's old bound (3650).
   expect(draft).toEqual({ scopes: ["read", "write"], expiresAt: "2028-01-01T23:59:59Z", rotationDays: 20000 });
+});
+
+// FW-11: the scopes field holds one scope on each line, and a comma is part of a scope, as each
+// `--scope` option of `akm edit` is one scope.
+const commaScope: KeyView = { ...stored, scopes: ["resource,subresource", "read"] };
+
+test("the scopes field shows one stored scope on each line, and a new line adds one scope", async () => {
+  const draft = await save(commaScope, () => {
+    const field = screen.getByLabelText("Scopes") as HTMLTextAreaElement;
+    expect(field.value).toBe("resource,subresource\nread");
+    type("Scopes", `${field.value}\nwrite`);
+  });
+  expect(draft).toEqual({ scopes: ["resource,subresource", "read", "write"] });
+});
+
+test("an empty line or a line of spaces adds no scope", async () => {
+  const draft = await save(commaScope, () => type("Scopes", "resource,subresource\n\n  \nread\r\nwrite\n"));
+  expect(draft).toEqual({ scopes: ["resource,subresource", "read", "write"] });
+});
+
+test("a tag is split where the vault splits it, so the form shows what a reopen shows", async () => {
+  expect(await save(stored, () => type("Tags", "one; two,three\tfour"))).toEqual({ tags: ["one", "two", "three", "four"] });
 });

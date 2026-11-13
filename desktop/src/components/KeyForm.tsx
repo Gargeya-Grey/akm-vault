@@ -30,9 +30,14 @@ function EditTarget({ item, id }: { item: KeyView; id: string }) {
   );
 }
 
-function splitList(value: string): string[] {
+/** One scope on each line, so a comma is part of a scope, as each `--scope` of `akm edit` is one (FW-11). */
+const SCOPE_SEPARATOR = /\r?\n/;
+/** Where the vault splits its tags when it reads them, so the form shows what a reopen shows. */
+const TAG_SEPARATOR = /[;,\t]/;
+
+function splitList(value: string, separator: RegExp): string[] {
   const seen = new Set<string>();
-  for (const part of value.split(",")) {
+  for (const part of value.split(separator)) {
     const trimmed = part.trim();
     if (trimmed) seen.add(trimmed);
   }
@@ -53,7 +58,7 @@ function shownText(item?: KeyView) {
     environment: item?.environment ?? "",
     envVar: item?.envVar ?? "",
     url: item?.url ?? "",
-    scopes: item?.scopes.join(", ") ?? "",
+    scopes: item?.scopes.join("\n") ?? "",
     tags: item?.tags.join(", ") ?? "",
     notes: item?.notes ?? "",
     expires: item?.expiresAt ? item.expiresAt.slice(0, 10) : "",
@@ -128,8 +133,8 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
     if (changed(environment, shown.environment)) draft.environment = environment;
     if (changed(envVar, shown.envVar)) draft.envVar = envVar;
     if (changed(url, shown.url)) draft.url = url;
-    if (changed(scopes, shown.scopes)) draft.scopes = splitList(scopes);
-    if (changed(tags, shown.tags)) draft.tags = splitList(tags);
+    if (changed(scopes, shown.scopes)) draft.scopes = splitList(scopes, SCOPE_SEPARATOR);
+    if (changed(tags, shown.tags)) draft.tags = splitList(tags, TAG_SEPARATOR);
     if (changed(notes, shown.notes)) draft.notes = notes;
     if (changed(expires, shown.expires)) draft.expiresAt = expires ? dateOnlyExpiry(expires) : null;
     if (changed(rotation, shown.rotation)) draft.rotationDays = rotationDays;
@@ -334,16 +339,17 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
 
                 <div className="field">
                   <label htmlFor="key-scopes">Scopes</label>
-                  <input
+                  <textarea
                     id="key-scopes"
                     className="mono"
                     value={scopes}
                     onChange={(event) => setScopes(event.target.value)}
-                    placeholder="chat, models"
+                    rows={3}
+                    placeholder={"chat\nmodels"}
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <p className="field-note">Comma separated.</p>
+                  <p className="field-note">One scope on each line. A comma is part of the scope.</p>
                 </div>
 
                 <div className="field">
