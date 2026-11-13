@@ -17,8 +17,12 @@ export interface BoundaryOptions {
    * `transport`: native records the launch, and the reply is lost in transport (U2-R1-07).
    */
   terminal?: "hold" | "transport";
-  /** `hold`: an import never answers, as when its native confirmation is still open. */
+  /**
+   * `hold`: an import does not answer, as when its native confirmation is still open. The test ends
+   * it with `__akmTest.applyImport`, which adds `importAdds` to the keys.
+   */
   importReply?: "hold";
+  importAdds?: Partial<KeyView>[];
   /** The vault has an older format, so the page offers the format upgrade. */
   needsUpgrade?: boolean;
 }
@@ -60,7 +64,14 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
       notes: null, expiresAt: null, rotationDays: null, createdAt: null,
       updatedAt: null, rotationDueAt: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0,
     };
-    const keys = (options.keys ?? [{}]).map((overrides, index) => ({ ...key, id: `${key.id}-${index}`, ...overrides }));
+    let keys = (options.keys ?? [{}]).map((overrides, index) => ({ ...key, id: `${key.id}-${index}`, ...overrides }));
+    let answerImport: ((report: unknown) => void) | null = null;
+    // The native window was approved: the keys change, and the reply arrives or is lost.
+    const applyImport = (reply: boolean) => {
+      const added = (options.importAdds ?? []).map((overrides, index) => ({ ...key, id: `${key.id}-imported-${index}`, ...overrides }));
+      keys = [...keys, ...added];
+      if (reply) answerImport?.({ added: added.length, updated: 0 });
+    };
     let damaged = options.damagedJournal ?? false;
     let recovered = false;
     const journalPath = "C:/fake-test/journal/j-00000000000000000000000000000000.jsonl";
@@ -81,7 +92,7 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
       return hideId;
     };
     Object.assign(window, {
-      __akmTest: { calls, emitLock, emitNotice, expireView, owner: () => owner },
+      __akmTest: { calls, emitLock, emitNotice, expireView, applyImport, owner: () => owner },
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
       __TAURI_INTERNALS__: {
         transformCallback: (callback: (event: unknown) => void) => { callbacks.set(++next, callback); return next; },
@@ -149,7 +160,7 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
               { seq: "3", ts: "2026-10-31T00:00:00Z", action: "add-completed", keyTitle: "OpenAI", project: "demo", environment: "dev", keyId: "00000000-0000-4000-8000-000000000001", detail: "fake detail: 2 keys added, 1 updated" },
             ] };
             case "backup_info": return { path: "C:/fake-test/vault.kdbx.bak", exists: false, bytes: 0, modified: null };
-            case "env_import": return options.importReply === "hold" ? new Promise(() => {}) : { added: 0, updated: 1 };
+            case "env_import": return options.importReply === "hold" ? new Promise((resolve) => { answerImport = resolve; }) : { added: 0, updated: 1 };
             case "key_history": return [{ index: 0, modifiedAt: "2026-10-30T12:00:00Z", changed: ["Password"], secretChanged: true }];
             case "env_export": return "OPENAI_API_KEY=fake-browser-test-value\n";
             default: throw new Error(`Unexpected test IPC: ${command}`);

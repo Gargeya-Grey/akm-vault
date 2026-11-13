@@ -81,12 +81,22 @@ export function beginOutcome(operation: "import" | "export" | "terminal", origin
   return id;
 }
 
+/**
+ * An import changed the keys, and the page may have read them before it ended (FV-13). Every
+ * mounted read (`useNativeRead`) starts again on this event, under its usual rules.
+ */
+export const IMPORT_APPLIED_EVENT = "akm-import-applied";
+function importApplied() {
+  window.dispatchEvent(new CustomEvent(IMPORT_APPLIED_EVENT));
+}
+
 export function settleOutcome(id: number, outcome: Exclude<Outcome, "pending">, by: SettledBy = "reply") {
   const pending = receipts.get(id);
   if (!pending || pending.outcome !== "pending") return;
   receipts.set(id, { ...pending, outcome });
   settledBy.set(id, by);
   announce();
+  if (pending.operation === "import" && (outcome === "completed" || outcome === "completedWhileLocked")) importApplied();
   if (outcome === "completedWhileLocked") signalSessionLoss(pending.generation);
 }
 
@@ -138,7 +148,10 @@ export function settleNativeOutcome(nativeOperation: string, { operation, outcom
 // old, whatever the state of the receipt, and also when this page has no receipt (U2-R2-01).
 export function importRecordChangedData(nativeOperation: string) {
   const id = nativeOperations.get(nativeOperation);
-  if (id === undefined || receipts.get(id)?.outcome !== "completed") changeData();
+  if (id === undefined || receipts.get(id)?.outcome !== "completed") {
+    changeData();
+    importApplied();
+  }
 }
 
 function signalSessionLoss(origin: number) {

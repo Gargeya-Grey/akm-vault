@@ -94,6 +94,34 @@ for (const theme of ["light", "dark"]) {
     expect(errors).toEqual([]);
   });
 
+  // FV-13: the user goes from Use keys to Keys while the import waits, and the import ends there.
+  for (const how of ["reply", "record"] as const) {
+    test(`${theme}: an import that ends by its ${how} after the user went to Keys shows the new key there`, async ({ page }) => {
+      const errors = await open(page, theme, { importReply: "hold", importAdds: [{ title: "Imported fake", project: "imported-project", environment: "dev", resolvedEnvVar: "FAKE_TOKEN" }] });
+      await page.getByRole("button", { name: "Use keys", exact: true }).click();
+      await page.getByRole("button", { name: "Import .env…" }).click();
+      await page.getByLabel("Paste the .env contents").fill("FAKE_TOKEN=fake-browser-import-value");
+      await page.getByLabel("Target project").fill("imported-project");
+      await page.getByLabel("Target environment").fill("dev");
+      await page.getByRole("button", { name: "Review import" }).click();
+      const call = await page.waitForFunction(() => window.__akmTest.calls.find((each) => each.command === "env_import")?.args);
+      const { operationId } = (await call.jsonValue()) as { operationId: string };
+      await page.evaluate(() => window.__akmTest.expireView());
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await page.getByRole("button", { name: "Keys", exact: true }).click();
+      await expect(page.getByRole("button", { name: "Open OpenAI", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Open Imported fake", exact: true })).toHaveCount(0);
+
+      await page.evaluate((reply) => window.__akmTest.applyImport(reply), how === "reply");
+      if (how === "record") await record(page, { id: operationId, originSession: "A", kind: "importApplied" });
+
+      await expect(page.getByRole("button", { name: "Open Imported fake", exact: true })).toBeVisible({ timeout: 8000 });
+      await expect(page.getByRole("button", { name: "Project imported-project", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Open OpenAI", exact: true })).toBeVisible();
+      expect(errors).toEqual([]);
+    });
+  }
+
   test(`${theme}: after a reload during the native review, the record is the only truth and its notice names the terminal`, async ({ page }) => {
     const errors = await open(page, theme, { terminal: "hold" });
     const { operationId } = await launch(page);

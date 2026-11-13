@@ -158,9 +158,8 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     setMessage(LAUNCH_SETTLED[state.outcome as Exclude<Outcome, "pending">]);
   }, [receiptsVersion, launch]);
 
-  // An import changed the vault whoever settled it, so the list reads again. When the record or a
-  // transport failure settled it, the form shows that outcome.
-  const reloadKeys = read.reload;
+  // A saved import makes every mounted read start again, this list too (IMPORT_APPLIED_EVENT).
+  // When the record or a transport failure settled it, the form shows that outcome.
   useEffect(() => {
     if (importOperation === null) return;
     const state = receiptState(importOperation.receipt);
@@ -168,7 +167,6 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     setImportOperation(null);
     if (state === null) return;
     const saved = state.outcome === "completed" || state.outcome === "completedWhileLocked";
-    if (saved) reloadKeys();
     if (state.by === "reply" || importOperation.request !== importRequest.current) return;
     if (saved) {
       setImporting(false);
@@ -181,7 +179,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
       setImportError(text);
       setMessage({ tone: "error", text });
     }
-  }, [receiptsVersion, importOperation, reloadKeys]);
+  }, [receiptsVersion, importOperation]);
 
   useEffect(() => {
     if (preview.value === null) return;
