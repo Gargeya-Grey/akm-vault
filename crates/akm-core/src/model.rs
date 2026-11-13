@@ -777,7 +777,9 @@ const RESERVED: &[Rule] = &[
         exact: &["NETRC"],
         prefixes: &[],
     },
-    // Not re-checked in this unit: Perl, Ruby, PHP, Lua and R.
+    // Perl, Ruby, PHP, Lua and R: re-checked on 2026-11-13 against what each interpreter
+    // reads when it starts (FV-08). Left out: names that need a debugging build of Perl
+    // (PERLIO_DEBUG, PERL_MEM_LOG), and the files of `R CMD check` and `R CMD build`.
     Rule {
         doc: "https://perldoc.perl.org/perlrun#ENVIRONMENT",
         class: ReservedClass::StartupHook,
@@ -786,18 +788,73 @@ const RESERVED: &[Rule] = &[
             "PERL5LIB",
             "PERLLIB",
             "PERL5DB",
+            "PERL_USE_UNSAFE_INC",
             "RUBYOPT",
             "RUBYLIB",
             "PHPRC",
             "PHP_INI_SCAN_DIR",
-            "LUA_INIT",
-            "LUA_PATH",
-            "LUA_CPATH",
             "R_PROFILE",
             "R_PROFILE_USER",
             "R_ENVIRON",
             "R_ENVIRON_USER",
         ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://perldoc.perl.org/perlrun#ENVIRONMENT",
+        class: ReservedClass::HelperProgram,
+        exact: &["PERL5SHELL"],
+        prefixes: &[],
+    },
+    Rule {
+        // Lua tries the versioned name first (LUA_INIT_5_4), then LUA_INIT; so for every
+        // version these are prefixes (lua.c `handle_luainit`, loadlib.c `setpath`).
+        doc: "https://www.lua.org/manual/5.4/manual.html#7",
+        class: ReservedClass::StartupHook,
+        exact: &[],
+        prefixes: &["LUA_INIT", "LUA_PATH", "LUA_CPATH"],
+    },
+    Rule {
+        doc: "https://github.com/ruby/ruby/blob/master/man/ruby.1",
+        class: ReservedClass::ProcessControl,
+        exact: &["RUBYPATH"],
+        prefixes: &[],
+    },
+    Rule {
+        // `RUBY_CRASH_REPORT` that starts with `|` runs the rest as a command.
+        doc: "https://github.com/ruby/ruby/blob/master/man/ruby.1",
+        class: ReservedClass::HelperProgram,
+        exact: &["RUBYSHELL", "RUBY_CRASH_REPORT"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://docs.ruby-lang.org/en/master/Gem.html#method-c-use_gemdeps",
+        class: ReservedClass::StartupHook,
+        exact: &["RUBYGEMS_GEMDEPS"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://stat.ethz.ch/R-manual/R-devel/library/base/html/libPaths.html",
+        class: ReservedClass::StartupHook,
+        exact: &[
+            "R_LIBS",
+            "R_LIBS_USER",
+            "R_LIBS_SITE",
+            "R_DEFAULT_PACKAGES",
+            "R_SCRIPT_DEFAULT_PACKAGES",
+        ],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://stat.ethz.ch/R-manual/R-devel/library/utils/html/Rscript.html",
+        class: ReservedClass::ProcessControl,
+        exact: &["RHOME"],
+        prefixes: &[],
+    },
+    Rule {
+        doc: "https://cran.r-project.org/bin/windows/base/rw-FAQ.html",
+        class: ReservedClass::UserLocation,
+        exact: &["R_USER"],
         prefixes: &[],
     },
     Rule {
