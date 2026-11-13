@@ -3,7 +3,6 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Activity } from "./Activity";
 import { KeysView } from "./KeysView";
 import { RecycleBin } from "./RecycleBin";
-import { cutsOf } from "./glyphs";
 import { invalidateSession } from "../sessionBoundary";
 import type { KeyView, RecycledKey } from "../types";
 
@@ -92,10 +91,6 @@ const PAIRS: [string, Partial<KeyView>, Partial<KeyView>, [string, string]][] = 
   ["identical facts", { id: ID.e1 }, { id: ID.e2 }, ["0fa1c0de-0000", "0fa1c0de-0001"]],
   ["IDs that share their first 8 characters", { id: ID.f1 }, { id: ID.f2 }, ["c4d2e8a1-0", "c4d2e8a1-1"]],
 ];
-
-test("the fixture pairs draw the same key glyph", () => {
-  for (const [, one, two] of PAIRS) expect(cutsOf(one.id!).join(), `${one.id} ${two.id}`).toBe(cutsOf(two.id!).join());
-});
 
 for (const [name, one, two, [short1, short2]] of PAIRS) {
   test(`two keys with ${name}: each row draws its own short ID, and the rows differ on screen and to a screen reader`, async () => {

@@ -156,7 +156,7 @@ export function FilterSelect({
       setOpen(false);
     } else if (event.key === "Tab") {
       setOpen(false);
-    } else if (event.key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    } else if ([...event.key].length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey) {
       event.preventDefault();
       matchTyped(event.key);
     }

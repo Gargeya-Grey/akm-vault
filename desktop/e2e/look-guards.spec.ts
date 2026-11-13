@@ -170,8 +170,11 @@ test.describe("forced colours", () => {
     expect(await boxed(page, ".btn-secondary")).toBe(true);
   });
 
-  // A line between two regions that the normal themes draw with a shadow.
-  const lines: { name: string; reach: (page: Page) => Promise<unknown>; selector: string; side: "Top" | "Right" | "Bottom" }[] = [
+  const lock = (page: Page) => page.evaluate(() => (window as unknown as { __akmTest: { emitLock: () => void } }).__akmTest.emitLock());
+  const firstKey = (page: Page) => page.locator(".key-row").first().click();
+  // A line between two regions, or the edge of a panel, that the normal themes draw with a shadow or
+  // a fill. A line drawn by a pseudo-element names it. The fixture gives each list two rows.
+  const lines: { name: string; reach: (page: Page) => Promise<unknown>; selector: string; pseudo?: "::before"; side: "Top" | "Right" | "Bottom" }[] = [
     { name: "the edge of the rail", reach: async () => {}, selector: ".rail", side: "Right" },
     { name: "the line above the rail tools", reach: async () => {}, selector: ".rail-tools", side: "Top" },
     { name: "the line above the drawer's actions", reach: (page) => page.locator(".key-row").first().click(), selector: ".drawer-foot", side: "Top" },
@@ -188,18 +191,27 @@ test.describe("forced colours", () => {
       selector: ".preview-head",
       side: "Bottom",
     },
-    { name: "the edge of the lock stage", reach: (page) => page.evaluate(() => (window as unknown as { __akmTest: { emitLock: () => void } }).__akmTest.emitLock()), selector: ".lock-stage", side: "Right" },
+    { name: "the edge of the lock stage", reach: lock, selector: ".lock-stage", side: "Right" },
+    { name: "the line between two key rows", reach: async () => {}, selector: ".key-line + .key-line", pseudo: "::before", side: "Top" },
+    { name: "the line between two Recycle Bin rows", reach: (page) => page.getByRole("button", { name: "Recycle Bin", exact: true }).click(), selector: ".bin-row + .bin-row", pseudo: "::before", side: "Top" },
+    { name: "the line between two facts in the key drawer", reach: firstKey, selector: ".drawer .fact-row + .fact-row", pseudo: "::before", side: "Top" },
+    { name: "the line between two groups of the key form", reach: (page) => page.getByRole("button", { name: "Add key", exact: true }).click(), selector: ".form-group + .form-group", pseudo: "::before", side: "Top" },
+    { name: "the line between two Settings sections", reach: (page) => page.getByRole("button", { name: "Settings", exact: true }).click(), selector: ".settings-section + .settings-section", pseudo: "::before", side: "Top" },
+    { name: "the line between two promises of the lock screen", reach: lock, selector: ".lock-promises li + li", pseudo: "::before", side: "Top" },
+    { name: "the edge of the lock art", reach: lock, selector: ".lock-art", side: "Top" },
+    { name: "the edge of the key tile in the key drawer", reach: firstKey, selector: ".drawer .key-tile", side: "Top" },
+    { name: "the edge of a scope chip", reach: firstKey, selector: ".drawer .chip", side: "Top" },
   ];
-  for (const { name, reach, selector, side } of lines) {
+  for (const { name, reach, selector, pseudo, side } of lines) {
     test(`${name} keeps a border`, async ({ page }) => {
-      await open(page);
+      await open(page, "dark", { keys: [{}, { title: "Second" }], recycled: [{ key: { title: "Twin" }, deletedAt: null }, { key: { title: "Twin" }, deletedAt: null }] });
       await page.emulateMedia({ forcedColors: "active" });
       await reach(page);
-      const line = await page.locator(selector).first().evaluate((node, edge) => {
-        const style = getComputedStyle(node);
+      const line = await page.locator(selector).first().evaluate((node, [edge, part]) => {
+        const style = getComputedStyle(node, part);
         return [style.getPropertyValue(`border-${edge}-style`), parseFloat(style.getPropertyValue(`border-${edge}-width`))];
-      }, side.toLowerCase());
-      expect(line[0] !== "none" && Number(line[1]) >= 1, `${selector}: ${line.join(" ")}`).toBe(true);
+      }, [side.toLowerCase(), pseudo] as const);
+      expect(line[0] !== "none" && Number(line[1]) >= 1, `${selector}${pseudo ?? ""}: ${line.join(" ")}`).toBe(true);
     });
   }
 
@@ -221,12 +233,15 @@ test.describe("forced colours", () => {
     });
   }
 
-  test("the current section and a status keep their marks", async ({ page }) => {
+  test("the current section, a status and a heading keep their marks", async ({ page }) => {
     await open(page);
     await page.emulateMedia({ forcedColors: "active" });
-    for (const [selector, pseudo] of [[".nav-pill", "::before"], [".state-dot", ""]] as const) {
-      expect(await page.locator(selector).first().evaluate((node, part) => getComputedStyle(node, part || undefined).forcedColorAdjust, pseudo), selector).toBe("none");
+    const adjust = (selector: string, pseudo: string) => page.locator(selector).first().evaluate((node, part) => getComputedStyle(node, part || undefined).forcedColorAdjust, pseudo);
+    for (const [selector, pseudo] of [[".nav-pill", "::before"], [".state-dot", ""], [".group-head", "::before"]] as const) {
+      expect(await adjust(selector, pseudo), selector).toBe("none");
     }
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    expect(await adjust(".settings-section > h2", "::before"), "the stem of a Settings heading").toBe("none");
   });
 });
 

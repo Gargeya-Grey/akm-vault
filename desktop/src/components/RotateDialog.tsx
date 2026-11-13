@@ -9,6 +9,8 @@ import { useDialogFocus } from "./useDialogFocus";
 interface Props {
   item: KeyView;
   onRotated: (receipt: RotationReceipt) => void;
+  /** The request failed. Its reply may have been lost after native code rotated. */
+  onFailed?: () => void;
   onClose: () => void;
 }
 
@@ -17,7 +19,7 @@ interface Props {
  * cancel never hides a request that may still commit. The typed value is cleared as soon as
  * the request ends, whatever the outcome.
  */
-export function RotateDialog({ item, onRotated, onClose }: Props) {
+export function RotateDialog({ item, onRotated, onFailed, onClose }: Props) {
   const dialogRef = useDialogFocus<HTMLDivElement>();
   const titleId = useId();
   const fieldId = useId();
@@ -51,6 +53,7 @@ export function RotateDialog({ item, onRotated, onClose }: Props) {
     } catch (cause) {
       setSecret("");
       setError(errorText(cause));
+      onFailed?.();
     } finally {
       setBusy(false);
     }

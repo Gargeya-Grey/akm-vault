@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { KeyForm } from "./KeyForm";
 import type { KeyView } from "../types";
@@ -49,6 +49,37 @@ test("a field changed and changed back to the text that the form showed is not n
 test("an edit that changes no field names none", async () => {
   expect(await save(stored, () => {})).toEqual({});
 });
+
+// D2B-02: an edit judges only the fields that the user changed. A stored value that the form's own
+// rules would refuse never blocks an edit of another field, and the request does not name it.
+const UNJUDGED: [string, Partial<KeyView>][] = [
+  ["a rotation interval above the form's maximum", { rotationDays: 50000 }],
+  ["a rotation interval of zero days", { rotationDays: 0 }],
+  ["an empty title", { title: "" }],
+  ["a title of spaces", { title: "   " }],
+];
+for (const [name, field] of UNJUDGED) {
+  test(`a stored key with ${name} can be edited, and the edit does not name that field`, async () => {
+    expect(await save({ ...stored, ...field }, () => type("Notes", "A new note"))).toEqual({ notes: "A new note" });
+  });
+}
+
+// A field that the user changes is judged as in an add, so its bounds still hold.
+const REFUSED: [string, () => void][] = [
+  ["a rotation interval changed to more than 36500 days", () => type(/Rotat/, "36501")],
+  ["a rotation interval changed to zero days", () => type(/Rotat/, "0")],
+  ["a cleared title", () => type("Title", "")],
+  ["a title changed to spaces", () => type("Title", "   ")],
+];
+for (const [name, edit] of REFUSED) {
+  test(`an edit with ${name} is refused`, async () => {
+    mock.update.mockClear();
+    render(<KeyForm item={stored} onSaved={() => {}} onClose={() => {}} />);
+    edit();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save changes" })); });
+    expect(mock.update).not.toHaveBeenCalled();
+  });
+}
 
 // FV-12: the form shows the stored username and can change it.
 const withUsername: KeyView = { ...stored, username: " AKIAFAKEEXAMPLE " };
