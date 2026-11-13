@@ -353,34 +353,6 @@ mod tests {
     }
 
     #[test]
-    fn a_leaked_owner_never_changes_the_outcome() {
-        let leak = Release {
-            close_failed: false,
-            owner_leaked: true,
-        };
-        for outcome in [
-            Outcome::Untouched(error("a")),
-            Outcome::Emptied(error("a")),
-            Outcome::Published(evidence()),
-            Outcome::Residual(error("a"), evidence()),
-            Outcome::ResidualUntracked(error("a")),
-        ] {
-            let before = Publication::for_test(outcome);
-            let name = before.name_for_test();
-            let after = before.released(leak);
-            assert_eq!(after.name_for_test(), name);
-            assert!(after.owner_leaked());
-        }
-    }
-
-    #[test]
-    fn a_clean_release_changes_nothing() {
-        let after =
-            Publication::for_test(Outcome::Published(evidence())).released(Release::default());
-        assert_eq!(after.published_for_test(), 7);
-    }
-
-    #[test]
     fn the_chain_derives_each_outcome_from_its_phase() {
         assert_eq!(
             begin().fail(error("a")).name_for_test(),

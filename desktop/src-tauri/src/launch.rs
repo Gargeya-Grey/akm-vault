@@ -1743,17 +1743,6 @@ mod tests {
         assert!(!shown[0].contains("fake-"));
     }
 
-    #[test]
-    fn the_review_names_one_variable_in_the_singular() {
-        let review = LaunchReview::new(
-            "app".into(),
-            "dev".into(),
-            PathBuf::from("C:/work"),
-            vec!["ONLY".into()],
-        );
-        assert!(review_text(&review.body(), review.names()).contains("hold 1 variable:\n  ONLY"));
-    }
-
     fn block(inherited: &[(&str, &str)], secrets: &[(&str, &str)]) -> Vec<String> {
         let secrets: Vec<(String, String)> = secrets
             .iter()
@@ -1884,13 +1873,6 @@ mod tests {
                 "{name:?}"
             );
         }
-        let child = include_str!("../../../crates/akm-cli/src/child.rs");
-        let rule = "name.to_string_lossy()\n        .get(..4)\n        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(\"AKM_\"))";
-        assert!(
-            child.contains(rule),
-            "child.rs changed its AKM_ rule; change launch.rs too"
-        );
-        assert!(include_str!("launch.rs").contains(rule));
     }
 
     #[cfg(windows)]

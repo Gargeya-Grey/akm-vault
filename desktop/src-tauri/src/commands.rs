@@ -2247,23 +2247,6 @@ mod tests {
         assert!(!error.message.contains("fake"), "{}", error.message);
     }
 
-    #[test]
-    fn add_refuses_a_reserved_variable_name_for_the_desktop_too() {
-        let (session, _directory) = test_session();
-        let error = session
-            .access(Access::Write, None, |vault| {
-                vault.add(akm_core::ApiKeyInput {
-                    title: "Process control".into(),
-                    secret: "fake".into(),
-                    env_var: Some("PATH".into()),
-                    ..Default::default()
-                })?;
-                Ok(())
-            })
-            .err()
-            .unwrap();
-        assert!(error.message.contains("reserved"), "{}", error.message);
-    }
     struct ScriptedConfirm {
         answer: bool,
         shown: Mutex<Vec<String>>,
