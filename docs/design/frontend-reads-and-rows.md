@@ -272,6 +272,14 @@ from the vault, so it is not under the mechanism. Each form clears it when it cl
 - Class D on the screen: `promiseWords.test.ts` scans the text of the page for always, never,
   verify, verified, complete, secure, safe, guarantee and "is cleared". Each use names its
   evidence. Two uses had none and changed (decisions 14 and 15).
+- Class D on the screen, again (U2-R1-06): an approved text matched as a part, so a second
+  promise after an approved sentence passed. The scan now reads the source with the TypeScript
+  parser: strings in either quote, template strings (an expression reads as {…}) and the text of
+  each JSX element (a child element or an expression reads as {…}). It splits each text into
+  sentences. A sentence with a promise word must equal an approved sentence of the same file in
+  full. Tests: the review's appended sentence, a promise in a template string and in a
+  single-quoted string, an approved sentence in another file, and a longer sentence that holds an
+  approved one. With the review's sentence planted, the old guard passed and the new one names it.
 - Destructive dialogs: Cancel takes the first focus in the move to the Recycle Bin and in the
   permanent delete, so the first Enter cancels and sends nothing (`Modals.keyboard.test.tsx`).
 - Stale values: every view handler that awaits native code acts on the identity it captured (an
@@ -354,6 +362,8 @@ Each decision takes the option that removes state or removes a promise.
   `backupRetention` and `journal`, and the page shows those texts.
 - The Edge tests use a mocked native boundary. They prove the page side of the contract. The
   native record of a terminal launch needs the native tests of unit 1 and the owner-present proof.
-- The promise-word scan reads double-quoted strings, template literals and JSX text in
-  `desktop/src`. It does not read single-quoted strings, text built from parts at run time, or the
-  texts of the native windows in `desktop/src-tauri`.
+- The promise-word scan reads strings, template strings and JSX text in `desktop/src`. It does not
+  read text that the page joins at run time from parts in separate places (a constant joined in a
+  function), text from the vault or from native errors, or the texts of the native windows in
+  `desktop/src-tauri`. A sentence break is a full stop, a question mark or an exclamation mark
+  before a space, so two sentences with no space between them count as one.
