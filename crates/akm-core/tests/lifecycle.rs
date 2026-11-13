@@ -5,11 +5,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use akm_core::model::META_SECRET_CHANGED;
+use akm_core::model::{META_ROTATION_DAYS, META_SCOPES, META_SECRET_CHANGED};
 use akm_core::schedule::Remaining;
 use akm_core::{ApiKeyInput, Clock, Error, KeyDisclosure, Secret, SecretChange, Vault};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
-use keepass::db::{fields, Database};
+use keepass::db::{fields, Database, Entry};
 use keepass::DatabaseKey;
 
 const PASSWORD: &str = "correct horse battery staple";
@@ -1140,5 +1140,90 @@ fn a_foreign_future_location_time_orders_a_rotation_and_a_removal_after_it() {
     assert_eq!(
         f.vault.recycled()[0].deleted_at,
         Some(utc("2030-01-01T00:00:02Z"))
+    );
+}
+
+// ------------------------- diff review of fix round 2: an update keeps what it does not change
+
+impl Fixture {
+    /// Another KeePass program rewrites the entry of `id` in the vault file, then the vault is
+    /// opened again with the same controlled clock.
+    fn with_foreign_edit(&mut self, id: &str, edit: impl FnOnce(&mut Entry)) {
+        let mut db = self.raw();
+        let entry_id = keepass::db::EntryId::from_uuid(id.parse().unwrap());
+        edit(&mut db.entry_mut(entry_id).unwrap());
+        write_database(&self.path, &db);
+        self.vault = Vault::open(&self.path, PASSWORD)
+            .unwrap()
+            .with_clock(Arc::new(self.clock.clone()));
+    }
+
+    fn entry(&self, id: &str) -> Entry {
+        let entry_id = keepass::db::EntryId::from_uuid(id.parse().unwrap());
+        (*self.raw().entry(entry_id).unwrap()).clone()
+    }
+}
+
+/// D2B-01, D2B-02: another KeePass program stored a title with outer spaces and a rotation
+/// interval above AKM's limit. An edit of the notes changes the notes and nothing else: the
+/// title keeps its spaces, and the interval is not judged, because the edit does not change it.
+#[test]
+fn an_update_writes_and_judges_only_the_fields_that_it_changes() {
+    const TITLE: &str = "  Foreign\u{200B} e\u{301}  ";
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_edit(&key.id, |entry| {
+        entry.set_unprotected(fields::TITLE, TITLE);
+        entry.set_unprotected(META_ROTATION_DAYS, "50000");
+        entry.fields.remove(fields::USERNAME);
+        entry.fields.remove(META_SCOPES);
+    });
+    let before = f.entry(&key.id);
+
+    f.clock.advance(Duration::days(1));
+    let mut edit = f.vault.edit_input(&key.id).unwrap();
+    edit.notes = Some("new note".into());
+    let saved = f.vault.update(&key.id, edit).unwrap();
+
+    assert_eq!(saved.title, TITLE);
+    assert_eq!(saved.rotation_days, Some(50_000));
+    let mut after = f.entry(&key.id);
+    assert_eq!(after.get(fields::NOTES), Some("new note"));
+    after.fields.remove(fields::NOTES);
+    assert_eq!(after.fields, before.fields, "an untouched field changed");
+    assert_eq!(after.tags, before.tags);
+    assert_eq!(after.times.expires, before.times.expires);
+
+    let mut edit = f.vault.edit_input(&key.id).unwrap();
+    edit.rotation_days = Some(50_001);
+    assert!(
+        matches!(f.vault.update(&key.id, edit), Err(Error::Invalid(_))),
+        "an interval that the edit changes is judged"
+    );
+}
+
+/// D2B-03: a key that another program wrote, with no field of AKM. An update that gives the
+/// values that the key already has saves nothing: the vault file keeps its bytes.
+#[test]
+fn an_update_with_the_stored_values_of_a_key_from_another_program_saves_nothing() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_edit(&key.id, |entry| {
+        entry
+            .fields
+            .retain(|name, _| name == fields::TITLE || name == fields::PASSWORD);
+        entry.times.expires = None;
+    });
+    let stored = f.vault.get_by_id(&key.id).unwrap();
+    let bytes = fs::read(&f.path).unwrap();
+
+    f.clock.advance(Duration::days(1));
+    let same = f.vault.edit_input(&key.id).unwrap();
+    let answer = f.vault.update(&key.id, same).unwrap();
+
+    assert_eq!(answer, stored);
+    assert!(
+        fs::read(&f.path).unwrap() == bytes,
+        "the vault file was written"
     );
 }

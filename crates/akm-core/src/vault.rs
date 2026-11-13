@@ -412,7 +412,11 @@ impl Vault {
 
     pub fn update(&mut self, id: &str, input: ApiKeyInput) -> Result<ApiKey> {
         self.ensure_writable()?;
-        input.validate_fields()?;
+        // An update judges and writes only the fields whose value differs from the stored
+        // one. Every other field stays as it is in the file, also when another program wrote
+        // it in a form that AKM does not write (D2B-01, D2B-02, D2B-03).
+        let stored = self.edit_input(id)?;
+        input.validate_changes(Some(&stored))?;
         let now = self.clock.now();
         let entry_id = self
             .find_entry_id(id)
@@ -428,13 +432,7 @@ impl Vault {
         // to save, to record or to stamp (design D4).
         let created = before.times.creation.unwrap_or_else(|| whole_second(now));
         let mut probe = before.clone();
-        write_entry(
-            &mut probe,
-            &input,
-            id,
-            created,
-            before.times.last_modification.unwrap_or(created),
-        );
+        write_fields(&mut probe, &input, Some(&stored));
         if probe == before {
             return Ok(read_entry(&before));
         }
@@ -450,7 +448,8 @@ impl Vault {
                 .entry_mut(entry_id)
                 .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
             keep_version(&mut entry, before);
-            write_entry(&mut entry, &input, id, created, stamp);
+            write_fields(&mut entry, &input, Some(&stored));
+            stamp_entry(&mut entry, id, created, stamp);
             if secret_changed {
                 entry.set_unprotected(META_SECRET_CHANGED, format_secret_change(stamp));
             }
@@ -1746,45 +1745,82 @@ fn write_entry(
     created: NaiveDateTime,
     updated: NaiveDateTime,
 ) {
-    entry.set_unprotected(fields::TITLE, input.title.trim());
-    entry.set_unprotected(
-        fields::USERNAME,
-        input.username.as_deref().unwrap_or("api-key"),
-    );
-    entry.set_protected(fields::PASSWORD, input.secret.as_str());
+    write_fields(entry, input, None);
+    stamp_entry(entry, id, created, updated);
+}
 
-    set_or_remove(entry, fields::URL, input.url.as_deref());
-    set_or_remove(entry, fields::NOTES, input.notes.as_deref());
-
-    entry.tags = input.tags.clone();
+/// The identity and the times that AKM gives an entry that it writes.
+fn stamp_entry(entry: &mut Entry, id: &str, created: NaiveDateTime, updated: NaiveDateTime) {
     entry.times.creation = Some(created);
     entry.times.last_modification = Some(updated);
-
-    match input.expires_at {
-        Some(expires) => {
-            entry.times.expires = Some(true);
-            entry.times.expiry = expires
-                .naive_utc()
-                .with_nanosecond(0)
-                .expect("zero nanoseconds are valid");
-        }
-        None => entry.times.expires = Some(false),
-    }
-
     entry.set_unprotected(META_ID, id);
-    set_or_remove(entry, META_ISSUER, input.issuer.as_deref());
-    set_or_remove(entry, META_PROJECT, input.project.as_deref());
-    set_or_remove(entry, META_ENVIRONMENT, input.environment.as_deref());
-    entry.set_unprotected(
-        META_SCOPES,
-        serde_json::to_string(&input.scopes).unwrap_or_else(|_| "[]".to_string()),
-    );
-    set_or_remove(entry, META_ENV_VAR, input.env_var.as_deref());
-    set_or_remove(
-        entry,
-        META_ROTATION_DAYS,
-        input.rotation_days.map(|days| days.to_string()).as_deref(),
-    );
+}
+
+/// Writes each field of `input` whose value differs from the one in `stored`, the key as
+/// `Vault::edit_input` reads it from this entry. With no stored key it writes every field.
+/// A field that is not written keeps the exact bytes that the file has.
+fn write_fields(entry: &mut Entry, input: &ApiKeyInput, stored: Option<&ApiKeyInput>) {
+    let changed = |same: fn(&ApiKeyInput, &ApiKeyInput) -> bool| {
+        stored.is_none_or(|stored| !same(input, stored))
+    };
+    if changed(|new, old| new.title == old.title) {
+        entry.set_unprotected(fields::TITLE, input.title.trim());
+    }
+    if changed(|new, old| new.username == old.username) {
+        entry.set_unprotected(
+            fields::USERNAME,
+            input.username.as_deref().unwrap_or("api-key"),
+        );
+    }
+    if changed(|new, old| new.secret.as_str() == old.secret.as_str()) {
+        entry.set_protected(fields::PASSWORD, input.secret.as_str());
+    }
+    if changed(|new, old| new.url == old.url) {
+        set_or_remove(entry, fields::URL, input.url.as_deref());
+    }
+    if changed(|new, old| new.notes == old.notes) {
+        set_or_remove(entry, fields::NOTES, input.notes.as_deref());
+    }
+    if changed(|new, old| new.tags == old.tags) {
+        entry.tags = input.tags.clone();
+    }
+    if changed(|new, old| new.expires_at == old.expires_at) {
+        match input.expires_at {
+            Some(expires) => {
+                entry.times.expires = Some(true);
+                entry.times.expiry = expires
+                    .naive_utc()
+                    .with_nanosecond(0)
+                    .expect("zero nanoseconds are valid");
+            }
+            None => entry.times.expires = Some(false),
+        }
+    }
+    if changed(|new, old| new.issuer == old.issuer) {
+        set_or_remove(entry, META_ISSUER, input.issuer.as_deref());
+    }
+    if changed(|new, old| new.project == old.project) {
+        set_or_remove(entry, META_PROJECT, input.project.as_deref());
+    }
+    if changed(|new, old| new.environment == old.environment) {
+        set_or_remove(entry, META_ENVIRONMENT, input.environment.as_deref());
+    }
+    if changed(|new, old| new.scopes == old.scopes) {
+        entry.set_unprotected(
+            META_SCOPES,
+            serde_json::to_string(&input.scopes).unwrap_or_else(|_| "[]".to_string()),
+        );
+    }
+    if changed(|new, old| new.env_var == old.env_var) {
+        set_or_remove(entry, META_ENV_VAR, input.env_var.as_deref());
+    }
+    if changed(|new, old| new.rotation_days == old.rotation_days) {
+        set_or_remove(
+            entry,
+            META_ROTATION_DAYS,
+            input.rotation_days.map(|days| days.to_string()).as_deref(),
+        );
+    }
 }
 
 fn set_or_remove(entry: &mut Entry, key: &str, value: Option<&str>) {

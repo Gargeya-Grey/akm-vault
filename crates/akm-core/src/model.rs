@@ -203,31 +203,76 @@ impl ApiKeyInput {
 
     /// Everything but the NUL check of the secret.
     pub(crate) fn validate_fields(&self) -> crate::Result<()> {
-        if self.title.trim().is_empty() {
+        self.validate_changes(None)
+    }
+
+    /// The checks of each field whose value differs from the one in `stored`, and of every
+    /// field when there is no stored key. An update does not judge a field that it leaves as
+    /// it is: another program, or an older rule, can have stored a value that AKM would not
+    /// take today, and that value must not stop an edit of another field (D2B-02).
+    pub(crate) fn validate_changes(&self, stored: Option<&Self>) -> crate::Result<()> {
+        let changed =
+            |same: fn(&Self, &Self) -> bool| stored.is_none_or(|stored| !same(self, stored));
+        let title = changed(|new, old| new.title == old.title);
+        if title && self.title.trim().is_empty() {
             return Err(crate::Error::Invalid("title must not be empty".into()));
         }
-        if self.secret.is_empty() {
+        if changed(|new, old| new.secret.as_str() == old.secret.as_str()) && self.secret.is_empty()
+        {
             return Err(crate::Error::Invalid("secret must not be empty".into()));
         }
         let texts = [
-            ("title", Some(&self.title)),
-            ("username", self.username.as_ref()),
-            ("issuer", self.issuer.as_ref()),
-            ("project", self.project.as_ref()),
-            ("environment", self.environment.as_ref()),
-            ("url", self.url.as_ref()),
-            ("notes", self.notes.as_ref()),
+            ("title", Some(&self.title), title),
+            (
+                "username",
+                self.username.as_ref(),
+                changed(|new, old| new.username == old.username),
+            ),
+            (
+                "issuer",
+                self.issuer.as_ref(),
+                changed(|new, old| new.issuer == old.issuer),
+            ),
+            (
+                "project",
+                self.project.as_ref(),
+                changed(|new, old| new.project == old.project),
+            ),
+            (
+                "environment",
+                self.environment.as_ref(),
+                changed(|new, old| new.environment == old.environment),
+            ),
+            (
+                "url",
+                self.url.as_ref(),
+                changed(|new, old| new.url == old.url),
+            ),
+            (
+                "notes",
+                self.notes.as_ref(),
+                changed(|new, old| new.notes == old.notes),
+            ),
         ];
-        let lists = [("scope", &self.scopes), ("tag", &self.tags)];
+        let lists = [
+            (
+                "scope",
+                &self.scopes,
+                changed(|new, old| new.scopes == old.scopes),
+            ),
+            ("tag", &self.tags, changed(|new, old| new.tags == old.tags)),
+        ];
         let nul_field = texts
             .iter()
-            .find(|(_, value)| value.is_some_and(|value| value.contains('\0')))
-            .map(|(label, _)| *label)
+            .find(|(_, value, changed)| *changed && value.is_some_and(|value| value.contains('\0')))
+            .map(|(label, _, _)| *label)
             .or_else(|| {
                 lists
                     .iter()
-                    .find(|(_, values)| values.iter().any(|value| value.contains('\0')))
-                    .map(|(label, _)| *label)
+                    .find(|(_, values, changed)| {
+                        *changed && values.iter().any(|value| value.contains('\0'))
+                    })
+                    .map(|(label, _, _)| *label)
             });
         if let Some(label) = nul_field {
             return Err(crate::Error::Invalid(format!(
@@ -235,38 +280,47 @@ impl ApiKeyInput {
             )));
         }
         if let Some(var) = &self.env_var {
-            if !is_valid_env_var(var) {
+            if changed(|new, old| new.env_var == old.env_var) && !is_valid_env_var(var) {
                 return Err(crate::Error::Invalid(format!(
                     "{var:?} is not a valid environment variable name (use A-Z, 0-9, _)"
                 )));
             }
         }
-        let resolved = self
-            .env_var
-            .clone()
-            .unwrap_or_else(|| derive_env_var(&self.title));
-        if let Some(class) = reserved_class(&resolved) {
-            return Err(crate::Error::Invalid(format!(
-                "{resolved:?} is reserved: {}; set a different env var name for this key",
-                class.reason()
-            )));
-        }
-        if let Some(expires) = self.expires_at {
-            crate::schedule::require_whole_second(expires)?;
-        }
-        if let Some(days) = self.rotation_days {
-            if days == 0 {
-                return Err(crate::Error::Invalid(
-                    "rotation_days must be greater than zero".into(),
-                ));
-            }
-            if days > MAX_ROTATION_DAYS {
+        let resolved = self.resolved_env_var();
+        if stored.is_none_or(|stored| stored.resolved_env_var() != resolved) {
+            if let Some(class) = reserved_class(&resolved) {
                 return Err(crate::Error::Invalid(format!(
-                    "rotation_days must be at most {MAX_ROTATION_DAYS} (100 years)"
+                    "{resolved:?} is reserved: {}; set a different env var name for this key",
+                    class.reason()
                 )));
             }
         }
+        if let Some(expires) = self.expires_at {
+            if changed(|new, old| new.expires_at == old.expires_at) {
+                crate::schedule::require_whole_second(expires)?;
+            }
+        }
+        if let Some(days) = self.rotation_days {
+            if changed(|new, old| new.rotation_days == old.rotation_days) {
+                if days == 0 {
+                    return Err(crate::Error::Invalid(
+                        "rotation_days must be greater than zero".into(),
+                    ));
+                }
+                if days > MAX_ROTATION_DAYS {
+                    return Err(crate::Error::Invalid(format!(
+                        "rotation_days must be at most {MAX_ROTATION_DAYS} (100 years)"
+                    )));
+                }
+            }
+        }
         Ok(())
+    }
+
+    fn resolved_env_var(&self) -> String {
+        self.env_var
+            .clone()
+            .unwrap_or_else(|| derive_env_var(&self.title))
     }
 }
 
