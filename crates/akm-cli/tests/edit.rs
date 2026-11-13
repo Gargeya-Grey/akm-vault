@@ -407,3 +407,34 @@ fn a_refused_edit_changes_nothing() {
     }
     assert!(!f.journal().contains("update-completed"));
 }
+
+/// The test audit of 13 Nov 2026 found no test of this refusal. `init` on the path of an
+/// existing vault must not replace the vault.
+#[test]
+fn init_over_an_existing_vault_is_refused_and_the_file_stays_as_it_was() {
+    let fixture = Fixture::new();
+    let bytes = fs::read(&fixture.vault).unwrap();
+    let output = fixture.run(&["init"]);
+    assert!(!output.status.success(), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("already exists"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(fs::read(&fixture.vault).unwrap(), bytes);
+    assert_success(&fixture.run(&["get", "Gamma"]));
+}
+
+/// The test audit of 13 Nov 2026 found no test of this refusal.
+#[test]
+fn get_refuses_a_field_that_does_not_exist_and_prints_nothing() {
+    let fixture = Fixture::new();
+    let output = fixture.run(&["get", "Gamma", "--field", "no-such-field"]);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("unknown field"),
+        "{}",
+        stderr(&output)
+    );
+}
