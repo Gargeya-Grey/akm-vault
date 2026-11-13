@@ -6,8 +6,8 @@ import { IMPORT_APPLIED_EVENT, sessionGeneration } from "./sessionBoundary";
 
 /**
  * Every read of native state that a view shows goes through `useNativeRead` (fault classes K and
- * L, docs/design/frontend-reads-and-rows.md). The reads live in native.ts, which a view cannot
- * import (`readGuard.test.ts`), and each entry of `nativeReads` is a token that only this hook runs.
+ * L, docs/design/frontend-reads-and-rows.md). The reads live in native.ts, which a view must not
+ * import, and each entry of `nativeReads` is a token that only this hook runs.
  *
  * - Only the newest request can set the state. A late success or a late failure of an older
  *   request changes nothing.

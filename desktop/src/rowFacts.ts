@@ -9,8 +9,8 @@ import { useNow } from "./useNow";
  * and U2-R1-02, docs/design/frontend-reads-and-rows.md). One function builds the facts of each
  * kind of row. The row, its accessible description, every dialog that acts on the key, and the
  * tests use them. Every key row and every place that names a key draws the key's short ID, so two
- * keys never draw the same, whatever their values. `rowFactsGuard.test.ts` fails when a page file
- * draws a key without them.
+ * keys never draw the same, whatever their values. The tests of each view (RowIdentity,
+ * KeyTarget, RecycleBin.facts) draw two keys that differ by one fact and tell them apart.
  */
 export interface DrawnFact {
   /** The label of the fact in a fact list and in the accessible description. */

@@ -7,7 +7,7 @@ import type { Sealed } from "./types";
  * session, the generation of the vault data and the scope. Only `plaintext.tsx` opens a sealed
  * value, and only while all three still hold and the view names the same scope. A value found
  * stale is dropped at once and never shows again: only a new request shows plaintext again.
- * `plaintextGuard.test.ts` keeps every other file away from this module.
+ * No other file may import this module. No test enforces this rule: a review does.
  */
 
 export interface Stamp {

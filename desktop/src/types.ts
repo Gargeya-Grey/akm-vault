@@ -153,8 +153,8 @@ export type Theme = "light" | "dark";
 /**
  * The kinds of a native error reply: the contract with native code (U2-R1-07). A native command
  * rejects only with a `CommandError`, a plain object `{ kind, message }` whose kind is on this list.
- * `native.ts` treats a rejection of any other shape as a transport failure. `nativeErrorKinds.test.ts`
- * compares this list with the kinds that the native sources build.
+ * `native.ts` treats a rejection of any other shape as a transport failure. A kind that native
+ * code adds must be added here too: no test compares the two lists.
  */
 export const NATIVE_ERROR_KINDS = [
   "ambiguous", "busy", "changedOnDisk", "clipboard", "clipboardLost", "clipboardNotReleased", "clipboardUncertain",
