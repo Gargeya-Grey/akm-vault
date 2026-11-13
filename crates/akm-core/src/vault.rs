@@ -102,8 +102,9 @@ pub enum VaultWarningKind {
     /// A file that AKM wrote beside the vault could not be made private to the current
     /// user (the file system keeps no Windows permissions, or refused them).
     FilePermissions,
-    /// The vault file changed outside AKM, and AKM cannot confirm that it is the same vault.
-    /// Its history continues in the existing journal (FR-12).
+    /// The vault file changed outside AKM (FR-12), or the journal mapping was started again
+    /// after damage (FV-01), and AKM cannot confirm that it is the same vault. Its history
+    /// continues in the journal that AKM keeps for its path.
     JournalLineageUnconfirmed,
 }
 
@@ -273,7 +274,7 @@ impl Vault {
         if self.lineage_unconfirmed.swap(false, Ordering::Relaxed) {
             warnings.push(VaultWarning {
                 kind: VaultWarningKind::JournalLineageUnconfirmed,
-                message: "this vault file changed outside AKM, so AKM cannot confirm that it is the same vault. Its history continues in the existing journal.".into(),
+                message: "this vault file changed outside AKM, or the journal mapping of this device was started again, so AKM cannot confirm that it is the same vault. Its history continues in the journal that AKM keeps for this path.".into(),
             });
         }
         warnings

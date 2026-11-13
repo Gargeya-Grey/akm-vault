@@ -206,7 +206,15 @@ The hash chain detects some edits but cannot prove completeness. Truncating the
 end, deleting the log or rewriting the whole chain is not authenticated. Treat it
 as a convenience journal, not security evidence. A damaged journal is kept as it is,
 reported by kind (`truncatedTail`, `malformedJson`, `brokenLink`, `hashMismatch`) with
-no claim about the cause, and gets no new records. If a record cannot be saved
+no claim about the cause, and gets no new records. A damaged journal stops the reveals,
+copies, exports and launches of its vault. A damaged mapping file stops them for every
+vault on this device. Nothing recovers by itself. In the desktop app, Activity can start
+again after you approve in a native window that names the damaged file. AKM keeps that
+file unchanged beside it, under a dated name, and puts a new file in its place. After a
+damaged journal, the new journal starts with a record of the gap. After a damaged mapping
+file, the earlier journals stay in the folder, unchanged and linked to no vault. The next
+record of each vault then starts a new journal with a record of the gap, and AKM warns
+that it cannot confirm the vault's lineage. The CLI has no recovery. If a record cannot be saved
 before a disclosure, an export or a launch, the action does not happen. If it cannot
 be saved after a committed change, AKM prints a warning that says the change is saved
 and that you must not repeat it.

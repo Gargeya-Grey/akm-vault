@@ -662,35 +662,33 @@ pub async fn audit_recover(
 }
 
 /// The recovery, in the order that keeps the old journal usable as evidence after every
-/// failure: a journal that is not damaged is refused before any window; the user approves in a
-/// native window that holds no gate; the recovery runs bound to the session, the revision and
-/// the presentation of the request, so a lock, a change or a hide during the window refuses it
-/// with nothing moved. The core call writes the new journal first, keeps the old bytes under a
-/// dated name and puts the old journal back if a step fails (`AuditLog::recover_damaged`).
+/// failure: nothing damaged is refused before any window; the user approves in a native window
+/// that names the damaged file and holds no gate; the recovery runs bound to the session, the
+/// revision and the presentation of the request, so a lock, a change or a hide during the
+/// window refuses it with nothing moved. The damaged file is the journal of this vault, or the
+/// mapping of the device, which no snapshot can read (FV-01). The recovery moves only the file
+/// that the window named (`AuditLog::recover_damaged_file`). The core call writes the new file
+/// first, keeps the old bytes under a dated name and puts the old file back if a step fails.
 fn run_recovery(
     session: &Session,
     host: &dyn ImportConfirm,
     session_id: &str,
 ) -> Result<Option<JournalRecoveryView>, CommandError> {
     let expected = session.snapshot_for(session_id)?;
-    let file = session
+    let damaged = session
         .access_reviewed(Access::Read, expected, |vault| {
-            let log = vault.audit_log();
-            if log.snapshot(0)?.state != akm_core::audit::AuditState::Corrupt {
-                return Err(CommandError::new(
+            vault.audit_log().damaged_file()?.ok_or_else(|| {
+                CommandError::new(
                     "journal",
                     "The journal is not damaged, so nothing was changed.",
-                ));
-            }
-            let path = log.journal_path()?.ok_or_else(|| {
-                CommandError::new("journal", "There is no journal to start over.")
-            })?;
-            Ok(path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default())
+                )
+            })
         })?
         .value;
+    let file = damaged
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let review = DisclosureReview::recovery(&file)?;
     if disclosure::ask(session, host, expected.ticket, &review)? == Approval::Declined {
         return Ok(None);
@@ -700,7 +698,7 @@ fn run_recovery(
     // an access that then refuses means that the session ended during the move.
     let mut recovered = None;
     let finished = session.access_reviewed(Access::Read, expected, |vault| {
-        recovered = Some(vault.audit_log().recover_damaged()?);
+        recovered = Some(vault.audit_log().recover_damaged_file(&damaged)?);
         host.journal_moved();
         Ok(())
     });
@@ -3366,6 +3364,11 @@ mod tests {
     /// An unlocked session with a fake clock, a fake clipboard and three fake keys: two in
     /// `app/dev` and one in `app/prod`.
     fn disclosing() -> Disclosing {
+        disclosing_in(akm_core::journal::JournalRoot::from_environment())
+    }
+
+    /// Like `disclosing`, with the journal in `journal`.
+    fn disclosing_in(journal: akm_core::journal::JournalRoot) -> Disclosing {
         use crate::{
             clipboard::tests::{FakeClipboard, FakeData},
             policy::Signal,
@@ -3382,10 +3385,11 @@ mod tests {
         let ticket = session.begin_open().unwrap();
         session
             .open(ticket, || {
-                Vault::create(
+                Vault::create_in(
                     directory.path().join("vault.kdbx"),
                     "fake-test-password-123!",
                     None,
+                    journal,
                 )
                 .map_err(Into::into)
             })
@@ -4161,6 +4165,128 @@ mod tests {
         assert_eq!(fs::read(&journal).unwrap(), damaged);
     }
 
+    /// FV-01, the reviewer's probe through the handler: two vaults share one journal folder (a
+    /// temporary one, because the test damages its mapping). A damaged mapping stops the
+    /// reveals of both. The recovery window names the mapping. After it, both vaults reveal
+    /// again, the damaged bytes are kept, both journal files are as they were, and the first
+    /// reveal of each vault gives the page one journalLineageUnconfirmed notice.
+    #[test]
+    fn fv01_a_damaged_mapping_is_recovered_through_the_handler_and_both_vaults_resume() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = akm_core::journal::JournalRoot::at(folder.path().join("journal"));
+        let both = [disclosing_in(root.clone()), disclosing_in(root)];
+        let yes = ScriptedConfirm::new(true);
+        let lineage = |f: &Disclosing| {
+            let report = serde_json::to_value(f.session.warnings().unwrap()).unwrap();
+            report["operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|notice| notice["kind"] == "journalLineageUnconfirmed")
+                .count()
+        };
+        let journals: Vec<_> = both
+            .iter()
+            .map(|f| {
+                assert!(reveal_one(f, &yes, KeyDisclosure::Reveal)
+                    .unwrap()
+                    .is_some());
+                journal_of(f)
+            })
+            .collect();
+        let mapping = folder.path().join("journal").join("mapping.json");
+        let bytes = fs::read(&mapping).unwrap();
+        fs::write(&mapping, &bytes[..bytes.len() / 2]).unwrap();
+        let damaged = fs::read(&mapping).unwrap();
+        for f in &both {
+            let refused = reveal_one(f, &yes, KeyDisclosure::Reveal).err().unwrap();
+            assert_eq!(refused.kind, "journal");
+        }
+
+        let kept = recover(&both[0], &yes).unwrap().expect("approved");
+
+        let window = yes.shown().last().unwrap().clone();
+        assert!(window.contains("mapping.json"), "{window}");
+        assert_eq!(
+            fs::read(mapping.with_file_name(&kept.kept_name)).unwrap(),
+            damaged
+        );
+        for f in &both {
+            assert_eq!(lineage(f), 0);
+            assert!(reveal_one(f, &yes, KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some());
+            assert_eq!(lineage(f), 1, "the first reveal warns");
+            assert!(reveal_one(f, &yes, KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some());
+            assert_eq!(lineage(f), 1, "and only the first");
+        }
+        for (path, bytes) in journals {
+            assert_eq!(fs::read(&path).unwrap(), bytes, "{}", path.display());
+        }
+    }
+
+    /// FV-01, class B through the handler: the window named the damaged mapping. While it is
+    /// open, another program puts the mapping back and damages the journal of this vault. The
+    /// approval covered the mapping, not the journal, so the recovery refuses and moves nothing.
+    #[test]
+    fn fv01_an_approval_of_the_mapping_moves_no_journal_that_was_damaged_later() {
+        let folder = tempfile::tempdir().unwrap();
+        let journal = folder.path().join("journal");
+        let f = disclosing_in(akm_core::journal::JournalRoot::at(&journal));
+        let (chain, mut damaged_chain) = journal_of(&f);
+        damaged_chain.extend_from_slice(b"{this is not a record}\n");
+        let mapping = journal.join("mapping.json");
+        let good = fs::read(&mapping).unwrap();
+        fs::write(&mapping, &good[..good.len() / 2]).unwrap();
+        let names = || {
+            let mut names: Vec<_> = fs::read_dir(&journal)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        let before = names();
+        let (path, bytes) = (mapping.clone(), good.clone());
+        let (chain_path, chain_bytes) = (chain.clone(), damaged_chain.clone());
+        let swapping = ScriptedConfirm::during(true, move || {
+            fs::write(&path, &bytes).unwrap();
+            fs::write(&chain_path, &chain_bytes).unwrap();
+        });
+
+        let refused = recover(&f, &swapping).unwrap_err();
+
+        assert_eq!(refused.kind, "journal", "{refused:?}");
+        assert!(swapping.shown().last().unwrap().contains("mapping.json"));
+        assert_eq!(fs::read(&mapping).unwrap(), good);
+        assert_eq!(
+            fs::read(&chain).unwrap(),
+            damaged_chain,
+            "the journal stays"
+        );
+        assert_eq!(
+            names(),
+            before,
+            "nothing was kept aside, nothing was started"
+        );
+    }
+
+    /// The journal file of the fixture and its bytes.
+    fn journal_of(f: &Disclosing) -> (PathBuf, Vec<u8>) {
+        let path = f
+            .session
+            .access(Access::Read, None, |vault| {
+                Ok(vault.audit_log().journal_path()?)
+            })
+            .unwrap()
+            .value
+            .expect("the added keys made a journal");
+        let bytes = fs::read(&path).unwrap();
+        (path, bytes)
+    }
+
     #[test]
     fn fr14_the_command_is_registered_and_takes_the_session_and_the_native_window() {
         let source = include_str!("commands.rs");
@@ -4178,8 +4304,12 @@ mod tests {
         let run = &code[code.find("fn run_recovery(").unwrap()..];
         let run = &run[..run.find("\n}\n").unwrap()];
         assert!(
-            run.find("disclosure::ask(").unwrap() < run.find("recover_damaged()").unwrap(),
+            run.find("disclosure::ask(").unwrap() < run.find("recover_damaged_file(").unwrap(),
             "the user is asked before anything moves"
+        );
+        assert!(
+            !run.contains("recover_damaged()"),
+            "the recovery moves only the file that the window named"
         );
     }
 
