@@ -314,6 +314,26 @@ fn clear_empties_an_optional_field_and_keeps_the_others() {
     assert_only_changed(&before, &after, &["AKM_SCOPES"]);
 }
 
+/// The class of FV-12: a field that `add` and `edit` store is a field that `get` shows.
+#[test]
+fn get_shows_the_stored_username_and_tags() {
+    let fixture = Fixture::new();
+    let view = fixture.run(&["get", "Gamma"]);
+    assert_success(&view);
+    let shown = stdout(&view);
+    assert!(shown.contains("Username:    fake-user\n"), "{shown}");
+    assert!(shown.contains("Tags:        fake-tag, plain\n"), "{shown}");
+    for (field, value) in [("username", "fake-user"), ("tags", "fake-tag,plain")] {
+        let one = fixture.run(&["get", "Gamma", "--field", field]);
+        assert_success(&one);
+        assert_eq!(stdout(&one).trim_end(), value, "--field {field}");
+    }
+    assert_success(&fixture.run(&["edit", "Gamma", "--clear", "username", "--clear", "tags"]));
+    let cleared = stdout(&fixture.run(&["get", "Gamma"]));
+    assert!(cleared.contains("Username:    -\n"), "{cleared}");
+    assert!(cleared.contains("Tags:        -\n"), "{cleared}");
+}
+
 #[test]
 fn an_edit_that_changes_nothing_saves_nothing_and_says_so() {
     let f = Fixture::new();

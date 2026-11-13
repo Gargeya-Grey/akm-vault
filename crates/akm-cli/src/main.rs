@@ -1340,7 +1340,9 @@ struct KeyMetadata {
     environment: Option<String>,
     env_var: String,
     issuer: Option<String>,
+    username: Option<String>,
     scopes: Vec<String>,
+    tags: Vec<String>,
     url: Option<String>,
     notes: Option<String>,
     expires_at: Option<DateTime<Utc>>,
@@ -1360,7 +1362,9 @@ impl KeyMetadata {
             environment: key.environment.clone(),
             env_var: key.resolved_env_var(),
             issuer: key.issuer.clone(),
+            username: key.username.clone(),
             scopes: key.scopes.clone(),
+            tags: key.tags.clone(),
             url: key.url.clone(),
             notes: key.notes.clone(),
             expires_at: key.expires_at,
@@ -1395,11 +1399,25 @@ fn print_key(
     writeln!(out, "Issuer:      {}", key.issuer.as_deref().unwrap_or("-"))?;
     writeln!(
         out,
+        "Username:    {}",
+        key.username.as_deref().unwrap_or("-")
+    )?;
+    writeln!(
+        out,
         "Scopes:      {}",
         if key.scopes.is_empty() {
             "-".to_string()
         } else {
             key.scopes.join(", ")
+        }
+    )?;
+    writeln!(
+        out,
+        "Tags:        {}",
+        if key.tags.is_empty() {
+            "-".to_string()
+        } else {
+            key.tags.join(", ")
         }
     )?;
     writeln!(out, "URL:         {}", key.url.as_deref().unwrap_or("-"))?;
@@ -1460,6 +1478,8 @@ fn print_field(out: &mut dyn Write, key: &KeyMetadata, field: &str) -> Result<()
         "project" => writeln!(out, "{}", key.project.as_deref().unwrap_or(""))?,
         "env" | "environment" => writeln!(out, "{}", key.environment.as_deref().unwrap_or(""))?,
         "issuer" => writeln!(out, "{}", key.issuer.as_deref().unwrap_or(""))?,
+        "username" => writeln!(out, "{}", key.username.as_deref().unwrap_or(""))?,
+        "tags" => writeln!(out, "{}", key.tags.join(","))?,
         "url" => writeln!(out, "{}", key.url.as_deref().unwrap_or(""))?,
         "notes" => writeln!(out, "{}", key.notes.as_deref().unwrap_or(""))?,
         "scopes" => writeln!(out, "{}", key.scopes.join(","))?,
@@ -1472,7 +1492,7 @@ fn print_field(out: &mut dyn Write, key: &KeyMetadata, field: &str) -> Result<()
         )?,
         other => {
             return Err(Error::Invalid(format!(
-                "unknown field {other:?}; try id, title, secret, project, env, issuer, url, notes, scopes, env_var, expires"
+                "unknown field {other:?}; try id, title, secret, project, env, issuer, username, url, notes, scopes, tags, env_var, expires"
             )))
         }
     }
