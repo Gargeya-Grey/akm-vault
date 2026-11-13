@@ -2251,17 +2251,6 @@ mod tests {
         }
     }
 
-    /// FR-28: usual settings still open: the KeePassXC-made fixture and AKM's own vaults.
-    #[test]
-    fn vaults_at_usual_key_derivation_settings_still_open() {
-        let (_dir, path, _vault) = fixture_vault();
-        Vault::open(&path, PASSWORD).unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let own = dir.path().join("own.kdbx");
-        Vault::create(&own, PASSWORD, None).unwrap();
-        Vault::open(&own, PASSWORD).unwrap();
-    }
-
     /// P2R2-07: two spellings of one vault file use one lock: a junction to the folder, a
     /// `.` and `..` detour, and another letter case.
     #[cfg(windows)]

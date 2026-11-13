@@ -6,8 +6,8 @@
 //! This module is the only place in AKM that computes with dates (core review 1, finding 6).
 //! A day count comes from a person or from a vault, so no count can make it panic: each
 //! function here gives a checked or a saturated result, and the lint below refuses an
-//! operator that can overflow. The test `date_arithmetic_lives_only_in_the_schedule_module`
-//! fails when other code computes with dates.
+//! operator that can overflow. No test stops other code from computing with dates: a review
+//! does.
 #![deny(clippy::arithmetic_side_effects)]
 
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, SecondsFormat, Utc};

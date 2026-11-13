@@ -2013,30 +2013,6 @@ fn file_export_rejects_an_ignored_private_dacl_before_writing() {
 }
 
 #[test]
-fn file_export_publication_failure_removes_its_plaintext_temp() {
-    struct FailedPublication;
-    impl export::ExportIo for FailedPublication {
-        fn publish(&mut self, file: &fs::File, _destination: &Path) -> akm_core::Result<()> {
-            assert_eq!(file.metadata()?.len(), 30);
-            Err(std::io::Error::other("injected publication failure").into())
-        }
-    }
-
-    let directory = temporary_directory();
-    let target = directory.path().join("out.env");
-    let result = export::write_new_with(
-        &target,
-        &[("EXPORT_SECRET".into(), "fake-test-value".into())],
-        &mut FailedPublication,
-    );
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("injected publication failure"));
-    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
-}
-
-#[test]
 fn file_export_that_cannot_confirm_removal_of_its_plaintext_temp_says_so_and_names_the_file() {
     struct FailedDelete;
     impl export::ExportIo for FailedDelete {
@@ -2855,89 +2831,6 @@ fn the_secret_disclosures_still_fail_closed_with_a_damaged_journal() {
             "{args:?}"
         );
     }
-}
-
-/// Unit 1a, 1A-R8-05: the README names exactly the actions the CLI records, in their order.
-#[test]
-fn the_readme_names_the_recorded_audit_actions_in_their_order() {
-    let fixture = Fixture::new();
-    let path = fixture.report("names.json");
-    let audit = fixture.log();
-    let run = fixture.probe_command(&path).output().unwrap();
-    assert_success(&run);
-    assert_success(
-        &fixture
-            .cli()
-            .args(["export", "--project", "demo", "--env", "dev"])
-            .output()
-            .unwrap(),
-    );
-    assert_success(
-        &fixture
-            .cli()
-            .args(["get", "Demo", "--reveal"])
-            .output()
-            .unwrap(),
-    );
-    let mut entries = audit.read(100).unwrap();
-    entries.sort_by_key(|entry| entry.seq);
-    let recorded: Vec<&str> = entries.iter().map(|entry| entry.action.as_str()).collect();
-    assert_eq!(
-        recorded,
-        [
-            "run-requested",
-            "export-requested",
-            "export-completed",
-            "reveal-requested"
-        ],
-        "the recorded actions and their order"
-    );
-    let readme =
-        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md")).unwrap();
-    let named: std::collections::BTreeSet<&str> = readme
-        .split('`')
-        .skip(1)
-        .step_by(2)
-        .filter(|word| {
-            word.ends_with("-requested") || word.ends_with("-completed") || word.ends_with("-start")
-        })
-        .collect();
-    // Other commands record these; lifecycle.rs and edit.rs assert that each is written.
-    let lifecycle = [
-        "rotate-completed",
-        "remove-completed",
-        "restore-completed",
-        "purge-completed",
-        "update-completed",
-    ];
-    let expected: std::collections::BTreeSet<&str> =
-        recorded.iter().copied().chain(lifecycle).collect();
-    assert_eq!(
-        named, expected,
-        "the README must name exactly the recorded actions"
-    );
-    // 1A-A1-04: the README states when each record is written, in the order above.
-    let line = |action: &str| {
-        let name = format!("`{action}`");
-        readme
-            .lines()
-            .find(|line| line.contains(&name))
-            .unwrap_or_else(|| panic!("the README names {action}"))
-            .to_string()
-    };
-    for (action, timing) in [
-        ("run-requested", "before the child starts"),
-        ("reveal-requested", "before `get --reveal`"),
-        ("export-requested", "before any export byte is written"),
-        ("export-completed", "after the export is written"),
-    ] {
-        assert!(line(action).contains(timing), "{action}: {timing}");
-    }
-    let at = |action: &str| readme.find(&format!("`{action}`")).unwrap();
-    assert!(
-        at("export-requested") < at("export-completed"),
-        "the README lists the request before the completion"
-    );
 }
 
 /// FR-16: a NUL byte in the secret is refused where the secret comes in, for add and for

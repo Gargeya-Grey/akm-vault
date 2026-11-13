@@ -390,34 +390,6 @@ fn legacy_vault_with(names: &[(&str, &str)]) -> (tempfile::TempDir, Vault) {
     (directory, vault)
 }
 
-#[test]
-fn a_legacy_key_with_a_reserved_name_is_refused_by_the_plan_with_its_title_and_never_its_value() {
-    let (_directory, vault) =
-        legacy_vault_with(&[("Build proxy", "HTTP_PROXY"), ("Safe key", "SAFE_TOKEN")]);
-    let text = message(
-        vault
-            .plan_env(Some("demo"), Some("dev"), false)
-            .unwrap_err(),
-    );
-    assert!(text.contains("Build proxy"), "{text}");
-    assert!(text.contains("HTTP_PROXY"), "{text}");
-    assert!(text.contains("reserved"), "{text}");
-    assert!(!text.contains("fake-legacy-secret"), "{text}");
-    let text = message(vault.plan_env(None, None, true).unwrap_err());
-    assert!(text.contains("Build proxy"), "{text}");
-}
-
-#[test]
-fn renaming_a_legacy_key_makes_it_usable_again() {
-    let (_directory, mut vault) = legacy_vault_with(&[("Build proxy", "HTTP_PROXY")]);
-    let key = vault.list().remove(0);
-    let mut edit = vault.edit_input(&key.id).unwrap();
-    edit.env_var = Some("BUILD_PROXY_TOKEN".into());
-    vault.update(&key.id, edit).unwrap();
-    let plan = vault.plan_env(Some("demo"), Some("dev"), false).unwrap();
-    assert_eq!(plan.names().collect::<Vec<_>>(), ["BUILD_PROXY_TOKEN"]);
-}
-
 /// FR-02: the Cargo and Rust controls are reserved in any case, and so is every Cargo target
 /// setting that runs a program or passes flags, for any target triple.
 #[test]

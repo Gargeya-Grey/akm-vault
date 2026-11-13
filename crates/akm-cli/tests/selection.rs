@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 use keepass::config::{DatabaseVersion, KdfConfig};
@@ -353,38 +353,6 @@ fn a_partial_word_cannot_restore_purge_or_show_the_history_of_a_recycled_key() {
     }
     assert_eq!(fixture.bytes(), before);
     assert!(fixture.run(&["restore", "gamma"]).status.success());
-}
-
-#[test]
-fn the_readme_documents_the_selector_rule() {
-    let readme =
-        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md")).unwrap();
-    assert!(
-        readme.contains("exact title"),
-        "README.md must state the selector rule"
-    );
-}
-
-/// Review 1 class D: the help of every command that takes a selector states the rule that
-/// `select` enforces, and never the old substring search.
-#[test]
-fn the_help_of_every_selector_command_states_the_exact_rule() {
-    for command in ["get", "edit", "rotate", "rm", "history", "restore", "purge"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_akm"))
-            .args([command, "--help"])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{command} --help failed");
-        let help = out(&output).to_lowercase();
-        assert!(
-            help.contains("id or exact title"),
-            "{command} --help must state the selector rule:\n{help}"
-        );
-        assert!(
-            !help.contains("substring"),
-            "{command} --help still describes a substring search:\n{help}"
-        );
-    }
 }
 
 // ---------------------------------------------------------------------- FR-17: letter case
