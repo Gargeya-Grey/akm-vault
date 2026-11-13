@@ -167,3 +167,50 @@ All instances: 32 waits in the library tests (commands, session, launch, reminde
 | An IPC wait keeps its own bound of 60 seconds | `class_q_every_wait_for_an_event_that_must_happen_uses_the_shared_patience` |
 
 Limit: a wait that proves promptness can still fail on a machine that is slow enough. Those bounds are 300 milliseconds to 10 seconds, for an act that takes milliseconds alone.
+
+## 10. Class sweeps
+
+Each sweep reads every instance in the production code of `desktop/src-tauri/src`, before its test module. The line numbers are at the stage F commit.
+
+### 10.1 Classes A and P, the gate and each access function
+
+- `Held::new` has one production caller, in `Session::commit_point` (`session.rs:786`). It runs after `bound` checked the binding under the gate (`session.rs:785`). Every act that takes `&Held` runs there: the vault replacement (the core `CommitGate`), the terminal resume (`launch.rs:472`), the rename of the saved path (`commands.rs:207`) and the notification hand-over (`reminders.rs:248`).
+- The other 26 functions of `session.rs` that take the gate read or change native state. None of them acts outside AKM, except the lock notice, which the lock itself sends.
+- `Session::access` (`session.rs:1029`) and `Session::access_reviewed` (`session.rs:1053`) both run `access_checked` (`session.rs:1062`). Under the gate it checks that the stored vault belongs to the current session. With an expected snapshot, it also checks the ticket, the revision and, when bound, the presentation (`session.rs:1074` to `1095`). A write replaces the file only through the `VaultCommit` that the access installs.
+- After each native window, the caller checks the session again: the folder window (`launch.rs:427` and `429`), the launch review (`launch.rs:443`, then the reviewed access at `launch.rs:456`), the disclosure review (`disclosure.rs:168` and `178`), the save window (`commands.rs:995`) and the import review (`commands.rs:1223`).
+- The copy, the publication and the reveal stay outside the commit point (decisions 3 and 4, inventory rows 6 to 8). The copy checks before and after its act (`session.rs:1216` and `1230`). The reveal checks and hands the value back under one gate hold (`session.rs:1233`).
+
+### 10.2 Class B, each binding is checked where it is used
+
+- `bound` checks each binding of a commit (`session.rs:800`): the ticket, the named session, or the ticket and the revision.
+- A stamped value carries its snapshot. The reveal (`session.rs:1236` to `1241`) and the copy (`session.rs:1205` to `1215`) check its ticket and its presentation.
+- The status read of an opening passes no snapshot (`commands.rs:190`). Its caller checks the ticket of the result where it uses it (`commands.rs:200`).
+- An operation record names the session where the request started (`session.rs:1292`). The class N test shows that a record of session A changes nothing in session B.
+
+### 10.3 Class C, no state moves before its record is durable
+
+- The revision moves in `commit_point` only after the act succeeded (`session.rs:786` to `789`). The act is the file replacement.
+- The fence of the saved path moves only after the rename succeeded (`settings.rs:114`).
+- An operation record is written when the guard drops, after the act. `done` follows the commit (`launch.rs:474`).
+- The terminal values leave the vault only after the `run-requested` record is durable: the record at `launch.rs:497`, then the commit that copies the values at `launch.rs:503`.
+
+### 10.4 A hostile value gives a controlled error
+
+- Production code has two `expect` calls, in `GateGuard` (`session.rs:224` and `230`). They state that the guard lives until its drop. No input reaches them. `clipboard_fake.rs` and `test_support.rs` compile for tests only (`lib.rs:2` and `21`).
+- Each slice index has a guard before it: `launch.rs:289` after the length check at `launch.rs:283`; `clipboard.rs:857`, whose end is a position in the same slice; `private_export.rs:20` to `29` after the length check; `private_export.rs:602`, `637` and `645` after `validate_destination` checked the drive form (`private_export.rs:100` and `117`, called at `private_export.rs:281`).
+- A poisoned mutex gives a fixed error: the gate (`session.rs:508`), the vault (`session.rs:1069`) and the settings fence (`settings.rs:102`).
+- A panic in a native step gives a fixed error (stage F, below). A panic in a review window gives a fixed error too (`review_window.rs:93`).
+
+### 10.5 Error texts that reach the page
+
+- Fixed in stage F: a native step that panicked passed its panic message to the page. On the code before the fix, the page got `task 17 panicked with message "C:\\fake-folder\\fake-secret-value"`. `blocking` (`commands.rs:327`) now maps a failed step to a fixed text, and it is the one place that starts a blocking thread. Test: `a_panic_in_a_native_step_reaches_the_page_as_a_fixed_text`. It also counts the blocking threads in the production code of `commands.rs`.
+- Texts that keep a path, by decision 16: `notFound` (`error.rs:41`), the FR-04 remnant (`private_export.rs:196`) and `journal` (`error.rs:50`).
+- Texts from the operating system: `io` errors carry the message of the system (`error.rs:51`, `private_export.rs:14`, `settings.rs` and `reminders.rs`). The standard library puts no path in it. A `save` error carries the text of the KDBX library about the file structure (`error.rs:46`). A failed folder pick carries the text of the dialog plugin (`launch.rs:180`).
+- No error text holds a secret value. The tests of FR-04, T-R1-08, T-R3-02 and class N assert that no fake value is in the reply.
+
+### 10.6 Mutants
+
+| Mutant | Test that fails |
+|---|---|
+| A panic text reaches the page (the code before stage F) | `a_panic_in_a_native_step_reaches_the_page_as_a_fixed_text` |
+| The opening starts its own blocking thread | `a_panic_in_a_native_step_reaches_the_page_as_a_fixed_text` |

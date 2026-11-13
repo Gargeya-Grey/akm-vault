@@ -178,7 +178,7 @@ async fn open_vault(
     let ticket = session.claim_open(session_id)?;
     let completion = if create { Access::Write } else { Access::Read };
     let worker = session.clone();
-    let opened = tauri::async_runtime::spawn_blocking(move || {
+    let opened = blocking(move || {
         let load = || load_vault(&target, &password, name.as_deref(), create);
         if create {
             worker.open_created(ticket, load)?;
@@ -196,8 +196,7 @@ async fn open_vault(
                 }
             })
     })
-    .await
-    .map_err(CommandError::internal)??;
+    .await?;
     if opened.snapshot.ticket != ticket {
         return Err(completion.cancelled_after_completion());
     }
@@ -319,20 +318,18 @@ async fn run_session<T: Send + 'static>(
     operation: impl FnOnce(&mut Vault) -> Result<T, CommandError> + Send + 'static,
 ) -> Result<T, CommandError> {
     let worker = session.clone();
-    let completed = tauri::async_runtime::spawn_blocking(move || {
-        worker.access(access, Some(expected), operation)
-    })
-    .await
-    .map_err(CommandError::internal)??;
+    let completed = blocking(move || worker.access(access, Some(expected), operation)).await?;
     session.finish(access, completed)
 }
 
+/// Runs a native step on a blocking thread. It is the one place that starts one. A step that
+/// panicked gives a fixed text: the panic message can name a path or hold a value.
 async fn blocking<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T, CommandError> + Send + 'static,
 ) -> Result<T, CommandError> {
     tauri::async_runtime::spawn_blocking(operation)
         .await
-        .map_err(CommandError::internal)?
+        .map_err(|_| CommandError::internal("A native step failed. Try again."))?
 }
 
 #[tauri::command]
@@ -986,7 +983,7 @@ pub async fn env_save<R: tauri::Runtime>(
     let scope = ExportScope::new(project, environment, all)?;
     let session = state.0.clone();
     let expected = session.snapshot_for(&session_id)?;
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         // FileSaveDialog keeps its default overwrite-approval prompt. No session mutex spans the dialog.
         let selected = app
             .dialog()
@@ -1039,7 +1036,6 @@ pub async fn env_save<R: tauri::Runtime>(
         Ok(Some(saved.display().to_string()))
     })
     .await
-    .map_err(CommandError::internal)?
 }
 
 struct FileExport {
@@ -1471,6 +1467,21 @@ mod tests {
             })
             .unwrap();
         (session, directory)
+    }
+
+    /// A panic in a native step reaches the page as a fixed text, and `blocking` is the one
+    /// place that starts a blocking thread, so no other path can pass a panic message on.
+    #[test]
+    fn a_panic_in_a_native_step_reaches_the_page_as_a_fixed_text() {
+        let answer = tauri::async_runtime::block_on(blocking::<()>(|| {
+            panic!("C:\\fake-folder\\fake-secret-value")
+        }));
+        let error = answer.unwrap_err();
+        assert_eq!(error.kind, "internal");
+        assert_eq!(error.message, "A native step failed. Try again.");
+        let source = include_str!("commands.rs");
+        let production = &source[..source.find("\nmod tests {").unwrap()];
+        assert_eq!(production.matches("spawn_blocking(").count(), 1);
     }
 
     #[test]

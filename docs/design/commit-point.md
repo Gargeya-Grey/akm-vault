@@ -182,6 +182,12 @@ Each mutant is one change to the code. The named test must fail on it. All of th
 8. **No dedupe of operation IDs.** Each dispatch leaves its own record. A page that reuses an ID gets two records with that ID. Native code keeps no list of used IDs.
 9. **The launch reply stays the count after a late lock.** The start happened, so the reply says so. The record says `terminalSessionEnded`. The reply shape does not change, as the contract with unit 2 requires.
 10. **A recovery that moved the journal answers `completedWhileLocked` after a lock.** Before, it answered `locked`, which said that nothing moved.
+11. **The FR-03 single-key budget belongs to the run of AKM, not to a session.** A lock and a new opening leave it as it is. Before, a lock cleared it, so a lock and a reopen gave a new budget. Veto effect: a budget per session, and the reopen path that resets it.
+12. **The launch keeps its own check of reserved names.** The core refuses a reserved name first, so the check in `check_names` is a second guard, as in the command line. Veto effect: delete that branch and its own test. The launch boundary does not change.
+13. **The desktop list of the command prompt names is deleted.** The core class `ShellStartup` holds `PROMPT`, `DIRCMD` and `COPYCMD`, and the table test asserts it. One list remains.
+14. **One bound for every wait for an event that must happen, 120 seconds (class Q).** A broken run takes longer to fail. A loaded run no longer fails.
+15. **A panic in a native step answers the fixed text "A native step failed. Try again."** The panic message can name a path or hold a value, so it never reaches the page.
+16. **Three error texts keep a path.** `notFound` names the vault path that the page sent. The FR-04 warning names the remnant, which the user must delete. A `journal` error names the journal file, which the user must act on. No error text holds a secret value. Veto effect: fixed texts, and the user no longer sees where to act.
 
 ## 9. An outcome for every dispatched request
 
