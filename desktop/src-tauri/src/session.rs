@@ -2949,7 +2949,7 @@ mod tests {
         f.session.warn_for(origin, OperationWarningKind::Preference);
         let id = first["operations"][0]["id"].as_str().unwrap().to_string();
         f.session
-            .dismiss_warnings(&[id.clone(), "unseen-id".into()])
+            .dismiss_warnings(&[id.clone(), uuid::Uuid::new_v4().to_string()])
             .unwrap();
         let remaining = serde_json::to_value(f.session.warnings().unwrap()).unwrap();
         assert_eq!(remaining["operations"].as_array().unwrap().len(), 1);
