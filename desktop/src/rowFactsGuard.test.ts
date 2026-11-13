@@ -33,8 +33,8 @@ const DRAWS_ID = new Set(["namedKey", "keyFactList", "binFactList", "keyRowDescr
 const ALLOWED: { file: string; reads: Record<string, number>; why: string }[] = [
   {
     file: "components/KeyForm.tsx",
-    reads: { "KeyView.title": 1, "KeyView.issuer": 1, "KeyView.project": 1, "KeyView.environment": 1, "KeyView.envVar": 1, "KeyView.url": 1, "KeyView.scopes": 1, "KeyView.tags": 1, "KeyView.notes": 1 },
-    why: "the edit form starts from the stored values, so that a save keeps them; its fields draw nothing else",
+    reads: { "KeyView.title": 2, "KeyView.issuer": 2, "KeyView.project": 2, "KeyView.environment": 2, "KeyView.envVar": 2, "KeyView.url": 2, "KeyView.scopes": 2, "KeyView.tags": 2, "KeyView.notes": 2 },
+    why: "the edit form starts from the stored values, and sends an untouched field back as it was stored; its fields draw nothing else",
   },
   {
     file: "components/UseKeys.tsx",
@@ -211,5 +211,5 @@ test("a new raw read in a file that the table names fails, because the count cha
   const form = ts.sys.readFile(under("components/KeyForm.tsx"))!;
   const planted = form.replace("export function KeyForm(", "export const plantedTitle = (item: KeyView) => item.title;\nexport function KeyForm(");
   expect(planted).not.toBe(form);
-  expect(unexplained(scan(program({ "components/KeyForm.tsx": planted })).raw)).toEqual([expect.stringMatching(/^components\/KeyForm\.tsx: 2 raw KeyView\.title \(allowed 1\)/)]);
+  expect(unexplained(scan(program({ "components/KeyForm.tsx": planted })).raw)).toEqual([expect.stringMatching(/^components\/KeyForm\.tsx: 3 raw KeyView\.title \(allowed 2\)/)]);
 });

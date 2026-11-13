@@ -38,29 +38,46 @@ function splitList(value: string): string[] {
   return [...seen];
 }
 
+/** The longest rotation interval that the core accepts (`MAX_ROTATION_DAYS`). */
+const MAX_ROTATION_DAYS = 36500;
+
+/** The text that the form shows for each stored field. Some of it is a lossy view of the value. */
+function shownText(item?: KeyView) {
+  return {
+    title: item?.title ?? "",
+    issuer: item?.issuer ?? "",
+    project: item?.project ?? "",
+    environment: item?.environment ?? "",
+    envVar: item?.envVar ?? "",
+    url: item?.url ?? "",
+    scopes: item?.scopes.join(", ") ?? "",
+    tags: item?.tags.join(", ") ?? "",
+    notes: item?.notes ?? "",
+    expires: item?.expiresAt ? item.expiresAt.slice(0, 10) : "",
+    rotation: item?.rotationDays !== null && item?.rotationDays !== undefined ? String(item.rotationDays) : "",
+  };
+}
+
+const text = (value: string) => value.trim() || null;
+
 export function KeyForm({ item, onSaved, onClose }: Props) {
   const editing = item !== undefined;
   const dialogRef = useDialogFocus<HTMLDivElement>();
   const targetId = useId();
 
-  const [title, setTitle] = useState(item?.title ?? "");
+  const [shown] = useState(() => shownText(item));
+  const [title, setTitle] = useState(shown.title);
   const [secret, setSecret] = useState("");
-  const [issuer, setIssuer] = useState(item?.issuer ?? "");
-  const [project, setProject] = useState(item?.project ?? "");
-  const [environment, setEnvironment] = useState(item?.environment ?? "");
-  const [envVar, setEnvVar] = useState(item?.envVar ?? "");
-  const [url, setUrl] = useState(item?.url ?? "");
-  const [scopes, setScopes] = useState(item?.scopes.join(", ") ?? "");
-  const [tags, setTags] = useState(item?.tags.join(", ") ?? "");
-  const [notes, setNotes] = useState(item?.notes ?? "");
-  const [expires, setExpires] = useState(
-    item?.expiresAt ? item.expiresAt.slice(0, 10) : "",
-  );
-  const [rotation, setRotation] = useState(
-    item?.rotationDays !== null && item?.rotationDays !== undefined
-      ? String(item.rotationDays)
-      : "",
-  );
+  const [issuer, setIssuer] = useState(shown.issuer);
+  const [project, setProject] = useState(shown.project);
+  const [environment, setEnvironment] = useState(shown.environment);
+  const [envVar, setEnvVar] = useState(shown.envVar);
+  const [url, setUrl] = useState(shown.url);
+  const [scopes, setScopes] = useState(shown.scopes);
+  const [tags, setTags] = useState(shown.tags);
+  const [notes, setNotes] = useState(shown.notes);
+  const [expires, setExpires] = useState(shown.expires);
+  const [rotation, setRotation] = useState(shown.rotation);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -86,29 +103,37 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
       return;
     }
 
+    // A field that the user did not touch goes back exactly as it was stored: the form's text
+    // cannot hold a comma inside a list item, a time of day, or a space at an end.
+    function field<T>(now: string, was: string, stored: T | undefined, read: (now: string) => T): T {
+      return stored !== undefined && now === was ? stored : read(now);
+    }
+
     let rotationDays: number | null = null;
-    if (rotation.trim()) {
+    if (item !== undefined && rotation === shown.rotation) {
+      rotationDays = item.rotationDays;
+    } else if (rotation.trim()) {
       const parsed = Number(rotation);
-      if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 3650) {
-        setError("Rotation must be a whole number of days between 1 and 3650.");
+      if (!Number.isInteger(parsed) || parsed <= 0 || parsed > MAX_ROTATION_DAYS) {
+        setError(`Rotation must be a whole number of days between 1 and ${MAX_ROTATION_DAYS}.`);
         return;
       }
       rotationDays = parsed;
     }
 
     const draft: KeyDraft = {
-      title: title.trim(),
+      title: field(title, shown.title, item?.title, (now) => now.trim()),
       secret: secret ? secret : null,
       username: item?.username ?? null,
-      issuer: issuer.trim() || null,
-      project: project.trim() || null,
-      environment: environment.trim() || null,
-      scopes: splitList(scopes),
-      envVar: envVar.trim() || null,
-      url: url.trim() || null,
-      notes: notes.trim() || null,
-      tags: splitList(tags),
-      expiresAt: expires ? dateOnlyExpiry(expires) : null,
+      issuer: field(issuer, shown.issuer, item?.issuer, text),
+      project: field(project, shown.project, item?.project, text),
+      environment: field(environment, shown.environment, item?.environment, text),
+      scopes: field(scopes, shown.scopes, item?.scopes, splitList),
+      envVar: field(envVar, shown.envVar, item?.envVar, text),
+      url: field(url, shown.url, item?.url, text),
+      notes: field(notes, shown.notes, item?.notes, text),
+      tags: field(tags, shown.tags, item?.tags, splitList),
+      expiresAt: field(expires, shown.expires, item?.expiresAt, (now) => (now ? dateOnlyExpiry(now) : null)),
       rotationDays,
     };
 
@@ -272,7 +297,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
                     type="number"
                     inputMode="numeric"
                     min={1}
-                    max={3650}
+                    max={MAX_ROTATION_DAYS}
                     step={1}
                     value={rotation}
                     onChange={(event) => setRotation(event.target.value)}
