@@ -2106,7 +2106,7 @@ mod tests {
     #[test]
     fn complete_export_record_with_failed_sync_keeps_publication_and_late_lock_receipt() {
         use crate::test_support::{canonical, journal_in, own_root};
-        use std::{io::Write, sync::mpsc, time::Duration};
+        use std::{io::Write, sync::mpsc};
         for late_lock in [false, true] {
             let (session, directory) = test_session_with(true);
             session
@@ -2168,7 +2168,9 @@ mod tests {
                     },
                 )
             });
-            written_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+            written_rx
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
             assert!(target.exists());
             if late_lock {
                 session.lock().unwrap();
@@ -2998,7 +3000,7 @@ mod tests {
 
     #[test]
     fn a_committed_import_keeps_its_receipt_when_lock_arrives_during_the_journal_append() {
-        use std::time::{Duration, Instant};
+        use std::time::Instant;
         let (session, directory) = test_session();
         let path = directory.path().join("vault.kdbx");
         let initial = fs::read(&path).unwrap();
@@ -3024,7 +3026,7 @@ mod tests {
                 Some("dev".into()),
             )
         });
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + crate::test_support::PATIENCE;
         let committed = loop {
             if fs::read(&path).unwrap() != initial {
                 break true;
@@ -3078,7 +3080,7 @@ mod tests {
                 self.release
                     .lock()
                     .unwrap()
-                    .recv_timeout(std::time::Duration::from_secs(30))
+                    .recv_timeout(crate::test_support::PATIENCE)
                     .unwrap();
             }
             self.inner.save_vault_path(ticket, owned, vault_path)
@@ -3138,7 +3140,7 @@ mod tests {
             std::thread::spawn(move || open(&session, &store, &owner, path))
         };
         entered_rx
-            .recv_timeout(std::time::Duration::from_secs(30))
+            .recv_timeout(crate::test_support::PATIENCE)
             .unwrap();
         let owner_b = session.prepare_open().unwrap();
         let b_status = open(&session, &store, &owner_b, b_path.clone()).unwrap();
@@ -3207,7 +3209,7 @@ mod tests {
                 .release
                 .lock()
                 .unwrap()
-                .recv_timeout(std::time::Duration::from_secs(30))
+                .recv_timeout(crate::test_support::PATIENCE)
                 .unwrap();
             self.inner.act(held)
         }
@@ -3263,7 +3265,7 @@ mod tests {
             std::thread::spawn(move || open(session, store, owner_a, a_path))
         };
         entered_rx
-            .recv_timeout(std::time::Duration::from_secs(30))
+            .recv_timeout(crate::test_support::PATIENCE)
             .unwrap();
         let (retired_tx, retired_rx) = mpsc::channel();
         let second = {
@@ -3339,7 +3341,7 @@ mod tests {
             std::thread::spawn(move || open(session, store, owner_a, a_path))
         };
         entered_rx
-            .recv_timeout(std::time::Duration::from_secs(30))
+            .recv_timeout(crate::test_support::PATIENCE)
             .unwrap();
         let owner_b = session.prepare_open().unwrap();
         assert!(open(

@@ -66,6 +66,10 @@ use tauri::{
     webview::InvokeRequest,
 };
 
+/// The bound of a wait for an event that must happen: the same value as
+/// `test_support::PATIENCE` in the library (class Q).
+const PATIENCE: Duration = Duration::from_secs(120);
+
 type Clipboard = Arc<Mutex<clipboard_fake::FakeState>>;
 
 fn clipboard_text(state: &Clipboard) -> String {
@@ -142,7 +146,7 @@ impl review_window::ReviewDialog for &Dialog {
         if let Some((entered, release)) = held {
             entered.send(()).unwrap();
             release
-                .recv_timeout(Duration::from_secs(60))
+                .recv_timeout(PATIENCE)
                 .expect("the test answers the dialog");
         }
         Ok(if self.approve.load(Ordering::SeqCst) {
@@ -254,7 +258,7 @@ impl review_window::ReviewDialog for &Terminal {
         if let Some((entered, release)) = held {
             entered.send(()).unwrap();
             release
-                .recv_timeout(Duration::from_secs(60))
+                .recv_timeout(PATIENCE)
                 .expect("the test answers the review");
         }
         Ok(if self.approve.load(Ordering::SeqCst) {
@@ -331,7 +335,7 @@ fn call(
         );
     });
     let response = response_rx
-        .recv_timeout(Duration::from_secs(60))
+        .recv_timeout(PATIENCE)
         .expect("actual command response");
     dispatch.join().unwrap();
     match response {
@@ -440,7 +444,7 @@ fn main() {
                 Ok(())
             })
         });
-        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        entered_rx.recv_timeout(PATIENCE).unwrap();
         let sequence_before = clipboard.lock().unwrap().sequence;
         let (response_tx, response_rx) = mpsc::channel();
         let (returned_tx, returned_rx) = mpsc::channel();
@@ -475,7 +479,7 @@ fn main() {
         holding.join().unwrap().unwrap();
         dispatch.join().unwrap();
         let response = early
-            .or_else(|| response_rx.recv_timeout(Duration::from_secs(60)).ok())
+            .or_else(|| response_rx.recv_timeout(PATIENCE).ok())
             .expect("actual command response");
         assert!(
             matches!(response, InvokeResponse::Ok(_)),
@@ -1376,7 +1380,7 @@ fn every_dispatched_launch_leaves_one_record(
     let operation = uuid::Uuid::new_v4().to_string();
     let (entered, release) = terminal.arm();
     let pending = send(webview, "env_launch_terminal", scope(&operation));
-    entered.recv_timeout(Duration::from_secs(20)).unwrap();
+    entered.recv_timeout(PATIENCE).unwrap();
     session.document_started();
     release.send(()).unwrap();
     let _lost = reply(&pending);
@@ -1416,7 +1420,7 @@ fn every_dispatched_launch_leaves_one_record(
             None => {
                 let (entered, release) = terminal.arm();
                 let pending = send(webview, "env_launch_terminal", scope(&operation));
-                entered.recv_timeout(Duration::from_secs(20)).unwrap();
+                entered.recv_timeout(PATIENCE).unwrap();
                 lock();
                 release.send(()).unwrap();
                 reply(&pending)
@@ -1440,7 +1444,7 @@ fn every_dispatched_launch_leaves_one_record(
     let a_operation = uuid::Uuid::new_v4().to_string();
     let (entered, release) = terminal.arm();
     let pending = send(webview, "env_launch_terminal", scope(&a_operation));
-    entered.recv_timeout(Duration::from_secs(20)).unwrap();
+    entered.recv_timeout(PATIENCE).unwrap();
     let b_owner = fresh("outcome-b.kdbx");
     assert_ne!(b_owner, owner);
     let b_before = session.snapshot().unwrap();
@@ -1690,10 +1694,7 @@ fn the_history_command_answers_times_and_field_names(
 }
 
 fn reply(rx: &mpsc::Receiver<InvokeResponse>) -> Result<serde_json::Value, serde_json::Value> {
-    match rx
-        .recv_timeout(Duration::from_secs(60))
-        .expect("the command answers")
-    {
+    match rx.recv_timeout(PATIENCE).expect("the command answers") {
         InvokeResponse::Ok(InvokeResponseBody::Json(text)) => {
             Ok(serde_json::from_str(&text).unwrap())
         }
@@ -1806,7 +1807,7 @@ fn the_dialog_is_the_review(
             "env_import",
             import_args(&owner, &operation, "TOKEN=fake-approved\n"),
         );
-        entered.recv_timeout(Duration::from_secs(20)).unwrap();
+        entered.recv_timeout(PATIENCE).unwrap();
         let reviewed = session.snapshot().unwrap();
         match approval {
             "a discard that reached native while the dialog was open" => {
@@ -1865,7 +1866,7 @@ fn the_dialog_is_the_review(
             "env_import",
             import_args(&owner, &operation, "TOKEN=fake-refused\n"),
         );
-        entered.recv_timeout(Duration::from_secs(20)).unwrap();
+        entered.recv_timeout(PATIENCE).unwrap();
         let mut other = None;
         match change {
             "lock" => {
@@ -1940,7 +1941,7 @@ fn a_discard_names_its_session(
         "env_import",
         import_args(&b, &operation, "TOKEN=fake-b-import\n"),
     );
-    entered.recv_timeout(Duration::from_secs(20)).unwrap();
+    entered.recv_timeout(PATIENCE).unwrap();
     let b_before = session.snapshot().unwrap();
     let notices_before = delivered.lock().unwrap().len();
 
@@ -2095,7 +2096,7 @@ fn clipboard_through_the_handlers(
             Ok(())
         });
     });
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    entered_rx.recv_timeout(PATIENCE).unwrap();
     let response = send(webview, "key_copy", serde_json::json!({"id": id}));
     call(
         webview,
@@ -2106,7 +2107,7 @@ fn clipboard_through_the_handlers(
     release_tx.send(()).unwrap();
     holding.join().unwrap();
     let reply = response
-        .recv_timeout(Duration::from_secs(60))
+        .recv_timeout(PATIENCE)
         .expect("the delayed copy answers");
     let InvokeResponse::Err(error) = reply else {
         panic!("a copy delayed past a lock must fail");

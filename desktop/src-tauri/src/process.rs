@@ -398,7 +398,10 @@ mod tests {
             assert!(!marker.exists(), "a suspended child ran");
             if resume {
                 child.resume(&Held::for_test()).unwrap();
-                assert_eq!(child.wait(30_000), Some(0));
+                assert_eq!(
+                    child.wait(crate::test_support::PATIENCE.as_millis() as u32),
+                    Some(0)
+                );
                 assert!(marker.exists(), "the resumed child did not run");
                 assert!(child.terminate().is_ok(), "a started child is not ended");
             } else {

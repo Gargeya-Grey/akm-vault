@@ -50,6 +50,12 @@ pub(crate) fn journal_of(vault: &Path) -> Journal {
     Journal { log, path }
 }
 
+/// The bound of a wait for an event that must happen. Each test vault uses the production
+/// key derivation, so a full run under load can be several times slower than one test
+/// alone. A wait that proves that an event is prompt, or that it does not happen, keeps its
+/// own short bound (class Q).
+pub(crate) const PATIENCE: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// A vault's journal in a root of the test's own, so the test does not share the Cargo
 /// root with other tests (P2R2-06).
 pub(crate) fn journal_in(vault: &Path, root: JournalRoot) -> Journal {
@@ -91,4 +97,55 @@ pub(crate) fn env_of(vault: &Vault, project: &str, environment: &str) -> Vec<(St
         .disclose_env(akm_core::EnvDisclosure::Export, &plan, Some("test"))
         .unwrap();
     vault.env_vars(&plan, &proof).unwrap()
+}
+
+/// Class Q. A wait for an event that must happen passes `PATIENCE`: a timed receive whose
+/// statement unwraps or expects the event, and a deadline. The test reads the test code of
+/// every source file and of the integration tests, so a new file is read as well. Its own
+/// search texts are built with `concat!`, so this source does not hold them.
+#[test]
+fn class_q_every_wait_for_an_event_that_must_happen_uses_the_shared_patience() {
+    const RECEIVE: &str = concat!("recv_timeout", "(");
+    const DEADLINE: &str = concat!("Instant::now()", " + ");
+    const TEST_MODULE: &str = concat!("mod tests", " {");
+    const TEST_ONLY: [&str; 2] = ["test_support.rs", "clipboard_fake.rs"];
+    let shared = |text: &str| {
+        text.starts_with("PATIENCE") || text.starts_with("crate::test_support::PATIENCE")
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut faults = Vec::new();
+    for folder in ["src", "tests"] {
+        for entry in std::fs::read_dir(root.join(folder)).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let whole = folder == "tests" || TEST_ONLY.iter().any(|name| path.ends_with(name));
+            let tests = if whole {
+                text.as_str()
+            } else {
+                text.find(TEST_MODULE).map_or("", |start| &text[start..])
+            };
+            let mut found = |rest: &str, what: &str| {
+                let start: String = rest.chars().take(40).collect();
+                faults.push(format!("{}: {what} {start}", path.display()));
+            };
+            for (at, _) in tests.match_indices(RECEIVE) {
+                let rest = &tests[at + RECEIVE.len()..];
+                let statement = &rest[..rest.find(';').unwrap_or(rest.len())];
+                let required = statement.contains(".unwrap()") || statement.contains(".expect(");
+                if required && !shared(rest) {
+                    found(rest, "a required receive with its own bound");
+                }
+            }
+            for (at, _) in tests.match_indices(DEADLINE) {
+                let rest = &tests[at + DEADLINE.len()..];
+                if !shared(rest) {
+                    found(rest, "a deadline with its own bound");
+                }
+            }
+        }
+    }
+    assert!(faults.is_empty(), "{faults:#?}");
 }

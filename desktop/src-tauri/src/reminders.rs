@@ -316,9 +316,7 @@ mod tests {
             let held = self.hold.lock().unwrap().take();
             if let Some((entered, release)) = held {
                 entered.send(()).unwrap();
-                release
-                    .recv_timeout(std::time::Duration::from_secs(30))
-                    .unwrap();
+                release.recv_timeout(crate::test_support::PATIENCE).unwrap();
             }
             if *self.refuse.lock().unwrap() {
                 return Err("fake refusal".into());
@@ -484,7 +482,7 @@ mod tests {
                 std::thread::spawn(move || reminders.notify(&session, &id, 2))
             };
             entered_rx
-                .recv_timeout(std::time::Duration::from_secs(30))
+                .recv_timeout(crate::test_support::PATIENCE)
                 .unwrap();
             let (done_tx, done_rx) = mpsc::channel();
             let retire = {

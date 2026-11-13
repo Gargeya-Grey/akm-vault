@@ -150,3 +150,20 @@ Stale statements outside the files of this unit:
 - The verification guide (`.agents/skills/verify-akm/features/terminal-and-history.md`) already gives the decided design. The T-R2-07 row is stale.
 - The FINDINGS rows T-R1-01, T-R1-05, T-R1-06, T-R1-07, T-R1-12, T-R2-07, T-R3-02 and T-R3-07 describe earlier states. The report of this unit proposes new text for each.
 - A search of `docs/STATE.md` for gate and record statements finds no contradiction at the base of this unit.
+
+## 9. Class Q, a wait that a loaded run exceeds
+
+The full desktop run failed in two tests at stage E, and in other tests at stages B to D. Each failed test passes alone in about 6 seconds. Each failure was a wait for an event that must happen, with a bound of 20 seconds. Each test vault that `Vault::create` makes uses the production key derivation (Argon2id, 64 MiB, 4 lanes), so parallel tests slow each other. The full run takes about 12 minutes on this machine.
+
+Class Q: a wait for an event that must happen, with a bound that a loaded run exceeds. Guard: every such wait passes one shared bound, `PATIENCE` (120 seconds, in `test_support.rs`, and the same value in `tests/ipc_dispatch.rs`). The bound changes only how long a broken run waits before it fails. Each assertion stays as it was. A wait that proves that an event is prompt, or that it does not happen, keeps its own short bound. Test: `class_q_every_wait_for_an_event_that_must_happen_uses_the_shared_patience` reads the test code of every source file and of the integration tests. It fails on a timed receive that unwraps or expects its event with another bound, and on a deadline with another bound.
+
+All instances: 32 waits in the library tests (commands, session, launch, reminders and process) and 14 in `tests/ipc_dispatch.rs`. Two of the 32 wait for a test process to end (`child.wait`). They use `PATIENCE` too, but the guard test does not read that form. The waits that keep their own bound prove promptness or absence. The production wait in `windows_session.rs` is not a test.
+
+### 9.1 Mutants
+
+| Mutant | Test that fails |
+|---|---|
+| A deadline keeps its own bound of 20 seconds | `class_q_every_wait_for_an_event_that_must_happen_uses_the_shared_patience` |
+| An IPC wait keeps its own bound of 60 seconds | `class_q_every_wait_for_an_event_that_must_happen_uses_the_shared_patience` |
+
+Limit: a wait that proves promptness can still fail on a machine that is slow enough. Those bounds are 300 milliseconds to 10 seconds, for an act that takes milliseconds alone.

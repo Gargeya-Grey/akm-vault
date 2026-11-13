@@ -828,7 +828,7 @@ mod tests {
                 )
             });
             reached_record
-                .recv_timeout(Duration::from_secs(20))
+                .recv_timeout(crate::test_support::PATIENCE)
                 .expect("the launch reached the journal");
             std::thread::sleep(Duration::from_millis(200));
 
@@ -1122,7 +1122,7 @@ mod tests {
                 at_commit
                     .lock()
                     .unwrap()
-                    .recv_timeout(Duration::from_secs(30))
+                    .recv_timeout(crate::test_support::PATIENCE)
                     .expect("the write reached its commit point");
             }
             LaunchStep::Started => release.lock().unwrap().send(()).unwrap(),
@@ -1799,7 +1799,10 @@ mod tests {
         .unwrap();
         assert!(!printed.exists(), "a suspended child ran");
         child.resume(&Held::for_test()).unwrap();
-        assert_eq!(child.wait(30_000), Some(0));
+        assert_eq!(
+            child.wait(crate::test_support::PATIENCE.as_millis() as u32),
+            Some(0)
+        );
         let text = std::fs::read_to_string(&printed).unwrap();
         let mut lines = text.lines();
         assert_eq!(

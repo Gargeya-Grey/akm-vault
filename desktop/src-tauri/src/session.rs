@@ -1573,7 +1573,9 @@ mod tests {
                 Ok(())
             })
         });
-        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        entered_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         let (expiry_tx, expiry_rx) = mpsc::channel();
         let session = f.session.clone();
         let expiry =
@@ -1653,7 +1655,9 @@ mod tests {
                 Ok(id)
             })
         });
-        committed_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+        committed_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         let (expiry_tx, expiry_rx) = mpsc::channel();
         let session = f.session.clone();
         let expiry =
@@ -1716,7 +1720,9 @@ mod tests {
                     },
                 )
             });
-            stalled_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            stalled_rx
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
             f.session.expire_presentation().unwrap();
             release_tx.send(()).unwrap();
             let result = worker.join().unwrap();
@@ -1764,7 +1770,9 @@ mod tests {
                     |prepared| prepared.publish(),
                 )
             });
-            prepared_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            prepared_rx
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
             f.session.expire_presentation().unwrap();
             if lock {
                 f.session.lock().unwrap();
@@ -2052,7 +2060,9 @@ mod tests {
                 Vault::open(path, "fake-test-password-123!").map_err(Into::into)
             })
         });
-        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        started_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         f.session.lock_owned(Some(&b)).unwrap();
         release_tx.send(()).unwrap();
         assert_eq!(worker.join().unwrap().unwrap_err().kind, "locked");
@@ -2195,7 +2205,9 @@ mod tests {
                 Ok(())
             })
         });
-        committed_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+        committed_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         f.session.lock().unwrap();
         release_tx.send(()).unwrap();
         assert_eq!(
@@ -2807,7 +2819,9 @@ mod tests {
                         Ok(())
                     })
                 });
-                saved_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+                saved_rx
+                    .recv_timeout(crate::test_support::PATIENCE)
+                    .unwrap();
                 if overtaken {
                     f.session.lock().unwrap();
                 }
@@ -3061,7 +3075,9 @@ mod tests {
                 Ok(Zeroizing::new("fake-private-result".to_string()))
             })
         });
-        committed_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+        committed_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         f.session.lock().unwrap();
         release_tx.send(()).unwrap();
         let error = writer.join().unwrap().err().unwrap();
@@ -3104,7 +3120,9 @@ mod tests {
                 |_| -> Result<(), CommandError> { panic!("A locked export must not publish") },
             )
         });
-        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        started_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         let (locked_tx, locked_rx) = mpsc::channel();
         let session = f.session.clone();
         let locker = std::thread::spawn(move || {
@@ -3166,7 +3184,9 @@ mod tests {
                 Ok(vault)
             })
         });
-        created_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+        created_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         f.session.lock().unwrap();
         release_tx.send(()).unwrap();
         assert_eq!(
@@ -3225,7 +3245,9 @@ mod tests {
                 |prepared| prepared.publish(),
             )
         });
-        prepared_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        prepared_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         f.session.observe(Signal::Locked);
         release_tx.send(()).unwrap();
         assert_eq!(exporter.join().unwrap().unwrap_err().kind, "locked");
@@ -3267,7 +3289,9 @@ mod tests {
                 },
             )
         });
-        authorized_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        authorized_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         let (locked_tx, locked_rx) = mpsc::channel();
         let session = f.session.clone();
         let locker = std::thread::spawn(move || {
@@ -3705,7 +3729,9 @@ mod tests {
             f.clock.set(30);
             let session = f.session.clone();
             let tick = std::thread::spawn(move || session.tick());
-            started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            started_rx
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
 
             let (free_tx, free_rx) = mpsc::channel();
             let session = f.session.clone();
@@ -3715,12 +3741,12 @@ mod tests {
                 free_tx.send(()).unwrap();
             });
             free_rx
-                .recv_timeout(Duration::from_secs(10))
+                .recv_timeout(crate::test_support::PATIENCE)
                 .expect("a stalled cleanup must not hold the gate");
 
             let session = f.session.clone();
             let lock = std::thread::spawn(move || session.lock());
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + crate::test_support::PATIENCE;
             while f.events.load(Ordering::SeqCst) == 0 {
                 assert!(
                     Instant::now() < deadline,
@@ -3785,7 +3811,9 @@ mod tests {
             f.clock.set(30);
             let session = f.session.clone();
             let tick = std::thread::spawn(move || session.tick());
-            started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            started_rx
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
             let session = f.session.clone();
             let copy = std::thread::spawn(move || {
                 session.copy(ticket, Zeroizing::new("fake-second".into()))
@@ -3797,7 +3825,7 @@ mod tests {
                 free_tx.send(()).unwrap();
             });
             free_rx
-                .recv_timeout(Duration::from_secs(10))
+                .recv_timeout(crate::test_support::PATIENCE)
                 .expect("a waiting copy must not hold the gate");
             release_tx.send(()).unwrap();
             tick.join().unwrap();
@@ -4900,7 +4928,9 @@ mod tests {
                     })
                     .map(|done| done.value.id)
             });
-            at_commit.recv_timeout(Duration::from_secs(30)).unwrap();
+            at_commit
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
             let (locked, done) = mpsc::channel();
             let locker = f.session.clone();
             std::thread::spawn(move || {
@@ -4937,7 +4967,9 @@ mod tests {
                     })
                     .map(drop)
             });
-            at_commit.recv_timeout(Duration::from_secs(30)).unwrap();
+            at_commit
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
             let ticket = f.session.begin_open().unwrap();
             release.send(()).unwrap();
             assert_eq!(writer.join().unwrap().unwrap_err().kind, "locked");
