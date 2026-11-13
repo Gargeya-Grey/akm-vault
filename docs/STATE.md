@@ -84,32 +84,32 @@ The CLI is complete and proved. The desktop app is the product that the owner wi
    - Of the 8.25 points deducted, 1.25 are defects (four, all Low), 2.75 are disclosed limits, 1.75 are release matters, 1.0 is a design choice, 1.0 is the unrun desktop proofs and 0.5 is a missing workflow. 3.0 of the points need the owner (the desktop proofs, CI, signing, the install test).
    - The new defects of each review fell from 6.75 to 5.5 to 1.25 points. The premise "fix what the review found, and the next review passes" held this time, by 1.75 points. In the second review the two security reviewers differed by 1.5 points on the same code, so the number does not prove that another set of reviewers would stay above 90.
    - The reviewers' own answers did not change: four would use the CLI with precautions, and two would not use the desktop app for daily work. So the first measure passed its bar, and the second (completion) and the third (the real desktop) are where they were.
-9. Next: the owner-present tests (step 3). They are the second part of the release gate, and the one thing that changes the reviewers' answers. Before them, one small fix round for the four Low defects of the third review ("Next action" below), so that the owner tests the final build.
+9. Done: fix round 4 for the four Low defects of the third review, and its one diff review. The review failed with 1 P2 and 2 P3 in places that the round did not change; all four fixes held. The three findings and two more of the same class are fixed ("Next action" below).
+10. Next: the owner-present tests (step 3), on the builds of `168dbca`. They are the second part of the release gate, and the one thing that changes the reviewers' answers.
 
 **Mistakes that changed the process.** The gate of each unit was "no P2 finding", and nobody checked that it converged: now the full review is the meter. The score was treated as the only measure: now there are three. The owner-present tests stood at the end of every list: now they are step 3. A feature was removed partly for the score (the Windows notification): from now on a removal is weighed against the required workflows, and it stays the owner's veto. The test set grew through the review rounds without a rule for what a test is for: now a test must protect a behaviour or a stated contract (step 5). A text change of a notice was committed after the unit tests only, and it broke a browser test that the next full run found: a change of page text now runs the browser tests before its commit.
 
 ## Last full check run
 
-On `4436dee`, the head of `gate/integration` after fix round 3 (2026-11-13, fake data only, Rust builds in `<build>`). Every step of the run exited 0.
+On `168dbca`, the head of `gate/integration` after fix round 4 (2026-11-14, fake data only, Rust builds in `<build>`). Every one of the 30 steps of the run exited 0.
 
-- Rust: `cargo fmt --check` and Clippy (`-D warnings`) clean. `cargo test --workspace --offline --locked --no-fail-fast`: 713 passed, 0 failed, 2 ignored. Three tests that need a real symbolic link printed NOT RUN: this account has no symbolic-link privilege.
-- Frontend: `npm run build` exit 0; `npm test` 788 passed in 46 files; `npm run test:ui` 192 passed in headless Edge (mocked native boundary). The Tauri release build exit 0; the setup program was built and not installed.
-- Security checks: `check_no_network.py` and its test PASS. `check_dependencies.ps1` PASS inside the full run. In two earlier runs it failed there, because `cargo audit` could not finish its lookup of yanked crates in time; the tool counts an unfinished lookup as a failure.
-- Real readers on the `akm.exe` below: KeePassXC 2.8.0 interchange PASS; kdbxweb interchange PASS.
+- Rust: `cargo fmt --check` and Clippy (`-D warnings`) clean. `cargo test --workspace --offline --locked --no-fail-fast`: 716 passed, 0 failed, 2 ignored. Three tests that need a real symbolic link printed NOT RUN: this account has no symbolic-link privilege.
+- Frontend: `npm run build` exit 0; `npm test` 788 passed in 46 files; `npm run test:ui` 196 passed in headless Edge (mocked native boundary). The Tauri release build exit 0; the setup program was built and not installed.
+- Security checks: `check_no_network.py` and its test PASS. `check_dependencies.ps1` PASS.
+- Real readers on the `akm.exe` below: KeePassXC 2.8.0 interchange PASS; kdbxweb interchange PASS (a key with no username has an empty `UserName` field, FX-03).
 - CLI on the release build, through the verification skill's helper: 37 steps PASS.
 - Tools: `check_docs.py` PASS in the fast mode and in the full mode. The five Python tool tests, the notices check and its test, and the five PowerShell tool tests: all exit 0. The publication scan of the tree is clean.
-- Native GUI proofs on the builds below: `-JournalOnly` 28 checks PASS (one more than before: the proof refreshed its view of the start screen once, and says so); `-JournalExportOnly` 8 checks PASS. No clipboard access, no minimize. The settings file was byte-identical afterwards (`dacba49a…9115`), and no `akm-desktop` process remained. The transcripts are local, in the ignored folder `.scratch\gate`.
-- One test of fix round 2 passed its full run by chance (C3-01 in [FINDINGS.md](FINDINGS.md)); it is repaired, and it ran 30 times in a row without a failure.
-- CI: no result. The branch is pushed, and draft pull request 11 holds it. GitHub did not start the CI job of that pull request: its note says that recent account payments have failed or the spending limit needs to be increased. The last CI run that ran is of 8 Nov 2026.
+- Native GUI proofs on the builds below: `-JournalOnly` 28 checks PASS; `-JournalExportOnly` 8 checks PASS. No clipboard access, no minimize. The settings file was byte-identical afterwards (`dacba49a…9115`), and no `akm-desktop` process remained. The transcripts are local, in the ignored folder `.scratch\gate`.
+- CI: no result. Draft pull request 11 holds the branch. GitHub did not start the CI job: its note says that recent account payments have failed or the spending limit needs to be increased. The last CI run that ran is of 8 Nov 2026.
 - Not run: R4-04, the real clipboard test, the full native GUI proof, the native import dialog, the terminal window of a real launch, a real window hide, a real OS lock, suspend and idle wait, a real lock while a copy stalls, the replace prompt of the real save window, Windows text at 150 and 200 percent, install on a clean computer, real high-contrast themes and a real screen reader. They need the owner present ([FIRST_USE.md](FIRST_USE.md)).
 
 ## Builds under test
 
-Builds of `4436dee`, all unsigned and not installed by an agent, SHA-256. They are in `<build>\release`.
+Builds of `168dbca`, all unsigned and not installed by an agent, SHA-256. They are in `<build>\release`. The third full review scored the builds of `4436dee`; these builds hold fix round 4 on top of it, and no full review has scored them.
 
-- `akm-desktop.exe` `6f1648f53a428466e9b1c59ade5c6cbe41cabacc03457c51d41740d07d8991c1`
-- `akm.exe` `50883615ad58ca527d6188ab8294d7a8f6f5ae5f51e98189becd37a1466ba391`
-- `AKM_0.1.0_x64-setup.exe` `bc3c3fc087eed482ca602344550c3b819e63bad4cd6612f43bbb10dc05651773`, in `<build>\release\bundle\nsis`
+- `akm-desktop.exe` `afd93ea6f21e375d0d52de2b3548fa39ef7387dcc81ef40a95fb678df0ca8248`
+- `akm.exe` `f59ef72302c60f1713f0cc3cec60c7ba37d3ff535170f7bd80ca653b7d2f5ffb`
+- `AKM_0.1.0_x64-setup.exe` `5297970c3c65183d1c1f126930a4713021306480c9384e66eb9c07d4ac44ac82`, in `<build>\release\bundle\nsis`
 
 Each CI run uploads its own build with a `SHA256SUMS.txt`, and keeps it for 90 days. No CI run exists for these builds.
 
@@ -208,9 +208,16 @@ One class is new in review 2: work without a bound on bytes that are not authent
 
 ## Next action
 
-The path is in "Destination, measures and path" above. The third full review gave 91.75/100 on the builds of `4436dee`, so the first part of the release gate is met. The one next action: fix round 4 (below), then the owner-present tests of [FIRST_USE.md](FIRST_USE.md) on its build.
+The path is in "Destination, measures and path" above. The third full review gave 91.75/100 on the builds of `4436dee`, so the first part of the release gate is met. The one next action: the owner-present tests of [FIRST_USE.md](FIRST_USE.md), on the builds of `168dbca` ("Builds under test"). They need the owner.
 
-**Fix round 4 (planner's decision of 14 Nov 2026, for the owner's veto).** The third review found four Low defects (FX-02 to FX-05 in [FINDINGS.md](FINDINGS.md)): an edit gives a creation time to a key that has none; the username `api-key` reads as empty; with enlarged text at the smallest window the buttons of the rail overlap, and one status text is cut. Each gets its smallest fix and a regression test, and the round gets one diff review. The score stays the measured 91.75 of `4436dee`: no points are added for these fixes, and no fourth full review is planned. Veto effect: without this round, the owner tests the builds of `4436dee` with the four defects in them; the enlarged-text test of the owner would then meet FX-04. FX-01 gets no code: it stays a stated limit.
+**Fix round 4 and its diff review (14 Nov 2026).** Decisions of the planner, for the owner's veto:
+
+- **The round itself.** The third review found four Low defects (FX-02 to FX-05 in [FINDINGS.md](FINDINGS.md)). Each got its smallest fix and a regression test that failed first (`a6e0fb4`, `f9b1380`). The score stays the measured 91.75 of `4436dee`: no points are added, and no fourth full review is planned. Veto effect: the owner tests the builds of `4436dee`, with the defects in them.
+- **The username (FX-03).** The core no longer writes the word `api-key` for a key with no username, and no longer removes that word when it reads. A key with no username stores an empty field. A key that an earlier build wrote with no username now shows `api-key`; no build was released, so only test vaults hold such keys.
+- **The [diff review](reviews/2026-11-14-diff-review-round4.md) failed: 1 P2 and 2 P3.** All four fixes held. By the rule of AGENTS.md the round has had its one review, and no second diff review is a gate. The fixes of its findings are "Fixed, not accepted" (`63a5bf4`, `168dbca`; the D4 and C4 rows).
+- **An edit that changes what the user did not touch (D4-01; fourth instance of class R).** The premise of the earlier fixes was "guard each field, and an update touches only the changed fields". Two side writes outside those guards broke it (a creation time, FX-02; a secret-change time, D4-01). The planner stopped testing one field at a time: one test now compares the whole stored entry before and after an edit of one field, and allows four differences only (that field, the modification time, AKM's ID field, the history). It failed on the old code and passes now, so no other side write of an update exists on that path today.
+- **Enlarged text (D4-02, D4-03; third review that found a new place of the class of FW-07).** The premise of the earlier fixes was "fix the place that the review names, and test that place". The planner replaced the per-place test by one sweep over every screen (the lock screen in both modes and the five views; 900 x 620 and 900 x 800; root font 24 and 32 px; both themes). On the page before the fixes it found five kinds of fault: the two of the reviewer, the cut rail label "Settings" (C4-01), and the cause of D4-02: a background layer of 760 px made the page taller than a lower window, so focus could scroll the whole page (C4-02). The promise is written, with its limits, in [desktop/DESIGN.md](../desktop/DESIGN.md), "Rules that tests hold": the sweep sets the root font of the page, not the Windows text setting, and it does not look for text that is cut at the top or the bottom of a box. The Windows text setting stays an owner-present test.
+- **FX-01** (no notice after a Save .env that ends after a reload of the page) gets no code and stays a stated limit.
 
 **The diff review of fix round 2 failed (13 Nov 2026): 7 P2 and 7 P3** ([review](reviews/2026-11-13-diff-review-round2.md); the D2A, D2B and C3 rows of [FINDINGS.md](FINDINGS.md)). It is a cheap gate before the six reviewers of a full review, and it gives no score. Every check passed on the reviewed commit `bc28959` (710 Rust tests, 754 page tests, 182 browser tests, the CLI workflows, the two journal proofs on the built app), so the checks did not see these defects. Decisions of the planner for this round, for the owner's veto:
 
@@ -239,10 +246,10 @@ Open with the owner:
 2. GitHub Actions billing. GitHub refused to start the CI job of pull request 11 (failed payments or the spending limit). CI has not run since 8 Nov 2026 (0.25 point).
 3. The signing decision (1.0 point) and an install on a clean computer (0.5 point).
 4. The veto on the decisions of 2026-11-13: the planner's decisions of step 4 and of this section; the test removals of step 5; the Windows notification is removed (merged as `785748a`; Settings has no Reminders section, and a `reminders.json` file from an earlier version stays on disk untouched), the backup promise is narrower, and AGENTS.md has three changed rules (`git revert 41f96fd` takes them back).
-5. The fake journals in the real journal folder (below): archive them, or leave them.
+5. The fake journals in the real journal folder (below): archive them, or leave them. The active GitHub account of the owner's computer changed during the work of 14 Nov 2026 to an account that cannot read this repository; the agent changed no credential and used the right account inside each command.
 6. Pull request 11 (draft) holds the whole campaign and supersedes pull requests 9 and 10, which are still open. A merge needs the owner's yes.
 
-Small open items: one deleted test checked that the configuration holds no autostart, startup, scheduled-task or service entry, and no test checks that now. `docs/CLAIMS.md` may still need the narrower promises about the journal. The CLI has no journal recovery command (FR-14). The audit workers listed behaviours with no test; the largest are that no test runs the real page against the real handlers, and that `list --expiring` has no test with an ordinary count. The six reviewers left their probe folders in `%TEMP%` (names in the review record); they hold the reproductions of the FW rows.
+Small open items: the reviewer of fix round 4 left its folders in place (`node_modules`, `dist` and a probe folder in `%TEMP%`), because the tool policy refused the deletion. One deleted test checked that the configuration holds no autostart, startup, scheduled-task or service entry, and no test checks that now. `docs/CLAIMS.md` may still need the narrower promises about the journal. The CLI has no journal recovery command (FR-14). The audit workers listed behaviours with no test; the largest are that no test runs the real page against the real handlers, and that `list --expiring` has no test with an ordinary count. The six reviewers left their probe folders in `%TEMP%` (names in the review record); they hold the reproductions of the FW rows.
 
 ## Local state outside the repository
 
