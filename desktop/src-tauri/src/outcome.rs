@@ -7,8 +7,9 @@
 //! session of the request and one fixed kind: no name, no value, no path.
 //!
 //! One guard is made when the request passes its session check. It records once, whatever way
-//! the request ends: a reply, an early return through `?`, or a panic that unwinds through it.
-//! The default is "failed".
+//! the request ends: a reply, an early return through `?`, or a panic, which `dispatched`
+//! catches. The default is "failed". After the effect, no reply invites a retry: the session
+//! ends, and the reply is `completedWhileLocked` (U1-R1-04).
 
 use std::cell::Cell;
 
@@ -125,9 +126,16 @@ pub fn dispatched<T>(
         origin: expected.ticket,
         fact: Cell::new(Fact::Failed),
     };
-    let reply = run(&outcome, expected);
+    let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&outcome, expected)))
+        .unwrap_or_else(|_| Err(CommandError::failed_step()));
     outcome.settle(&reply);
-    reply
+    match reply {
+        Err(error) if outcome.fact.get() == Fact::Done && error.kind != "completedWhileLocked" => {
+            let _ = session.lock();
+            Err(CommandError::completed_while_locked())
+        }
+        reply => reply,
+    }
 }
 
 #[cfg(test)]
@@ -199,24 +207,30 @@ mod tests {
 
     type Run = fn(&Session, &Outcome<'_>) -> Result<Option<u8>, CommandError>;
 
+    /// Each way out: the reply ("1", "null" or the error kind), and the record of an import and
+    /// of a launch. A panic never unwinds out of `dispatched`. After the effect, no reply invites
+    /// a retry: the session ends and the reply is `completedWhileLocked` (U1-R1-04).
     #[test]
     fn class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record() {
-        let ways: [(&str, Run, &str, &str); 9] = [
+        let ways: [(&str, Run, &str, &str, &str); 9] = [
             (
                 "a value",
                 |_, _| Ok(Some(1)),
+                "1",
                 "importApplied",
                 "terminalStarted",
             ),
             (
                 "null",
                 |_, _| Ok(None),
+                "null",
                 "importDeclined",
                 "terminalDeclined",
             ),
             (
                 "an error",
                 |_, _| Err(CommandError::locked()),
+                "locked",
                 "importFailed",
                 "terminalFailed",
             ),
@@ -226,6 +240,7 @@ mod tests {
                     failing_step()?;
                     Ok(Some(1))
                 },
+                "invalid",
                 "importFailed",
                 "terminalFailed",
             ),
@@ -235,12 +250,14 @@ mod tests {
                     session.lock().unwrap();
                     Err(CommandError::completed_while_locked())
                 },
+                "completedWhileLocked",
                 "importSessionEnded",
                 "terminalSessionEnded",
             ),
             (
                 "a panic before the effect",
                 |_, _| panic!("a fake fault before the effect"),
+                "internal",
                 "importFailed",
                 "terminalFailed",
             ),
@@ -250,8 +267,9 @@ mod tests {
                     outcome.done();
                     panic!("a fake fault after the effect")
                 },
-                "importApplied",
-                "terminalStarted",
+                "completedWhileLocked",
+                "importSessionEnded",
+                "terminalSessionEnded",
             ),
             (
                 "an error after the effect",
@@ -259,8 +277,9 @@ mod tests {
                     outcome.done();
                     Err(CommandError::internal("a fake error after the effect"))
                 },
-                "importApplied",
-                "terminalStarted",
+                "completedWhileLocked",
+                "importSessionEnded",
+                "terminalSessionEnded",
             ),
             (
                 "a lock after the effect, then a value",
@@ -269,11 +288,12 @@ mod tests {
                     session.lock().unwrap();
                     Ok(Some(1))
                 },
+                "1",
                 "importSessionEnded",
                 "terminalSessionEnded",
             ),
         ];
-        for (way, run, import, terminal) in ways {
+        for (way, run, answer, import, terminal) in ways {
             for (operation, expected) in
                 [(Operation::Import, import), (Operation::Terminal, terminal)]
             {
@@ -287,11 +307,14 @@ mod tests {
                         run(&session, outcome)
                     })
                 }));
-                assert_eq!(
-                    reply.is_err(),
-                    way.starts_with("a panic"),
-                    "{way}: only a panic unwinds"
-                );
+                let reply = match reply.expect("no panic unwinds out of dispatched") {
+                    Ok(value) => serde_json::to_value(value).unwrap().to_string(),
+                    Err(error) => {
+                        assert!(!error.message.contains("Try again"), "{way}");
+                        error.kind
+                    }
+                };
+                assert_eq!(reply, answer, "{way}, {operation:?}");
                 assert_eq!(
                     records(&f.session, &id),
                     [(ticket.0.to_string(), expected.to_string())],

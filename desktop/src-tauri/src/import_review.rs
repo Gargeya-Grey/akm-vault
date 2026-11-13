@@ -140,6 +140,9 @@ pub trait ImportConfirm: Send + Sync {
     /// Runs right after a recovery moved the damaged journal, inside its vault access.
     /// Production does nothing here. A test locks there.
     fn journal_moved(&self) {}
+    /// Runs right after the import replaced the vault file, inside its vault access.
+    /// Production does nothing here. A test fails there (U1-R1-04).
+    fn imported(&self) {}
 }
 
 pub struct ConfirmState(pub Arc<dyn ImportConfirm>);

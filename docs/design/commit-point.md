@@ -190,7 +190,7 @@ Each mutant is one change to the code. The named test must fail on it. All of th
 12. **The launch keeps its own check of reserved names.** The core refuses a reserved name first, so the check in `check_names` is a second guard, as in the command line. Veto effect: delete that branch and its own test. The launch boundary does not change.
 13. **The desktop list of the command prompt names is deleted.** The core class `ShellStartup` holds `PROMPT`, `DIRCMD` and `COPYCMD`, and the table test asserts it. One list remains.
 14. **One bound for every wait for an event that must happen, 120 seconds (class Q).** A broken run takes longer to fail. A loaded run no longer fails.
-15. **A panic in a native step answers the fixed text "A native step failed. Try again."** The panic message can name a path or hold a value, so it never reaches the page.
+15. **A panic in a native step answers a fixed text that invites no retry.** The panic message can name a path or hold a value, so it never reaches the page. The text is "A native step failed, so AKM cannot say whether it finished. Check the result before you try again." Before U1-R1-04, the text was "A native step failed. Try again.", which invited a retry of a step that may have finished. A panic is caught at three places, so that what is known about the effect survives it (section 9.1): in the act under the gate, in the vault access, and in `dispatched`. A caught panic ends the session, because memory may no longer match the file or the process.
 16. **Three error texts keep a path.** `notFound` names the vault path that the page sent. The FR-04 warning names the remnant, which the user must delete. A `journal` error names the journal file, which the user must act on. No error text holds a secret value. Veto effect: fixed texts, and the user no longer sees where to act.
 
 ## 9. An outcome for every dispatched request
@@ -201,7 +201,10 @@ Fault class N: a request whose effect outlives the page must leave a true record
 
 - `outcome::dispatched` runs `env_import` and `env_launch_terminal`. The page makes the operation ID, a UUID, for each request.
 - A malformed operation ID is refused with `invalid`, and a session that is not the current one with `locked`. Both leave no record: nothing ran, and the reply says so.
-- From the session check on, one guard (`Outcome`) records exactly once, in its drop. So a reply, an early return through `?` and a panic that unwinds all leave one record. The default is "failed".
+- From the session check on, one guard (`Outcome`) records exactly once, in its drop. So a reply, an early return through `?` and a panic all leave one record. `dispatched` catches a panic in the request, so no panic unwinds past it. The default is "failed".
+- The commit is marked where it happens. A vault write marks it in `VaultCommit` (`CommitLog::committed`), and the vault access catches a panic in its operation, so it always reads that mark. The launch marks it with `Outcome::done` right after the resume. A panic in the act itself, under the gate, is caught there: the gate is not poisoned, the effect is revoked, and the answer is the fixed text of decision 15.
+- After the mark, no reply invites a retry. An error or a panic after a vault replacement, or after `done`, ends the session, and the reply is `completedWhileLocked`. The page then shows the locked screen, and the record says "session ended".
+- `Session::record_operation` writes into a poisoned gate too, so a record is never skipped.
 - The reply decides the kind. A value: applied or started. `null`: declined. `completedWhileLocked`: session ended. Any other error: failed.
 - `Outcome::done` marks an effect that happened. The launch calls it right after the resume. A fault after that point records the start, and no later error turns the record into "failed".
 - "Session ended" means that the effect happened and that the session of the request was no longer the current one when the record was written. The check is the same as a status read: it does not count as activity, and it changes nothing in the session that is current. The record holds the session of the request, so a record of session A never names session B.
@@ -219,19 +222,22 @@ Fault class N: a request whose effect outlives the page must leave a true record
 
 ### 9.3 Limits
 
-6. A panic inside the core after the vault replacement and before the import returns records `importFailed`, though the file holds the import. The vault file and the journal show the truth. No code in that path is known to panic.
+6. A gate that some other code poisons still takes a record, but `vault_warnings` then refuses, as every other gate user does, so the page cannot read the record until AKM restarts. Since U1-R1-04 the act under the gate cannot poison it, and no other code under the gate is known to panic.
 7. Records live in memory until the page acknowledges them or AKM quits. A record does not survive a restart.
+8. A panic in an act under the gate (U1-R1-04) records "failed". For a terminal, the revoke has ended the process. For a vault replacement, the file may hold the change; the `importFailed` text says that a failure does not confirm that nothing was saved.
 
 ### 9.4 Tests
 
 | Rule | Test |
 |---|---|
-| One record on each way out, for both operations: a value, `null`, an error, `?`, `completedWhileLocked`, a panic before and after `done`, an error after `done`, a lock after `done` | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` |
+| One record and one reply on each way out, for both operations: a value, `null`, an error, `?`, `completedWhileLocked`, a panic before and after `done`, an error after `done`, a lock after `done` | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` |
+| A panic under the gate leaves a working gate; a poisoned gate still takes a record (U1-R1-04) | `u1_r1_04_a_panic_under_the_gate_leaves_a_working_gate_and_no_record_is_skipped` |
+| An error or a panic after the vault replacement answers `completedWhileLocked` (U1-R1-04) | `u1_r1_04_an_access_that_fails_after_its_replacement_answers_completed_while_locked` |
 | No record before the session check | `class_n_a_malformed_operation_or_another_session_runs_nothing_and_leaves_no_record` |
 | A record of session A changes nothing in session B | `class_n_a_record_of_session_a_changes_nothing_in_session_b` |
 | A hidden window at the import check leaves a failed record (T-R3-05) | `t_r3_05_a_window_that_is_not_shown_gets_no_dialog_and_leaves_a_failed_record` |
 | A recovery that moved the journal answers `completedWhileLocked` after a lock | `fr14_a_lock_after_the_journal_moved_answers_completed_while_locked` |
-| Through the production handlers: each way out of a launch with the reply dropped, a page load while the review is open and then an approval, a hidden window at the window check, a lock at three steps, sessions A and B, and a hidden window at the import check | the outcome section of `desktop/src-tauri/tests/ipc_dispatch.rs` |
+| Through the production handlers: each way out of a launch with the reply dropped, a fault after the start and right after the resume, a page load while the review is open and then an approval, a hidden window at the window check, a lock at three steps, sessions A and B, a hidden window at the import check, and a fault right after the import's replacement | the outcome section of `desktop/src-tauri/tests/ipc_dispatch.rs` |
 
 ### 9.5 Mutants
 
@@ -248,3 +254,6 @@ Each mutant is one change to the code. The named test must fail on it. All of th
 | A malformed operation ID is accepted | `class_n_a_malformed_operation_or_another_session_runs_nothing_and_leaves_no_record` |
 | The record names the current session, not the session of the request | `class_n_a_record_of_session_a_changes_nothing_in_session_b` |
 | An error after the start turns the record into "failed" | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` |
+| The vault access does not catch a panic in its operation | `u1_r1_04_an_access_that_fails_after_its_replacement_answers_completed_while_locked` |
+| The commit point does not catch a panic in the act | `u1_r1_04_a_panic_under_the_gate_leaves_a_working_gate_and_no_record_is_skipped` |
+| `dispatched` keeps an error reply after the effect | `class_n_every_way_out_of_a_dispatched_request_leaves_one_true_record` |

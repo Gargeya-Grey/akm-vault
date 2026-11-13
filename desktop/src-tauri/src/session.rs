@@ -783,7 +783,16 @@ impl Session {
     ) -> Result<E::Output, CommandError> {
         let acted = self.gate().and_then(|mut gate| {
             self.bound(&mut gate, binding)?;
-            let output = effect.act(&Held::new())?;
+            // A panic in the act is caught here, so it never poisons the gate. The act may have
+            // happened, so the session ends: nothing builds on memory that may not match the file
+            // or the process (U1-R1-04).
+            let output =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| effect.act(&Held::new())))
+                    .unwrap_or_else(|_| {
+                        gate.policy.lock();
+                        self.locked_gate(&mut gate);
+                        Err(CommandError::failed_step())
+                    })?;
             if advance {
                 gate.revision = gate.revision.wrapping_add(1);
             }
@@ -1102,7 +1111,11 @@ impl Session {
             before.revision,
         ));
         vault.set_commit_gate(Some(commit.clone()));
-        let result = operation(vault);
+        // A panic in the operation is caught here, so `finish` below still learns whether the
+        // file was replaced (U1-R1-04).
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(vault)));
+        let panicked = result.is_err();
+        let result = result.unwrap_or_else(|_| Err(CommandError::failed_step()));
         vault.set_commit_gate(Some(VaultCommit::closed()));
         let log = commit.finish();
         let warnings = vault.take_warning_records();
@@ -1129,6 +1142,18 @@ impl Session {
         if let Some(refusal) = log.refusal {
             return Err(refusal);
         }
+        let result = match result {
+            // After a panic the memory may not match the file, and after a replacement no reply
+            // may invite a retry. So the session ends, and a replacement answers
+            // `completedWhileLocked` (U1-R1-04).
+            Err(error) if panicked || log.committed => {
+                *stored = StoredVault::default();
+                gate.policy.lock();
+                self.locked_gate(&mut gate);
+                return Err(ended(error));
+            }
+            result => result,
+        };
         // A write moved the revision at its commit. A reload changes what is in memory.
         if result.is_ok() && matches!(access, Access::Reload) {
             gate.revision = gate.revision.wrapping_add(1);
@@ -1310,14 +1335,13 @@ impl Session {
     /// The outcome record of a dispatched request (`outcome.rs`). It belongs to the
     /// application, not to a session: it must survive a lock and a lost reply. It holds the
     /// opaque operation ID of the page, the session of the request and a fixed kind only.
+    /// A poisoned gate still takes the record, so a record is never skipped (U1-R1-04).
     pub fn record_operation(&self, ticket: Ticket, operation_id: &str, kind: OperationWarningKind) {
-        if let Ok(mut gate) = self.gate() {
-            gate.notices.push(OperationNotice {
-                id: operation_id.to_string(),
-                origin_session: ticket.0.to_string(),
-                kind,
-            });
-        }
+        self.raw_gate().notices.push(OperationNotice {
+            id: operation_id.to_string(),
+            origin_session: ticket.0.to_string(),
+            kind,
+        });
     }
 
     /// A page load means the document that held any on-screen result is gone.
@@ -5286,6 +5310,111 @@ mod tests {
                 .map(|notice| notice.message)
                 .collect();
             assert_eq!(messages, ["fake revoke failure"]);
+        }
+
+        /// U1-R1-04: an act that panics under the gate. The panic does not poison the gate, the
+        /// revoke runs, the session ends, the reply does not invite a retry, and the next opening
+        /// works. A gate that is poisoned some other way still takes a record.
+        #[test]
+        fn u1_r1_04_a_panic_under_the_gate_leaves_a_working_gate_and_no_record_is_skipped() {
+            struct Panics {
+                revoked: bool,
+            }
+            impl Effect for Panics {
+                type Output = ();
+                fn act(&mut self, _held: &Held<'_>) -> Result<(), CommandError> {
+                    panic!("a fake fault under the gate")
+                }
+                fn revoke(&mut self) -> Result<(), String> {
+                    self.revoked = true;
+                    Ok(())
+                }
+            }
+            let f = fixture();
+            let ticket = f.session.snapshot().unwrap().ticket;
+            let mut effect = Panics { revoked: false };
+            let error = f
+                .session
+                .commit(Binding::Ticket(ticket), &mut effect)
+                .unwrap_err();
+            assert_eq!(error.message, CommandError::failed_step().message);
+            assert!(effect.revoked, "the revoke ran");
+            assert!(!f.session.gate.is_poisoned(), "the gate is not poisoned");
+            assert_eq!(f.session.snapshot().unwrap_err().kind, "locked");
+            assert!(f.session.warnings().is_ok());
+            let next = f.session.begin_open().unwrap();
+            f.session
+                .open(next, || {
+                    let path = f._directory.path().join("next.kdbx");
+                    Vault::create(path, "fake-test-password-123!", None).map_err(Into::into)
+                })
+                .unwrap();
+            assert!(f.session.snapshot().is_ok(), "the next opening works");
+
+            let session = f.session.clone();
+            let _ = std::thread::spawn(move || {
+                let _gate = session.gate.lock().unwrap();
+                panic!("a fake fault that poisons the gate");
+            })
+            .join();
+            assert!(f.session.gate.is_poisoned());
+            let id = uuid::Uuid::new_v4().to_string();
+            f.session
+                .record_operation(ticket, &id, OperationWarningKind::ImportFailed);
+            assert!(
+                f.session
+                    .raw_gate()
+                    .notices
+                    .iter()
+                    .any(|notice| notice.id == id),
+                "the record was taken"
+            );
+        }
+
+        /// U1-R1-04: a write access that fails or panics. Before the replacement, a panic answers
+        /// the fixed text, ends the session and leaves the file. After the replacement, an error
+        /// or a panic answers `completedWhileLocked` and ends the session; the file holds the
+        /// write. The vault mutex is never poisoned.
+        #[test]
+        fn u1_r1_04_an_access_that_fails_after_its_replacement_answers_completed_while_locked() {
+            for (way, replaces, answer) in [
+                ("a panic before the replacement", false, "internal"),
+                (
+                    "an error after the replacement",
+                    true,
+                    "completedWhileLocked",
+                ),
+                (
+                    "a panic after the replacement",
+                    true,
+                    "completedWhileLocked",
+                ),
+            ] {
+                let f = fixture();
+                let before = on_disk(&f);
+                let error = f
+                    .session
+                    .access(Access::Write, None, |vault| -> Result<(), CommandError> {
+                        if replaces {
+                            vault.add(akm_core::ApiKeyInput::new(
+                                "Fake write before the fault",
+                                "fake-fault-value",
+                            ))?;
+                        }
+                        if way.starts_with("a panic") {
+                            panic!("a fake fault in the access");
+                        }
+                        Err(CommandError::internal("a fake error after the replacement"))
+                    })
+                    .err()
+                    .expect("the access failed");
+                assert_eq!(error.kind, answer, "{way}");
+                assert!(!error.message.contains("Try again"), "{way}");
+                assert_eq!(on_disk(&f) != before, replaces, "{way}: the file");
+                assert_eq!(f.session.snapshot().unwrap_err().kind, "locked", "{way}");
+                assert!(!f.session.vault.is_poisoned(), "{way}");
+                assert!(!f.session.gate.is_poisoned(), "{way}");
+            }
         }
 
         fn sources() -> Vec<(String, String)> {

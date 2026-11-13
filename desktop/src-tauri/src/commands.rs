@@ -329,7 +329,7 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T, CommandError> {
     tauri::async_runtime::spawn_blocking(operation)
         .await
-        .map_err(|_| CommandError::internal("A native step failed. Try again."))?
+        .map_err(|_| CommandError::failed_step())?
 }
 
 #[tauri::command]
@@ -1245,6 +1245,7 @@ fn run_import(
                     }
                     let (added, updated) =
                         vault.import_env(&entries.0, project.as_deref(), environment.as_deref())?;
+                    confirm.imported();
                     Ok(ImportReport { added, updated })
                 })
                 .and_then(|stamped| session.finish(Access::Write, stamped))
@@ -1478,7 +1479,11 @@ mod tests {
         }));
         let error = answer.unwrap_err();
         assert_eq!(error.kind, "internal");
-        assert_eq!(error.message, "A native step failed. Try again.");
+        assert_eq!(error.message, CommandError::failed_step().message);
+        assert!(
+            !error.message.contains("Try again"),
+            "the step may have finished, so the text does not invite a retry (U1-R1-04)"
+        );
         let source = include_str!("commands.rs");
         let production = &source[..source.find("\nmod tests {").unwrap()];
         assert_eq!(production.matches("spawn_blocking(").count(), 1);
