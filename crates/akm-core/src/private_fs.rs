@@ -174,12 +174,14 @@ pub(crate) fn check_private(path: &Path) -> Result<()> {
 
 #[cfg(windows)]
 pub(crate) use imp::{
-    create_private_dir, file_id, move_new, open_dir, open_file, reject_links, remove_file_if,
+    create_private_dir, file_id, link_count, move_new, open_dir, open_file, reject_links,
+    remove_file_if,
 };
 
 #[cfg(not(windows))]
 pub(crate) use other::{
-    create_private_dir, file_id, move_new, open_dir, open_file, reject_links, remove_file_if,
+    create_private_dir, file_id, link_count, move_new, open_dir, open_file, reject_links,
+    remove_file_if,
 };
 
 #[cfg(not(windows))]
@@ -204,6 +206,20 @@ mod other {
 
     pub(crate) fn file_id(_: &Path) -> Option<String> {
         None
+    }
+
+    /// See the Windows `link_count`.
+    pub(crate) fn link_count(file: &File) -> std::io::Result<u32> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Ok(u32::try_from(file.metadata()?.nlink()).unwrap_or(u32::MAX))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = file;
+            Ok(1)
+        }
     }
 
     pub(crate) fn reject_links(_: &Path) -> Result<()> {
@@ -707,6 +723,11 @@ mod imp {
         };
         verify(&file, path)?;
         Ok(Some(file))
+    }
+
+    /// The number of names (hard links) of an open file (CORE-R2-05).
+    pub(crate) fn link_count(file: &File) -> io::Result<u32> {
+        Ok(information(file)?.nNumberOfLinks)
     }
 
     /// Volume serial number and file index of an existing file, if the file system has them.

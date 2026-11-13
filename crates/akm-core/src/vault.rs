@@ -55,6 +55,22 @@ fn read_vault_file(path: &Path) -> Result<Vec<u8>> {
     }
 }
 
+/// A save refuses a vault file with more than one name (hard link): the lock is named from one
+/// path, and the replacement changes one name only, so the other names would keep the old
+/// vault (CORE-R2-05). Reading stays possible.
+fn refuse_names(names: u32) -> Result<()> {
+    if names > 1 {
+        return Err(Error::Save(format!(
+            "the vault file has {names} names (hard links), and a save through one name would leave the old vault under the others. Nothing was changed. Copy the vault to a new file, open the copy, and save there"
+        )));
+    }
+    Ok(())
+}
+
+fn refuse_second_name(file: &File) -> Result<()> {
+    refuse_names(private_fs::link_count(file)?)
+}
+
 /// The file at `path` holds exactly `expected`. It reads at most one byte past its length.
 fn holds_exactly(path: &Path, expected: &[u8]) -> std::io::Result<bool> {
     match private_fs::read_bounded(&mut File::open(path)?, expected.len() as u64) {
@@ -1100,6 +1116,8 @@ impl Vault {
                     }
                 })
             } else {
+                // Again under the lock: a second name made after the last check (CORE-R2-05).
+                refuse_second_name(&File::open(&self.path)?)?;
                 fs::rename(&tmp.path, &self.path).map_err(Error::Io)
             }
         };
@@ -1163,10 +1181,15 @@ impl Vault {
     }
 
     fn checked_source(&self) -> Result<Option<Vec<u8>>> {
-        let read = File::open(&self.path)
-            .and_then(|mut file| private_fs::read_bounded(&mut file, MAX_VAULT_BYTES));
+        let read = File::open(&self.path).and_then(|mut file| {
+            let names = private_fs::link_count(&file)?;
+            Ok((names, private_fs::read_bounded(&mut file, MAX_VAULT_BYTES)?))
+        });
         let bytes = match read {
-            Ok(bytes) => bytes,
+            Ok((names, bytes)) => {
+                refuse_names(names)?;
+                bytes
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return if self.fingerprint.is_none() {
                     Ok(None)
@@ -2491,5 +2514,84 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("larger than"), "{error}");
         assert_eq!(fs::read(&path).unwrap(), saved, "the vault is unchanged");
+    }
+
+    /// CORE-R2-05, the reviewer's closing test: two names (hard links) of one vault file. The
+    /// lock is named from one path, so it cannot cover the other name, and a save replaces one
+    /// name only. A save through either name is refused before it writes anything, whichever
+    /// name holds the lock, and also when two saves start at once: the two names never fork.
+    /// Reading works through both names, and a save works again once the second name is gone.
+    #[test]
+    fn a_vault_file_with_two_names_is_read_but_never_written() {
+        let (dir, path, vault) = fixture_vault();
+        drop(vault);
+        let alias = dir.path().join("alias.kdbx");
+        fs::hard_link(&path, &alias).unwrap();
+        let before = fs::read(&path).unwrap();
+        let names = [path.clone(), alias.clone()];
+        let serialized = std::rc::Rc::new(std::cell::Cell::new(false));
+        for held in &names {
+            let lock = acquire_lock(held).unwrap();
+            for name in &names {
+                let mut vault = Vault::open(name, PASSWORD).unwrap();
+                vault.list();
+                let flag = serialized.clone();
+                on_save(SaveStage::Serialized, move |_, _| flag.set(true));
+                let error = vault
+                    .add(ApiKeyInput::new("Fake key", "fake-value"))
+                    .unwrap_err();
+                assert!(
+                    matches!(error, Error::Locked) || error.to_string().contains("hard links"),
+                    "{error}"
+                );
+            }
+            drop(lock);
+        }
+        assert!(!serialized.get(), "a refused save wrote no new version");
+        let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let saves: Vec<_> = names
+            .iter()
+            .cloned()
+            .map(|name| {
+                let start = start.clone();
+                std::thread::spawn(move || {
+                    let mut vault = Vault::open(&name, PASSWORD).unwrap();
+                    start.wait();
+                    vault
+                        .add(ApiKeyInput::new("Fake key", "fake-value"))
+                        .is_err()
+                })
+            })
+            .collect();
+        for save in saves {
+            assert!(save.join().unwrap(), "a save through two names was refused");
+        }
+        assert_eq!(fs::read(&path).unwrap(), before, "the vault is unchanged");
+        assert_eq!(fs::read(&alias).unwrap(), before, "the names never fork");
+
+        fs::remove_file(&alias).unwrap();
+        let mut vault = Vault::open(&path, PASSWORD).unwrap();
+        vault
+            .add(ApiKeyInput::new("Fake key", "fake-value"))
+            .unwrap();
+    }
+
+    /// CORE-R2-05: the check again under the lock, just before the replacement. A second name
+    /// made after the first check stops the save, and both names keep the old vault.
+    #[test]
+    fn a_second_name_made_during_a_save_stops_the_replacement() {
+        let (dir, path, mut vault) = fixture_vault();
+        let alias = dir.path().join("alias.kdbx");
+        let before = fs::read(&path).unwrap();
+        let made = alias.clone();
+        on_save(SaveStage::BeforeReplace, move |_, vault_path| {
+            fs::hard_link(vault_path, &made).unwrap();
+        });
+        let error = vault
+            .add(ApiKeyInput::new("Fake key", "fake-value"))
+            .unwrap_err();
+        assert!(error.to_string().contains("hard links"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), before, "the vault is unchanged");
+        assert_eq!(fs::read(&alias).unwrap(), before, "the names never fork");
     }
 }
