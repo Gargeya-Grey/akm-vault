@@ -210,8 +210,29 @@ function Confirm-NativeImport([string]$expect, [string]$button = 'Import', [int]
 }
 
 function Set-Field([string]$name, [string]$value) {
-  $element = Find-Control $name ([System.Windows.Automation.ControlType]::Edit)
-  $element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($value)
+  # The page can replace a form just after it shows it: a lock shows the unlock form, and the
+  # native confirmation of that lock mounts the form again. An element found before the
+  # replacement is stale, and text set in it is lost. So read the value back from the element
+  # that is there after a short wait. A password field gives no value to read.
+  $edit = [System.Windows.Automation.ControlType]::Edit
+  $pattern = [System.Windows.Automation.ValuePattern]::Pattern
+  $until = [DateTime]::UtcNow.AddMilliseconds(12000)
+  $last = ''
+  do {
+    try {
+      $element = Find-Control $name $edit
+      $element.GetCurrentPattern($pattern).SetValue($value)
+      if ($element.Current.IsPassword) { return }
+      Start-Sleep -Milliseconds 250
+      $shown = (Find-Control $name $edit).GetCurrentPattern($pattern).Current.Value
+      if ($shown -ceq $value) { return }
+      $last = 'the field did not keep the value'
+    } catch [System.InvalidOperationException], [System.Windows.Automation.ElementNotAvailableException] {
+      $last = $_.Exception.Message
+    }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $until)
+  throw "Could not set AKM field ${name}: $last"
 }
 
 function Click-Control([string]$name) {
