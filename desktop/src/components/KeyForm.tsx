@@ -87,6 +87,11 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
   const [rotation, setRotation] = useState(shown.rotation);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // An edit names and judges only the fields whose text the user changed (FW-03, D2B-02). Native
+  // code keeps every other field exactly as it was stored, so a stored value that the form's own
+  // rules would refuse never blocks an edit of another field.
+  const changed = (now: string, was: string) => !editing || now !== was;
+  const rotationJudged = changed(rotation, shown.rotation);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -100,7 +105,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
     event.preventDefault();
     setError(null);
 
-    if (!title.trim()) {
+    if (changed(title, shown.title) && !title.trim()) {
       setError("Give the key a title.");
       return;
     }
@@ -110,12 +115,8 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
       return;
     }
 
-    // An edit names only the fields whose text the user changed (FW-03). Native code keeps every
-    // other field exactly as it was stored, and cleans a named text as an add does.
-    const changed = (now: string, was: string) => !editing || now !== was;
-
     let rotationDays: number | null = null;
-    if (changed(rotation, shown.rotation) && rotation.trim()) {
+    if (rotationJudged && rotation.trim()) {
       const parsed = Number(rotation);
       if (!Number.isInteger(parsed) || parsed <= 0 || parsed > MAX_ROTATION_DAYS) {
         setError(`Rotation must be a whole number of days between 1 and ${MAX_ROTATION_DAYS}.`);
@@ -137,7 +138,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
     if (changed(tags, shown.tags)) draft.tags = splitList(tags, TAG_SEPARATOR);
     if (changed(notes, shown.notes)) draft.notes = notes;
     if (changed(expires, shown.expires)) draft.expiresAt = expires ? dateOnlyExpiry(expires) : null;
-    if (changed(rotation, shown.rotation)) draft.rotationDays = rotationDays;
+    if (rotationJudged) draft.rotationDays = rotationDays;
 
     setBusy(true);
     try {
@@ -200,7 +201,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
                     placeholder="OpenAI — staging"
                     autoComplete="off"
                     autoFocus
-                    required
+                    required={changed(title, shown.title)}
                   />
                 </div>
 
@@ -311,8 +312,8 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
                     id="key-rotation"
                     type="number"
                     inputMode="numeric"
-                    min={1}
-                    max={MAX_ROTATION_DAYS}
+                    min={rotationJudged ? 1 : undefined}
+                    max={rotationJudged ? MAX_ROTATION_DAYS : undefined}
                     step={1}
                     value={rotation}
                     onChange={(event) => setRotation(event.target.value)}
