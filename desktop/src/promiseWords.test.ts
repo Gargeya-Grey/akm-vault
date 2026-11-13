@@ -74,6 +74,32 @@ test("every entry of the evidence table still matches a sentence on the screen",
   expect(stale).toEqual([]);
 });
 
+/** JSX texts and JSX attribute values that hold a character entity. The page draws the decoded text, and this scan reads the source text. */
+function entities(files: Record<string, string>) {
+  const entity = /&(#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/i;
+  return Object.entries(files).flatMap(([file, text]) => {
+    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    const found: { file: string; text: string }[] = [];
+    const visit = (node: ts.Node) => {
+      const drawn = ts.isJsxText(node) || (ts.isStringLiteral(node) && ts.isJsxAttribute(node.parent));
+      if (drawn && entity.test(node.getText(source))) found.push({ file, text: node.getText(source).trim() });
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    return found;
+  });
+}
+
+// U2-R2-04. `alw&#97;ys` draws "always". No screen text uses a character entity, so the scan above
+// reads each text as the page draws it. A text that needs such a character writes it as itself.
+test("no JSX text or JSX attribute holds a character entity", () => {
+  expect(entities(sources)).toEqual([]);
+  expect(entities({ "./components/Planted.tsx": `export const a = <p title="s&#97;fe">Your secrets are alw&#97;ys s&amp;fe.</p>;` })).toEqual([
+    { file: "./components/Planted.tsx", text: `"s&#97;fe"` },
+    { file: "./components/Planted.tsx", text: "Your secrets are alw&#97;ys s&amp;fe." },
+  ]);
+});
+
 test("the scan reads strings in either quote, template strings and JSX text, and no comment, module name or type", () => {
   const text = [
     `import x from "./never-shown";`,

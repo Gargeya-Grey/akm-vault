@@ -499,8 +499,6 @@ Each decision takes the option that removes state or removes a promise.
   makes held plaintext stale. So the rule that a list read that starts again names no scope has no
   test of its own on a screen. `plaintext.test.tsx` tests that a view that names no scope drops its
   value. Two mutants of that rule (Use keys and the key drawer) pass every test for this reason.
-- Until unit 1 maps the two core warnings to their own kinds, native still sends them as
-  `backupRetention` and `journal`, and the page shows those texts.
 - The Edge tests use a mocked native boundary. They prove the page side of the contract. The
   native record of a terminal launch needs the native tests of unit 1 and the owner-present proof.
 - The promise-word scan reads strings, template strings and JSX text in `desktop/src`. It does not

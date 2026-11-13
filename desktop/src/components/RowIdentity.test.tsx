@@ -141,6 +141,17 @@ test("the edit form and the search use the stored value, not the drawn one", asy
   expect((update?.args?.draft as { issuer: string }).issuer).toBe("Acme  Cloud");
 });
 
+test("the save notice names the title that was saved, not the title of the last render (U2-R2-06)", async () => {
+  await showKeys([key({ id: ID.a1, title: "Original title" })]);
+  fireEvent.click(rows()[0]);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Renamed title" } });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save changes" })); });
+  const notice = screen.getByText(/The vault file has been rewritten/).textContent ?? "";
+  expect(notice).toContain("Saved “Renamed title” (ID ");
+  expect(notice).not.toContain("Original title");
+});
+
 test("the key drawer draws its title, issuer and details by the rule, and its notes keep their lines", async () => {
   await showKeys([key({ id: ID.a1, title: "Twin\u200B", issuer: "Acme  Cloud", url: "https://example.invalid/\u202Efdp", tags: ["tag "], scopes: ["read\u200B"], notes: "line one\nline\u200Btwo" })]);
   fireEvent.click(rows()[0]);

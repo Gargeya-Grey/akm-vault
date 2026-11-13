@@ -1,5 +1,5 @@
 import type { ApplicationNotice, OperationNotice, WarningReport } from "./types";
-import { settleNativeOutcome, WARNING_EVENT } from "./sessionBoundary";
+import { importRecordChangedData, settleNativeOutcome, WARNING_EVENT } from "./sessionBoundary";
 import type { NativeOutcome } from "./sessionBoundary";
 
 // The native record of a dispatched request, and the outcome it gives the receipt of that request.
@@ -35,6 +35,8 @@ export function receiveWarnings(report: WarningReport): string[] {
       folded.push(id);
       continue;
     }
+    // The first sight of a record that no waiting receipt took.
+    if (kind === "importApplied" && !pending.has(id)) importRecordChangedData(id);
     pending.set(id, { id, originSession, kind });
   }
   for (const { id, message } of report.application) {

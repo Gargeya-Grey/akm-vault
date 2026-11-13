@@ -91,14 +91,22 @@ export function App() {
   const epoch = useRef(0);
   const transition = useRef(0);
   const request = useRef(0);
+  // The page shows the lock, and its unlock form is mounted.
+  const lockShown = useRef(false);
+  if (status?.unlocked) lockShown.current = false;
   const renderedEpoch = epoch.current;
 
-  const showLocked = useCallback(() => {
+  const showLocked = useCallback((asked = false) => {
     invalidateSession();
     request.current += 1;
-    epoch.current += 1;
     transition.current += 1;
-    setSessionEpoch(epoch.current);
+    // The answer to a lock that this page asked for, when the page already shows the lock, keeps the
+    // unlock form and what a person typed in it (U2-C-01). Every other lock signal mounts a new form.
+    if (!(asked === true && lockShown.current)) {
+      epoch.current += 1;
+      setSessionEpoch(epoch.current);
+    }
+    lockShown.current = true;
     setBootInterrupted(true);
     setStatus((current) => current ? { ...current, sessionId: null, unlocked: false, keyCount: 0, vaultName: null } : current);
     setView("keys");
@@ -144,8 +152,9 @@ export function App() {
       setError(null);
     };
     const invalidated = (event: Event) => {
-      showLocked();
-      const message = (event as CustomEvent<{ message?: string }>).detail?.message;
+      const detail = (event as CustomEvent<{ message?: string; asked?: boolean }>).detail;
+      showLocked(detail?.asked === true);
+      const message = detail?.message;
       if (message) setError(message);
     };
     window.addEventListener(NATIVE_OPEN_EVENT, opening);

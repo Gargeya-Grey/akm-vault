@@ -331,6 +331,20 @@ test("import row 10, after a change of view the new view waits for the same impo
   expect(button("Import .env…").disabled).toBe(false);
 });
 
+for (const how of ["reply", "record"] as const) {
+  test(`import row 10, after a change of view the ${how} of a saved import makes the new view read the list again (U2-R2-02)`, async () => {
+    await startImport();
+    cleanup();
+    await act(async () => { render(<UseKeys />); });
+    await act(async () => {});
+    const before = callsOf("keys_list").length;
+    if (how === "reply") await settle("env_import", "resolve", { added: 1, updated: 0 });
+    else await record("env_import", "importApplied");
+    expect(callsOf("keys_list")).toHaveLength(before + 1);
+    expect(button("Import .env…").disabled).toBe(false);
+  });
+}
+
 // The file export has a receipt but no native record (the sweep of the same class).
 
 for (const how of ["hide", "native view expiry", "a change of view"] as const) {

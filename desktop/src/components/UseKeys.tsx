@@ -64,7 +64,12 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
   const [importError, setImportError] = useState<string | null>(null);
   const [importNote, setImportNote] = useState<string | null>(null);
   const [launch, setLaunch] = useState<Tracked | null>(null);
-  const [importOperation, setImportOperation] = useState<Tracked | null>(null);
+  // An import that was dispatched before this form was mounted is tracked too, with the request of no
+  // form: the list reads again when it settles, and the form shows nothing of it (U2-R2-02).
+  const [importOperation, setImportOperation] = useState<Tracked | null>(() => {
+    const receipt = waitingReceipt("import");
+    return receipt === null ? null : { receipt, request: -1 };
+  });
 
   // A form waits while a receipt of its operation waits in this session. The receipt is the one
   // owner: a hide, an expiry or a new mount of this view does not end the wait (U2-R1-03).

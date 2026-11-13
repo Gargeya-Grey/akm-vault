@@ -5,7 +5,7 @@ import { plaintextScope } from "./plaintext";
 import { openFor } from "./sealed";
 import { adoptReservation, nativeOwner, releaseNativeOwner } from "./nativeSession";
 import { acknowledgeNotices, retainedOperationNotices } from "./operationNotices";
-import { acknowledgeCompletions, COMPLETION_EVENT, invalidateSession, retainedCompletions, sessionGeneration, SESSION_LOSS_EVENT } from "./sessionBoundary";
+import { acknowledgeCompletions, COMPLETION_EVENT, dataGeneration, invalidateSession, retainedCompletions, sessionGeneration, SESSION_LOSS_EVENT } from "./sessionBoundary";
 import { NATIVE_ERROR_KINDS } from "./types";
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
@@ -96,6 +96,44 @@ for (const [kind, outcome] of [["importApplied", "completed"], ["importSessionEn
     expect(retainedCompletions()).toHaveLength(1);
   });
 }
+
+// U2-R2-01. An applied import changed the vault data, so a value that is on the screen is old. The
+// record says so also when no receipt waits for it. The data generation hides such a value.
+test("an applied import record changes the data generation once when the reply was lost", async () => {
+  native.invoke.mockRejectedValueOnce(new Error("the reply was lost"));
+  await api.importEnv(...IMPORT).catch(() => {});
+  expect(retainedCompletions()).toMatchObject([{ operation: "import", outcome: "lost" }]);
+  const operation = dispatchedOperation();
+  native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, "importApplied") : undefined);
+  const before = dataGeneration();
+  await reads.warnings();
+  expect(dataGeneration()).toBe(before + 1);
+  expect(retainedOperationNotices()).toMatchObject([{ kind: "importApplied" }]);
+  await reads.warnings();
+  expect(dataGeneration()).toBe(before + 1);
+  acknowledgeNotices(retainedOperationNotices().map(({ id }) => id));
+});
+
+test("an applied import record of a request this page never made changes the data generation once", async () => {
+  const record = recordFor(crypto.randomUUID(), "importApplied");
+  native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? record : undefined);
+  const before = dataGeneration();
+  await reads.warnings();
+  await reads.warnings();
+  expect(dataGeneration()).toBe(before + 1);
+  acknowledgeNotices(retainedOperationNotices().map(({ id }) => id));
+});
+
+test("an applied import record after the reply said the same changes no data generation again", async () => {
+  native.invoke.mockResolvedValueOnce({ added: 1, updated: 0 });
+  await api.importEnv(...IMPORT);
+  const operation = dispatchedOperation();
+  native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(operation, "importApplied") : undefined);
+  const before = dataGeneration();
+  await reads.warnings();
+  expect(dataGeneration()).toBe(before);
+  acknowledgeNotices(retainedOperationNotices().map(({ id }) => id));
+});
 
 test("a native import record for a request this page never made is shown as a notice, not folded", async () => {
   native.invoke.mockImplementation(async (command: string) => command === "vault_warnings" ? recordFor(crypto.randomUUID(), "importApplied") : undefined);

@@ -134,6 +134,13 @@ export function settleNativeOutcome(nativeOperation: string, { operation, outcom
   return true;
 }
 
+// An applied import changed the vault data. Unless the reply already said so, a value on the screen is
+// old, whatever the state of the receipt, and also when this page has no receipt (U2-R2-01).
+export function importRecordChangedData(nativeOperation: string) {
+  const id = nativeOperations.get(nativeOperation);
+  if (id === undefined || receipts.get(id)?.outcome !== "completed") changeData();
+}
+
 function signalSessionLoss(origin: number) {
   // This is a live signal, not a replayable outcome-state update.
   window.dispatchEvent(new CustomEvent(SESSION_LOSS_EVENT, { detail: { generation: origin } }));

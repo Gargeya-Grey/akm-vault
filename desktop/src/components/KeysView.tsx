@@ -143,7 +143,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     read.apply((current) => [...current.filter((key) => key.id !== item.id), item]);
     setSelectedId(item.id);
     setFormItem(undefined);
-    setFlash(`Saved ${namedKey(factsOf(item))}. The vault file has been rewritten.`);
+    setFlash(`Saved ${namedKey(keyRowFacts(item, now, shortId))}. The vault file has been rewritten.`);
   }
 
   function rotated(receipt: RotationReceipt) {
@@ -151,7 +151,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     setSelectedId(receipt.key.id);
     setRotatingId(null);
     setFlash(
-      `Rotated ${namedKey(factsOf(receipt.key))}. The old secret stays in the vault history. Rotating here does not change the secret at the provider.`,
+      `Rotated ${namedKey(keyRowFacts(receipt.key, now, shortId))}. The old secret stays in the vault history. Rotating here does not change the secret at the provider.`,
     );
   }
 

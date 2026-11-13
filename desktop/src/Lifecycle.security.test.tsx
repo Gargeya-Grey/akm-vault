@@ -200,6 +200,17 @@ for (const [name, call] of [
   });
 }
 
+test("a late reply to a manual lock keeps what a person typed in the unlock form (U2-C-01)", async () => {
+  let confirm = () => {};
+  boot({ vault_lock: () => new Promise<void>((resolve) => { confirm = resolve; }) }, () => [key()]);
+  await act(async () => { render(<App />); });
+  fireEvent.click(await screen.findByRole("button", { name: "Lock now" }));
+  fireEvent.change(await screen.findByLabelText("Master password"), { target: { value: "fake-typed-password" } });
+  await act(async () => { confirm(); });
+  await act(async () => {});
+  expect((screen.getByLabelText("Master password") as HTMLInputElement).value).toBe("fake-typed-password");
+});
+
 test("a list of recycled keys overtaken by lock is refused as locked", async () => {
   adoptReservation(crypto.randomUUID());
   let resolve!: (value: unknown) => void;

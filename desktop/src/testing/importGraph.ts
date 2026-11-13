@@ -36,7 +36,8 @@ export function resolve(from: string, specifier: string, sources: Sources): stri
   // A Vite query (`?raw`, `?url`) still names the same module.
   const path = specifier.split("?")[0];
   if (!path.startsWith(".")) return path;
-  const relative = join(from, path);
+  // TypeScript resolves the spelling `./x.js` to `x.ts` or `x.tsx` (U2-R2-03).
+  const relative = join(from, path).replace(/\.[cm]?jsx?$/, "");
   for (const extension of EXTENSIONS) if (Object.hasOwn(sources, relative + extension)) return relative + extension;
   return relative;
 }

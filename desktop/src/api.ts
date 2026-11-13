@@ -38,7 +38,7 @@ async function open(command: "vault_unlock" | "vault_create", args: Record<strin
 
 async function lockSession(sessionId: string | null): Promise<void> {
   await invoke<void>("vault_lock", { sessionId });
-  confirmNativeLock(sessionId);
+  confirmNativeLock(sessionId, true);
 }
 
 export const api = {
