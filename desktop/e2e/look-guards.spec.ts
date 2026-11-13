@@ -170,6 +170,39 @@ test.describe("forced colours", () => {
     expect(await boxed(page, ".btn-secondary")).toBe(true);
   });
 
+  // A line between two regions that the normal themes draw with a shadow.
+  const lines: { name: string; reach: (page: Page) => Promise<unknown>; selector: string; side: "Top" | "Right" | "Bottom" }[] = [
+    { name: "the edge of the rail", reach: async () => {}, selector: ".rail", side: "Right" },
+    { name: "the line above the rail tools", reach: async () => {}, selector: ".rail-tools", side: "Top" },
+    { name: "the line above the drawer's actions", reach: (page) => page.locator(".key-row").first().click(), selector: ".drawer-foot", side: "Top" },
+    { name: "the line under the Activity headings", reach: (page) => page.getByRole("button", { name: "Activity", exact: true }).click(), selector: ".audit-head", side: "Bottom" },
+    { name: "the line under an Activity row", reach: (page) => page.getByRole("button", { name: "Activity", exact: true }).click(), selector: ".audit-row", side: "Bottom" },
+    {
+      name: "the line under the preview heading",
+      reach: async (page) => {
+        await page.getByRole("button", { name: "Use keys", exact: true }).click();
+        await page.getByLabel("Project", { exact: true }).selectOption("demo");
+        await page.getByLabel("Environment", { exact: true }).selectOption("dev");
+        await page.getByRole("button", { name: "Preview", exact: true }).click();
+      },
+      selector: ".preview-head",
+      side: "Bottom",
+    },
+    { name: "the edge of the lock stage", reach: (page) => page.evaluate(() => (window as unknown as { __akmTest: { emitLock: () => void } }).__akmTest.emitLock()), selector: ".lock-stage", side: "Right" },
+  ];
+  for (const { name, reach, selector, side } of lines) {
+    test(`${name} keeps a border`, async ({ page }) => {
+      await open(page);
+      await page.emulateMedia({ forcedColors: "active" });
+      await reach(page);
+      const line = await page.locator(selector).first().evaluate((node, edge) => {
+        const style = getComputedStyle(node);
+        return [style.getPropertyValue(`border-${edge}-style`), parseFloat(style.getPropertyValue(`border-${edge}-width`))];
+      }, side.toLowerCase());
+      expect(line[0] !== "none" && Number(line[1]) >= 1, `${selector}: ${line.join(" ")}`).toBe(true);
+    });
+  }
+
   test("the open list shows its edge and its active option", async ({ page }) => {
     await open(page);
     await page.emulateMedia({ forcedColors: "active" });

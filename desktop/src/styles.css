@@ -651,6 +651,9 @@ button:disabled { cursor: default; opacity: 0.4; }
   .btn, .btn-secondary, .btn-danger, .icon-button, .theme, .rail-lock, .raised, .key-rows, .attention-summary, .notice, .secret-stage, .select-menu {
     border: 1px solid CanvasText;
   }
+  .rail, .lock-stage { border-right: 1px solid CanvasText; }
+  .rail-tools, .drawer-foot { border-top: 1px solid CanvasText; }
+  .preview-head, .audit-head, .audit-row { border-bottom: 1px solid CanvasText; }
   .btn { background-image: none; }
   input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid Highlight; outline-offset: 1px; }
   .select-option.active { forced-color-adjust: none; background: Highlight; color: HighlightText; }
