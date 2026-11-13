@@ -1439,6 +1439,11 @@ mod tests {
     }
 
     fn test_session() -> (Arc<Session>, tempfile::TempDir) {
+        test_session_with(false)
+    }
+
+    /// `own_root`: the vault journals in `test_support::own_root` of the folder.
+    fn test_session_with(own_root: bool) -> (Arc<Session>, tempfile::TempDir) {
         use crate::{
             clipboard::tests::{FakeClipboard, FakeData},
             policy::Signal,
@@ -1455,12 +1460,14 @@ mod tests {
         let ticket = session.begin_open().unwrap();
         session
             .open(ticket, || {
-                Vault::create(
-                    directory.path().join("vault.kdbx"),
-                    "fake-test-password-123!",
-                    None,
-                )
-                .map_err(Into::into)
+                let path = directory.path().join("vault.kdbx");
+                let password = "fake-test-password-123!";
+                if own_root {
+                    let root = crate::test_support::own_root(directory.path());
+                    Vault::create_in(path, password, None, root).map_err(Into::into)
+                } else {
+                    Vault::create(path, password, None).map_err(Into::into)
+                }
             })
             .unwrap();
         (session, directory)
@@ -2098,9 +2105,10 @@ mod tests {
 
     #[test]
     fn complete_export_record_with_failed_sync_keeps_publication_and_late_lock_receipt() {
+        use crate::test_support::{canonical, journal_in, own_root};
         use std::{io::Write, sync::mpsc, time::Duration};
         for late_lock in [false, true] {
-            let (session, directory) = test_session();
+            let (session, directory) = test_session_with(true);
             session
                 .access(Access::Write, None, |vault| {
                     vault
@@ -2115,7 +2123,8 @@ mod tests {
             let exported = extract_export(&session, &scope, "file export").unwrap();
             let expected = exported.snapshot;
             let path = directory.path().join("vault.kdbx");
-            let log = crate::test_support::journal_of(&path);
+            let root = own_root(directory.path());
+            let log = journal_in(&path, root.clone());
             let before = fs::read(log.path()).unwrap();
             // Make valid completion bytes with the real encoder, then inject failure immediately
             // after writing those bytes to the actual test journal, before syncing that handle.
@@ -2131,6 +2140,7 @@ mod tests {
             let (written_tx, written_rx) = mpsc::channel();
             let (release_tx, release_rx) = mpsc::channel();
             let worker_session = session.clone();
+            let worker_root = root.clone();
             let worker = std::thread::spawn(move || {
                 worker_session.publish(
                     expected,
@@ -2145,7 +2155,7 @@ mod tests {
                     },
                     |prepared| {
                         publish_and_record(&worker_session, expected, prepared, |_| {
-                            let log = crate::test_support::journal_of(&path);
+                            let log = journal_in(&path, worker_root);
                             let mut file = fs::OpenOptions::new()
                                 .append(true)
                                 .open(log.path())
@@ -2165,10 +2175,11 @@ mod tests {
                 let newer = session.begin_open().unwrap();
                 session
                     .open(newer, || {
-                        Vault::create(
+                        Vault::create_in(
                             directory.path().join("b.kdbx"),
                             "fake-test-password-123!",
                             None,
+                            root.clone(),
                         )
                         .map_err(Into::into)
                     })
@@ -2179,7 +2190,7 @@ mod tests {
             if late_lock {
                 assert_eq!(outcome.unwrap_err().kind, "completedWhileLocked");
             } else {
-                assert_eq!(outcome.unwrap(), target);
+                assert_eq!(canonical(&outcome.unwrap()), canonical(&target));
             }
             assert!(fs::read_to_string(&target)
                 .unwrap()

@@ -16,8 +16,7 @@ The page names a session, a project and an environment. It cannot name a program
 3. It plans the scope under the vault access of the request. The plan holds names only. It refuses, before any dialog:
    - a scope without both a project and an environment;
    - an empty scope;
-   - a reserved variable name (the same `reserved_class` rule as `akm run`);
-   - a variable that the command prompt reads and can print: `PROMPT`, `DIRCMD`, `COPYCMD`;
+   - a reserved variable name (the same `reserved_class` rule as `akm run`). Its shell class holds the variables that the command prompt reads and can print: `PROMPT`, `DIRCMD`, `COPYCMD`;
    - more names than the review window lists (`MAX_REVIEWED_CHANGES`, 25). It never cuts the list short.
 4. It checks that the main window is shown. A hidden window gets no dialog.
 5. A native folder picker. Cancel returns `null`. Nothing is journaled, and the outcome record says `terminalDeclined`. A network folder (UNC) is refused, because a console cannot start there and would show a folder it is not in.
@@ -103,7 +102,7 @@ The tests are in `desktop/src-tauri/src/launch.rs` and `process.rs`, apart from 
 | 2a | Journal stall against a lock | `a_held_journal_lock_does_not_delay_a_lock_and_the_launch_then_starts_nothing` |
 | 3 | The user declines the review | `case_3_declining_in_the_review_records_nothing_and_starts_nothing` |
 | 4 | The folder picker is cancelled | `case_4_cancelling_the_folder_picker_shows_no_review_and_records_nothing` |
-| 5 | A reserved variable name | `case_5_a_reserved_variable_name_is_refused_before_any_dialog`, `a_variable_that_the_command_prompt_prints_is_refused_before_any_dialog` |
+| 5 | A reserved variable name | `case_5_a_reserved_variable_name_is_refused_before_any_dialog`, `a_variable_that_the_command_prompt_prints_is_refused_before_any_dialog`, `t_r3_02_every_reserved_class_and_every_shell_name_is_refused_at_the_launch_boundary` |
 | 6 | Empty scope, or too many names | `case_6_an_empty_scope_and_a_scope_too_big_to_list_are_refused_before_any_dialog` |
 | 7 | Child environment | `case_7_the_child_environment_holds_the_selected_variables_and_no_akm_variable`, `a_real_child_gets_the_folder_and_the_selected_variables_and_no_akm_variable`, `the_block_holds_the_selected_variables_and_no_removed_name_and_ends_in_two_zeros` |
 | 7a | The suspended start | `a_resumed_child_writes_its_marker_and_a_terminated_child_never_does` |

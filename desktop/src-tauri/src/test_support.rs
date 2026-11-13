@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use akm_core::audit::AuditLog;
+use akm_core::journal::{JournalRoot, VaultEvidence};
 use akm_core::{KeyDisclosure, Vault};
 
 /// A vault's journal in the Cargo-provided test root, with the path of its journal file
@@ -47,6 +48,25 @@ pub(crate) fn journal_of(vault: &Path) -> Journal {
     let log = AuditLog::for_vault(vault);
     let path = log.create_journal_path().unwrap();
     Journal { log, path }
+}
+
+/// A vault's journal in a root of the test's own, so the test does not share the Cargo
+/// root with other tests (P2R2-06).
+pub(crate) fn journal_in(vault: &Path, root: JournalRoot) -> Journal {
+    let log = AuditLog::new(root, VaultEvidence::from_file(vault));
+    let path = log.create_journal_path().unwrap();
+    Journal { log, path }
+}
+
+/// The root of the test's own journals, inside its temporary folder.
+pub(crate) fn own_root(directory: &Path) -> JournalRoot {
+    JournalRoot::at(directory.join("journal"))
+}
+
+/// The canonical form of a path. A temporary folder can hold a short name such as
+/// `RUNNER~1`, so a test compares canonical paths (P2R2-06).
+pub(crate) fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap()
 }
 
 /// A stored secret, read through a recorded disclosure request.

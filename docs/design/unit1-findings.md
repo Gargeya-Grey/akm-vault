@@ -71,3 +71,82 @@ Each mutant is one change to the code. The named test must fail on it. All of th
 |---|---|
 | The recovery skips the native review | `fr14_a_decline_moves_nothing_and_disclosure_stays_blocked` and the other `fr14_` tests |
 | The recovery answers the plain error after the journal moved | `fr14_a_lock_after_the_journal_moved_answers_completed_while_locked` |
+
+## 4. T-R3-02, a reserved variable reaches the terminal
+
+The core reserves `GIT_EDITOR` at the base of this unit (`ReservedClass::HelperProgram`). This unit adds the test through the production launch boundary: `t_r3_02_every_reserved_class_and_every_shell_name_is_refused_at_the_launch_boundary`. It calls `run_launch` with a fake vault. The vault holds one key whose variable is reserved. The test has a table of names for each reserved class. The match on the class has no wildcard, so a new class in the core does not compile until the table has a row for it. Some names are in lower or mixed case. For each name, the launch answers `invalid` before any dialog: nothing is journaled, no value is copied and no terminal is made. The error holds no value. Two registry tokens and an ordinary name still start a terminal.
+
+The shell rows hold the names that the command prompt reads and can print (`PROMPT`, `DIRCMD`, `COPYCMD`) and the names that PowerShell and the POSIX shells read at start. The desktop had its own list of the three command prompt names. The core class `ShellStartup` holds them, and the table asserts that, so this unit deletes the desktop list.
+
+### 4.1 Mutants
+
+| Mutant | Test that fails |
+|---|---|
+| The core forgets `GIT_EDITOR` (the affected version) | `t_r3_02_every_reserved_class_and_every_shell_name_is_refused_at_the_launch_boundary` |
+| The core forgets `PROMPT` | `a_variable_that_the_command_prompt_prints_is_refused_before_any_dialog` |
+| The launch skips its own reserved check | `a_list_of_names_is_checked_for_the_same_faults_as_the_command_line_checks` |
+
+The third mutant does not change what the launch boundary shows. The core refuses a reserved name when it plans the scope, before the launch checks the names. The launch keeps its own check as a second guard, as the command line does, and its own test catches the mutant.
+
+## 5. T-R1-08, a custom field name in the history of a foreign entry
+
+The fix of T-R1-08 shows only the known KDBX field names. Any other name shows as "Other". The unit test `a_custom_field_name_in_the_history_never_reaches_the_page` holds this for an entry that AKM wrote. This unit adds a check through IPC in `tests/ipc_dispatch.rs`, for an entry that another writer made. The check writes a KDBX file with the community `keepass` writer, not with AKM. The file holds one entry with one history entry. The entry has a custom field whose name is fake secret text. Between the history entry and the current entry, the password, the custom field and the title change, and a second custom field is added. The check opens the file through `vault_prepare_open` and `vault_unlock` and reads `key_history`. The reply has one change. It says that the secret changed, and it names the changed fields `Password`, `Title` and `Other`. The reply holds no fake text: no value and no custom field name.
+
+### 5.1 Mutants
+
+| Mutant | Test that fails |
+|---|---|
+| The history shows every field name (the affected version) | The IPC check of the foreign entry |
+
+## 6. T-R1-12, copies of a value that are not zeroed
+
+The desktop no longer uses `std::process::Command`. It builds the environment block of the terminal itself (`process.rs`, `EnvironmentBlock`). The block is allocated once at its final size, so no reallocation leaves a copy behind. A debug assertion checks the final length. The block is zeroed when it is dropped. The values of the launch are zeroed when the launch ends (`LaunchSecrets`). `the_block_holds_the_selected_variables_and_no_removed_name_and_ends_in_two_zeros` tests the content of the block.
+
+Limits that remain:
+
+- No test observes the zeroing. A test would have to read freed memory.
+- The command line still uses `std::process::Command` (`crates/akm-cli/src/child.rs`), which keeps copies that are not zeroed. That limit stays for the command line.
+- The terminal holds its own copy of each value until the window closes. That is the purpose of the launch.
+- This unit did not audit the copies inside the core and inside the `keepass` crate.
+
+## 7. P2R2-06, tests that depend on the machine
+
+The four desktop tests of the row compare canonical paths (`test_support::canonical`):
+
+- `complete_export_record_with_failed_sync_keeps_publication_and_late_lock_receipt`;
+- `overwriting_an_existing_file_keeps_the_export_private`;
+- `publication_moves_the_owned_file_after_its_temp_name_is_replaced`;
+- `native_presentation_expiry_preserves_approved_publication_and_its_truthful_completion`.
+
+The first and the last open a vault and write its journal. Each now uses a journal root inside its own temporary folder (`test_support::own_root`), so it does not share the Cargo root with other tests. The two export tests write no journal.
+
+Fail first: the mutant runner ran each test with `TEMP` and `TMP` set to a folder whose path holds a short name (8.3) on this machine. On that path, each mutant that puts back one raw comparison makes its test fail.
+
+### 7.1 Mutants
+
+| Mutant | Test that fails |
+|---|---|
+| The export receipt test compares raw paths | `complete_export_record_with_failed_sync_keeps_publication_and_late_lock_receipt` |
+| The publication test compares raw paths | `publication_moves_the_owned_file_after_its_temp_name_is_replaced` |
+| The overwrite test compares raw paths | `overwriting_an_existing_file_keeps_the_export_private` |
+| The presentation test compares raw paths | `native_presentation_expiry_preserves_approved_publication_and_its_truthful_completion` |
+
+Limit: the other desktop tests still journal in the root that `.cargo/config.toml` sets. The row names these four only.
+
+## 8. T-R3-07 and T-R2-07, statements that contradict the design
+
+The decided design (owner's option (a)): the `run-requested` record is written before any value leaves the vault. A value is read inside the vault earlier, to validate it. A lock during the record is prompt, and the record can then exist for a launch that never started.
+
+Fixed in the files of this unit:
+
+- `unit4.md` said that a notification is handed over inside `Session::while_session`. That function is gone. The note now names `Session::commit`.
+- `unit1h.md` said that a lock waits for the gate behind a copy. The copy acts outside the gate, so the note now says that it does not.
+
+A search of `desktop/src-tauri` and `docs/design` finds no other statement that a record comes before any value is read, or that a lock waits for process creation, except in the text that describes the old design as old.
+
+Stale statements outside the files of this unit:
+
+- `crates/akm-core/src/vault.rs`, the comment of the function that journals a planned scope, says "before any value is read". It should say "before any value leaves the vault".
+- The verification guide (`.agents/skills/verify-akm/features/terminal-and-history.md`) already gives the decided design. The T-R2-07 row is stale.
+- The FINDINGS rows T-R1-01, T-R1-05, T-R1-06, T-R1-07, T-R1-12, T-R2-07, T-R3-02 and T-R3-07 describe earlier states. The report of this unit proposes new text for each.
+- A search of `docs/STATE.md` for gate and record statements finds no contradiction at the base of this unit.

@@ -771,6 +771,7 @@ fn main() {
     a_core_warning_reaches_the_page_with_its_own_kind(webview, directory.path());
     a_hidden_window_at_the_import_check_leaves_a_failed_record(webview, &dialog, directory.path());
     the_history_command_answers_times_and_field_names(webview, directory.path());
+    a_foreign_entry_with_history_shows_only_known_field_names(webview, directory.path());
     a_page_that_holds_the_session_id_cannot_disclose_without_the_user(
         webview,
         &dialog,
@@ -1578,6 +1579,75 @@ fn a_core_warning_reaches_the_page_with_its_own_kind(
         "filePermissions"
     );
     println!("PASS: a vault replaced by an unseen clone gives the page one journalLineageUnconfirmed notice and no path; filePermissions has its own name on the wire.");
+}
+
+/// T-R1-08, through the production handlers. A vault that another KeePass program wrote holds an
+/// entry with native history and custom field names. `key_history` answers the known names and
+/// "Other" for the rest: no custom name and no value reaches the page.
+fn a_foreign_entry_with_history_shows_only_known_field_names(
+    webview: &tauri::Webview<MockRuntime>,
+    directory: &std::path::Path,
+) {
+    use keepass::db::fields;
+    let path = directory.join("foreign-history.kdbx");
+    let mut db = keepass::Database::new();
+    db.config.kdf_config = keepass::config::KdfConfig::Aes { rounds: 10 };
+    {
+        let mut root = db.root_mut();
+        let mut group = root.add_group();
+        group.name = "API Keys".into();
+        let mut entry = group.add_entry();
+        entry.set_unprotected(fields::TITLE, "Fake foreign");
+        entry.set_protected(fields::PASSWORD, "fake-foreign-one");
+        entry.set_unprotected("fake-secret-in-a-field-name", "fake-field-value-one");
+        let before = (*entry).clone();
+        entry
+            .history
+            .get_or_insert_with(Default::default)
+            .add_entry(before);
+        entry.set_protected(fields::PASSWORD, "fake-foreign-two");
+        entry.set_unprotected("fake-secret-in-a-field-name", "fake-field-value-two");
+        entry.set_unprotected("another-fake-name", "fake-added");
+        entry.set_unprotected(fields::TITLE, "Fake foreign renamed");
+    }
+    db.save(
+        &mut std::fs::File::create(&path).unwrap(),
+        keepass::DatabaseKey::new().with_password(PASSWORD),
+    )
+    .unwrap();
+
+    let reserved = call(webview, "vault_prepare_open", serde_json::json!({})).unwrap();
+    let reserved = reserved.as_str().unwrap().to_string();
+    call(
+        webview,
+        "vault_unlock",
+        serde_json::json!({"path": path.display().to_string(), "password": PASSWORD, "sessionId": reserved}),
+    )
+    .unwrap();
+    let listed = call(webview, "keys_list", serde_json::json!({})).unwrap();
+    let id = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|key| key["title"] == "Fake foreign renamed")
+        .expect("the foreign entry is listed")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let history = call(webview, "key_history", serde_json::json!({"id": id})).unwrap();
+    assert_eq!(history.as_array().unwrap().len(), 1, "{history}");
+    assert_eq!(history[0]["secretChanged"], true);
+    assert_eq!(
+        history[0]["changed"],
+        serde_json::json!(["Password", "Title", "Other"]),
+        "{history}"
+    );
+    let wire = history.to_string();
+    assert!(
+        !wire.contains("fake"),
+        "no custom name and no value: {wire}"
+    );
+    println!("PASS: key_history of a foreign entry with history answers Password, Title and Other, and no custom field name or value.");
 }
 
 /// The history command answers times and field names, with the camelCase shape of api.ts.

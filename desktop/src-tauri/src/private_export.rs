@@ -775,7 +775,8 @@ mod tests {
         .unwrap();
         let (replacement, displaced) = displace_temp(directory.path());
 
-        assert_eq!(prepared.publish().unwrap(), target);
+        use crate::test_support::canonical;
+        assert_eq!(canonical(&prepared.publish().unwrap()), canonical(&target));
 
         assert_eq!(fs::read(&target).unwrap(), b"TOKEN=fake-owned\n");
         assert_private_acl(&target);
@@ -1487,9 +1488,10 @@ mod tests {
         fs::write(&target, b"previous approved export\n").unwrap();
         assert!(windows::verify_private_acl(&File::open(&target).unwrap()).is_err());
 
+        use crate::test_support::canonical;
         assert_eq!(
-            write_private(&target, "TOKEN=fake-owned\n", &[], &[]).unwrap(),
-            target
+            canonical(&write_private(&target, "TOKEN=fake-owned\n", &[], &[]).unwrap()),
+            canonical(&target)
         );
 
         assert_eq!(fs::read(&target).unwrap(), b"TOKEN=fake-owned\n");

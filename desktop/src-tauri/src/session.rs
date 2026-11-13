@@ -1472,6 +1472,11 @@ mod tests {
         _directory: tempfile::TempDir,
     }
     fn fixture() -> Fixture {
+        fixture_with(false)
+    }
+
+    /// `own_root`: the vault journals in `test_support::own_root` of the folder.
+    fn fixture_with(own_root: bool) -> Fixture {
         let directory = tempfile::tempdir().unwrap();
         let clock = Arc::new(TestClock::default());
         let clipboard = Arc::new(Mutex::new(FakeData::default()));
@@ -1491,12 +1496,14 @@ mod tests {
         let ticket = session.begin_open().unwrap();
         session
             .open(ticket, || {
-                Vault::create(
-                    directory.path().join("vault.kdbx"),
-                    "fake-test-password-123!",
-                    None,
-                )
-                .map_err(Into::into)
+                let path = directory.path().join("vault.kdbx");
+                let password = "fake-test-password-123!";
+                if own_root {
+                    let root = crate::test_support::own_root(directory.path());
+                    Vault::create_in(path, password, None, root).map_err(Into::into)
+                } else {
+                    Vault::create(path, password, None).map_err(Into::into)
+                }
             })
             .unwrap();
         Fixture {
@@ -1673,8 +1680,9 @@ mod tests {
 
     #[test]
     fn native_presentation_expiry_preserves_approved_publication_and_its_truthful_completion() {
+        use crate::test_support::canonical;
         for authorized in [false, true] {
-            let f = fixture();
+            let f = fixture_with(true);
             let snapshot = f.session.snapshot().unwrap();
             let target = f._directory.path().join("presentation.env");
             let (stalled_tx, stalled_rx) = mpsc::channel();
@@ -1712,7 +1720,7 @@ mod tests {
             f.session.expire_presentation().unwrap();
             release_tx.send(()).unwrap();
             let result = worker.join().unwrap();
-            assert_eq!(result.unwrap(), target);
+            assert_eq!(canonical(&result.unwrap()), canonical(&target));
             assert_eq!(
                 std::fs::read_to_string(&target).unwrap(),
                 "TOKEN=fake-view-export\n"

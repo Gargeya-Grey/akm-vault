@@ -303,13 +303,11 @@ fn is_akm_name(name: &OsStr) -> bool {
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("AKM_"))
 }
 
-/// Variables that the command prompt itself reads. It prints `PROMPT` on every line, and it
-/// prints the value of the other two in its error messages.
-const READ_BY_THE_COMMAND_PROMPT: [&str; 3] = ["PROMPT", "DIRCMD", "COPYCMD"];
-
 /// The names of a scope, checked before any dialog opens or anything is journaled. The core
 /// refuses a reserved name when it plans; this repeats the check of the command line
-/// (`child::validate_names`) so that the two cannot drift apart.
+/// (`child::validate_names`), with the same `reserved_class` rule. That rule also holds
+/// the variables that the command prompt reads and can print (`PROMPT`, `DIRCMD`,
+/// `COPYCMD`).
 fn check_names(names: &[String]) -> Result<(), CommandError> {
     if names.is_empty() {
         return Err(CommandError::new(
@@ -324,17 +322,6 @@ fn check_names(names: &[String]) -> Result<(), CommandError> {
                 format!(
                     "a selected key uses the reserved variable {name:?}: {}",
                     class.reason()
-                ),
-            ));
-        }
-        if READ_BY_THE_COMMAND_PROMPT
-            .iter()
-            .any(|reserved| reserved.eq_ignore_ascii_case(name))
-        {
-            return Err(CommandError::new(
-                "invalid",
-                format!(
-                    "a selected key uses the variable {name:?}. The command prompt can print that variable on screen, so no terminal was opened. Give the key another variable name."
                 ),
             ));
         }
@@ -1466,6 +1453,104 @@ mod tests {
         *host.folder.lock().unwrap() = None;
         assert_eq!(launch(&fixture, &host).unwrap(), None);
         assert_nothing_happened(&fixture, &host, &["window", "folder"]);
+    }
+
+    /// The names of each reserved class that this table checks. The match has no wildcard, so
+    /// a new class in the core does not compile until it has a row here.
+    fn reserved_names(class: akm_core::model::ReservedClass) -> &'static [&'static str] {
+        use akm_core::model::ReservedClass::*;
+        match class {
+            AkmInternal => &["AKM_PASSWORD", "akm_id"],
+            ProcessControl => &[
+                "PATH",
+                "PATHEXT",
+                "ComSpec",
+                "SYSTEMROOT",
+                "WINDIR",
+                "PSMODULEPATH",
+                "LD_PRELOAD",
+                "RUSTUP_TOOLCHAIN",
+            ],
+            StartupHook => &[
+                "NODE_OPTIONS",
+                "PYTHONSTARTUP",
+                "JAVA_TOOL_OPTIONS",
+                "DOTNET_STARTUP_HOOKS",
+                "COR_PROFILER",
+                "CORECLR_ENABLE_PROFILING",
+            ],
+            HelperProgram => &[
+                "GIT_EDITOR",
+                "git_editor",
+                "GIT_SEQUENCE_EDITOR",
+                "GIT_SSH_COMMAND",
+                "EDITOR",
+                "PAGER",
+                "RUSTC_WRAPPER",
+                "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER",
+                "GIT_CONFIG_COUNT",
+            ],
+            // The shells: cmd, PowerShell and the POSIX shells that tools start.
+            ShellStartup => &[
+                "PROMPT",
+                "DIRCMD",
+                "COPYCMD",
+                "PSEXECUTIONPOLICYPREFERENCE",
+                "__PSLOCKDOWNPOLICY",
+                "BASH_ENV",
+                "ENV",
+                "PROMPT_COMMAND",
+            ],
+            TrafficRedirect => &[
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "NODE_EXTRA_CA_CERTS",
+                "SSLKEYLOGFILE",
+                "PIP_INDEX_URL",
+                "NPM_CONFIG_REGISTRY",
+            ],
+            UserLocation => &["TEMP", "TMP", "USERPROFILE", "APPDATA", "CARGO_HOME"],
+        }
+    }
+
+    /// T-R3-02, through the production launch boundary (`run_launch`). A key of the scope whose
+    /// variable is reserved, of any class and in any case, stops the launch before any dialog:
+    /// nothing is journaled, no value is copied and no terminal is made. A registry token of a
+    /// reserved family and an ordinary name still start.
+    #[test]
+    fn t_r3_02_every_reserved_class_and_every_shell_name_is_refused_at_the_launch_boundary() {
+        use akm_core::model::ReservedClass::*;
+        let classes = [
+            AkmInternal,
+            ProcessControl,
+            StartupHook,
+            HelperProgram,
+            ShellStartup,
+            TrafficRedirect,
+            UserLocation,
+        ];
+        for class in classes {
+            for name in reserved_names(class) {
+                assert_eq!(reserved_class(name), Some(class), "{name}");
+                let fixture =
+                    fake_vault(&[DEV[0], ("Reserved", name, "app", "dev", "fake-reserved")]);
+                let host = FakeHost::choosing(fixture.directory.path());
+                let error = launch(&fixture, &host).expect_err(name);
+                assert_eq!(error.kind, "invalid", "{name}");
+                assert!(!error.message.contains("fake-"), "{}", error.message);
+                assert_nothing_happened(&fixture, &host, &[]);
+            }
+        }
+        for allowed in [
+            "CARGO_REGISTRY_TOKEN",
+            "CARGO_REGISTRIES_FAKE_TOKEN",
+            "OPENAI_API_KEY",
+        ] {
+            assert_eq!(reserved_class(allowed), None, "{allowed}");
+            let fixture = fake_vault(&[("Allowed", allowed, "app", "dev", "fake-allowed")]);
+            let host = FakeHost::choosing(fixture.directory.path());
+            assert_eq!(launch(&fixture, &host).unwrap(), Some(1), "{allowed}");
+        }
     }
 
     #[test]
