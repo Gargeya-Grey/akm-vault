@@ -1900,19 +1900,18 @@ mod tests {
     }
 
     /// FV-06: after `destination` checked the folder, and before the file is written, the
-    /// folder is moved away and a junction to another folder takes its name. The reviewer
+    /// folder (still empty) is removed and a junction to another folder takes its name. The reviewer
     /// held the journal mapping lock in this window.
     #[cfg(windows)]
     struct ReplacedFolder {
         chosen: std::path::PathBuf,
-        moved: std::path::PathBuf,
         elsewhere: std::path::PathBuf,
     }
 
     #[cfg(windows)]
     impl FilePublisher for ReplacedFolder {
         fn write_new(&mut self, path: &Path, envs: &[(String, String)]) -> Result<()> {
-            std::fs::rename(&self.chosen, &self.moved)?;
+            std::fs::remove_dir(&self.chosen)?;
             let linked = std::process::Command::new("cmd")
                 .args(["/C", "mklink", "/J"])
                 .arg(&self.chosen)
@@ -1933,7 +1932,6 @@ mod tests {
         std::fs::create_dir(&elsewhere).unwrap();
         let mut files = ReplacedFolder {
             chosen: chosen.clone(),
-            moved: directory.path().join("chosen-moved"),
             elsewhere: elsewhere.clone(),
         };
         let (mut out, mut err) = (Vec::new(), Vec::new());
@@ -1951,10 +1949,8 @@ mod tests {
         assert_eq!(code, 1, "{err}");
         assert!(err.contains("destination folder changed"), "{err}");
         assert!(!err.contains(SECRET), "{err}");
-        for folder in [&elsewhere, &files.moved] {
-            let left: Vec<_> = std::fs::read_dir(folder).unwrap().collect();
-            assert!(left.is_empty(), "{} holds {left:?}", folder.display());
-        }
+        let left: Vec<_> = std::fs::read_dir(&elsewhere).unwrap().collect();
+        assert!(left.is_empty(), "{} holds {left:?}", elsewhere.display());
         assert_eq!(journal_actions(&path), ["export-requested"]);
     }
 
