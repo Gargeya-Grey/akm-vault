@@ -169,7 +169,9 @@ the current Windows account or an administrator from reading an export.
 
 File exports require Windows storage with persistent ACLs. The CLI verifies its
 private temporary file's permissions before writing and publishes without replacing
-an existing destination. Write/flush/sync/publication failures trigger owned-file
+an existing destination. It reads the file's location from the open handle before it
+writes and after it publishes: a destination folder that was moved or replaced after the
+check (for example by a junction) stops the export. Write/flush/sync/publication failures trigger owned-file
 cleanup. If the CLI cannot confirm that it removed its temporary file, it says "could not confirm cleanup", names the file and exits with a failure, so you can delete it yourself. This is not secure erasure or a crash/power-loss cleanup guarantee.
 Desktop exports prepare outside the lock-state gate and check authorization before
 publication. A lock cancels an export that has not been authorized for publication;

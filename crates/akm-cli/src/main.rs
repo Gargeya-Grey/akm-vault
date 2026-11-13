@@ -1736,6 +1736,65 @@ mod tests {
         );
     }
 
+    /// FV-06: after `destination` checked the folder, and before the file is written, the
+    /// folder is moved away and a junction to another folder takes its name. The reviewer
+    /// held the journal mapping lock in this window.
+    #[cfg(windows)]
+    struct ReplacedFolder {
+        chosen: std::path::PathBuf,
+        moved: std::path::PathBuf,
+        elsewhere: std::path::PathBuf,
+    }
+
+    #[cfg(windows)]
+    impl FilePublisher for ReplacedFolder {
+        fn write_new(&mut self, path: &Path, envs: &[(String, String)]) -> Result<()> {
+            std::fs::rename(&self.chosen, &self.moved)?;
+            let linked = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&self.chosen)
+                .arg(&self.elsewhere)
+                .output()?;
+            assert!(linked.status.success(), "mklink /J failed");
+            export::write_new(path, envs)
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_file_export_writes_nothing_when_its_checked_folder_is_replaced_by_a_junction() {
+        let (directory, path) = fake_export_vault();
+        let chosen = directory.path().join("chosen");
+        let elsewhere = directory.path().join("elsewhere");
+        std::fs::create_dir(&chosen).unwrap();
+        std::fs::create_dir(&elsewhere).unwrap();
+        let mut files = ReplacedFolder {
+            chosen: chosen.clone(),
+            moved: directory.path().join("chosen-moved"),
+            elsewhere: elsewhere.clone(),
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run_with(
+            export_file_cli(&path, &chosen.join("fake-export.env")),
+            &mut Io {
+                out: &mut out,
+                err: &mut err,
+                files: &mut files,
+                complete: append_completion,
+            },
+        );
+        let _ = std::fs::remove_dir(&chosen);
+        let err = String::from_utf8_lossy(&err);
+        assert_eq!(code, 1, "{err}");
+        assert!(err.contains("destination folder changed"), "{err}");
+        assert!(!err.contains(SECRET), "{err}");
+        for folder in [&elsewhere, &files.moved] {
+            let left: Vec<_> = std::fs::read_dir(folder).unwrap().collect();
+            assert!(left.is_empty(), "{} holds {left:?}", folder.display());
+        }
+        assert_eq!(journal_actions(&path), ["export-requested"]);
+    }
+
     struct RefusingFiles;
     impl FilePublisher for RefusingFiles {
         fn write_new(&mut self, _: &Path, _: &[(String, String)]) -> Result<()> {

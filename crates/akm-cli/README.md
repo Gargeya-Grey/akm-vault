@@ -102,7 +102,10 @@ are refused.
 
 File export is Windows-only. Files are created with a protected, non-inherited
 owner-rights DACL. Capability queries and permission read-back must succeed before
-writing plaintext. Unsupported storage or ACL setup failures fail closed rather
+writing plaintext. AKM reads the location of its open file from the file handle, before
+the first plaintext byte and again after publication. If the destination folder was
+moved or replaced after the check (for example by a junction), the export stops and
+AKM removes its file through the handle. Unsupported storage or ACL setup failures fail closed rather
 than falling back to inherited permissions. Stdout export is unchanged.
 Exported files contain plaintext secrets and must be protected and removed when
 no longer needed.

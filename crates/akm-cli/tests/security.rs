@@ -2124,6 +2124,130 @@ fn file_export_cleanup_and_publication_never_claim_a_replaced_temp_name() {
     }
 }
 
+#[cfg(windows)]
+fn junction(link: &Path, target: &Path) {
+    let output = Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "mklink: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// The names in a folder, and whether any file there holds the fake value.
+fn holds_value(folder: &Path, value: &[u8]) -> (Vec<String>, bool) {
+    let mut names = Vec::new();
+    let mut found = false;
+    for entry in fs::read_dir(folder).unwrap() {
+        let entry = entry.unwrap();
+        names.push(entry.file_name().to_string_lossy().into_owned());
+        if let Ok(bytes) = fs::read(entry.path()) {
+            found |= bytes.windows(value.len()).any(|window| window == value);
+        }
+    }
+    (names, found)
+}
+
+// FV-06: the checked folder is moved away, and a junction to another folder takes its name,
+// after the destination check and before the temporary file is created.
+#[test]
+#[cfg(windows)]
+fn file_export_refuses_a_folder_replaced_by_a_junction_before_any_plaintext_is_written() {
+    struct SwapAtCreate {
+        chosen: PathBuf,
+        moved: PathBuf,
+        elsewhere: PathBuf,
+        wrote: bool,
+    }
+    impl export::ExportIo for SwapAtCreate {
+        fn create_private(&mut self, path: &Path) -> akm_core::Result<fs::File> {
+            fs::rename(&self.chosen, &self.moved)?;
+            junction(&self.chosen, &self.elsewhere);
+            export::private_file(path)
+        }
+
+        fn write(
+            &mut self,
+            file: &mut fs::File,
+            envs: &[(String, String)],
+        ) -> akm_core::Result<()> {
+            self.wrote = true;
+            export::write(file, envs)
+        }
+    }
+
+    let directory = temporary_directory();
+    let chosen = directory.path().join("chosen");
+    let elsewhere = directory.path().join("elsewhere");
+    fs::create_dir(&chosen).unwrap();
+    fs::create_dir(&elsewhere).unwrap();
+    let target = export::destination(&chosen.join("out.env")).unwrap();
+    let mut io = SwapAtCreate {
+        chosen: chosen.clone(),
+        moved: directory.path().join("chosen-moved"),
+        elsewhere: elsewhere.clone(),
+        wrote: false,
+    };
+    let result = export::write_new_with(
+        &target,
+        &[("EXPORT_SECRET".into(), "fake-redirected-value".into())],
+        &mut io,
+    );
+    let _ = fs::remove_dir(&chosen);
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("destination folder changed"), "{message}");
+    assert!(!io.wrote, "plaintext was written before the location check");
+    for folder in [&elsewhere, &io.moved] {
+        let (names, found) = holds_value(folder, b"fake-redirected-value");
+        assert!(
+            names.is_empty() && !found,
+            "{}: {names:?}",
+            folder.display()
+        );
+    }
+}
+
+// FV-06: a publication that does not end at the checked destination is removed through the
+// owned handle. The seam stands for a folder that changes during the rename.
+#[test]
+#[cfg(windows)]
+fn file_export_removes_a_publication_that_landed_outside_the_checked_folder() {
+    struct PublishElsewhere(PathBuf);
+    impl export::ExportIo for PublishElsewhere {
+        fn publish(&mut self, file: &fs::File, _destination: &Path) -> akm_core::Result<()> {
+            export::publish_new(file, &self.0)
+        }
+    }
+
+    let directory = temporary_directory();
+    let chosen = directory.path().join("chosen");
+    let elsewhere = directory.path().join("elsewhere");
+    fs::create_dir(&chosen).unwrap();
+    fs::create_dir(&elsewhere).unwrap();
+    let target = export::destination(&chosen.join("out.env")).unwrap();
+    let mut io = PublishElsewhere(export::destination(&elsewhere.join("out.env")).unwrap());
+    let result = export::write_new_with(
+        &target,
+        &[("EXPORT_SECRET".into(), "fake-redirected-value".into())],
+        &mut io,
+    );
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("destination folder changed"), "{message}");
+    for folder in [&chosen, &elsewhere] {
+        let (names, found) = holds_value(folder, b"fake-redirected-value");
+        assert!(
+            names.is_empty() && !found,
+            "{}: {names:?}",
+            folder.display()
+        );
+    }
+}
+
 #[test]
 fn file_export_public_api_keeps_non_env_names_and_leaves_no_temp() {
     let directory = temporary_directory();
