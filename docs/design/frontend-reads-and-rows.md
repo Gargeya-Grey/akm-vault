@@ -144,7 +144,7 @@ matches it, and native code gets it as it is.
 - The shelf, the group headings and the environment filter use the drawn text. An unset project
   and a literal project "No project" share one shelf and one heading. A filter option draws its
   stored value, and keeps the stored value as its value.
-- The search matches the stored values and the drawn values, the short ID included.
+- The search matches the stored values and the drawn values, the short ID and the username included. It compares with AKM's caseless rule (`caseless` in `rowFacts.ts`, which follows the core's rule letter by letter; FW-05, FW-06).
 - A project page title and a group heading say "Project" before the name, and a project shelf
   button reads as "Project <name>". So a project named "All keys" or "Needs attention" differs
   from that shelf on screen and by its accessible name (decision 19).
