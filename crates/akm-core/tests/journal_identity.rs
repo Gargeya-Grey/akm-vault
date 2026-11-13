@@ -222,7 +222,8 @@ fn the_public_append_leaves_an_unseen_revision_for_the_next_warning() {
 /// vault, which warns.
 #[test]
 fn no_public_journal_writer_settles_an_unseen_revision() {
-    let writers: [(&str, fn(&AuditLog)); 7] = [
+    type Writer = (&'static str, fn(&AuditLog));
+    let writers: [Writer; 7] = [
         ("append", |log| {
             log.append("fake-record", None, None).unwrap()
         }),
