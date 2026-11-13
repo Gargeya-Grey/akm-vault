@@ -173,6 +173,103 @@ fn disclosure_warnings(vault: &mut Vault, id: &str) -> usize {
     lineage_warnings(vault)
 }
 
+/// A bound vault that an outside program rewrote, opened again: the session holds a version
+/// that no journal recorded. Gives the vault and the ID of its key.
+fn unseen_revision(f: &Fixture) -> (Vault, String) {
+    let path = f.directory.path().join("vault.kdbx");
+    let mut vault =
+        Vault::create_in(&path, VAULT_PASSWORD, None, JournalRoot::at(&f.root)).unwrap();
+    let key = vault
+        .add(ApiKeyInput::new("Fake key", "fake-original"))
+        .unwrap();
+    drop(vault);
+    rewrite_externally(&path, "fake-outside");
+    let vault = Vault::open_in(&path, VAULT_PASSWORD, JournalRoot::at(&f.root)).unwrap();
+    assert_eq!(
+        vault.audit_log().snapshot(10).unwrap().identity,
+        Identity::Unconfirmed
+    );
+    (vault, key.id)
+}
+
+/// CORE-R2-04, the reviewer's closing test: a record through the public `AuditLog::append`
+/// under an unseen revision has no way to pass the lineage warning on, so it leaves the
+/// version unsettled. The next record through the vault warns, and settles it.
+#[test]
+fn the_public_append_leaves_an_unseen_revision_for_the_next_warning() {
+    let f = Fixture::new();
+    let (mut vault, id) = unseen_revision(&f);
+    vault.audit_log().append("fake-record", None, None).unwrap();
+    assert_eq!(
+        vault.audit_log().snapshot(10).unwrap().identity,
+        Identity::Unconfirmed,
+        "the public append settled nothing"
+    );
+    assert_eq!(
+        disclosure_warnings(&mut vault, &id),
+        1,
+        "the next record warns"
+    );
+    assert_eq!(
+        vault.audit_log().snapshot(10).unwrap().identity,
+        Identity::Confirmed
+    );
+    assert_eq!(disclosure_warnings(&mut vault, &id), 0, "settled once");
+}
+
+/// CORE-R2-04: no public journal writer of `AuditLog` settles an unseen revision, because
+/// none of them passes the warning on. Each one leaves it for the next record through the
+/// vault, which warns.
+#[test]
+fn no_public_journal_writer_settles_an_unseen_revision() {
+    let writers: [(&str, fn(&AuditLog)); 7] = [
+        ("append", |log| {
+            log.append("fake-record", None, None).unwrap()
+        }),
+        ("snapshot", |log| {
+            log.snapshot(10).unwrap();
+        }),
+        ("read", |log| {
+            log.read(10).unwrap();
+        }),
+        ("verify", |log| {
+            log.verify().unwrap();
+        }),
+        ("journal_path", |log| {
+            log.journal_path().unwrap();
+        }),
+        ("create_journal_path", |log| {
+            log.create_journal_path().unwrap();
+        }),
+        ("recover_damaged", |log| {
+            use std::io::Write;
+            let journal = log.journal_path().unwrap().unwrap();
+            fs::OpenOptions::new()
+                .append(true)
+                .open(journal)
+                .unwrap()
+                .write_all(b"not a record\n")
+                .unwrap();
+            log.recover_damaged().unwrap();
+        }),
+    ];
+    for (name, write) in writers {
+        let f = Fixture::new();
+        let (mut vault, id) = unseen_revision(&f);
+        write(&vault.audit_log());
+        assert_eq!(
+            vault.audit_log().snapshot(10).unwrap().identity,
+            Identity::Unconfirmed,
+            "{name}"
+        );
+        assert_eq!(
+            disclosure_warnings(&mut vault, &id),
+            1,
+            "{name}: the next record warns"
+        );
+    }
+}
+
 struct Fixture {
     directory: tempfile::TempDir,
     root: PathBuf,
@@ -197,6 +294,15 @@ impl Fixture {
             JournalRoot::at(&self.root),
             VaultEvidence::unlocked(path, Some(sha), vault_id.to_string()),
         )
+    }
+
+    /// The log of a version that AKM's own save made from `from`: the session's lineage holds
+    /// the version that it read, so the journal confirms the new version (CORE-R2-04).
+    fn saved(&self, path: &Path, bytes: &[u8], from: &[u8], vault_id: &str) -> AuditLog {
+        let sha = hex::encode(Sha256::digest(bytes));
+        let evidence = VaultEvidence::unlocked(path, Some(sha), vault_id.to_string())
+            .with_lineage(vec![hex::encode(Sha256::digest(from))]);
+        AuditLog::new(JournalRoot::at(&self.root), evidence)
     }
 
     fn locked(&self, path: &Path) -> AuditLog {
@@ -308,7 +414,7 @@ fn restoring_an_earlier_version_is_recorded_in_the_same_journal() {
         .append("first", None, None)
         .unwrap();
     fs::write(&path, b"fake-two").unwrap();
-    f.log(&path, b"fake-two", "root-a")
+    f.saved(&path, b"fake-two", b"fake-one", "root-a")
         .append("second", None, None)
         .unwrap();
     fs::write(&path, b"fake-one").unwrap();
@@ -553,15 +659,16 @@ impl Fixture {
         fs::read(self.root.join("mapping.json")).unwrap()
     }
 
-    /// Two versions of one vault are observed, then the first one is restored. Returns the
-    /// log of the restored version, with the journal holding `first` and `second`.
+    /// Two versions of one vault are recorded (AKM's own save made the second), then the
+    /// first one is restored. Returns the log of the restored version, with the journal
+    /// holding `first` and `second`.
     fn rolled_back_vault(&self) -> (PathBuf, AuditLog) {
         let path = self.vault("a.kdbx", b"fake-one");
         self.log(&path, b"fake-one", "root-a")
             .append("first", None, None)
             .unwrap();
         fs::write(&path, b"fake-two").unwrap();
-        self.log(&path, b"fake-two", "root-a")
+        self.saved(&path, b"fake-two", b"fake-one", "root-a")
             .append("second", None, None)
             .unwrap();
         fs::write(&path, b"fake-one").unwrap();

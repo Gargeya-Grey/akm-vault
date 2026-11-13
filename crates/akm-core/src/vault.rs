@@ -999,7 +999,7 @@ impl Vault {
     pub fn log(&self, action: &str, key: Option<&ApiKey>, detail: Option<&str>) -> Result<()> {
         let unconfirmed =
             self.audit_log()
-                .append_reporting(action, key.map(|k| k.id.as_str()), detail)?;
+                .append_reporting(action, key.map(|k| k.id.as_str()), detail, true)?;
         if unconfirmed {
             self.lineage_unconfirmed.store(true, Ordering::Relaxed);
         }
