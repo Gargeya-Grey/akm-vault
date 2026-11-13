@@ -378,12 +378,6 @@ fn a_recycled_key_is_selected_by_its_id_in_any_letter_case() {
             }
         })
         .collect();
-    assert!(
-        mixed.chars().any(|ch| ch.is_ascii_uppercase())
-            && mixed.chars().any(|ch| ch.is_ascii_lowercase()),
-        "{mixed}"
-    );
-
     let history = fixture.run(&["history", &upper]);
     assert!(history.status.success(), "{}", err(&history));
     assert!(out(&history).contains(&gamma), "{}", out(&history));

@@ -835,13 +835,7 @@ fn export_body(
     }
     let proof = vault.disclose_env(kind, &plan, Some(&detail(plan.len())))?;
     let vars = SecretEntries(vault.env_vars(&plan, &proof)?);
-    let mut body = Zeroizing::new(String::new());
-    for (name, value) in &vars.0 {
-        let line = Zeroizing::new(dotenv::line(name, value));
-        body.push_str(&line);
-        body.push('\n');
-    }
-    Ok((body, vars.0.len()))
+    Ok((dotenv::document(&vars.0), vars.0.len()))
 }
 
 #[cfg(test)]

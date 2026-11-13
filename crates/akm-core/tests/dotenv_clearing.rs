@@ -22,8 +22,11 @@ static UNCLEARED: AtomicUsize = AtomicUsize::new(0);
 static TURN: Mutex<()> = Mutex::new(());
 
 unsafe impl GlobalAlloc for Counting {
+    // Every new buffer starts as zeros. A buffer from the system can still hold the bytes of
+    // an earlier use past the length that its new owner writes, and a free of that buffer
+    // would count as an uncleared copy of a value that its owner never held.
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe { System.alloc(layout) }
+        unsafe { System.alloc_zeroed(layout) }
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
@@ -174,4 +177,24 @@ fn an_import_preview_leaves_no_uncleared_copy_of_a_value() {
     });
 
     assert_eq!(freed, 0, "a planned value was freed uncleared");
+}
+
+/// D2A-03: the text of an export is one buffer of its exact length. A text that grows frees
+/// each shorter buffer uncleared, with the values in it.
+#[test]
+fn a_dotenv_document_leaves_no_uncleared_copy_of_a_value() {
+    let _turn = TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let entries: Vec<(String, String)> = (0..40)
+        .map(|index| {
+            (
+                format!("FAKE_NAME_{index}"),
+                format!("fake-dotenv-marker {index}"),
+            )
+        })
+        .collect();
+    let freed = uncleared(|| drop(dotenv::document(&entries)));
+    assert_eq!(freed, 0, "a buffer that held a value was freed uncleared");
+    assert!(
+        dotenv::document(&entries).starts_with("FAKE_NAME_0='fake-dotenv-marker 0'\nFAKE_NAME_1='")
+    );
 }

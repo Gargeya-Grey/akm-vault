@@ -78,6 +78,25 @@ pub fn line(name: &str, value: &str) -> String {
     out
 }
 
+/// Render every entry as one document, one `line` for each entry, each with a line feed.
+///
+/// The document is one buffer of its exact length. A text that grows frees each shorter
+/// buffer without clearing it, with the values in it (D2A-03). The list of the lines holds
+/// their addresses only, and each line is cleared when it is dropped.
+pub fn document(entries: &[(String, String)]) -> Zeroizing<String> {
+    let lines: Vec<Zeroizing<String>> = entries
+        .iter()
+        .map(|(name, value)| Zeroizing::new(line(name, value)))
+        .collect();
+    let length = lines.iter().map(|line| line.len() + 1).sum();
+    let mut out = Zeroizing::new(String::with_capacity(length));
+    for line in &lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 /// Parse a dotenv document with the AKM profile (docs/design/unit3.md, section 2).
 ///
 /// A leading byte order mark is dropped. A line ends at a line feed or a CR LF pair. Blank
