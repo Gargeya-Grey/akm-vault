@@ -14,7 +14,6 @@ mod private_export;
 mod process;
 #[doc(hidden)]
 pub mod publication;
-mod reminders;
 mod review_window;
 mod session;
 mod settings;
@@ -34,18 +33,11 @@ use session::{MonotonicClock, Session, VaultState};
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init())
         .manage(visibility::WindowPresentation::default())
         .setup(|app| {
             let handle = app.handle().clone();
             app.manage(settings::PreferenceState(Arc::new(
                 settings::FilePreferences::for_app(&handle),
-            )));
-            app.manage(reminders::ReminderState(Arc::new(
-                reminders::Reminders::new(
-                    Arc::new(reminders::FileReminders::for_app(&handle)),
-                    Arc::new(reminders::NativeNotifier(handle.clone())),
-                ),
             )));
             app.manage(import_review::ConfirmState(Arc::new(
                 import_review::NativeConfirm(handle.clone()),

@@ -272,11 +272,9 @@ pub struct VaultState(pub Arc<Session>);
 
 /// What a commit is bound to. The commit checks it under the gate, just before the act.
 #[derive(Clone, Copy)]
-pub enum Binding<'a> {
+pub enum Binding {
     /// The session of a native step that holds its ticket (an opening).
     Ticket(Ticket),
-    /// The session that a page request names.
-    Named(&'a str),
     /// A session and a vault revision: a write since then refuses the act.
     Revision(Snapshot),
 }
@@ -424,7 +422,7 @@ fn not_written() -> akm_core::Error {
 /// Proof that the session gate is held for a session that is still current. Only
 /// `Session::commit_point` makes one, and it is neither `Clone` nor `Copy`, so it cannot
 /// outlive the call that made it. Every act for a session (the vault replacement, the terminal
-/// resume, the saved-path rename, the notification) takes `&Held`: a caller that checked the
+/// resume, the saved-path rename) takes `&Held`: a caller that checked the
 /// session earlier and acts later has nothing to pass.
 pub struct Held<'gate> {
     gate: std::marker::PhantomData<&'gate ()>,
@@ -767,7 +765,7 @@ impl Session {
     /// released, it revokes the preparation when the check refused or the act failed.
     pub fn commit<E: Effect + ?Sized>(
         &self,
-        binding: Binding<'_>,
+        binding: Binding,
         effect: &mut E,
     ) -> Result<E::Output, CommandError> {
         self.commit_point(binding, effect, false)
@@ -777,7 +775,7 @@ impl Session {
     /// gate hold as the act, so a later commit bound to the old revision refuses.
     fn commit_point<E: Effect + ?Sized>(
         &self,
-        binding: Binding<'_>,
+        binding: Binding,
         effect: &mut E,
         advance: bool,
     ) -> Result<E::Output, CommandError> {
@@ -806,11 +804,10 @@ impl Session {
         acted
     }
 
-    fn bound(&self, gate: &mut Gate, binding: Binding<'_>) -> Result<(), CommandError> {
+    fn bound(&self, gate: &mut Gate, binding: Binding) -> Result<(), CommandError> {
         let current = self.current(gate)?;
         match binding {
             Binding::Ticket(ticket) if ticket == current.ticket => Ok(()),
-            Binding::Named(session_id) => owned_by(gate, current, session_id),
             Binding::Revision(expected) if expected.ticket == current.ticket => {
                 if expected.revision == current.revision {
                     Ok(())
@@ -3059,29 +3056,21 @@ mod tests {
     fn review1_a_session_effect_runs_only_for_the_current_owner() {
         let f = fixture();
         let old_ticket = f.session.snapshot().unwrap().ticket;
-        let old_owner = f.session.active_owner(old_ticket).unwrap();
         let old = f.session.snapshot().unwrap();
         let ran = AtomicUsize::new(0);
-        let run = |binding: Binding<'_>| {
+        let run = |binding: Binding| {
             f.session.commit(
                 binding,
                 &mut Act::new(|_: &Held<'_>| Ok(ran.fetch_add(1, Ordering::SeqCst))),
             )
         };
         assert!(run(Binding::Ticket(old_ticket)).is_ok());
-        assert!(run(Binding::Named(&old_owner)).is_ok());
         assert!(run(Binding::Revision(old)).is_ok());
-        assert_eq!(ran.load(Ordering::SeqCst), 3);
-        let new_owner = f.session.prepare_open().unwrap();
+        assert_eq!(ran.load(Ordering::SeqCst), 2);
+        drop(f.session.prepare_open().unwrap());
         for (name, result) in [
             ("old ticket", run(Binding::Ticket(old_ticket)).err()),
-            ("old owner", run(Binding::Named(&old_owner)).err()),
             ("old revision", run(Binding::Revision(old)).err()),
-            (
-                "new owner, not opened",
-                run(Binding::Named(&new_owner)).err(),
-            ),
-            ("malformed", run(Binding::Named("not-a-uuid")).err()),
         ] {
             assert_eq!(
                 result.unwrap_or_else(|| panic!("{name} ran")).kind,
@@ -3090,7 +3079,7 @@ mod tests {
         }
         assert_eq!(
             ran.load(Ordering::SeqCst),
-            3,
+            2,
             "a retired owner runs no effect"
         );
     }
@@ -3099,17 +3088,14 @@ mod tests {
     fn review1_a_session_effect_holds_the_gate_so_lock_and_a_new_opening_wait_for_it() {
         for newer in ["lock", "open"] {
             let f = fixture();
-            let owner = f
-                .session
-                .active_owner(f.session.snapshot().unwrap().ticket)
-                .unwrap();
+            let ticket = f.session.snapshot().unwrap().ticket;
             let (inside_tx, inside_rx) = mpsc::channel();
             let (release_tx, release_rx) = mpsc::channel();
             let effect_session = f.session.clone();
             let effect = std::thread::spawn(move || {
                 effect_session
                     .commit(
-                        Binding::Named(&owner),
+                        Binding::Ticket(ticket),
                         &mut Act::new(|_: &Held<'_>| {
                             inside_tx.send(()).unwrap();
                             release_rx.recv().unwrap();
@@ -5522,7 +5508,7 @@ mod tests {
                 );
                 for function in functions_taking(text, "Held<") {
                     assert!(
-                        ["act", "resume", "show"].contains(&function.as_str()),
+                        ["act", "resume"].contains(&function.as_str()),
                         "{name}: fn {function} takes the witness but is not an act"
                     );
                 }

@@ -21,7 +21,6 @@ use crate::{
     launch::{self, TerminalState},
     outcome::{self, Operation},
     private_export,
-    reminders::{ReminderState, ReminderStatus},
     review_window::ReviewAnswer,
     session::{
         Access, Admission, Binding, OperationWarningKind, Session, Snapshot, Stamped, VaultState,
@@ -65,10 +64,7 @@ macro_rules! production_handlers {
             env_launch_terminal,
             env_import,
             view_discard,
-            backup_info,
-            reminders_status,
-            reminders_set,
-            reminders_notify
+            backup_info
         ]
     };
 }
@@ -1280,31 +1276,6 @@ fn discard_view(
 }
 
 #[tauri::command]
-pub fn reminders_status(state: State<'_, ReminderState>) -> Result<ReminderStatus, CommandError> {
-    state.0.status()
-}
-
-#[tauri::command]
-pub fn reminders_set(
-    state: State<'_, ReminderState>,
-    enabled: bool,
-) -> Result<ReminderStatus, CommandError> {
-    state.0.set_enabled(enabled)
-}
-
-/// The page sends a count and the session it counted in, and nothing else. The text of the
-/// notification is built natively, and only while that session is still the current one.
-#[tauri::command]
-pub fn reminders_notify(
-    vault: State<'_, VaultState>,
-    state: State<'_, ReminderState>,
-    session_id: String,
-    count: u32,
-) -> Result<ReminderStatus, CommandError> {
-    state.0.notify(&vault.0, &session_id, count)
-}
-
-#[tauri::command]
 pub async fn backup_info(
     state: State<'_, VaultState>,
     session_id: String,
@@ -1346,8 +1317,6 @@ mod tests {
             "vault_dismiss_warnings",
             "application-wide, takes record ids",
         ),
-        ("reminders_status", "application-wide preference"),
-        ("reminders_set", "application-wide preference"),
     ];
 
     /// Commands that take `session_id` and that the page sets by hand, not through the
@@ -1358,7 +1327,6 @@ mod tests {
         "vault_lock",
         "env_import",
         "view_discard",
-        "reminders_notify",
     ];
 
     /// How many times the identifier `session_id` appears in the text, as a whole word.
