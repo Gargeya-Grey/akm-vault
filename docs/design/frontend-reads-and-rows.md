@@ -4,6 +4,8 @@ This note records how the desktop frontend reads native state and how it draws a
 also lists the decisions that the owner can veto. The campaign plan is
 [gate-campaign.md](gate-campaign.md).
 
+**Note of 13 Nov 2026.** The test audit removed the tests that read source text: `readGuard.test.ts`, `rowFactsGuard.test.ts`, `nativeErrorKinds.test.ts`, `promiseWords.test.ts`, and the parts of `plaintextGuard.test.ts` that read the Rust commands and the import graph (owner's rule: a test stays only when it protects a behaviour or a stated contract). The rules that those tests guarded stay rules of the design, and a review checks them. Every paragraph below that describes the read guard, the row-facts guard, the error-kind scan or the promise-word scan describes a removed test, and stays here as the record of the design. The tests that drive the page stay: the views, the sealed replies and the browser tests.
+
 ## The read mechanism (fault classes K and L)
 
 One hook, `useNativeRead` in `desktop/src/nativeRead.ts`, owns every read of native state that a
@@ -12,7 +14,7 @@ token that only `useNativeRead` can run, so a view cannot call a read itself.
 
 The reads live in `reads`, in `desktop/src/native.ts`, beside the one boundary function `invoke`.
 `api` in `desktop/src/api.ts` holds only actions. Only three files may import `native.ts`, and
-only `native.ts` may import the Tauri IPC (U2-R1-05). The guard test `desktop/src/readGuard.test.ts`
+only `native.ts` may import the Tauri IPC (U2-R1-05). The guard test `desktop/src/readGuard.test.ts` (removed on 13 Nov 2026; see the note at the top)
 reads the import graph of `desktop/src` with the TypeScript parser and checks it by the resolved
 module, never by the name of a binding. An alias, a re-export by name or by `export *`, a helper
 that passes the reads on, a namespace import, a dynamic import, a `require`, an import-equals, an
@@ -183,7 +185,7 @@ the accessible description differ, and the action sends the ID of the selected k
 
 ### The guard
 
-`desktop/src/rowFactsGuard.test.ts` reads the page files with the TypeScript type checker.
+`desktop/src/rowFactsGuard.test.ts` (removed on 13 Nov 2026; see the note at the top) read the page files with the TypeScript type checker.
 
 - A read of a drawn field outside `rowFacts.ts` fails: `title`, `issuer`, `project`,
   `environment`, `envVar`, `resolvedEnvVar`, `url`, `notes`, `scopes` and `tags` of a `KeyView`,
@@ -210,8 +212,9 @@ The contract is in `docs/design/gate-campaign.md`, under "Contract between units
   its own text in `App.tsx`.
 - The file-permission notice says that anyone who can read the vault folder can copy the
   encrypted vault and its backups. It says nothing about backup retention.
-- The lineage notice says that the vault file changed outside AKM and that its activity continues
-  in the existing journal. It does not say that a change was saved: the core sets this warning on
+- The lineage notice says that the vault file changed outside AKM, or that the journal mapping of
+  this device was started again (FV-01), and that its activity continues in the journal that AKM
+  keeps for this path. It does not say that a change was saved: the core sets this warning on
   any journal entry, and a reveal or a copy writes one too.
 - `api.launchTerminal` sends a fresh UUID as `operationId`, as `api.importEnv` does. The terminal
   receipt starts before the request leaves, with that ID.
@@ -279,7 +282,7 @@ from. This is the contract for the native unit.
   notFound, open, reviewFailed, save, sessionUnavailable, stalePreview, tooLarge, upgradeRequired
   and viewChanged.
 - A new kind goes on that list in the change that adds it to native code. The test
-  `desktop/src/nativeErrorKinds.test.ts` reads `desktop/src-tauri/src`. It fails when the two lists
+  `desktop/src/nativeErrorKinds.test.ts` (removed on 13 Nov 2026; see the note at the top) read `desktop/src-tauri/src`. It fails when the two lists
   differ, when native code builds a kind in a way that the scan cannot read, and when a command
   rejects with another error type. The mocked boundary of the Edge tests keeps to the same list.
 - Every other rejection is a transport failure: a string, an `Error` (also one that carries a
@@ -320,7 +323,10 @@ Now one mechanism holds every plaintext that comes from the vault.
   again, because the view then names no scope; a hide; the 30-second timer; an unmount.
 - A reply asked for before such an event arrives stale and does not show. Use keys then says
   that the keys changed before the preview arrived.
-- `plaintextGuard.test.ts` keeps the class closed. It reads the Rust commands, and every command
+- `plaintextGuard.test.ts` kept the class closed with scans that are now removed (see the note at
+  the top). It still checks that each plaintext reply reaches its caller sealed, that
+  `plaintext.tsx` exports no function that returns the text, and that each mutation is in
+  `DATA_CHANGES` or named as one that changes no key. Before the removal: it read the Rust commands, and every command
   whose reply holds a `String` must be in `PLAINTEXT_COMMANDS` or named as not plaintext (a session
   reservation, a saved path). It checks that each plaintext reply reaches its caller sealed, that
   only the two files reach `sealed.ts` (by the import graph, as the read guard does), that
@@ -371,12 +377,12 @@ from the vault, so it is not under the mechanism. Each form clears it when it cl
   not a key. The native windows are class K and
   native code. The format-upgrade and journal-recovery dialogs name no key. The reminder sort
   draws nothing. The fields of the edit form keep the stored values. `rowFactsGuard.test.ts`
-  keeps the class closed.
+  kept the class closed (removed on 13 Nov 2026; see the note at the top).
 - Class M in dialogs (U2-R1-02): the move to the Recycle Bin, the permanent delete, the rotation,
   the edit form and the key drawer list every row fact. The restore has no dialog, and its button
   is described by the bin facts. The format-upgrade, journal-recovery and import dialogs name no
   key.
-- Class D on the screen: `promiseWords.test.ts` scans the text of the page for always, never,
+- Class D on the screen: `promiseWords.test.ts` (removed on 13 Nov 2026; see the note at the top) scanned the text of the page for always, never,
   verify, verified, complete, secure, safe, guarantee and "is cleared". Each use names its
   evidence. Two uses had none and changed (decisions 14 and 15).
 - Class D on the screen, again (U2-R1-06): an approved text matched as a part, so a second
