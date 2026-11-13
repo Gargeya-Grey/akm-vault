@@ -993,6 +993,7 @@ pub async fn env_save<R: tauri::Runtime>(
         let target = selected
             .into_path()
             .map_err(|error| CommandError::new("invalidPath", error.to_string()))?;
+        let chosen = private_export::choose(&target)?;
         let FileExport {
             body,
             count,
@@ -1009,7 +1010,7 @@ pub async fn env_save<R: tauri::Runtime>(
             expected,
             || {
                 private_export::prepare_private(
-                    &target,
+                    chosen,
                     &body,
                     &[vault_path, settings],
                     &[config_dir],
@@ -2092,7 +2093,7 @@ mod tests {
                     expected,
                     || {
                         private_export::prepare_private(
-                            &worker_target,
+                            private_export::choose(&worker_target).unwrap(),
                             &exported.value,
                             std::slice::from_ref(&path),
                             &[],

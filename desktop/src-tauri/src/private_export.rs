@@ -272,6 +272,7 @@ impl Drop for TempFile {
 pub struct PreparedExport {
     destination: PathBuf,
     temp: TempFile,
+    approved: Option<File>,
     #[cfg(windows)]
     _parents: Vec<File>,
 }
@@ -281,24 +282,74 @@ impl PreparedExport {
         self.publish_with(&mut SystemExportIo)
     }
 
+    /// The move never replaces a file. When the user approved a replacement, that file leaves
+    /// the name through its own handle first, so no other file can be replaced (FW-10).
     fn publish_with(mut self, export_io: &mut impl ExportIo) -> Result<PathBuf, CommandError> {
-        export_io.publish(&self.temp.file, &self.destination)?;
+        let Some(approved) = self.approved.take() else {
+            export_io.publish(&self.temp.file, &self.destination)?;
+            self.temp.published = true;
+            return Ok(self.destination.clone());
+        };
+        let aside = self
+            .destination
+            .with_file_name(format!(".akm-replaced-{}.tmp", uuid::Uuid::new_v4()));
+        rename(&approved, &aside)?;
+        if let Err(error) = export_io.publish(&self.temp.file, &self.destination) {
+            if rename(&approved, &self.destination).is_err() {
+                return Err(CommandError::new(
+                    "io",
+                    format!(
+                        "The export was not saved, and AKM could not put back the file that you chose to replace. That file is now \"{}\".",
+                        review_path(&aside)
+                    ),
+                ));
+            }
+            return Err(error);
+        }
         self.temp.published = true;
+        if !(export_io.discard())(&approved) {
+            self.temp.remnants.record(aside, current_path(&approved));
+        }
         Ok(self.destination.clone())
     }
 }
 
-/// Writes the plaintext to a private temporary file beside `path`. Every temporary file whose
-/// deletion cannot be confirmed is recorded in `remnants`, whatever the way the export ends.
+/// The destination that the user chose in the save window. When a file had that name, the
+/// window asked the user to replace it, and `approved` holds that file: no other program can
+/// write, move or delete it until the export ends.
+pub struct Chosen {
+    path: PathBuf,
+    approved: Option<File>,
+}
+
+/// Reads the answer of the save window. Call it as soon as the window returns: a file that
+/// takes the name before this call counts as the approved one.
+pub fn choose(path: &Path) -> Result<Chosen, CommandError> {
+    check_windows_path(
+        path.to_str()
+            .ok_or_else(|| invalid("The export path must be valid Unicode."))?,
+    )?;
+    #[cfg(windows)]
+    let approved = windows::hold(path)?;
+    #[cfg(not(windows))]
+    let approved = None;
+    Ok(Chosen {
+        path: path.to_path_buf(),
+        approved,
+    })
+}
+
+/// Writes the plaintext to a private temporary file beside the chosen path. Every temporary file
+/// whose deletion cannot be confirmed is recorded in `remnants`, whatever the way the export ends.
 pub fn prepare_private(
-    path: &Path,
+    chosen: Chosen,
     contents: &str,
     protected: &[PathBuf],
     protected_dirs: &[PathBuf],
     remnants: &Remnants,
 ) -> Result<PreparedExport, CommandError> {
     prepare_private_with(
-        path,
+        chosen,
         contents,
         protected,
         protected_dirs,
@@ -308,21 +359,27 @@ pub fn prepare_private(
 }
 
 fn prepare_private_with(
-    path: &Path,
+    chosen: Chosen,
     contents: &str,
     protected: &[PathBuf],
     protected_dirs: &[PathBuf],
     remnants: &Remnants,
     export_io: &mut impl ExportIo,
 ) -> Result<PreparedExport, CommandError> {
-    let destination = validate_destination(path, protected, protected_dirs)?;
+    let destination = validate_destination(&chosen.path, protected, protected_dirs)?;
     #[cfg(windows)]
     let parents = windows::pin_local_parents(&destination)?;
+    // With the parents pinned and the approved file held, this answer holds until the move.
+    #[cfg(windows)]
+    if let Some(approved) = &chosen.approved {
+        windows::check_approved(approved, &destination)?;
+    }
     let temp = prepare_temp(&destination, contents, remnants, export_io)?;
     validate_destination(&destination, protected, protected_dirs)?;
     Ok(PreparedExport {
         destination,
         temp,
+        approved: chosen.approved,
         #[cfg(windows)]
         _parents: parents,
     })
@@ -346,7 +403,7 @@ trait ExportIo {
     }
 
     fn publish(&mut self, file: &File, destination: &Path) -> Result<(), CommandError> {
-        replace(file, destination)
+        rename(file, destination)
     }
 
     /// How a temporary file that must go is deleted. A test replaces it to fail the request.
@@ -394,12 +451,12 @@ fn create_private(_path: &Path) -> Result<File, CommandError> {
 }
 
 #[cfg(windows)]
-fn replace(file: &File, target: &Path) -> Result<(), CommandError> {
-    windows::replace(file, target)
+fn rename(file: &File, target: &Path) -> Result<(), CommandError> {
+    windows::rename(file, target)
 }
 
 #[cfg(not(windows))]
-fn replace(_file: &File, _target: &Path) -> Result<(), CommandError> {
+fn rename(_file: &File, _target: &Path) -> Result<(), CommandError> {
     Err(invalid("Private file export requires Windows."))
 }
 
@@ -411,12 +468,15 @@ mod windows {
         mem::{offset_of, size_of},
         os::windows::{
             ffi::{OsStrExt, OsStringExt},
+            fs::OpenOptionsExt,
             io::{AsRawHandle, FromRawHandle},
         },
         ptr::{null, null_mut},
     };
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, LocalFree, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE},
+        Foundation::{
+            CloseHandle, LocalFree, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+        },
         Security::{
             Authorization::{
                 ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
@@ -427,13 +487,13 @@ mod windows {
             TOKEN_QUERY, TOKEN_USER,
         },
         Storage::FileSystem::{
-            CreateFileW, FileDispositionInfo, FileRenameInfo, GetDriveTypeW,
-            GetFileInformationByHandle, GetFinalPathNameByHandleW, GetVolumeInformationW,
-            SetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, DELETE,
-            FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO,
-            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_NAME_NORMALIZED,
-            FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
-            OPEN_EXISTING, READ_CONTROL,
+            CreateFileW, FileDispositionInfo, FileIdInfo, FileRenameInfo, GetDriveTypeW,
+            GetFileInformationByHandle, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
+            GetVolumeInformationW, SetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+            CREATE_NEW, DELETE, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+            FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO,
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL,
         },
         System::Threading::{GetCurrentProcess, OpenProcessToken},
     };
@@ -625,14 +685,14 @@ mod windows {
         None
     }
 
-    pub(super) fn replace(file: &File, target: &Path) -> Result<(), CommandError> {
+    pub(super) fn rename(file: &File, target: &Path) -> Result<(), CommandError> {
         let name: Vec<u16> = target.as_os_str().encode_wide().collect();
         let bytes = name.len() * size_of::<u16>();
         let length = size_of::<FILE_RENAME_INFO>() + bytes;
         let mut buffer = vec![0usize; length.div_ceil(size_of::<usize>())];
         let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
         unsafe {
-            (*info).Anonymous.ReplaceIfExists = true;
+            (*info).Anonymous.ReplaceIfExists = false;
             (*info).FileNameLength = bytes
                 .try_into()
                 .map_err(|_| invalid("The export path is too long."))?;
@@ -645,7 +705,7 @@ mod windows {
                     .cast::<u16>(),
                 name.len(),
             );
-            // Rename the owned handle and retain its private DACL when replacing an approved target.
+            // A rename through the handle keeps the file's DACL. It fails when the name is taken.
             if SetFileInformationByHandle(
                 file.as_raw_handle(),
                 FileRenameInfo,
@@ -657,6 +717,53 @@ mod windows {
             {
                 return Err(io(std::io::Error::last_os_error()));
             }
+        }
+        Ok(())
+    }
+
+    /// Holds the file at `path`, or `None` when no file has that name. While the handle lives,
+    /// no other program can write, rename or delete the file.
+    pub(super) fn hold(path: &Path) -> Result<Option<File>, CommandError> {
+        match fs::OpenOptions::new()
+            .access_mode(GENERIC_READ | DELETE)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+        {
+            Ok(file) => Ok(Some(file)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(io(error)),
+        }
+    }
+
+    /// The volume serial number and the 128-bit file ID, which is unique on NTFS and ReFS.
+    fn file_id(file: &File) -> Option<(u64, [u8; 16])> {
+        let mut info = FILE_ID_INFO::default();
+        (unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                FileIdInfo,
+                std::ptr::from_mut(&mut info).cast(),
+                size_of::<FILE_ID_INFO>() as u32,
+            )
+        } != 0)
+            .then_some((info.VolumeSerialNumber, info.FileId.Identifier))
+    }
+
+    /// Refuses unless the file at `path` is the approved file. A junction above the chosen name
+    /// can point the name at another file after the choice.
+    pub(super) fn check_approved(approved: &File, path: &Path) -> Result<(), CommandError> {
+        let found = fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .ok()
+            .and_then(|found| file_id(&found));
+        if found.is_none() || found != file_id(approved) {
+            return Err(invalid(
+                "The file at the export path changed after you chose it. Nothing was saved.",
+            ));
         }
         Ok(())
     }
@@ -763,7 +870,7 @@ mod tests {
         protected_dirs: &[PathBuf],
     ) -> Result<PathBuf, CommandError> {
         prepare_private(
-            path,
+            choose(path)?,
             contents,
             protected,
             protected_dirs,
@@ -798,7 +905,7 @@ mod tests {
         let directory = temporary_directory();
         let target = directory.path().join("out.env");
         let prepared = prepare_private(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake-owned\n",
             &[],
             &[],
@@ -832,7 +939,7 @@ mod tests {
         let directory = temporary_directory();
         let target = directory.path().join("out.env");
         let prepared = prepare_private(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake-owned\n",
             &[],
             &[],
@@ -937,7 +1044,7 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn temporary_files(directory: &Path) -> Vec<PathBuf> {
+    fn files_starting(directory: &Path, prefix: &str) -> Vec<PathBuf> {
         fs::read_dir(directory)
             .unwrap()
             .map(|entry| entry.unwrap().path())
@@ -945,9 +1052,14 @@ mod tests {
                 path.file_name()
                     .unwrap()
                     .to_string_lossy()
-                    .starts_with(".akm-export-")
+                    .starts_with(prefix)
             })
             .collect()
+    }
+
+    #[cfg(windows)]
+    fn temporary_files(directory: &Path) -> Vec<PathBuf> {
+        files_starting(directory, ".akm-export-")
     }
 
     /// The remnant is real and the warning names it, and the warning holds no value.
@@ -987,7 +1099,7 @@ mod tests {
         };
 
         let error = prepare_private_with(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake-owned\n",
             &[],
             &[],
@@ -1008,7 +1120,7 @@ mod tests {
         let target = directory.path().join("out.env");
         let remnants = Remnants::default();
         let prepared = prepare_private_with(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake-owned\n",
             &[],
             &[],
@@ -1039,7 +1151,7 @@ mod tests {
         let target = directory.path().join("out.env");
         let remnants = Remnants::default();
         let prepared = prepare_private_with(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake-owned\n",
             &[],
             &[],
@@ -1061,7 +1173,7 @@ mod tests {
         let target = directory.path().join("out.env");
         let remnants = Remnants::default();
         let prepared = prepare_private_with(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake-owned\n",
             &[],
             &[],
@@ -1104,7 +1216,7 @@ mod tests {
         let target = directory.path().join("out.env");
         let remnants = Remnants::default();
         let prepared = prepare_private_with(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake-owned\n",
             &[],
             &[],
@@ -1166,7 +1278,7 @@ mod tests {
         let remnants = Remnants::default();
 
         let error = prepare_private_with(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake-owned\n",
             &[],
             &[],
@@ -1207,7 +1319,7 @@ mod tests {
         let remnants = Remnants::default();
 
         let error = prepare_private_with(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake-owned\n",
             &[],
             &[],
@@ -1246,7 +1358,7 @@ mod tests {
         let remnants = Remnants::default();
 
         let failed = prepare_private_with(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake-owned\n",
             &[],
             &[],
@@ -1254,7 +1366,16 @@ mod tests {
             &mut FailedSync,
         );
         assert!(failed.is_err());
-        drop(prepare_private(&target, "TOKEN=fake-owned\n", &[], &[], &remnants).unwrap());
+        drop(
+            prepare_private(
+                choose(&target).unwrap(),
+                "TOKEN=fake-owned\n",
+                &[],
+                &[],
+                &remnants,
+            )
+            .unwrap(),
+        );
 
         assert!(temporary_files(directory.path()).is_empty());
         assert!(remnants.warning().is_none());
@@ -1308,7 +1429,7 @@ mod tests {
         let mut export_io = ExistingTemp(None);
 
         let error = prepare_private_with(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake\n",
             &[],
             &[],
@@ -1361,7 +1482,7 @@ mod tests {
         let target = directory.path().join("out.env");
         let mut export_io = IgnoredAcl { wrote: false };
         let result = prepare_private_with(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake\n",
             &[],
             &[],
@@ -1442,7 +1563,7 @@ mod tests {
                 displaced: None,
             };
             let error = prepare_private_with(
-                &target,
+                choose(&target).unwrap(),
                 "TOKEN=fake-owned\n",
                 &[],
                 &[],
@@ -1488,7 +1609,7 @@ mod tests {
         let target = directory.path().join("out.env");
         fs::write(&target, b"previous approved export\n").unwrap();
         let prepared = prepare_private(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake-owned\n",
             &[],
             &[],
@@ -1519,16 +1640,81 @@ mod tests {
     }
 
     #[cfg(windows)]
-    #[test]
-    fn a_failed_native_rename_is_not_reported_as_a_saved_export() {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    const FAKE_VAULT: [u8; 8] = [0x03, 0xd9, 0xa2, 0x9a, 0x67, 0xfb, 0x4b, 0xb5];
 
+    /// Makes the new folder `link` a junction to `target`. It sets the reparse data itself,
+    /// because only process.rs may start a process.
+    #[cfg(windows)]
+    fn junction(link: &Path, target: &Path) {
+        use std::{
+            ffi::c_void,
+            os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle},
+            ptr::null_mut,
+        };
+        use windows_sys::Win32::{
+            Foundation::GENERIC_WRITE,
+            Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT},
+        };
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn DeviceIoControl(
+                device: *mut c_void,
+                code: u32,
+                input: *const c_void,
+                input_size: u32,
+                output: *mut c_void,
+                output_size: u32,
+                returned: *mut u32,
+                overlapped: *mut c_void,
+            ) -> i32;
+        }
+        const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00a4;
+        const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xa000_0003;
+
+        let name: Vec<u16> = std::ffi::OsStr::new(r"\??\")
+            .encode_wide()
+            .chain(target.as_os_str().encode_wide())
+            .collect();
+        let name_bytes = u16::try_from(name.len() * 2).unwrap();
+        // Name offsets and lengths, then the substitute name and an empty print name, each
+        // ended by a NUL.
+        let mut data = vec![0, name_bytes, name_bytes + 2, 0];
+        data.extend(&name);
+        data.extend([0, 0]);
+        let mut buffer = IO_REPARSE_TAG_MOUNT_POINT.to_le_bytes().to_vec();
+        buffer.extend(u16::try_from(data.len() * 2).unwrap().to_le_bytes());
+        buffer.extend([0, 0]);
+        buffer.extend(data.iter().flat_map(|unit| unit.to_le_bytes()));
+
+        fs::create_dir(link).unwrap();
+        let folder = fs::OpenOptions::new()
+            .access_mode(GENERIC_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(link)
+            .unwrap();
+        let mut returned = 0;
+        let set = unsafe {
+            DeviceIoControl(
+                folder.as_raw_handle(),
+                FSCTL_SET_REPARSE_POINT,
+                buffer.as_ptr().cast(),
+                u32::try_from(buffer.len()).unwrap(),
+                null_mut(),
+                0,
+                &mut returned,
+                null_mut(),
+            )
+        };
+        assert_ne!(set, 0, "{}", std::io::Error::last_os_error());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fw10_a_file_that_appears_at_a_free_destination_after_the_last_check_survives() {
         let directory = temporary_directory();
         let target = directory.path().join("out.env");
-        fs::write(&target, b"previous approved export\n").unwrap();
         let prepared = prepare_private(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake-owned\n",
             &[],
             &[],
@@ -1536,22 +1722,17 @@ mod tests {
         )
         .unwrap();
         let (replacement, displaced) = displace_temp(directory.path());
-        let blocker = fs::OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ)
-            .open(&target)
-            .unwrap();
+        fs::write(&target, FAKE_VAULT).unwrap();
 
         let error = prepared.publish().unwrap_err();
 
         assert_eq!(error.kind, "io");
-        drop(blocker);
-        assert_eq!(fs::read(&target).unwrap(), b"previous approved export\n");
+        assert_eq!(fs::read(&target).unwrap(), FAKE_VAULT, "the vault is kept");
         assert_eq!(
             fs::read(replacement).unwrap(),
             b"unrelated replacement file\n"
         );
-        assert!(!displaced.exists());
+        assert!(!displaced.exists(), "the owned plaintext is removed");
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 3);
         assert_eq!(
             fs::read_dir(displaced.parent().unwrap()).unwrap().count(),
@@ -1561,9 +1742,114 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn preparation_revalidates_the_destination_after_sync() {
-        const FAKE_VAULT: [u8; 8] = [0x03, 0xd9, 0xa2, 0x9a, 0x67, 0xfb, 0x4b, 0xb5];
+    fn fw10_another_file_reached_by_the_approved_name_after_the_choice_survives() {
+        let directory = temporary_directory();
+        let approved = directory.path().join("approved");
+        let other = directory.path().join("other");
+        fs::create_dir(&approved).unwrap();
+        fs::create_dir(&other).unwrap();
+        fs::write(approved.join("out.env"), b"previous approved export\n").unwrap();
+        fs::write(other.join("out.env"), b"another program's file\n").unwrap();
+        let link = directory.path().join("link");
+        junction(&link, &approved);
+        let chosen = choose(&link.join("out.env")).unwrap();
+        fs::remove_dir(&link).unwrap();
+        junction(&link, &other);
 
+        let error = prepare_private(chosen, "TOKEN=fake-owned\n", &[], &[], &Remnants::default())
+            .and_then(PreparedExport::publish)
+            .unwrap_err();
+
+        assert_eq!(error.kind, "invalidPath");
+        assert_eq!(
+            fs::read(other.join("out.env")).unwrap(),
+            b"another program's file\n"
+        );
+        assert_eq!(
+            fs::read(approved.join("out.env")).unwrap(),
+            b"previous approved export\n"
+        );
+        assert_eq!(fs::read_dir(&other).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(&approved).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fw10_a_file_that_takes_the_name_while_the_approved_file_is_aside_survives() {
+        struct NameTaken;
+        impl ExportIo for NameTaken {
+            fn publish(&mut self, file: &File, destination: &Path) -> Result<(), CommandError> {
+                fs::write(destination, b"another program's file\n").map_err(io)?;
+                rename(file, destination)
+            }
+        }
+
+        let directory = temporary_directory();
+        let target = directory.path().join("out.env");
+        fs::write(&target, b"previous approved export\n").unwrap();
+        let prepared = prepare_private(
+            choose(&target).unwrap(),
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &Remnants::default(),
+        )
+        .unwrap();
+
+        let error = prepared.publish_with(&mut NameTaken).unwrap_err();
+
+        assert_eq!(fs::read(&target).unwrap(), b"another program's file\n");
+        let aside = files_starting(directory.path(), ".akm-replaced-");
+        assert_eq!(aside.len(), 1, "the approved file is kept aside");
+        assert_eq!(fs::read(&aside[0]).unwrap(), b"previous approved export\n");
+        let name = aside[0].file_name().unwrap().to_string_lossy();
+        assert!(error.message.contains(&*name), "{}", error.message);
+        assert!(temporary_files(directory.path()).is_empty());
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fw10_a_replaced_file_whose_delete_is_refused_is_named() {
+        struct AsideKept;
+        impl ExportIo for AsideKept {
+            fn discard(&self) -> Discard {
+                delete_refused
+            }
+        }
+
+        let directory = temporary_directory();
+        let target = directory.path().join("out.env");
+        fs::write(&target, b"previous approved export\n").unwrap();
+        let remnants = Remnants::default();
+        let prepared = prepare_private_with(
+            choose(&target).unwrap(),
+            "TOKEN=fake-owned\n",
+            &[],
+            &[],
+            &remnants,
+            &mut AsideKept,
+        )
+        .unwrap();
+
+        prepared.publish_with(&mut AsideKept).unwrap();
+
+        assert_eq!(fs::read(&target).unwrap(), b"TOKEN=fake-owned\n");
+        let aside = files_starting(directory.path(), ".akm-replaced-");
+        assert_eq!(
+            aside.len(),
+            1,
+            "the refused delete leaves the replaced file"
+        );
+        assert_eq!(fs::read(&aside[0]).unwrap(), b"previous approved export\n");
+        let name = aside[0].file_name().unwrap().to_string_lossy();
+        let warning = remnants.warning().expect("the replaced file is reported");
+        assert!(warning.contains(&*name), "{warning}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preparation_revalidates_the_destination_after_sync() {
         struct LateVault(PathBuf);
         impl ExportIo for LateVault {
             fn sync(&mut self, file: &File) -> Result<(), CommandError> {
@@ -1575,7 +1861,7 @@ mod tests {
         let directory = temporary_directory();
         let target = directory.path().join("out.env");
         let error = prepare_private_with(
-            &target,
+            choose(&target).unwrap(),
             "TOKEN=fake-owned\n",
             &[],
             &[],
