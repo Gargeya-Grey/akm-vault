@@ -70,7 +70,7 @@ The master-password change (M2) needs its own plan: old backups keep the old pas
 ## Unit 3: dotenv, time and CLI selection
 
 - Write an external dotenv profile and pin reference fixtures: comments, quotes, escapes, BOM, CRLF, multiline values and malformed input. Never execute or interpolate file content. Keep the duplicate-name, empty-secret, scope and reserved-name protections.
-- Choose one instant for a date-only expiry and use it in the CLI, GUI, exports and reminders. Test time-zone boundaries. Keep display rounding apart from rotation scheduling.
+- Choose one instant for a date-only expiry and use it in the CLI, GUI, exports and key states. Test time-zone boundaries. Keep display rounding apart from rotation scheduling.
 - Fix P2-TIME-REFRESH. Status must update while Keys stays open, after hide and resume, and after a clock change. A refresh does not extend the idle deadline.
 - Decide whether the CLI fallback search through notes and URL is safe for disclosure and delete commands.
 - Remove the secret-bearing `Debug` and the secret loading for metadata-only callers. Do not claim full memory zeroization.
@@ -79,11 +79,11 @@ Acceptance: external parser fixtures as well as round trips, controlled clocks a
 
 ## Unit 4: reminders and accessibility
 
-- Specify the unlock summary and the opt-in Windows notification content. A notification on the lock screen shows no secret and no sensitive metadata. Do not add an always-running service as a hidden prerequisite.
+- Specify the unlock summary. AKM shows no Windows notification (removed on 2026-11-13, U1-R1-03) and adds no always-running service.
 - Check focus containment and return for every modal, including import. On the Keys screen, each key row's accessible name or description must announce its expiry and rotation status.
 - Fix the Keys-screen layout debt, or list it as kept debt. Functional fixes and visual changes go in separate pull requests.
 
-Acceptance: expired, overdue, unknown-date and no-key states; locked and hidden transitions; denied or disabled notifications; accessible status; and keyboard-only paths. Mocked UI tests do not prove native notification delivery.
+Acceptance: expired, overdue, unknown-date and no-key states; locked and hidden transitions; accessible status; and keyboard-only paths.
 
 ## Unit 5: second reader and full rescore
 

@@ -137,7 +137,7 @@ One class is new in review 2: work without a bound on bytes that are not authent
 ## Next action
 
 1. Collect the three rounds in flight when each worker reports: unit 1 round 1, unit 3 round 2, unit 4 round 2. Check each against its brief and the directive, merge, and run the full checks, both interchange suites and the two real-app proofs once on the merged tree. Unit 2 round 2 is done by the planner (six small fixes; `npm run build`, `npm test`, `npm run test:ui` and `check_docs.py` ran on them).
-2. Remove the Windows notification (native code, page, settings switch, documents, claims).
+2. Done: the Windows notification is removed (merged as `785748a`). Settings has no Reminders section, AKM never shows a Windows notification, and the unlock summary and the key states stay. A `reminders.json` file from an earlier version stays on disk; AKM does not read, write or delete it. With the plugin, the binding `Binding::Named` went too, because it had no other caller. One deleted test also checked that the configuration holds no autostart, startup, scheduled-task or service entry; no test checks that now.
 3. Narrow the promises in PROJECT.md, THREAT_MODEL.md and CLAIMS.md: backups, reserved names, locks, the journal.
 4. Run one full review with the official brief on the integrated tree. It gives the next measured score. Then fix by the size of each deduction, with the smallest fix.
 5. The owner's gates: CI billing, one sitting for the owner-present proofs, the signing decision.
