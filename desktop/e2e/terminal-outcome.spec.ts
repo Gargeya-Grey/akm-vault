@@ -165,7 +165,7 @@ for (const theme of ["light", "dark"]) {
     await expect(notices).toHaveCount(kinds.length);
     await expect(notices).toHaveText([
       /could not make its files private to your account\. Anyone who can read its folder can copy the encrypted vault and its backups\./,
-      /changed outside AKM, so AKM cannot confirm that it is the same vault as before\./,
+      /so AKM cannot confirm that it is the same vault as before\./,
       /did not receive its result\. That terminal keeps the keys until you close it/,
       /its session ended before the result arrived\. That terminal keeps the keys until you close it/,
       /^A terminal launch failed\. No terminal from that request runs\.$/,
