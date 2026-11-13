@@ -75,6 +75,9 @@ Dropbox or Syncthing folder.
   folder carries the list, so AKM rotates the listed backups in the copy too.
 - A vault file with two names (hard links) can be read, but AKM does not save
   it. Copy the vault to a new file, open the copy, and save there.
+- A vault opened through a file symbolic link can be read, but AKM does not save
+  it. Open the vault by its real path. A folder reached through a junction or a
+  folder link works.
 
 **This is not a distributed lock or an atomic compare-and-swap with your sync
 provider.** KeePassXC and cloud clients do not honor AKM's lock. An external writer

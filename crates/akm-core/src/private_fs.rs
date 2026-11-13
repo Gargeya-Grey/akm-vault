@@ -1043,9 +1043,14 @@ mod tests {
                 assert!(std::fs::symlink_metadata(&link).is_ok(), "the link stays");
                 assert_eq!(std::fs::read(&linked).unwrap(), b"keep");
             }
-            Err(error) if error.raw_os_error() == Some(1314) => eprintln!(
-                "NOT RUN: remove_file_if file-link case: Windows error 1314, no privilege to make a file symbolic link"
-            ),
+            // Written past the test harness's capture, so the line shows when the test passes.
+            Err(error) if error.raw_os_error() == Some(1314) => {
+                use std::io::Write as _;
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "NOT RUN: remove_file_if file-link case: Windows error 1314, no privilege to make a file symbolic link"
+                );
+            }
             Err(error) => panic!("could not make the file link: {error}"),
         }
     }
