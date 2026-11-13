@@ -1462,7 +1462,7 @@ mod tests {
         let (session, _directory) = test_session();
         let remnants = private_export::Remnants::default();
         let remnant = PathBuf::from(r"C:\fake-folder\.akm-export-00000000.tmp");
-        remnants.record(remnant.clone());
+        remnants.record(remnant.clone(), Some(remnant.clone()));
 
         let error = report_remnants::<()>(
             &session,
@@ -1485,7 +1485,8 @@ mod tests {
     fn fr04_a_saved_export_with_a_remnant_still_warns() {
         let (session, _directory) = test_session();
         let remnants = private_export::Remnants::default();
-        remnants.record(PathBuf::from(r"C:\fake-folder\.akm-export-11111111.tmp"));
+        let remnant = PathBuf::from(r"C:\fake-folder\.akm-export-11111111.tmp");
+        remnants.record(remnant.clone(), Some(remnant));
 
         let saved = report_remnants(&session, &remnants, Ok(7)).unwrap();
 
