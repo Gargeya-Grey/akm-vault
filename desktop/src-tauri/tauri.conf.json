@@ -34,6 +34,10 @@
     "category": "DeveloperTool",
     "shortDescription": "Personal API key manager on a KeePass vault",
     "longDescription": "Windows development build for API-key storage, metadata, expiry tracking and scoped environment injection using a KDBX vault. Not independently audited. Not approved for real secrets or public distribution.",
+    "resources": {
+      "../../LICENSE": "LICENSE",
+      "../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
+    },
     "windows": {
       "webviewInstallMode": {
         "type": "embedBootstrapper"
