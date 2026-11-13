@@ -35,10 +35,18 @@ function tokenColour(page: Page, name: string) {
 }
 
 // Class I: every dialog in the app. The inventory is `grep -rn "role=\"dialog\"" desktop/src`:
-// KeyDetail, KeyForm, RotateDialog, ConfirmDialog (move to the Recycle Bin, delete for good,
-// format upgrade) and the Use keys import drawer.
+// KeyDetail, KeyForm (add and edit), RotateDialog, ConfirmDialog (move to the Recycle Bin, delete
+// for good, format upgrade) and the Use keys import drawer.
 const openers: { name: string; open: (page: Page) => Promise<void>; options?: Parameters<typeof installNativeBoundaryMock>[4] }[] = [
   { name: "the Add key drawer", open: (page) => page.getByRole("button", { name: "Add key", exact: true }).click() },
+  {
+    name: "the edit drawer",
+    open: async (page) => {
+      await page.locator(".key-row").first().click();
+      await page.getByRole("button", { name: "Edit", exact: true }).click();
+      await expect(page.getByRole("dialog", { name: "Edit key" })).toBeVisible();
+    },
+  },
   { name: "the key drawer", open: (page) => page.locator(".key-row").first().click() },
   {
     name: "the delete confirmation",
@@ -94,6 +102,56 @@ for (const theme of ["light", "dark"]) {
   }
 }
 
+/**
+ * What a user with enlarged text cannot reach in the open dialog: an action outside the window or
+ * covered by another element once it is scrolled into view, a dialog that leaves the window, and
+ * anything that scrolls sideways.
+ */
+function outOfReach(page: Page) {
+  return page.evaluate(() => {
+    const surface = [...document.querySelectorAll(".overlay")].at(-1)!.querySelector<HTMLElement>(".raised")!;
+    const problems: string[] = [];
+    const scroller = document.scrollingElement!;
+    if (scroller.scrollWidth > scroller.clientWidth) problems.push("the page scrolls sideways");
+    if (surface.scrollWidth > surface.clientWidth) problems.push("the dialog scrolls sideways");
+    const edge = surface.getBoundingClientRect();
+    if (edge.left < 0 || edge.right > innerWidth) problems.push("the dialog leaves the window");
+    for (const button of surface.querySelectorAll("button")) {
+      button.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const box = button.getBoundingClientRect();
+      const name = button.getAttribute("aria-label") ?? button.textContent?.trim();
+      if (box.left < 0 || box.top < 0 || box.right > innerWidth || box.bottom > innerHeight) problems.push(`${name} is outside the window`);
+      else if (!button.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2))) problems.push(`${name} is covered`);
+    }
+    return problems;
+  });
+}
+
+// FW-07 and its class: 150 and 200 percent text (a root font of 24 and 32 px), at the minimum
+// window width and at a common width.
+for (const theme of ["light", "dark"]) {
+  for (const { name, open: openDialog, options } of openers) {
+    test(`${theme}: ${name} keeps every action in reach with enlarged text`, async ({ page }) => {
+      // Earlier versions put a button low in the key drawer, where the sticky footer could cover it.
+      await open(page, theme, { keys: [{ historyCount: 2 }], recycled: [{ key: { title: "Twin" }, deletedAt: null }], ...options });
+      await openDialog(page);
+      const surface = page.locator(".overlay").last().locator(".raised");
+      await expect(surface).toBeVisible();
+      // The drawer slides in from the right; measure where it comes to rest.
+      await surface.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
+      const found: [string, string[]][] = [];
+      for (const width of [900, 1180]) {
+        for (const font of [24, 32]) {
+          await page.setViewportSize({ width, height: 800 });
+          await page.evaluate((size) => { document.documentElement.style.fontSize = `${size}px`; }, font);
+          found.push([`${width} px wide, root font ${font} px`, await outOfReach(page)]);
+        }
+      }
+      expect(found.filter(([, problems]) => problems.length > 0)).toEqual([]);
+    });
+  }
+}
+
 test.describe("forced colours", () => {
   const boxed = async (page: Page, selector: string) => page.locator(selector).first().evaluate((node) => {
     const style = getComputedStyle(node);
@@ -111,6 +169,39 @@ test.describe("forced colours", () => {
     await page.getByRole("button", { name: "Use keys", exact: true }).click();
     expect(await boxed(page, ".btn-secondary")).toBe(true);
   });
+
+  // A line between two regions that the normal themes draw with a shadow.
+  const lines: { name: string; reach: (page: Page) => Promise<unknown>; selector: string; side: "Top" | "Right" | "Bottom" }[] = [
+    { name: "the edge of the rail", reach: async () => {}, selector: ".rail", side: "Right" },
+    { name: "the line above the rail tools", reach: async () => {}, selector: ".rail-tools", side: "Top" },
+    { name: "the line above the drawer's actions", reach: (page) => page.locator(".key-row").first().click(), selector: ".drawer-foot", side: "Top" },
+    { name: "the line under the Activity headings", reach: (page) => page.getByRole("button", { name: "Activity", exact: true }).click(), selector: ".audit-head", side: "Bottom" },
+    { name: "the line under an Activity row", reach: (page) => page.getByRole("button", { name: "Activity", exact: true }).click(), selector: ".audit-row", side: "Bottom" },
+    {
+      name: "the line under the preview heading",
+      reach: async (page) => {
+        await page.getByRole("button", { name: "Use keys", exact: true }).click();
+        await page.getByLabel("Project", { exact: true }).selectOption("demo");
+        await page.getByLabel("Environment", { exact: true }).selectOption("dev");
+        await page.getByRole("button", { name: "Preview", exact: true }).click();
+      },
+      selector: ".preview-head",
+      side: "Bottom",
+    },
+    { name: "the edge of the lock stage", reach: (page) => page.evaluate(() => (window as unknown as { __akmTest: { emitLock: () => void } }).__akmTest.emitLock()), selector: ".lock-stage", side: "Right" },
+  ];
+  for (const { name, reach, selector, side } of lines) {
+    test(`${name} keeps a border`, async ({ page }) => {
+      await open(page);
+      await page.emulateMedia({ forcedColors: "active" });
+      await reach(page);
+      const line = await page.locator(selector).first().evaluate((node, edge) => {
+        const style = getComputedStyle(node);
+        return [style.getPropertyValue(`border-${edge}-style`), parseFloat(style.getPropertyValue(`border-${edge}-width`))];
+      }, side.toLowerCase());
+      expect(line[0] !== "none" && Number(line[1]) >= 1, `${selector}: ${line.join(" ")}`).toBe(true);
+    });
+  }
 
   test("the open list shows its edge and its active option", async ({ page }) => {
     await open(page);

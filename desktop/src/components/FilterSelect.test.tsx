@@ -68,6 +68,14 @@ test("typing moves to the item that starts with those letters", () => {
   expect(onChange).not.toHaveBeenCalled();
 });
 
+test("typing compares by AKM's caseless rule, so a final sigma moves to a name that starts with a capital sigma (FW-06)", () => {
+  render(<FilterSelect id="demo" label="Project" value="" placeholder="Choose a project" options={[{ value: "alpha", label: "alpha" }, { value: "Σ-prod", label: "Σ-prod" }]} onChange={() => {}} />);
+  const field = screen.getByRole("combobox");
+  fireEvent.keyDown(field, { key: " " });
+  fireEvent.keyDown(field, { key: "ς" });
+  expect(screen.getByRole("listbox").querySelector(".active")?.textContent).toBe("Σ-prod");
+});
+
 test("Escape closes only the list, and a dialog behind it does not hear the key", () => {
   const { field, onChange } = setup("alpha");
   const heard = vi.fn();

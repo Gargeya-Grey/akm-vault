@@ -199,11 +199,27 @@ export function keyDetails(key: KeyView) {
   };
 }
 
-/** What a search of the key list matches: each stored value, and each value as its row draws it. */
+/**
+ * AKM's one caseless rule, as `caseless` in akm-core (FW-06). Each letter becomes the lowercase of
+ * its uppercase when that uppercase is one letter, and its own lowercase otherwise: `Σ`, `σ` and `ς`
+ * are one letter, `ẞ` and `ß` are one letter, and `ß` is not `ss`. Each letter maps alone, with no
+ * context and no normalization. The page and the core each use the Unicode tables of their own
+ * runtime, so a letter that only the newer table knows can fold differently.
+ */
+export function caseless(text: string): string {
+  let folded = "";
+  for (const letter of text) {
+    const upper = letter.toUpperCase();
+    folded += [...upper].length === 1 ? upper.toLowerCase() : letter.toLowerCase();
+  }
+  return folded;
+}
+
+/** What a search of the key list matches, folded by `caseless`: each stored value, and each value as its row draws it. */
 export function searchText(key: KeyView, facts: KeyRowFacts): string {
-  const stored = [key.title, key.issuer, key.project, key.environment, key.resolvedEnvVar, key.url, key.notes, ...key.scopes, ...key.tags];
+  const stored = [key.title, key.issuer, key.project, key.environment, key.username, key.resolvedEnvVar, key.url, key.notes, ...key.scopes, ...key.tags];
   const drawn = [facts.title, facts.issuer.text, facts.project.text, facts.environment.text, facts.variable.text, facts.id.text];
-  return [...stored, ...drawn].filter(Boolean).join("\n").toLowerCase();
+  return caseless([...stored, ...drawn].filter(Boolean).join("\n"));
 }
 
 export interface BinRowFacts {

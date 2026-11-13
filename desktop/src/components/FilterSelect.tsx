@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { drawnText } from "../rowFacts";
+import { caseless, drawnText } from "../rowFacts";
 import { Icon } from "./Icon";
 
 interface Option {
@@ -122,8 +122,8 @@ export function FilterSelect({
     const now = Date.now();
     const text = now - typed.current.at > 500 ? key : typed.current.text + key;
     typed.current = { text, at: now };
-    const wanted = text.toLocaleLowerCase();
-    const found = choices.findIndex((choice) => choice.label.toLocaleLowerCase().startsWith(wanted));
+    const wanted = caseless(text);
+    const found = choices.findIndex((choice) => caseless(choice.label).startsWith(wanted));
     if (found >= 0) moveTo(found);
   }
 

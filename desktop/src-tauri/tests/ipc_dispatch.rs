@@ -684,6 +684,7 @@ fn main() {
     a_hidden_window_at_the_import_check_leaves_a_failed_record(webview, &dialog, directory.path());
     a_fault_after_the_import_replacement_leaves_a_true_record(webview, &dialog, directory.path());
     the_history_command_answers_times_and_field_names(webview, directory.path());
+    an_edit_changes_only_the_fields_that_the_request_names(webview, directory.path());
     a_foreign_entry_with_history_shows_only_known_field_names(webview, directory.path());
     a_page_that_holds_the_session_id_cannot_disclose_without_the_user(
         webview,
@@ -1681,6 +1682,115 @@ fn the_history_command_answers_times_and_field_names(
     println!(
         "PASS: key_history answers index, modifiedAt, changed and secretChanged, and no value."
     );
+}
+
+/// FW-03, the wire shape of `key_add` and `key_update` through the production handlers. An
+/// update changes only the fields that the request names; `null`, an empty text or an empty
+/// list clears one. A request that names no field answers `null` and leaves the file as it
+/// was, and a field name that native code does not know is refused. An add names every field.
+fn an_edit_changes_only_the_fields_that_the_request_names(
+    webview: &tauri::Webview<MockRuntime>,
+    directory: &std::path::Path,
+) {
+    use serde_json::{json, Value};
+    let path = directory.join("edit-wire.kdbx");
+    let mut vault = akm_core::Vault::create(&path, PASSWORD, None).unwrap();
+    let mut stored = akm_core::ApiKeyInput::new("Fake wire key", "fake-wire-secret");
+    stored.username = Some(" AKIAFAKEWIRE ".into());
+    stored.project = Some(" demo ".into());
+    stored.environment = Some(" dev ".into());
+    stored.scopes = vec!["resource,subresource".into(), " read ".into()];
+    stored.tags = vec!["alpha".into()];
+    stored.expires_at = Some("2030-05-06T07:08:09Z".parse().unwrap());
+    stored.rotation_days = Some(90);
+    let id = vault.add(stored).unwrap().id;
+    drop(vault);
+    let reserved = call(webview, "vault_prepare_open", json!({})).unwrap();
+    call(
+        webview,
+        "vault_unlock",
+        json!({"path": path.display().to_string(), "password": PASSWORD, "sessionId": reserved}),
+    )
+    .unwrap();
+    let update = |draft: Value| call(webview, "key_update", json!({"id": id, "draft": draft}));
+
+    let saved = update(json!({"notes": "Fake wire notes"})).unwrap();
+    assert_eq!(saved["notes"], "Fake wire notes");
+    for (field, value) in [
+        ("username", json!(" AKIAFAKEWIRE ")),
+        ("project", json!(" demo ")),
+        ("environment", json!(" dev ")),
+        ("scopes", json!(["resource,subresource", " read "])),
+        ("expiresAt", json!("2030-05-06T07:08:09Z")),
+        ("rotationDays", json!(90)),
+    ] {
+        assert_eq!(saved[field], value, "{field}");
+    }
+    let cleared =
+        update(json!({"username": "", "scopes": [], "expiresAt": null, "rotationDays": null}))
+            .unwrap();
+    for field in ["username", "expiresAt", "rotationDays"] {
+        assert_eq!(cleared[field], Value::Null, "{field}");
+    }
+    assert_eq!(cleared["scopes"], json!([]));
+    assert_eq!(cleared["project"], " demo ");
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(update(json!({})).unwrap(), Value::Null);
+    assert!(update(json!({"note": "a field that native code does not know"})).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let reopened = akm_core::Vault::open(&path, PASSWORD).unwrap();
+    let key = reopened.get_by_id(&id).unwrap();
+    assert_eq!(
+        (key.project.as_deref(), key.environment.as_deref()),
+        (Some(" demo "), Some(" dev "))
+    );
+    assert_eq!(key.notes.as_deref(), Some("Fake wire notes"));
+    assert_eq!(key.tags, ["alpha"]);
+    assert_eq!(
+        (
+            key.username,
+            key.scopes.len(),
+            key.expires_at,
+            key.rotation_days
+        ),
+        (None, 0, None, None)
+    );
+
+    let added = call(
+        webview,
+        "key_add",
+        json!({"draft": {
+            "title": " Fake added ", "secret": "fake-added-secret", "username": " AKIAADD ",
+            "issuer": "", "project": " demo ", "environment": "dev", "scopes": [" read ", ""],
+            "envVar": "ADDED_TOKEN", "url": "", "notes": " fake note ", "tags": ["gamma"],
+            "expiresAt": "2031-01-02", "rotationDays": 30,
+        }}),
+    )
+    .unwrap();
+    for (field, value) in [
+        ("title", json!("Fake added")),
+        ("username", json!("AKIAADD")),
+        ("issuer", Value::Null),
+        ("project", json!("demo")),
+        ("scopes", json!(["read"])),
+        ("url", Value::Null),
+        ("notes", json!("fake note")),
+        ("tags", json!(["gamma"])),
+        ("expiresAt", json!("2031-01-02T23:59:59Z")),
+        ("rotationDays", json!(30)),
+    ] {
+        assert_eq!(added[field], value, "{field}");
+    }
+    assert_eq!(
+        call(
+            webview,
+            "key_add",
+            json!({"draft": {"title": "Fake no secret"}})
+        )
+        .unwrap_err()["kind"],
+        "invalid"
+    );
+    println!("PASS: key_update changes only the fields that the request names, clears with null or an empty value, and answers null with the file unchanged when it names none; key_add names every field.");
 }
 
 fn reply(rx: &mpsc::Receiver<InvokeResponse>) -> Result<serde_json::Value, serde_json::Value> {
