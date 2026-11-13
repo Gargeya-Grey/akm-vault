@@ -295,18 +295,31 @@ From [unit 4 review 1](reviews/2026-11-13-unit4-review1.md), on `a84d9ff`: fail.
 
 | ID | Severity | Status | Unit | Class | Problem |
 |---|---|---|---|---|---|
-| U4-R1-01 | P2, reproduced | Fixed, not accepted (fix round 1, `5127c4b`) | Campaign unit 4 | F | The public-snapshot tool runs Git with the caller's environment. With `GIT_DIR` set, it changed the source repository's configuration. |
+| U4-R1-01 | P2, reproduced | Open (not fixed: U4-R2-01) | Campaign unit 4 | F | The public-snapshot tool runs Git with the caller's environment. With `GIT_DIR` set, it changed the source repository's configuration. |
 | U4-R1-02 | P2, reproduced | Fixed, not accepted (fix round 1, `1f79efd`) | Campaign unit 4 | Scan that cannot be complete | The snapshot scan reads every file as UTF-8 text. UTF-16, UTF-32 and archive files with private data pass. |
 | U4-R1-03 | P2, reproduced | Fixed, not accepted (fix round 1, `1f79efd`) | Campaign unit 4 | Scan that cannot be complete | The snapshot scan does not read file names. |
-| U4-R1-04 | P2, reproduced | Fixed, not accepted (fix round 1, `1f79efd`) | Campaign unit 4 | Scan that cannot be complete | The e-mail rule exempts whole suffixes (an address that ends in `.rs` passes), and exempts the notices file by its name alone. |
+| U4-R1-04 | P2, reproduced | Open (not fixed: U4-R2-03) | Campaign unit 4 | Scan that cannot be complete | The e-mail rule exempts whole suffixes (an address that ends in `.rs` passes), and exempts the notices file by its name alone. |
 | U4-R1-05 | P2, reproduced | Fixed, not accepted (fix round 1, `1c8a9eb`) | Campaign unit 4 | Weak test | The docs-check test needs two old commits, which a one-commit snapshot does not hold, so the public tree fails its own required test. |
-| U4-R1-06 | P2, reproduced with a synthetic package | Fixed, not accepted (fix round 1, `da3c1a8`) | Campaign unit 4 | Missing artifact | The notices generator reads licence files in a package's root only. A nested notice (the Unicode licence in `regex-syntax`) is missing, and `--check` accepts that. |
-| U4-R1-07 | P3, reproduced | Fixed, not accepted (fix round 1, `b656f37`) | Campaign unit 4 | D | The claims check passes when a named proof script is deleted, when a test declaration is inside a comment, and when a workflow job name is inside plain text. |
+| U4-R1-06 | P2, reproduced with a synthetic package | Open (not fixed: U4-R2-04) | Campaign unit 4 | Missing artifact | The notices generator reads licence files in a package's root only. A nested notice (the Unicode licence in `regex-syntax`) is missing, and `--check` accepts that. |
+| U4-R1-07 | P3, reproduced | Open (not fixed: U4-R2-05) | Campaign unit 4 | D | The claims check passes when a named proof script is deleted, when a test declaration is inside a comment, and when a workflow job name is inside plain text. |
 | U4-R1-08 | P3, inspection | Fixed, not accepted (fix round 1, `b656f37`) | Campaign unit 4 | D | Claims that say too much: file export "never overwrites" (the desktop allows an approved replacement); proof scripts "never write the default journal" (the install test does, on its runner). FIRST_USE.md and THREAT_MODEL.md still say that the vault has no access-control list. |
 | U4-R1-09 | P3, reproduced | Fixed, not accepted (fix round 1, `1f79efd`) | Campaign unit 4 | Correctness | A tracked file that matches an ignore rule is left out of the snapshot commit, and the tool fails and leaves a partial snapshot. |
 | U4-R1-10 | P3, inspection | Fixed, not accepted (fix round 1, `50b03ca`) | Campaign unit 4 | Weak test | The install test logs the hash of the installed program and never compares it with the hashed build. |
 | U4-C-01 | P3, design | Fixed, not accepted (fix round 1, `50b03ca`) | Campaign unit 4 | F | The install folder is the parent of the journal folder, so an uninstaller that removes its folder would remove the journal. The install test checks that the journal survives; no run exists yet. |
 | U4-C-02 | P3, coverage | Gap | Campaign unit 2 | Weak test | The 30-second hide of the export preview has no test of its own, and two statements in the key form and the unlock screen about settings and logs have no test. |
+
+## Tools, CI and release package, review 2 (2026-11-13)
+
+From [unit 4 review 2](reviews/2026-11-13-unit4-review2.md), on `40b651a`: fail, the unit's second failure. The review verified the fixes for U4-R1-02, 03, 05, 08, 09 and 10 and for FR-23, FR-24 and FR-27. Four classes failed a second time, so each gets a new design before a new fix (STATE.md, "Unit 4 after two failed reviews").
+
+| ID | Severity | Status | Unit | Class | Problem |
+|---|---|---|---|---|---|
+| U4-R2-01 | P2, reproduced | Open | Campaign unit 4 | F | The snapshot tool still runs Git on the source repository. On a partial clone, the scan fetched a missing object, wrote pack files into the source, and a configured remote helper ran. |
+| U4-R2-02 | P2, reproduced | Open | Campaign unit 4 | Scan that cannot be complete | The scan splits lines on the line feed only, so an allow marker also covers the text after a lone carriage return or a Unicode line separator. |
+| U4-R2-03 | P2, reproduced | Open | Campaign unit 4 | Scan that cannot be complete | The e-mail rule misses a domain that holds combining marks. |
+| U4-R2-04 | P2, reproduced | Open | Campaign unit 4 | Missing artifact | The notices generator skips `.spdx` files, so the copyright line of `@tauri-apps/plugin-dialog` is missing. The generator's own test shares the exclusion. |
+| U4-R2-05 | P3, reproduced | Open | Campaign unit 4 | D | The claims check accepts a workflow command that is only an `env` value, a frontend test title inside a string, a skipped `describe` group and a Rust test that a `cfg` turns off. |
+| U4-R2-06 | P3, inspection | Open | Campaign unit 4 | D | THREAT_MODEL.md says that AKM does not delete encrypted backups. Since the FR-01 fix it deletes older backups that its list in the vault names. |
 
 ## Frontend, review 1 of the campaign (2026-11-13)
 
