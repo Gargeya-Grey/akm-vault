@@ -1193,6 +1193,16 @@ impl Session {
         result
     }
 
+    /// Check, publish, check. A refusal at the second check takes the published copy back
+    /// (U1-R1-02). That take-back is the one cleanup attempt of the call, so it also settles a
+    /// cleanup that a lock owes.
+    ///
+    /// | Cause (lock, new session, same-session write, view expiry) | Clipboard after | Reply |
+    /// |---|---|---|
+    /// | before the first check | untouched | the refusal |
+    /// | after publication, the copy still AKM's | AKM's copy removed | the refusal |
+    /// | after publication, the user copied again | the user's copy kept | the refusal |
+    /// | after publication, the take-back fails | AKM's copy may remain; one warning says so | the cleanup error kind, both texts |
     fn copy_held(
         &self,
         cell: &mut LeaseCell,
@@ -1219,7 +1229,31 @@ impl Session {
                 return Err(failure.error);
             }
         }
-        check(self)
+        let refusal = match check(self) {
+            Ok(()) => return Ok(()),
+            Err(refusal) => refusal,
+        };
+        if after.is_none() || after == before {
+            return Err(refusal);
+        }
+        self.raw_gate().cleanup_owed = false;
+        let taken = cell.clipboard.clear();
+        let failure = taken
+            .as_ref()
+            .err()
+            .zip(after)
+            .map(|(error, lease_generation)| CleanupFailure {
+                lease_generation,
+                error: CommandError::new(&error.kind, error.message.clone()),
+            });
+        self.account_cleanup(cell, failure);
+        match taken {
+            Ok(()) => Err(refusal),
+            Err(error) => Err(CommandError::new(
+                &error.kind,
+                format!("{} {}", refusal.message, error.message),
+            )),
+        }
     }
 
     pub fn reveal(&self, secret: Stamped<Zeroizing<String>>) -> Result<String, CommandError> {
@@ -3934,6 +3968,136 @@ mod tests {
                 .into_iter()
                 .map(|n| n.message)
                 .collect()
+        }
+
+        /// The fake Win32 backend, with `after` run right after each publication, before the
+        /// copy's final check.
+        struct Between {
+            inner: TransactionBackend,
+            after: Box<dyn FnMut() + Send>,
+        }
+        impl ClipboardBackend for Between {
+            fn set_private(&mut self, text: &str) -> crate::clipboard::Publication {
+                let published = self.inner.set_private(text);
+                (self.after)();
+                published
+            }
+            fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
+                self.inner.clear_matching(sequence, text)
+            }
+        }
+
+        /// U1-R1-02: the state table of `copy_held`, row by row. Each cause comes before the
+        /// first check, or between the publication and the final check. An idle lock stands
+        /// for a lock; a new session fails the same ticket comparison.
+        #[test]
+        fn u1_r1_02_a_copy_refused_after_its_publication_is_taken_back_row_by_row() {
+            #[derive(Clone, Copy, Debug, PartialEq)]
+            enum When {
+                Before,
+                StillOurs,
+                UserCopiedTheSameText,
+                TakeBackFails,
+            }
+            let refusals = [
+                ("lock", CommandError::locked()),
+                ("write", vault_changed()),
+                ("view", view_changed()),
+            ];
+            for (cause, refusal) in refusals {
+                for when in [
+                    When::Before,
+                    When::StillOurs,
+                    When::UserCopiedTheSameText,
+                    When::TakeBackFails,
+                ] {
+                    let row = format!("{cause}, {when:?}");
+                    let f = fixture();
+                    let state = Arc::new(Mutex::new(FakeState::default()));
+                    state.lock().unwrap().user_copy(units(USER));
+                    let clock = f.clock.clone();
+                    let apply = Arc::new(move |session: &Session| match cause {
+                        "lock" => clock.set(crate::policy::IDLE_TIMEOUT.as_secs() + 1),
+                        "write" => session
+                            .access(Access::Write, None, |vault| {
+                                vault.add(akm_core::ApiKeyInput::new(
+                                    "Fake intervening revision",
+                                    "fake-revision-value",
+                                ))?;
+                                Ok(())
+                            })
+                            .map(drop)
+                            .unwrap(),
+                        _ => drop(session.expire_presentation().unwrap()),
+                    });
+                    let (hook_apply, hook_state) = (apply.clone(), state.clone());
+                    let weak = Arc::downgrade(&f.session);
+                    f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(Between {
+                        inner: TransactionBackend(FakeApi(state.clone())),
+                        after: Box::new(move || {
+                            if when == When::Before {
+                                return;
+                            }
+                            hook_apply(&weak.upgrade().unwrap());
+                            let mut s = hook_state.lock().unwrap();
+                            match when {
+                                When::UserCopiedTheSameText => s.user_copy(units(A)),
+                                When::TakeBackFails => {
+                                    let next = s.open_calls + 1;
+                                    s.faults = vec![Fault::Open(next)];
+                                }
+                                _ => {}
+                            }
+                        }),
+                    }));
+                    let snapshot = f.session.snapshot().unwrap();
+                    if when == When::Before {
+                        apply(&f.session);
+                    }
+                    let error = f
+                        .session
+                        .copy_stamped(Stamped {
+                            snapshot,
+                            value: Zeroizing::new(A.into()),
+                        })
+                        .unwrap_err();
+                    let s = state.lock().unwrap();
+                    let (text, sets, faults) = (s.text(), s.set_calls, s.faults.len());
+                    drop(s);
+                    match when {
+                        When::Before => {
+                            assert_eq!(error.kind, refusal.kind, "{row}");
+                            assert_eq!(text, USER, "{row}: untouched");
+                            assert_eq!(sets, 0, "{row}: nothing published");
+                        }
+                        When::StillOurs => {
+                            assert_eq!(error.kind, refusal.kind, "{row}");
+                            assert_eq!(text, "", "{row}: AKM's copy removed");
+                            assert_eq!(generation(&f), None, "{row}: the lease ended");
+                        }
+                        When::UserCopiedTheSameText => {
+                            assert_eq!(error.kind, refusal.kind, "{row}");
+                            assert_eq!(text, A, "{row}: the user's copy kept");
+                            assert_eq!(generation(&f), None, "{row}: the lease ended");
+                        }
+                        When::TakeBackFails => {
+                            assert_eq!(error.kind, "clipboardUncertain", "{row}");
+                            assert_eq!(
+                                error.message,
+                                format!("{} {}", refusal.message, uncertain()),
+                                "{row}"
+                            );
+                            assert_eq!(faults, 0, "{row}: the busy open was reached");
+                            assert_eq!(text, A, "{row}: one attempt only, so the copy remains");
+                            assert!(generation(&f).is_some(), "{row}: the lease is kept");
+                            assert_eq!(application_messages(&f), vec![uncertain()], "{row}");
+                        }
+                    }
+                    if when != When::TakeBackFails {
+                        assert!(application_messages(&f).is_empty(), "{row}");
+                    }
+                }
+            }
         }
 
         #[derive(Clone, Copy, Debug, PartialEq)]
