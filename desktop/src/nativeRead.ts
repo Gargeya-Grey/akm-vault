@@ -59,7 +59,6 @@ export const nativeReads = {
   recycled: readSource(() => reads.recycled()),
   journal: readSource(() => reads.audit(500)),
   backup: readSource(() => reads.backup()),
-  reminders: readSource(() => reads.remindersStatus()),
   history: (id: string) => readSource(() => reads.history(id)),
 };
 

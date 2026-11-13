@@ -3,7 +3,7 @@ import { invoke, rawInvoke } from "./native";
 import { adoptReservation, beginNativeOpen, confirmNativeLock, endNativeOpen, invalidateNativeView, nativeCancellation, nativeOwner, releaseNativeOwner } from "./nativeSession";
 import { sessionGeneration } from "./sessionBoundary";
 import { acknowledgeNotices } from "./operationNotices";
-import type { Dispatched, ImportReport, JournalRecovery, KeyDraft, KeyView, ReminderStatus, RotationReceipt, Sealed, Status } from "./types";
+import type { Dispatched, ImportReport, JournalRecovery, KeyDraft, KeyView, RotationReceipt, Sealed, Status } from "./types";
 
 export { errorKind, errorText } from "./errors";
 
@@ -123,8 +123,4 @@ export const api = {
     const operationId = crypto.randomUUID();
     return invoke<ImportReport | null>("env_import", { sessionId, operationId, text, project, environment }, undefined, operationId);
   },
-
-  // The notification text is built natively from this count. The page cannot send any other text. The session names the vault the count was made in; native refuses it if that session is no longer the current one.
-  remindersSet: (enabled: boolean) => invoke<ReminderStatus>("reminders_set", { enabled }),
-  remindersNotify: (count: number, sessionId: string) => invoke<ReminderStatus>("reminders_notify", { sessionId, count }),
 };

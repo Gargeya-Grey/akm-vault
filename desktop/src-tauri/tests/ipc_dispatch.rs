@@ -32,8 +32,6 @@ mod process;
 #[path = "../src/publication.rs"]
 #[allow(unused_imports)]
 mod publication;
-#[path = "../src/reminders.rs"]
-mod reminders;
 #[path = "../src/review_window.rs"]
 #[allow(unused_imports)]
 mod review_window;
@@ -74,29 +72,6 @@ type Clipboard = Arc<Mutex<clipboard_fake::FakeState>>;
 
 fn clipboard_text(state: &Clipboard) -> String {
     state.lock().unwrap().text()
-}
-
-#[derive(Default)]
-struct Toasts(Mutex<Vec<(String, String)>>);
-impl reminders::Notifier for Toasts {
-    fn permission(&self) -> reminders::Permission {
-        reminders::Permission::Granted
-    }
-    fn show(&self, _held: &Held<'_>, title: &str, body: &str) -> Result<(), String> {
-        self.0.lock().unwrap().push((title.into(), body.into()));
-        Ok(())
-    }
-}
-#[derive(Default)]
-struct Flag(Mutex<bool>);
-impl reminders::ReminderStore for Flag {
-    fn enabled(&self) -> bool {
-        *self.0.lock().unwrap()
-    }
-    fn set_enabled(&self, enabled: bool) -> Result<(), error::CommandError> {
-        *self.0.lock().unwrap() = enabled;
-        Ok(())
-    }
 }
 
 /// The native confirmation, scripted. `arm` makes the next dialog wait until the test answers it.
@@ -412,12 +387,8 @@ fn main() {
     let second_vault = directory.path().join("second.kdbx");
     akm_core::Vault::create(&second_vault, "fake-dispatch-password-123!", None).unwrap();
     let settings_file = directory.path().join("fake-settings").join("settings.json");
-    let toasts = Arc::new(Toasts::default());
     let app = mock_builder()
         .manage(VaultState(session.clone()))
-        .manage(reminders::ReminderState(Arc::new(
-            reminders::Reminders::new(Arc::new(Flag::default()), toasts.clone()),
-        )))
         .manage(settings::PreferenceState(Arc::new(
             settings::FilePreferences::new(
                 Some(settings_file.clone()),
@@ -665,81 +636,6 @@ fn main() {
     assert!(recycled.as_array().unwrap().is_empty());
     println!("PASS: key_rotate, recycled_list, key_restore and key_purge answer the frontend's argument and reply shapes; no reply carries a secret.");
 
-    // The opt-in notification, with the shapes that api.ts sends.
-    let off = serde_json::json!({"enabled": false, "permission": "granted", "delivery": "none", "blocked": false});
-    assert_eq!(
-        call(webview, "reminders_status", serde_json::json!({})).unwrap(),
-        off
-    );
-    let ignored = call(
-        webview,
-        "reminders_notify",
-        serde_json::json!({"count": 3, "sessionId": owner}),
-    )
-    .unwrap();
-    assert_eq!(ignored, off, "a disabled setting shows nothing");
-    assert!(toasts.0.lock().unwrap().is_empty());
-    let on = call(
-        webview,
-        "reminders_set",
-        serde_json::json!({"enabled": true}),
-    )
-    .unwrap();
-    assert_eq!(on["enabled"], true);
-    let sent = call(
-        webview,
-        "reminders_notify",
-        serde_json::json!({"count": 2, "sessionId": owner}),
-    )
-    .unwrap();
-    assert_eq!(sent["delivery"], "sent");
-    assert_eq!(
-        *toasts.0.lock().unwrap(),
-        vec![("AKM".to_string(), "2 API keys need attention".to_string())]
-    );
-    let extra = call(
-        webview,
-        "reminders_notify",
-        serde_json::json!({"count": 2, "sessionId": owner, "title": "Secret title", "body": "Project X"}),
-    )
-    .unwrap();
-    assert_eq!(extra["delivery"], "sent");
-    assert!(
-        toasts
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|(title, body)| title == "AKM" && body == "2 API keys need attention"),
-        "a page cannot pass text into the notification"
-    );
-    assert_eq!(
-        call(
-            webview,
-            "reminders_notify",
-            serde_json::json!({"count": 0, "sessionId": owner})
-        )
-        .unwrap_err()["kind"],
-        "invalid"
-    );
-    let stranger = uuid::Uuid::new_v4().to_string();
-    let shown_so_far = toasts.0.lock().unwrap().len();
-    assert_eq!(
-        call(
-            webview,
-            "reminders_notify",
-            serde_json::json!({"count": 2, "sessionId": stranger})
-        )
-        .unwrap_err()["kind"],
-        "locked",
-        "a request made for another session shows nothing"
-    );
-    assert!(
-        call(webview, "reminders_notify", serde_json::json!({"count": 2})).is_err(),
-        "a request that names no session is refused"
-    );
-    assert_eq!(toasts.0.lock().unwrap().len(), shown_so_far);
-
     // The page reports a hidden document; native expires the presentation as a minimize does.
     let before_hide = session.snapshot().unwrap();
     assert_eq!(
@@ -761,18 +657,6 @@ fn main() {
         serde_json::json!({"sessionId": owner}),
     )
     .unwrap();
-    let shown_before_lock = toasts.0.lock().unwrap().len();
-    assert_eq!(
-        call(
-            webview,
-            "reminders_notify",
-            serde_json::json!({"count": 2, "sessionId": owner})
-        )
-        .unwrap_err()["kind"],
-        "locked"
-    );
-    assert_eq!(toasts.0.lock().unwrap().len(), shown_before_lock);
-    println!("PASS: reminders_status, reminders_set and reminders_notify answer the frontend shapes; a locked session shows nothing.");
     let reserved = call(webview, "vault_prepare_open", serde_json::json!({})).unwrap();
     let reserved = reserved.as_str().unwrap().to_string();
     let status = call(

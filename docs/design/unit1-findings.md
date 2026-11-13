@@ -174,7 +174,7 @@ Each sweep reads every instance in the production code of `desktop/src-tauri/src
 
 ### 10.1 Classes A and P, the gate and each access function
 
-- `Held::new` has one production caller, in `Session::commit_point` (`session.rs:786`). It runs after `bound` checked the binding under the gate (`session.rs:785`). Every act that takes `&Held` runs there: the vault replacement (the core `CommitGate`), the terminal resume (`launch.rs:472`), the rename of the saved path (`commands.rs:207`) and the notification hand-over (`reminders.rs:248`).
+- `Held::new` has one production caller, in `Session::commit_point` (`session.rs:786`). It runs after `bound` checked the binding under the gate (`session.rs:785`). Every act that takes `&Held` runs there: the vault replacement (the core `CommitGate`), the terminal resume (`launch.rs:472`) and the rename of the saved path (`commands.rs:207`).
 - The other 26 functions of `session.rs` that take the gate read or change native state. None of them acts outside AKM, except the lock notice, which the lock itself sends.
 - `Session::access` (`session.rs:1029`) and `Session::access_reviewed` (`session.rs:1053`) both run `access_checked` (`session.rs:1062`). Under the gate it checks that the stored vault belongs to the current session. With an expected snapshot, it also checks the ticket, the revision and, when bound, the presentation (`session.rs:1074` to `1095`). A write replaces the file only through the `VaultCommit` that the access installs.
 - After each native window, the caller checks the session again: the folder window (`launch.rs:427` and `429`), the launch review (`launch.rs:443`, then the reviewed access at `launch.rs:456`), the disclosure review (`disclosure.rs:168` and `178`), the save window (`commands.rs:995`) and the import review (`commands.rs:1223`).
@@ -205,7 +205,7 @@ Each sweep reads every instance in the production code of `desktop/src-tauri/src
 
 - Fixed in stage F: a native step that panicked passed its panic message to the page. On the code before the fix, the page got `task 17 panicked with message "C:\\fake-folder\\fake-secret-value"`. `blocking` (`commands.rs:327`) now maps a failed step to a fixed text, and it is the one place that starts a blocking thread. Test: `a_panic_in_a_native_step_reaches_the_page_as_a_fixed_text`. It also counts the blocking threads in the production code of `commands.rs`.
 - Texts that keep a path, by decision 16: `notFound` (`error.rs:41`), the FR-04 remnant (`private_export.rs:196`) and `journal` (`error.rs:50`).
-- Texts from the operating system: `io` errors carry the message of the system (`error.rs:51`, `private_export.rs:14`, `settings.rs` and `reminders.rs`). The standard library puts no path in it. A `save` error carries the text of the KDBX library about the file structure (`error.rs:46`). A failed folder pick carries the text of the dialog plugin (`launch.rs:180`).
+- Texts from the operating system: `io` errors carry the message of the system (`error.rs:51`, `private_export.rs:14` and `settings.rs`). The standard library puts no path in it. A `save` error carries the text of the KDBX library about the file structure (`error.rs:46`). A failed folder pick carries the text of the dialog plugin (`launch.rs:180`).
 - No error text holds a secret value. The tests of FR-04, T-R1-08, T-R3-02 and class N assert that no fake value is in the reply.
 
 ### 10.6 Mutants

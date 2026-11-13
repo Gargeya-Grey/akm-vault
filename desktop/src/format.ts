@@ -45,7 +45,7 @@ export const EXPIRES_SOON_DAYS = 30;
 export const ROTATE_SOON_DAYS = 14;
 
 /**
- * The one state of a key that the list, the detail, the summary and the notification share.
+ * The one state of a key that the list, the detail and the summary share.
  * The order is the order of precedence: a key that is expired and also overdue is "expired".
  */
 export type KeyStateKind = "expired" | "overdue" | "expiresSoon" | "rotateSoon" | "unknown" | "ok";

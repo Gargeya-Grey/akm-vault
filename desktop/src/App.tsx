@@ -3,7 +3,6 @@ import { listen } from "@tauri-apps/api/event";
 import { api, errorText } from "./api";
 import { reads } from "./native";
 import { Activity } from "./components/Activity";
-import { AttentionNotifier } from "./components/AttentionNotifier";
 import { KeysView } from "./components/KeysView";
 import { NavBar } from "./components/NavBar";
 import { RecycleBin } from "./components/RecycleBin";
@@ -436,8 +435,6 @@ export function App() {
       )}
 
       </div>
-
-      {status?.unlocked && <AttentionNotifier key={status.sessionId ?? "none"} />}
 
       {confirmUpgrade && status?.unlocked && (
         <ConfirmDialog title="Upgrade this vault to KDBX 4.1?" confirmLabel="Upgrade format" busy={upgradeBusy} destructive={false} onConfirm={() => void upgrade()} onCancel={() => setConfirmUpgrade(false)}>

@@ -79,7 +79,6 @@ A proof name stands for a script or a workflow job. The check resolves each name
 |---|---|---|---|
 | The desktop app locks after 10 minutes without activity, and a status poll does not count as activity. | README.md, docs/GETTING_STARTED.md | `status_checks_do_not_extend_the_ten_minute_deadline`, `only_explicit_activity_in_an_active_session_renews_idle` | A real 10-minute wait has not been tested. Until the lock, a person at the computer has the open vault. |
 | The desktop app locks when Windows locks, suspends or signs out. | README.md, docs/GETTING_STARTED.md | `unobservable_or_locked_windows_session_fails_closed`, `delayed_unlock_cannot_reopen_after_any_lock_signal` | The tests use scripted session events. Real OS lock and suspend delivery is not tested (R4-04 is open). The CLI has no timeout. |
-| The Windows notification shows only a count, and only while AKM is open and unlocked. | README.md, docs/FIRST_USE.md | `an_enabled_unlocked_session_shows_one_count_only_notification`, `review1_7_lock_and_a_new_opening_wait_for_a_notification_that_passed_validation`, `the_webview_has_no_notification_permission_and_no_background_entry_exists` | Windows decides whether to show it. Native delivery is not tested. |
 
 ## Activity journal
 

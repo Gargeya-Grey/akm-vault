@@ -50,7 +50,6 @@ function fixture(options: { unlocked?: boolean; discard?: (args: Args) => unknow
     }
     if (command === "keys_list") return [{ project: "demo", environment: "dev" }];
     if (command === "backup_info") return { path: "C:/fake/current.bak", exists: false, bytes: 0, modified: null };
-    if (command === "reminders_status") return { enabled: false, permission: "granted", delivery: "none", blocked: false };
     throw new Error(command);
   });
   return { owner, pending, active: () => current !== null };

@@ -184,4 +184,4 @@ Each proof job starts on a new runner. It first runs `tools/ci_native_preflight.
 
 ## Not tested yet
 
-Real Windows toast delivery of the opt-in notification (unit 4: only a mocked native boundary and fake notifiers ran), real OS lock and suspend delivery, a real 10-minute idle wait, install, upgrade and uninstall (a CI job exists and has not run), publisher signing, updater security, broad dotenv compatibility, a full rescore after phase one, and a professional audit.
+Real OS lock and suspend delivery, a real 10-minute idle wait, install, upgrade and uninstall (a CI job exists and has not run), publisher signing, updater security, broad dotenv compatibility, a full rescore after phase one, and a professional audit.

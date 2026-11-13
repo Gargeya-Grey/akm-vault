@@ -6,7 +6,7 @@ AKM is licensed under the MIT licence ([LICENSE](LICENSE)). It ships the depende
 
 **Limits.** The texts come from the packages as published, as plain text: line endings are LF, trailing spaces are removed, control, format, private-use and unassigned characters other than the tab are removed (for example a form feed between licence sections or a zero-width joiner), every other space is U+0020, and the text is in Unicode normalization form NFC. A copyright line that a package keeps only in its source code, its settings or its data files is not here. No lawyer has reviewed this file, and it is not legal advice.
 
-## Rust crates (305)
+## Rust crates (299)
 
 The crates that the workspace programs (`akm-cli` and `akm-desktop`) reach through normal dependencies on Windows. Build-time and test-only crates are not listed.
 
@@ -160,7 +160,6 @@ The crates that the workspace programs (`akm-cli` and `akm-desktop`) reach throu
 | moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 |
 | muda | 0.20.0 | Apache-2.0 OR MIT |
 | new_debug_unreachable | 1.0.6 | MIT |
-| notify-rust | 4.18.2 | MIT OR Apache-2.0 |
 | num-conv | 0.2.2 | MIT OR Apache-2.0 |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
@@ -184,8 +183,6 @@ The crates that the workspace programs (`akm-cli` and `akm-desktop`) reach throu
 | quick-error | 2.0.1 | MIT/Apache-2.0 |
 | quick-xml | 0.42.0 | MIT |
 | quote | 1.0.47 | MIT OR Apache-2.0 |
-| rand | 0.10.3 | MIT OR Apache-2.0 |
-| rand_core | 0.10.1 | MIT OR Apache-2.0 |
 | raw-window-handle | 0.6.2 | MIT OR Apache-2.0 OR Zlib |
 | ref-cast | 1.0.27 | MIT OR Apache-2.0 |
 | ref-cast-impl | 1.0.27 | MIT OR Apache-2.0 |
@@ -239,11 +236,9 @@ The crates that the workspace programs (`akm-cli` and `akm-desktop`) reach throu
 | tauri-macros | 2.7.4 | Apache-2.0 OR MIT |
 | tauri-plugin-dialog | 2.8.4 | Apache-2.0 OR MIT |
 | tauri-plugin-fs | 2.7.1 | Apache-2.0 OR MIT |
-| tauri-plugin-notification | 2.8.0 | Apache-2.0 OR MIT |
 | tauri-runtime | 2.12.2 | Apache-2.0 OR MIT |
 | tauri-runtime-wry | 2.12.3 | Apache-2.0 OR MIT |
 | tauri-utils | 2.10.2 | Apache-2.0 OR MIT |
-| tauri-winrt-notification | 0.8.1 | MIT OR Apache-2.0 |
 | tendril | 0.5.1 | MIT OR Apache-2.0 |
 | thiserror | 2.0.21 | MIT OR Apache-2.0 |
 | thiserror-impl | 2.0.21 | MIT OR Apache-2.0 |
@@ -259,7 +254,6 @@ The crates that the workspace programs (`akm-cli` and `akm-desktop`) reach throu
 | toml_parser | 1.1.5+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_writer | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
 | tracing | 0.1.44 | MIT |
-| tracing-attributes | 0.1.31 | MIT |
 | tracing-core | 0.1.36 | MIT |
 | tray-icon | 0.25.1 | MIT OR Apache-2.0 |
 | twofish | 0.8.0 | MIT OR Apache-2.0 |
@@ -497,7 +491,6 @@ The authors that each package's manifest declares (Cargo `authors`; package.json
 - muda 0.20.0 (crate): `LICENSE.spdx` PackageCopyrightText: 2020-2022, The Tauri Programme in the Commons Conservancy
 - new_debug_unreachable 1.0.6 (crate): author in the manifest: Matt Brubeck <mbrubeck@limpet.net>
 - new_debug_unreachable 1.0.6 (crate): author in the manifest: Jonathan Reem <jonathan.reem@gmail.com>
-- notify-rust 4.18.2 (crate): author in the manifest: Hendrik Sollich <hendrik@hoodie.de>
 - num-conv 0.2.2 (crate): author in the manifest: Jacob Pratt <jacob@jhpratt.dev>
 - num-traits 0.2.19 (crate): author in the manifest: The Rust Project Developers
 - once_cell 1.21.4 (crate): author in the manifest: Aleksey Kladov <aleksey.kladov@gmail.com>
@@ -520,9 +513,6 @@ The authors that each package's manifest declares (Cargo `authors`; package.json
 - quick-error 2.0.1 (crate): author in the manifest: Paul Colomiets <paul@colomiets.name>
 - quick-error 2.0.1 (crate): author in the manifest: Colin Kiegel <kiegel@gmx.de>
 - quote 1.0.47 (crate): author in the manifest: David Tolnay <dtolnay@gmail.com>
-- rand 0.10.3 (crate): author in the manifest: The Rand Project Developers
-- rand 0.10.3 (crate): author in the manifest: The Rust Project Developers
-- rand_core 0.10.1 (crate): author in the manifest: The Rand Project Developers
 - raw-window-handle 0.6.2 (crate): author in the manifest: Osspial <osspial@gmail.com>
 - ref-cast 1.0.27 (crate): author in the manifest: David Tolnay <dtolnay@gmail.com>
 - ref-cast-impl 1.0.27 (crate): author in the manifest: David Tolnay <dtolnay@gmail.com>
@@ -590,16 +580,9 @@ The authors that each package's manifest declares (Cargo `authors`; package.json
 - tauri-plugin-fs 2.7.1 (crate): author in the manifest: Tauri Programme within The Commons Conservancy
 - tauri-plugin-fs 2.7.1 (crate): `LICENSE.spdx` PackageSupplier: Organization: The Tauri Programme in the Commons Conservancy
 - tauri-plugin-fs 2.7.1 (crate): `LICENSE.spdx` PackageCopyrightText: 2019-2022, The Tauri Programme in the Commons Conservancy
-- tauri-plugin-notification 2.8.0 (crate): author in the manifest: Tauri Programme within The Commons Conservancy
-- tauri-plugin-notification 2.8.0 (crate): `LICENSE.spdx` PackageSupplier: Organization: The Tauri Programme in the Commons Conservancy
-- tauri-plugin-notification 2.8.0 (crate): `LICENSE.spdx` PackageCopyrightText: 2019-2022, The Tauri Programme in the Commons Conservancy
 - tauri-runtime 2.12.2 (crate): author in the manifest: Tauri Programme within The Commons Conservancy
 - tauri-runtime-wry 2.12.3 (crate): author in the manifest: Tauri Programme within The Commons Conservancy
 - tauri-utils 2.10.2 (crate): author in the manifest: Tauri Programme within The Commons Conservancy
-- tauri-winrt-notification 0.8.1 (crate): author in the manifest: allenbenz
-- tauri-winrt-notification 0.8.1 (crate): author in the manifest: Tauri Programme within The Commons Conservancy
-- tauri-winrt-notification 0.8.1 (crate): `LICENSE.spdx` PackageSupplier: Organization: The Tauri Programme in the Commons Conservancy
-- tauri-winrt-notification 0.8.1 (crate): `LICENSE.spdx` PackageCopyrightText: 2022-2022, The Tauri Programme in the Commons Conservancy
 - tendril 0.5.1 (crate): author in the manifest: Keegan McAllister <mcallister.keegan@gmail.com>
 - tendril 0.5.1 (crate): author in the manifest: Simon Sapin <simon.sapin@exyr.org>
 - tendril 0.5.1 (crate): author in the manifest: Chris Morgan <me@chrismorgan.info>
@@ -617,9 +600,6 @@ The authors that each package's manifest declares (Cargo `authors`; package.json
 - tokio 1.54.1 (crate): author in the manifest: Tokio Contributors <team@tokio.rs>
 - tracing 0.1.44 (crate): author in the manifest: Eliza Weisman <eliza@buoyant.io>
 - tracing 0.1.44 (crate): author in the manifest: Tokio Contributors <team@tokio.rs>
-- tracing-attributes 0.1.31 (crate): author in the manifest: Tokio Contributors <team@tokio.rs>
-- tracing-attributes 0.1.31 (crate): author in the manifest: Eliza Weisman <eliza@buoyant.io>
-- tracing-attributes 0.1.31 (crate): author in the manifest: David Barsky <dbarsky@amazon.com>
 - tracing-core 0.1.36 (crate): author in the manifest: Tokio Contributors <team@tokio.rs>
 - tray-icon 0.25.1 (crate): `LICENSE.spdx` PackageSupplier: Organization: The Tauri Programme in the Commons Conservancy
 - tray-icon 0.25.1 (crate): `LICENSE.spdx` PackageCopyrightText: 2020-2022, The Tauri Programme in the Commons Conservancy
@@ -673,7 +653,7 @@ The authors that each package's manifest declares (Cargo `authors`; package.json
 - @tauri-apps/plugin-dialog 2.8.4 (npm): `LICENSE.spdx` PackageSupplier: Organization: The Tauri Programme in the Commons Conservancy
 - @tauri-apps/plugin-dialog 2.8.4 (npm): `LICENSE.spdx` PackageCopyrightText: 2019-2022, The Tauri Programme in the Commons Conservancy
 
-## Licence texts (772 distinct texts)
+## Licence texts (748 distinct texts)
 
 ### Text 1
 
@@ -2304,11 +2284,9 @@ Shipped by:
 - tauri-macros 2.7.4 (crate): `LICENSE-APACHE-2.0`
 - tauri-plugin-dialog 2.8.4 (crate): `LICENSE_APACHE-2.0`
 - tauri-plugin-fs 2.7.1 (crate): `LICENSE_APACHE-2.0`
-- tauri-plugin-notification 2.8.0 (crate): `LICENSE_APACHE-2.0`
 - tauri-runtime 2.12.2 (crate): `LICENSE-APACHE-2.0`
 - tauri-runtime-wry 2.12.3 (crate): `LICENSE-APACHE-2.0`
 - tauri-utils 2.10.2 (crate): `LICENSE-APACHE-2.0`
-- tauri-winrt-notification 0.8.1 (crate): `LICENSE_APACHE-2.0`
 - time 0.3.55 (crate): `LICENSE-Apache`
 - time-core 0.1.9 (crate): `LICENSE-Apache`
 - time-macros 0.2.32 (crate): `LICENSE-Apache`
@@ -2502,11 +2480,9 @@ Shipped by:
 - tauri-macros 2.7.4 (crate): `LICENSE-MIT`
 - tauri-plugin-dialog 2.8.4 (crate): `LICENSE_MIT`
 - tauri-plugin-fs 2.7.1 (crate): `LICENSE_MIT`
-- tauri-plugin-notification 2.8.0 (crate): `LICENSE_MIT`
 - tauri-runtime 2.12.2 (crate): `LICENSE-MIT`
 - tauri-runtime-wry 2.12.3 (crate): `LICENSE-MIT`
 - tauri-utils 2.10.2 (crate): `LICENSE-MIT`
-- tauri-winrt-notification 0.8.1 (crate): `LICENSE_MIT`
 
 ```text
 MIT License
@@ -2629,7 +2605,6 @@ Shipped by:
 - @tauri-apps/plugin-dialog 2.8.4 (npm): `LICENSE.spdx`
 - tauri-plugin-dialog 2.8.4 (crate): `LICENSE.spdx`
 - tauri-plugin-fs 2.7.1 (crate): `LICENSE.spdx`
-- tauri-plugin-notification 2.8.0 (crate): `LICENSE.spdx`
 
 ```text
 SPDXVersion: SPDX-2.1
@@ -5602,7 +5577,6 @@ Shipped by:
 - hex 0.4.3 (crate): `LICENSE-APACHE`
 - is_terminal_polyfill 1.70.2 (crate): `LICENSE-APACHE`
 - json-patch 4.2.0 (crate): `LICENSE-APACHE`
-- notify-rust 4.18.2 (crate): `LICENSE-Apache`
 - once_cell_polyfill 1.70.2 (crate): `LICENSE-APACHE`
 - quick-error 2.0.1 (crate): `LICENSE-APACHE`
 - winapi 0.3.9 (crate): `LICENSE-APACHE`
@@ -59193,1035 +59167,6 @@ MIT
 
 Shipped by:
 
-- notify-rust 4.18.2 (crate): `CHANGELOG.md`
-
-```text
-# Changelog
-
-### [v4.18.2](https://github.com/hoodie/notify-rust/compare/v4.18.1...v4.18.2) (2026-10-07)
-
-#### Fixes
-
-* re-export `NotificationHandle` for `windows`
-([cb0d07e](https://github.com/hoodie/notify-rust/commit/cb0d07ec08377499c44cdbf027250ab7378024a6))
-
-### [v4.18.1](https://github.com/hoodie/notify-rust/compare/v4.18.0...v4.18.1) (2026-09-27)
-
-#### Fixes
-
-* **deps:** update rust crate winrt-notification to 0.8
-([ecf7bfa](https://github.com/hoodie/notify-rust/commit/ecf7bfa346d20be1bd571a76dd90159baa7cb5f6))
-
-## [v4.18.0](https://github.com/hoodie/notify-rust/compare/v4.17.0...v4.18.0) (2026-06-16)
-
-### Features
-
-* add common wait_for_response on all platforms
-([b20c59c](https://github.com/hoodie/notify-rust/commit/b20c59c9dd4db0d83c99dc37ebda1f550334f27b))
-* add wait_for_actions and on_close using mac-notification-sys
-([2627ef7](https://github.com/hoodie/notify-rust/commit/2627ef772b792f9e1660dfc611b4ea026054329c))
-* **macos:** add mac-usernotifications backend
-([602cd5f](https://github.com/hoodie/notify-rust/commit/602cd5f2c22b72c85f3895ad95543b38dc966a0b))
-* add common response types
-([25994d5](https://github.com/hoodie/notify-rust/commit/25994d58e0ea97a34ff31de8fbcee72d927c4290))
-* add Windows notification handles
-([eaaa540](https://github.com/hoodie/notify-rust/commit/eaaa5404da373727c4902d31456dae005afb7348))
-
-## [v4.17.0](https://github.com/hoodie/notify-rust/compare/v4.16.1...v4.17.0) (2026-05-05)
-
-### Features
-
-* return Result from update() instead of panicking on D-Bus errors
-([10d049b](https://github.com/hoodie/notify-rust/commit/10d049b4dfd3ea168379c01055922af815049e59))
-
-### [v4.16.1](https://github.com/hoodie/notify-rust/compare/v4.16.0...v4.16.1) (2026-04-29)
-
-#### Fixes
-
-* return Result from handle_action instead of panicking on D-Bus errors
-([dbd4fd6](https://github.com/hoodie/notify-rust/commit/dbd4fd678e5aa9341f7cbc36c6610544496ef725)),
-closes [#54](https://github.com/hoodie/notify-rust/issues/54)
-
-## [v4.16.0](https://github.com/hoodie/notify-rust/compare/v4.15.0...v4.16.0) (2026-04-19)
-
-### Features
-
-* add `images_no_default_features` crate feature for downstream users wishing
-to manually specify `image` sub-features.
-([6a42dd0](https://github.com/hoodie/notify-rust/commit/6a42dd0b2b335115f7dec5fda45b0cf8f3937cf3))
-
-## [v4.15.0](https://github.com/hoodie/notify-rust/compare/v4.14.0...v4.15.0) (2026-04-14)
-
-### Features
-
-* add non-blocking `wait_for_action_async`
-([9f3613c](https://github.com/hoodie/notify-rust/commit/9f3613c7d1b2bad5b00203fd2d6a18c37f01584a))
-
-## [v4.14.0](https://github.com/hoodie/notify-rust/compare/v4.13.1...v4.14.0) (2026-04-06)
-
-### Features
-
-* add urgency support for Windows
-([bb48726](https://github.com/hoodie/notify-rust/commit/bb48726aff7a4559fac046da908cb01b3466f60f))
-
-### [v4.13.1](https://github.com/hoodie/notify-rust/compare/v4.13.0...v4.13.1) (2026-04-04)
-
-#### Fixes
-
-* update maintenance state and formatting in README
-([efafd19](https://github.com/hoodie/notify-rust/commit/efafd19371f4628a3b5a4232061562c24630b702))
-
-## [v4.13.0](https://github.com/hoodie/notify-rust/compare/v4.12.0...v4.13.0) (2026-04-04)
-
-### Features
-
-* **macos:** forward image_path to content_image in notifications
-([959bcae](https://github.com/hoodie/notify-rust/commit/959bcae8f9a7e08d531322290d1cb252452e3a07))
-* **macos:** add image_path field and method
-([1351bf2](https://github.com/hoodie/notify-rust/commit/1351bf27486a98bbb07236f25c7bbc94b2dbc122))
-
-## [v4.12.0](https://github.com/hoodie/notify-rust/compare/v4.11.7...v4.12.0) (2026-02-01)
-
-### Features
-
-* add `z-with-tokio` feature (#245)
-([895280c](https://github.com/hoodie/notify-rust/commit/895280c0209786f87bb7dbaf751561bed13eb4cd)),
-closes [#245](https://github.com/hoodie/notify-rust/issues/245)
-
-### Fixes
-
-* **zbus:** don't unwrap result of close_fallible
-([d0c0d84](https://github.com/hoodie/notify-rust/commit/d0c0d8448771afca9902bb6ddcc65b823f4cdf0c)),
-closes [#253](https://github.com/hoodie/notify-rust/issues/253)
-
-### [v4.11.7](https://github.com/hoodie/notify-rust/compare/v4.11.6...v4.11.7) (2025-04-08)
-
-#### Fixes
-
-* **deps:** update rust crate winrt-notification to 0.7 (#220)
-([6411aec](https://github.com/hoodie/notify-rust/commit/6411aec798fab664f984ac60bd40ae6b41e19011)),
-closes [#220](https://github.com/hoodie/notify-rust/issues/220)
-
-### [v4.11.6](https://github.com/hoodie/notify-rust/compare/v4.11.5...v4.11.6) (2025-03-28)
-
-#### Fixes
-
-* resolve type inference issue with u32::MAX conversion (#244)
-([0c6c3ff](https://github.com/hoodie/notify-rust/commit/0c6c3ff251dbb32df6d45446940820d2f5d8e375)),
-closes [#244](https://github.com/hoodie/notify-rust/issues/244)
-
-### [v4.11.5](https://github.com/hoodie/notify-rust/compare/v4.11.4...v4.11.5) (2025-02-10)
-
-#### Fixes
-
-* **deps:** broken zbus export
-([354d5a8](https://github.com/hoodie/notify-rust/commit/354d5a8c7072e46aeba41a7e1991e2d780b6ad6a)),
-closes [#236](https://github.com/hoodie/notify-rust/issues/236)
-
-### [v4.11.4](https://github.com/hoodie/notify-rust/compare/v4.11.3...v4.11.4) (2025-01-12)
-
-#### Fixes
-
-* **deps:** update rust crate zbus to v5
-([0834adc](https://github.com/hoodie/notify-rust/commit/0834adc4635c72420ab52cb58ef573004693cab8))
-
-### [v4.11.3](https://github.com/hoodie/notify-rust/compare/v4.11.2...v4.11.3) (2024-09-11)
-
-#### Fixes
-
-* update build badge
-([c0ffeed](https://github.com/hoodie/notify-rust/commit/c0ffeed9455244f616ae738d2ac009e66fc2513a))
-
-### [v4.11.2](https://github.com/hoodie/notify-rust/compare/v4.11.1...v4.11.2) (2024-09-10)
-
-#### Fixes
-
-* **docs:** update links to Hints specification
-([6312e9c](https://github.com/hoodie/notify-rust/commit/6312e9c2273150d8c844c4725bf9ad29b3ac6021))
-* **docs:** link warning
-([6edff02](https://github.com/hoodie/notify-rust/commit/6edff02d5450b9ae13f8271f32685fe9bca64404))
-* more precise dependency on lazy_static
-([c24169e](https://github.com/hoodie/notify-rust/commit/c24169ef76b2b0be6d2acb4e6b4b445161a19d49))
-
-### [v4.11.1](https://github.com/hoodie/notify-rust/compare/v4.11.0...v4.11.1) (2024-08-01)
-
-#### Fixes
-
-* **docs:** make sure crates.io and readme are in sync
-([2bd2a2c](https://github.com/hoodie/notify-rust/commit/2bd2a2ce94aa9941040a939244ac3798f3a0110d))
-* update maintenance badge
-([789fe44](https://github.com/hoodie/notify-rust/commit/789fe44140416837812889c5cdc0b64ac81f26b7))
-
-## [v4.11.0](https://github.com/hoodie/notify-rust/compare/v4.10.0...v4.11.0) (2024-04-05)
-
-### Features
-
-* update to zbus v4
-([9683d01](https://github.com/hoodie/notify-rust/commit/9683d012568e4975f4e99068c7653b844146b536))
-
-### Fixes
-
-* **deps:** update rust crate image to 0.25
-([c453121](https://github.com/hoodie/notify-rust/commit/c4531213af4d7319c5c3b23095d48d75c14f2181))
-* **deps:** update rust crate env_logger to 0.11
-([656a915](https://github.com/hoodie/notify-rust/commit/656a915063484f1f96a5c3c5e0a566cf8dad71a7))
-* **deps:** update rust crate winrt-notification to 0.2
-([730d563](https://github.com/hoodie/notify-rust/commit/730d5632f541ed3f452c62612c7b14992923d978))
-
-## [v4.10.0](https://github.com/hoodie/notify-rust/compare/v4.9.0...v4.10.0) (2023-11-16)
-
-### Features
-
-* add feature `d_vendored` to enable dbus/vendored feature
-([a34239c](https://github.com/hoodie/notify-rust/commit/a34239c99e9caedf8f327226de82ad36dc6b3dcc))
-
-## [v4.9.0](https://github.com/hoodie/notify-rust/compare/v4.8.0...v4.9.0) (2023-08-22)
-
-### Features
-
-* base `Urgency` on `u8` instead of `u64`
-([e9e3c30](https://github.com/hoodie/notify-rust/commit/e9e3c3068478bd2133a202fb4cc7f03af8160836))
-* **xdg:** make dbus bus configurable
-([a514664](https://github.com/hoodie/notify-rust/commit/a514664cbe3277231106775482a87ac792f21635))
-
-### Fixes
-
-* remove redundant action button on macOS
-([c0ffee9](https://github.com/hoodie/notify-rust/commit/c0ffee958afdf312d4c8eee5433345690686efb9))
-* remove server feature
-([f8e89cf](https://github.com/hoodie/notify-rust/commit/f8e89cfd1a392d9b6cff43adcb167e9f64ebbdec))
-* building with both dbus and zbus backend
-([83d4489](https://github.com/hoodie/notify-rust/commit/83d44898a853944b9e62b77655c6384c5e75030c))
-
-## [v4.8.0](https://github.com/hoodie/notify-rust/compare/v4.7.1...v4.8.0) (2023-02-19)
-
-### Features
-
-* add .show_async()
-([ae3db62](https://github.com/hoodie/notify-rust/commit/ae3db621665ce4e2c741e2507f57d805d88c25ba))
-
-### [v4.7.1](https://github.com/hoodie/notify-rust/compare/v4.7.0...v4.7.1) (2023-02-15)
-
-#### Fixes
-
-* remove build issue when building with both z and d
-([6f4238f](https://github.com/hoodie/notify-rust/commit/6f4238fe60c7790dd47ed4f31613eb9a1814b436))
-
-## [v4.7.0](https://github.com/hoodie/notify-rust/compare/v4.6.0...v4.7.0) (2023-01-08)
-
-### Features
-
-* Accept durations as timeout arguments
-([3ab191a](https://github.com/hoodie/notify-rust/commit/3ab191a9b74ad3120211719050f125de2e6f757d))
-* implement FromStr for Timeout
-([b87b859](https://github.com/hoodie/notify-rust/commit/b87b859e6d18481e40d90ae7b4cd1b885589b897))
-
-### Fixes
-
-* **deps:** update rust crate zbus to 3.6
-([89779e8](https://github.com/hoodie/notify-rust/commit/89779e8f43978e3d4f72d9a66107a60bc3443d10))
-
-## [v4.6.0](https://github.com/hoodie/notify-rust/compare/v4.5.10...v4.6.0) (2022-12-04)
-
-### Features
-
-* update zbus dependency to 3.x
-([8425c05](https://github.com/hoodie/notify-rust/commit/8425c05b9ad945745cba9f16e288d6a8fc9887a6))
-
-### [v4.5.10](https://github.com/hoodie/notify-rust/compare/v4.5.9...v4.5.10) (2022-09-25)
-
-#### Fixes
-
-* lower minimum rustc version to 1.59.0 for linux (dbus)
-([c0ffeed](https://github.com/hoodie/notify-rust/commit/c0ffeede93816f601a0a8701fb3510c052ce3a0e))
-
-### [v4.5.9](https://github.com/hoodie/notify-rust/compare/v4.5.8...v4.5.9) (2022-09-21)
-
-#### Fixes
-
-* raise minimum rustc version to 1.60.0 for zbus
-([b3b9aba](https://github.com/hoodie/notify-rust/commit/b3b9aba88fbacfd2c2c406e58cbc020c46895879))
-* update winrt-notification to a maintained fork, closes #148
-([7cc6824](https://github.com/hoodie/notify-rust/commit/7cc682428d2f5f0c2335c8ff141fb71af1e01a26)),
-closes [#148](https://github.com/hoodie/notify-rust/issues/148)
-
-### [v4.5.8](https://github.com/hoodie/notify-rust/compare/v4.5.7...v4.5.8) (2022-03-26)
-
-#### Fixes
-
-* re-exported types from mac-notification-sys
-([80daef6](https://github.com/hoodie/notify-rust/commit/80daef6b0dfda0d61697d118c824930bb00a8a35))
-
-### [v4.5.7](https://github.com/hoodie/notify-rust/compare/v4.5.6...v4.5.7) (2022-03-20)
-
-#### Fixes
-
-* **deps:** update rust crate mac-notification-sys to 0.5.0
-([1f3a9f5](https://github.com/hoodie/notify-rust/commit/1f3a9f5c36c17775885fd6adb80bbf0295219e45))
-
-### [v4.5.6](https://github.com/hoodie/notify-rust/compare/v4.5.5...v4.5.6) (2022-02-04)
-
-#### Fixes
-
-* update crates zbus to v2, zvariant to v3, zvariant_derive to v3
-([14bca58](https://github.com/hoodie/notify-rust/commit/14bca588efbc88d6a1e00b5abcb5be7db44abfcf))
-* **deps:** update rust crate zbus to v2
-([04901a8](https://github.com/hoodie/notify-rust/commit/04901a85fd587ed7482a0bf222d76d7c898369ef))
-* **deps:** update rust crate image to 0.24
-([c7fa276](https://github.com/hoodie/notify-rust/commit/c7fa276cab7ffdd2b6e825334837a3515599a3a9))
-
-### [v4.5.5](https://github.com/hoodie/notify-rust/compare/v4.5.4...v4.5.5) (2021-11-04)
-
-#### Fixes
-
-* **deps:** update rust crate winrt-notification to 0.5
-([6620110](https://github.com/hoodie/notify-rust/commit/6620110a5a8e37b4ac738ccd3df87cda88f57ce8))
-
-### [v4.5.4](https://github.com/hoodie/notify-rust/compare/v4.5.3...v4.5.4) (2021-10-08)
-
-#### Fixes
-
-* update winrt-notification to 0.4
-([c94e111](https://github.com/hoodie/notify-rust/commit/c94e111f320c75015de9d2177d12f4dce218804b))
-
-### [v4.5.3](https://github.com/hoodie/notify-rust/compare/v4.5.2...v4.5.3) (2021-09-16)
-
-#### Fixes
-
-* clear up documentation and flip env switch for dual stack
-([3a3b175](https://github.com/hoodie/notify-rust/commit/3a3b1750ce24d2ba54437cfe65a9c8d7dd251cf2))
-
-### [v4.5.2](https://github.com/hoodie/notify-rust/compare/v4.5.1...v4.5.2) (2021-05-14)
-
-#### Fixes
-
-* clear up documentation of action handling
-([ad35d34](https://github.com/hoodie/notify-rust/commit/ad35d34f93bed6c4f926403d6495972f9dcba273))
-
-### [v4.5.1](https://github.com/hoodie/notify-rust/compare/v4.5.0...v4.5.1) (2021-05-13)
-
-#### Fixes
-
-* export of ActionResponse
-([3bf2f37](https://github.com/hoodie/notify-rust/commit/3bf2f37836902334f556d66c609d5d52d732284a))
-
-## [v4.5.0](https://github.com/hoodie/notify-rust/compare/v4.4.1...v4.5.0) (2021-05-05)
-
-### Features
-
-* **NotificationHandle:** add close reason handling
-([01f9980](https://github.com/hoodie/notify-rust/commit/01f9980e20a687f37391b8c32675436167b4f435)),
-closes [#104](https://github.com/hoodie/notify-rust/issues/104)
-
-### [v4.4.1](https://github.com/hoodie/notify-rust/compare/v4.4.0...v4.4.1) (2021-05-01)
-
-#### Fixes
-
-* notify with __closed when notification is closed in zbus implementation
-([3a9c206](https://github.com/hoodie/notify-rust/commit/3a9c2066929bace67bf88b5882f4296906a7a7dc))
-
-## [v4.4.0](https://github.com/hoodie/notify-rust/compare/v4.3.0...v4.4.0) (2021-04-25)
-
-### Features
-
-* add schedule_raw() for f64 timestamps
-([b8f811b](https://github.com/hoodie/notify-rust/commit/b8f811b030c94224a8b6c17cdd49f09a41a417a4))
-* add schedule method to Notification
-([30f1741](https://github.com/hoodie/notify-rust/commit/30f1741ca8818fd4552de0b53bf7fc19511886bc))
-* create macos schedule_notification method
-([72bda94](https://github.com/hoodie/notify-rust/commit/72bda94d3e0281d8c0dc88343f643099d1963520))
-
-## [v4.3.0](https://github.com/hoodie/notify-rust/compare/v4.2.2...v4.3.0) (2021-02-27)
-
-### Features
-
-* Convert DynamicImage::ImageRgba8
-([87e92b5](https://github.com/hoodie/notify-rust/commit/87e92b5d717edcd75f94f66b0f7aed1f04363459))
-* Implement TryFrom trait for RgbImage and RgbaImage
-([69c2b1e](https://github.com/hoodie/notify-rust/commit/69c2b1e2417399ea08a13463218c1ef34f64ab25))
-* Implement converting image with alpha
-([d25ab47](https://github.com/hoodie/notify-rust/commit/d25ab47b4bdc0d7cab2802787e3f086e32dad29d))
-* make zbus backend the default
-([582b87e](https://github.com/hoodie/notify-rust/commit/582b87ec85647e66058f1857bc0a169411ebeb3b))
-
-### [v4.2.2](https://github.com/hoodie/notify-rust/compare/v4.2.1...v4.2.2) (2021-01-09)
-
-#### Fixes
-
-* remove another stray println
-([bd6ab59](https://github.com/hoodie/notify-rust/commit/bd6ab59d04d23f25da1f333677fc89d90ff2aaf3))
-
-### [v4.2.1](https://github.com/hoodie/notify-rust/compare/v4.2.0...v4.2.1) (2021-01-08)
-
-#### Fixes
-
-* **deps:** update zbus
-([684d031](https://github.com/hoodie/notify-rust/commit/684d03161470ad119095c86999f169a352d2e4d3))
-* **deps:** update rust crate dbus to 0.9
-([96f84f4](https://github.com/hoodie/notify-rust/commit/96f84f4e1c2d025d0d42488f07c178fba012a030))
-
-## [v4.2.0](https://github.com/hoodie/notify-rust/compare/v4.1.1...v4.2.0) (2021-01-08)
-
-### Features
-
-* make custom hints unique
-([f6ec445](https://github.com/hoodie/notify-rust/commit/f6ec4453367db915fb1523c8ea223ed3e9cae800)),
-closes [#88](https://github.com/hoodie/notify-rust/issues/88)
-
-### Fixes
-
-* remove stray dbug!()
-([b67c1d5](https://github.com/hoodie/notify-rust/commit/b67c1d504df2c99f24a8ceef0079b4764ebc52d7))
-
-### [v4.1.1](https://github.com/hoodie/notify-rust/compare/v4.1.0...v4.1.1) (2021-01-07)
-
-#### Fixes
-
-* remove stray println
-([15b3ecd](https://github.com/hoodie/notify-rust/commit/15b3ecd2be6ec09a1a490187a24ed40e03526d77))
-
-## [v4.1.0](https://github.com/hoodie/notify-rust/compare/v4.0.0...v4.1.0) (2021-01-06)
-
-### Features
-
-* add zbus version
-([58d38ba](https://github.com/hoodie/notify-rust/commit/58d38ba98e19b6f382f577416b039bd0dcb4491c))
-
-### Fixes
-
-* **deps:** update rust crate image to 0.23
-([1dd236d](https://github.com/hoodie/notify-rust/commit/1dd236d95b9bd47ea4cbfd75d648ba6e93d8a9a0))
-
-## [v4.0.0](https://github.com/hoodie/notify-rust/compare/v3.6.3...v4.0.0) (2020-06-06)
-
-### ⚠ BREAKING CHANGE
-
-* remove `From<&str>`
-* restructure modules and exports
-
-
-### Features
-
-* **windows:** additions to the API (#69)
-([1d9cb0e](https://github.com/hoodie/notify-rust/commit/1d9cb0eb73fdf7f442757a63f2131cb42c4c150f)),
-closes [#69](https://github.com/hoodie/notify-rust/issues/69)
-* make notification non-exhaustive
-([0304274](https://github.com/hoodie/notify-rust/commit/03042744a05fdab5eff1eee5023c93b2930710d2))
-* make error non-exhaustive
-([26f96e4](https://github.com/hoodie/notify-rust/commit/26f96e4a90916496b26a0c955a878b0fe83b9aab))
-* drop redundant name prefixes
-([faf3123](https://github.com/hoodie/notify-rust/commit/faf3123bb375a58b57930727da9a09df49830c3e))
-* restructure modules and exports
-([45be84c](https://github.com/hoodie/notify-rust/commit/45be84ce976ac3a18d674df7a412ec638861e6b0))
-* .image() no longer silently fails
-([8b215bd](https://github.com/hoodie/notify-rust/commit/8b215bd8dfd31655711c522553bb130552930201))
-
-### Fixes
-
-* reexport NotificationHandle
-([00edbc9](https://github.com/hoodie/notify-rust/commit/00edbc9a2e44db642d02abfcb6931f0e3bb77563))
-
-### [v3.6.3](https://github.com/hoodie/notify-rust/compare/v3.6.2...v3.6.3) (2019-11-02)
-
-#### Fixes
-
-* **deps:** update rust crate lazy_static to 1.4
-([687e34d](https://github.com/hoodie/notify-rust/commit/687e34d7a73db36eb2bdeb20e27c8ed18b08f4c1))
-* build again after merge conflict
-([bcfc8c8](https://github.com/hoodie/notify-rust/commit/bcfc8c8d41d38bcc51a78ca5febcb4f1adb4d810))
-* test-build without `--features image` 🙄
-([3eead0b](https://github.com/hoodie/notify-rust/commit/3eead0b30d189315828a7e4835526e551f0e81a0))
-* test-build with `--features image`
-([60e963d](https://github.com/hoodie/notify-rust/commit/60e963de1ea40e29ab09599d26160b206b8acf31))
-* test-build with `--features image`
-([92217a2](https://github.com/hoodie/notify-rust/commit/92217a2c83b4c083076978061059175ecb9048ee))
-
-### [v3.6.2](https://github.com/hoodie/notify-rust/compare/v3.6.1...v3.6.2) (2019-08-11)
-
-#### Fixes
-
-* test-build without `--features image` 🙄
-([0524a5f](https://github.com/hoodie/notify-rust/commit/0524a5fba819a7470525cfdcbcf4dcb4db4b3623))
-
-### [v3.6.1](https://github.com/hoodie/notify-rust/compare/v3.6.0...v3.6.1) (2019-08-11)
-
-#### Fixes
-
-* test-build with `--features image`
-([8ee6998](https://github.com/hoodie/notify-rust/commit/8ee69984cb5350287581de2b453f225d1fef3de2))
-
-## [v3.6.0](https://github.com/hoodie/notify-rust/compare/v3.5.0...v3.6.0) (2019-05-06)
-
-## [v3.5.0](https://github.com/hoodie/notify-rust/compare/v3.4.3...v3.5.0) (2018-10-21)
-
-### [v3.4.3](https://github.com/hoodie/notify-rust/compare/v3.4.0...v3.4.3) (2018-10-13)
-
-## [v3.4.0](https://github.com/hoodie/notify-rust/compare/v3.2.1...v3.4.0) (2017-05-21)
-
-### [v3.2.1](https://github.com/hoodie/notify-rust/compare/v3.1.1...v3.2.1) (2016-09-07)
-
-### [v3.1.1](https://github.com/hoodie/notify-rust/compare/v3.1.0...v3.1.1) (2016-03-03)
-
-## [v3.1.0](https://github.com/hoodie/notify-rust/compare/v3.0.4...v3.1.0) (2016-03-01)
-
-### [v3.0.4](https://github.com/hoodie/notify-rust/compare/v3.0.3...v3.0.4) (2016-02-15)
-
-### [v3.0.3](https://github.com/hoodie/notify-rust/compare/v3.0.2...v3.0.3) (2016-02-15)
-
-### [v3.0.2](https://github.com/hoodie/notify-rust/compare/v3.0.1...v3.0.2) (2016-02-15)
-
-### [v3.0.1](https://github.com/hoodie/notify-rust/compare/v3.0.0...v3.0.1) (2015-10-23)
-
-## [v3.0.0](https://github.com/hoodie/notify-rust/compare/v2.1.0...v3.0.0) (2015-10-01)
-
-## [v2.1.0](https://github.com/hoodie/notify-rust/compare/v2.0.0...v2.1.0) (2015-09-27)
-
-## [v2.0.0](https://github.com/hoodie/notify-rust/compare/v1.1.0...v2.0.0) (2015-08-04)
-
-## [v1.1.0](https://github.com/hoodie/notify-rust/compare/v1.0.1...v1.1.0) (2015-08-03)
-
-### [v1.0.1](https://github.com/hoodie/notify-rust/compare/v1.0.0...v1.0.1) (2015-07-19)
-
-## [v1.0.0](https://github.com/hoodie/notify-rust/compare/v0.9.0...v1.0.0) (2015-07-13)
-
-## [v0.9.0](https://github.com/hoodie/notify-rust/compare/v0.8.0...v0.9.0) (2015-07-01)
-
-## [v0.8.0](https://github.com/hoodie/notify-rust/compare/v0.0.8...v0.8.0) (2015-06-19)
-
-### [v0.0.8](https://github.com/hoodie/notify-rust/compare/v0.0.7...v0.0.8) (2015-06-19)
-
-### [v0.0.7](https://github.com/hoodie/notify-rust/compare/v0.0.6...v0.0.7) (2015-06-13)
-
-### [v0.0.6](https://github.com/hoodie/notify-rust/compare/v0.0.4...v0.0.6) (2015-06-08)
-
-### [v0.0.4](https://github.com/hoodie/notify-rust/compare/v0.0.3...v0.0.4) (2015-05-30)
-
-### [v0.0.3](https://github.com/hoodie/notify-rust/compare/v0.0.2...v0.0.3) (2015-05-24)
-
-### v0.0.2 (2015-05-22)
-```
-
-### Text 448
-
-Shipped by:
-
-- notify-rust 4.18.2 (crate): `History.md`
-
-```text
-v4.0.0-alpha
-==================
-  * dbus message types are now hidden
-  * rename Notification{Hint, Image, Urgency}
-  * make `hint_from_key_val` a method
-  * reorganize modules
-  * make server an optional feature (was never stable)
-  * remove `handle_actions`
-
-v3.6.0 / 2019-05-16
-==================
-
-  * remove error-chain: use pure std::error implementation
-  * update mac-notification-sys
-
-v3.5.0 / 2018-10-21
-===================
-
-  * update dbus-rs to 0.6
-
-v3.4.3 / 2018-10-13
-===================
-
-  * bump version to 3.4.3
-  * update image and lazy-static
-  * applied some more clippy
-  * Complement requirements documentation and examples
-  * applied some clippy
-  * some manually assisted rustfmt
-  * format examples
-  * cleanups and modernizations
-  * Depedency update
-  * Updated error-chain
-  * including readme in package
-  * update docs link
-  * Create LICENSE-MIT
-  * Create LICENSE-Apache
-  * added requirements to readme
-  * formatting
-  * made NotificationHandle::new() internally public
-  * bumped version to 3.4.1
-  * publicly using NotificationHandle again
-  * Put mac-notificatio-sys errors as foreign links in error.rs
-  * Fix new mac-notification-sys integration
-
-v3.4.0 / 2017-05-21
-===================
-
-  * changed version to 3.4.0
-  * exposing Error again
-  * fixed build issues
-  * feature gate all the things
-  * image!
-  * static spec version and Error
-  * image_data
-  * first working version of image data
-  * badges!
-
-3.3.1 / 2017-05-06
-==================
-
-  * bumped to version 3.3.1
-  * readme update
-  * add sound example
-  * fix target_os
-  * documented platform compatibility
-  * updating history
-  * examples compile on macOS
-  * Fix some style issues given by clippy (#27)
-  * Minimize number of Timeout <-> i32 convertors (only single pair needed) * Make `dbus::FromMessageItem<'a> for Timeout` produce correct enum for Default and Never cases
-  * removed placeholder `Error`
-  * a little more macOS documentation
-  * simplyfied error handling in show (macOS)
-  * fix missing field in server.rs add missing documentation
-  * updating to mac-notification-sys 0.1.1
-  * split notification summary into title and subtitle
-  * fixing mac-notification-sys usage
-  * satisfied lints
-  * more moving things around
-  * documentation, tests and deduplication
-  * testing platform specific documentation
-  * moved xdg specifics into extra module
-  * target specific deps
-  * first minimal notification on macOS
-  * deprecated .actions
-  * added an extra type for timeout
-  * 3... 2... 1... NEW RELEASE! \0/
-
-v3.2.1 / 2016-09-07
-===================
-
-  * 3... 2... 1... NEW RELEASE! \0/
-  * updated to dbus ~0.4 and fixed warnings
-  * ready to release v3.2.0
-  * example to show notification in bg thread, good enough to fix #18
-  * documentation: more examples
-  * added fn auto_icon()
-  * added on_close(F) method to NotificationHandle
-  * `.show(&mut self)` -> `.show(&self)`
-  * chore: applied clippy
-  * added use of id when sending
-  * pubbed NotificaionHint const strings and added hint_from_key_val
-  * removing outdated commandline help from readme
-  * fix clippy version again
-
-v3.1.1 / 2016-03-03
-===================
-
-  * changed version to v3.1.1
-  * exposed dbus Error because its returned in public methods
-
-v3.1.0 / 2016-03-01
-===================
-
-  * changed version to v3.1.0
-  * made clippy happy
-  * removed redundant example
-  * info example print a valid yaml
-  * updated examples
-  * added examples for custom_int and reuse of notifications
-  * added custom int option
-  * updated examples to current api
-
-v3.0.4 / 2016-02-15
-===================
-
-  * updated dbus-rs dependency
-  * use cfg unix instead of linux
-  * updated to dbus ~0.3
-  * minimal preparations for work on macos
-  * reduced the TCB
-  * fuzzier crate versions
-
-v3.0.3 / 2015-11-03
-===================
-
-  * made a clippy a dev dependency only
-
-v3.0.2 / 2015-11-03
-===================
-
-  * removed bin from crate
-  * applied "good practices" checks
-  * readme examples
-  * building against stable
-  * no longer testing with 1.0.0, those times are over
-
-v3.0.1 / 2015-10-23
-===================
-
-  * bin moved in with lib
-  * added examples to README
-  * works with dbus 0.2.0
-  * Add missing docs for ServerInformation
-  * Add missing docs for NotificationUrgency
-  * Add missing docs to Hint
-  * Add missing documentation to NotificationServer
-  * Document NotificationHandle::wait_for_action
-  * why do I always forget the milk? no, the README :D
-
-v3.0.0 / 2015-10-01
-===================
-
-  * changed version to 3.0.0
-  * test example file for Hints
-  * adjusted to new Urgencies
-  * Tidying up
-  * more documentation
-  * added: Urgency::from(&str) for convenience
-  * updated changelog and history
-  * fixed: hint types other than just strings
-  * added convenience from::<str>() for Urgency
-  * renamed urgencies: Low, Normal and Critical (as in both standards)
-  * resolved timeout TODO
-  * fixed doc examples
-  * tests and examples
-  * added internal `stop_server()`
-  * fixed urgency in example
-  * removed redundant Urgency field
-  * serializing and deserializing Notifications
-  * introducing actual error handling, lots of breaking changes
-  * renamed get_information example into info.rs
-  * more idiomatic implementation of Hints
-  * added clippy as dev-dependency
-  * Cli: defaulting to --help if not command is issued
-  * tracking nightly dbus-rs
-  * updated changelog
-
-v2.1.0 / 2015-09-27
-===================
-
-  * fixed: Hint Types are not only strings
-
-v2.0.0 / 2015-08-04
-===================
-
-  * changed version to 2.0.0
-  * fixed example code to match new api
-  * Handle unused_must_use case
-  * Update examples and tests
-  * Remove old API
-  * Impl update, close, etc. for NotificationHandle
-  * Set transient hint in wait_for_closing example
-
-v1.1.0 / 2015-08-03
-===================
-
-  * changed version to 1.1.0
-  * small refactoring
-  * Add NotificationHandle to keep dbus conns alive
-  * added: notify-cli as child project
-  * added: GetCapabilities() and GetServerinformation() to server
-  * added a few possible panic messages
-  * updated readme
-  * using src/server for testing
-
-v1.0.1 / 2015-07-19
-===================
-
-  * fixed: actions and hints were not passed along
-
-v1.0.0 / 2015-07-13
-===================
-
-  * releasing 1.0.0
-  * added hints to `show_debug()`
-  * added urgency to `show_debug()`
-  * how could I have forgotten `urgency`?
-  * building agains dbus 0.1.1
-  * improved documentation
-  * shields
-  * took a note from clippy
-  * travis always test against 1.0.0, stable and nightly
-
-v0.9.0 / 2015-07-01
-===================
-
-  * added: updateing notifications ( see example )
-  * replace `.to_string()` with `.to_owned()`
-  * updated readme
-  * `if let` is nicer than `match`
-
-v0.8.0 / 2015-06-19
-===================
-
-  * corrected versioning scheme
-
-v0.0.8 / 2015-06-19
-===================
-
-  * changed version to v0.0.8
-  * added: extra example for closing signal alone
-  * added `"__closed"` action that is 'invoked' when the Notification closes
-  * added doc about show_and_wait_for_action()
-  * sacrificed storing closure approach for simpler construct
-  * added interface for adding action alongside closure
-  * checking for a certain action invoked
-  * signal listener breaks on `NotificationClosed` too
-  * checking the notificatoin id when waiting for a signal
-  * can listen for ActionInvoked signals
-  * added waiting_for_action_signal stub
-  * removed examples from README, doc should be up to date
-
-v0.0.7 / 2015-06-13
-===================
-
-  * ready for v0.0.7
-  * implemented `GetServerInformation()`
-  * Capitalize all the headlines!
-  * Urgency is now an enum
-  * pack methods return actual empty arrays now (builds with 1.0.0)
-  * moved to dbus-rs 0.1.0
-  * removed ruby script
-  * moved examples into tests
-  * added: close_notification
-  * is this worth commiting?
-  * made exe_name() private
-  * elaborated documentation
-  * displaying generic version in readme
-  * corrected build status image
-  * removed doc submodule
-  * doc up to date
-
-v0.0.6 / 2015-06-08
-===================
-
-  * writing history
-  * added documentation link
-  * changed submodule url
-  * added my own gh-pages branch as submodule as branch as submodule
-  * added note about Notification::hint()
-  * added link to doc to README
-  * added: `Notification.action(identifer, label)` for your convenience
-  * previous commit only compiles on rust-nightly :(
-  * pack methods return actual empty arrays now
-  * pack methods return MessageItem directly
-  * fixed: index out of bounds when no hints here used
-  * added ruby script for testing
-  * integrated hints, removed `NotificationCategory`
-  * added backend to hints()
-  * added: Hints and Categories API frontend
-  * renaming crates is generally a bad idea
-  * removed travis batch
-  * pointed travis batch into right direction
-  * removed left over send()s
-  * changed dependency notice in readme
-  * removed send()
-  * updated readme
-  * renamed into notify-rust
-  * renamed send() into show()
-  * added paragraph example
-  * changed default timeout -1
-  * working on documentation
-  * added my ultimate goal
-  * added some bookmarks for myself to read
-  * wrote a little documentation
-  * moved tests out of ./src
-  * modified server output
-  * added NotificationServer (barely works)
-  * implemented Notification::actions()
-  * implemented GetCapabilities()
-  * send() and send_debug() now returns Notifcation ID
-  * travis: build only
-  * build dependencies for travis
-  * whitespace removal
-  * README.md: add travic-ci batch
-  * Add support for travis-ci
-  * added send_debug to readme
-
-v0.0.4 / 2015-05-30
-===================
-
-  * changed version to v0.0.4
-  * added more examples
-  * added: formatting example
-  * added: loop_test()
-  * added: appname() and send_debug()
-
-v0.0.3 / 2015-05-24
-===================
-
-  * changed API: using builder pattern now
-  * getting ready for 0.0.3
-  * removed duplication
-  * updated example in README
-  * added icon() and timeout() to builder pattern
-  * implemented builder pattern
-  * trying out a hole lot of design patterns
-
-v0.0.2 / 2015-05-22
-===================
-```
-
-### Text 449
-
-Shipped by:
-
-- notify-rust 4.18.2 (crate): `LICENSE-MIT`
-
-```text
-MIT License
-
-Copyright (c) 2017 Hendrik Sollich
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
-### Text 450
-
-Shipped by:
-
-- notify-rust 4.18.2 (crate): `README.md`
-
-````text
-<div align="center">
-
-# notify-rust
-
-[![build](https://img.shields.io/github/actions/workflow/status/hoodie/notify-rust/build-platforms.yml?branch=main)](https://github.com/hoodie/notify-rust/actions?query=workflow%3A"Continuous+Integration")
-[![Crates.io](https://img.shields.io/crates/d/notify-rust)](https://crates.io/crates/notify-rust)
-[![contributors](https://img.shields.io/github/contributors/hoodie/notify-rust)](https://github.com/hoodie/notify-rust/graphs/contributors)
-![maintenance](https://img.shields.io/maintenance/yes/2027)
-
-[![version](https://img.shields.io/crates/v/notify-rust)](https://crates.io/crates/notify-rust/)
-[![documentation](https://img.shields.io/badge/docs-latest-blue.svg)](https://docs.rs/notify-rust/)
-[![license](https://img.shields.io/crates/l/notify-rust.svg?style=flat)](https://crates.io/crates/notify-rust/)
-
-</div>
-
-A not so well-named library for displaying desktop notifications.
-
-```toml
-[dependencies]
-notify-rust = "4"
-```
-
-## Usage & Documentation
-
-Please see the [documentation](https://docs.rs/crate/notify-rust/) for current examples.
-
-### Simple Notification
-
-```rust
-use notify_rust::Notification;
-Notification::new()
-    .summary("Firefox News")
-    .body("This will almost look like a real firefox notification.")
-    .icon("firefox")
-    .show()?;
-```
-
-### Persistent Notification
-
-```rust
-use notify_rust::{Notification, Hint};
-Notification::new()
-    .summary("Category:email")
-    .body("This has nothing to do with emails.\nIt should not go away until you acknowledge it.")
-    .icon("thunderbird")
-    .appname("thunderbird")
-    .hint(Hint::Category("email".to_owned()))
-    .hint(Hint::Resident(true)) // this is not supported by all implementations
-    .timeout(0) // this however is
-    .show()?;
-```
-
-## Linux/BSD support
-
-The main audience of this library are Linux/BSD based desktop environments that follow the XDG specification (see [gnome dev docs](http://web.archive.org/web/20200606201408/https://developer.gnome.org/notification-spec/) or [libnotify docs](https://www.galago-project.org/specs/notification/0.9/index.html)). These include KDE, Gnome, XFCE, LXDC, Mate (and probably also most others that I haven't personally tested).
-
-### Features
-
-#### `images`
-
-Enables sending of images with notifications via the `image_data()` / pixel-buffer API. This is only supported on XDG and requires the [**image** crate](https://lib.rs/image) as well as [**lazy_static**](https://lib.rs/lazy_static) to determine the supported spec-version on startup.
-
-> **Note on `image_path()`:** Passing an image by file path via `image_path()` does **not** require the `images` feature on any platform. On Linux/BSD it maps to the `image-path` XDG hint, on macOS it maps to `content_image` in `mac-notification-sys`, and on Windows it is passed directly to `winrt-notification` — all without any additional dependencies.
-
-#### `d`
-
-Enables the usage of [**dbus-rs**](https://lib.rs/dbus) instead of [**zbus**](https://lib.rs/zbus) (also XDG only).
-This is functionally identical to the default feature set.
-**As long as you still compile with default-features this will only enable dbus-rs usage, but not default to it!** In order to use the dbus-rs implementation set the environment variable **`DBUSRS `** or compile notify-rust with **`--no-default-features`**.
-
-## macOS support
-
-This library shines on linux and bsd, which is its original target platform.
-Lately it gained support for macOS thanks to [mac-notification-sys](https://crates.io/crates/mac-notification-sys).
-However this only includes a small subset of the current functionality, since [`NSNotification`](https://developer.apple.com/reference/foundation/nsnotification)s don't have as many features.
-
-**call for participation:** You are a versed macOS UI developer with mad Objective-C skillz? <abbr title="pull request sil vous plait">PRSV</abbr>.
-
-## Windows support
-
-Similar to macOS we support windows via the help of [winrt-notification](https://crates.io/crates/winrt-notification).
-
-## Commandline tool
-
-Checkout [toastify](https://github.com/hoodie/toastify), it exposes most of the functionality of the lib to the commandline.
-
-## Contributing
-
-Any help in form of descriptive and friendly [issues](https://github.com/hoodie/notify-rust/issues) or comprehensive pull requests are welcome!
-
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in notify-rust by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
-
-### Conventions
-
-The Changelog of this library is generated from its commit log, there any commit message must conform with https://www.conventionalcommits.org/en/v1.0.0/. For simplicity you could make your commits with [convco](https://crates.io/crates/convco).
-
-### Recognition
-
-Thanks goes to these wonderful people:
-
- <a href="https://github.com/hoodie/notify-rust/graphs/contributors">
-   <img src="https://contrib.rocks/image?repo=hoodie/notify-rust" />
- </a>
-
-### License
-
-<sup>
-`notify-rust` is licensed under either of <a href="LICENSE-APACHE">Apache License, Version
-2.0</a> or <a href="LICENSE-MIT">MIT license</a> at your option.
-</sup>
-
-<br>
-
-<sub>
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in this crate by you, as defined in the Apache-2.0 license, shall
-be dual licensed as above, without any additional terms or conditions.
-</sub>
-````
-
-### Text 451
-
-Shipped by:
-
 - num-conv 0.2.2 (crate): `LICENSE-MIT`
 
 ```text
@@ -60246,7 +59191,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 452
+### Text 448
 
 Shipped by:
 
@@ -60261,7 +59206,7 @@ turbofish syntax. The crate is currently in the process of being uplifted into t
 see [rust-lang/rust#154330](https://github.com/rust-lang/rust/issues/154330) for details.
 ```
 
-### Text 453
+### Text 449
 
 Shipped by:
 
@@ -60328,7 +59273,7 @@ for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
 dual licensed as above, without any additional terms or conditions.
 ````
 
-### Text 454
+### Text 450
 
 Shipped by:
 
@@ -60644,7 +59589,7 @@ No prior release notes were kept.  Thanks all the same to the many
 contributors that have made this crate what it is!
 ```
 
-### Text 455
+### Text 451
 
 Shipped by:
 
@@ -60916,7 +59861,7 @@ Shipped by:
 - No changelog until this point :(
 ```
 
-### Text 456
+### Text 452
 
 Shipped by:
 
@@ -60982,7 +59927,7 @@ More patterns and use-cases are in the [docs](https://docs.rs/once_cell/)!
 Parts of `once_cell` API are included into `std` [as of Rust 1.70.0](https://github.com/rust-lang/rust/pull/105587).
 ````
 
-### Text 457
+### Text 453
 
 Shipped by:
 
@@ -61017,7 +59962,7 @@ conditions.
 [Documentation]: https://docs.rs/once_cell_polyfill
 ```
 
-### Text 458
+### Text 454
 
 Shipped by:
 
@@ -61400,7 +60345,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   defined by the Mozilla Public License, v. 2.0.
 ```
 
-### Text 459
+### Text 455
 
 Shipped by:
 
@@ -61476,7 +60421,7 @@ fn example_map_or_else2() {
 ```
 ````
 
-### Text 460
+### Text 456
 
 Shipped by:
 
@@ -61785,7 +60730,7 @@ There are also several major changes:
   support the `unlocked` and `bump` methods, and can't be used with `CondVar`.
 ```
 
-### Text 461
+### Text 457
 
 Shipped by:
 
@@ -61944,7 +60889,7 @@ for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
 additional terms or conditions.
 ````
 
-### Text 462
+### Text 458
 
 Shipped by:
 
@@ -62421,7 +61366,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 ```
 
-### Text 463
+### Text 459
 
 Shipped by:
 
@@ -62453,7 +61398,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 464
+### Text 460
 
 Shipped by:
 
@@ -62620,7 +61565,7 @@ pub fn parse_operator(operator: &str) -> Option<&'static str> {
 ```
 ````
 
-### Text 465
+### Text 461
 
 Shipped by:
 
@@ -62883,7 +61828,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 ```
 
-### Text 466
+### Text 462
 
 Shipped by:
 
@@ -62897,7 +61842,7 @@ This crate is for the `phf` crate, [find it on crates.io][phf] for details.
 [phf]: https://crates.io/crates/phf
 ```
 
-### Text 467
+### Text 463
 
 Shipped by:
 
@@ -63306,7 +62251,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 ```
 
-### Text 468
+### Text 464
 
 Shipped by:
 
@@ -63644,7 +62589,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 ```
 
-### Text 469
+### Text 465
 
 Shipped by:
 
@@ -63658,7 +62603,7 @@ This crate is for the `phf` crate, [find it on crates.io][phf] for details.
 [phf]: https://crates.io/crates/phf
 ```
 
-### Text 470
+### Text 466
 
 Shipped by:
 
@@ -63931,7 +62876,7 @@ Initial release
 [0.1.0]: https://github.com/taiki-e/pin-project-lite/releases/tag/v0.1.0
 ````
 
-### Text 471
+### Text 467
 
 Shipped by:
 
@@ -64069,7 +63014,7 @@ for inclusion in the work by you, as defined in the Apache-2.0 license, shall
 be dual licensed as above, without any additional terms or conditions.
 ````
 
-### Text 472
+### Text 468
 
 Shipped by:
 
@@ -64166,7 +63111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [1.7.2]: https://github.com/ebarnard/rust-plist/compare/v1.7.1...v1.7.2
 ```
 
-### Text 473
+### Text 469
 
 Shipped by:
 
@@ -64194,7 +63139,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 474
+### Text 470
 
 Shipped by:
 
@@ -64210,7 +63155,7 @@ Many features from previous versions are now hidden behind the `enable_unstable_
 [Documentation](https://docs.rs/plist/)
 ```
 
-### Text 475
+### Text 471
 
 Shipped by:
 
@@ -64559,7 +63504,7 @@ Shipped by:
 Begin of changelog
 ```
 
-### Text 476
+### Text 472
 
 Shipped by:
 
@@ -64593,7 +63538,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 477
+### Text 473
 
 Shipped by:
 
@@ -64634,7 +63579,7 @@ for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
 additional terms or conditions.
 ```
 
-### Text 478
+### Text 474
 
 Shipped by:
 
@@ -64649,7 +63594,7 @@ Then you launch it with
     rustup run nightly cargo bench --features=benchmarks
 ```
 
-### Text 479
+### Text 475
 
 Shipped by:
 
@@ -64762,7 +63707,7 @@ because:
   https://github.com/image-rs/image-png/discussions/562#discussioncomment-13303307
 ````
 
-### Text 480
+### Text 476
 
 Shipped by:
 
@@ -64782,7 +63727,7 @@ A crate providing unvalidated string and character types.
 For more information on development, authorship, contributing etc. please visit [`ICU4X home page`](https://github.com/unicode-org/icu4x).
 ```
 
-### Text 481
+### Text 477
 
 Shipped by:
 
@@ -64992,7 +63937,7 @@ Shipped by:
    limitations under the License.
 ```
 
-### Text 482
+### Text 478
 
 Shipped by:
 
@@ -65020,7 +63965,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 483
+### Text 479
 
 Shipped by:
 
@@ -65074,7 +64019,7 @@ time by you, as defined in the Apache-2.0 license, shall be dual licensed as abo
 additional terms or conditions.
 ```
 
-### Text 484
+### Text 480
 
 Shipped by:
 
@@ -65104,7 +64049,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 485
+### Text 481
 
 Shipped by:
 
@@ -65207,7 +64152,7 @@ be dual licensed as above, without any additional terms or conditions.
 </sub>
 ````
 
-### Text 486
+### Text 482
 
 Shipped by:
 
@@ -65221,7 +64166,7 @@ Mostly fast and accurate math.
 Most of the methods have ULP less than 0.5.
 ```
 
-### Text 487
+### Text 483
 
 Shipped by:
 
@@ -65249,7 +64194,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 488
+### Text 484
 
 Shipped by:
 
@@ -65323,7 +64268,7 @@ license, shall be dual licensed as above, without any additional terms or
 conditions.
 ```
 
-### Text 489
+### Text 485
 
 Shipped by:
 
@@ -65355,7 +64300,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### Text 490
+### Text 486
 
 Shipped by:
 
@@ -65551,7 +64496,7 @@ Any PR is welcomed!
 MIT
 ````
 
-### Text 491
+### Text 487
 
 Shipped by:
 
@@ -65673,7 +64618,7 @@ cargo run --example read_utf16      --features encoding
 ```
 ````
 
-### Text 492
+### Text 488
 
 Shipped by:
 
@@ -65715,7 +64660,7 @@ utf16be.xml
 utf16le.xml
 ```
 
-### Text 493
+### Text 489
 
 Shipped by:
 
@@ -65994,2247 +64939,7 @@ be dual licensed as above, without any additional terms or conditions.
 </sub>
 ````
 
-### Text 494
-
-Shipped by:
-
-- rand 0.10.3 (crate): `CHANGELOG.md`
-
-```text
-# Changelog
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-A [separate changelog is kept for rand_core](https://github.com/rust-random/core/blob/master/CHANGELOG.md).
-
-You may also find the [Upgrade Guide](https://rust-random.github.io/book/update.html) useful.
-
-## [0.10.3] — 2026-09-20
-
-### Fixes
-- Fix `WeightedIndex` panic when the sum of float weights is infinite; return `Error::Overflow` instead ([#1808])
-- Fix spurious `Error::NonFinite` from `Uniform::new_inclusive` on large finite float ranges such as `0.0..=f64::MAX` ([#1821])
-- Fix possible panic due to sampling a deserialized `Uniform<char>` ([#1831])
-
-### Changes
-- Report exact remaining lengths from `WeightedIndex::weights()` and reduce overhead when reading weights ([#1838])
-
-[#1808]: https://github.com/rust-random/rand/pull/1808
-[#1821]: https://github.com/rust-random/rand/pull/1821
-[#1831]: https://github.com/rust-random/rand/pull/1831
-[#1838]: https://github.com/rust-random/rand/pull/1838
-
-## [0.10.2] — 2026-07-02
-
-### Fixes
-- Fix possible memory safety violation due to deserialization of `UniformChar` from bad source ([#1790])
-
-### Changes
-- Document required output order of fn `partial_shuffle` and apply `#[must_use]` ([#1769])
-- Avoid usage of `unsafe` in contexts where non-local memory corruption could invalidate contract ([#1791])
-
-[#1769]: https://github.com/rust-random/rand/pull/1769
-[#1790]: https://github.com/rust-random/rand/pull/1790
-[#1791]: https://github.com/rust-random/rand/pull/1791
-
-## [0.10.1] — 2026-02-11
-This release includes a fix for a soundness bug; see [#1763].
-
-### Changes
-- Document panic behavior of `make_rng` and add `#[track_caller]` ([#1761])
-- Deprecate feature `log` ([#1763])
-
-[#1761]: https://github.com/rust-random/rand/pull/1761
-[#1763]: https://github.com/rust-random/rand/pull/1763
-
-## [0.10.0] - 2026-02-08
-
-### Changes
-- The dependency on `rand_chacha` has been replaced with a dependency on `chacha20`. This changes the implementation behind `StdRng`, but the output remains the same. There may be some API breakage when using the ChaCha-types directly as these are now the ones in `chacha20` instead of `rand_chacha` ([#1642]).
-- Rename fns `IndexedRandom::choose_multiple` -> `sample`, `choose_multiple_array` -> `sample_array`, `choose_multiple_weighted` -> `sample_weighted`, struct `SliceChooseIter` -> `IndexedSamples` and fns `IteratorRandom::choose_multiple` -> `sample`, `choose_multiple_fill` -> `sample_fill` ([#1632])
-- Use Edition 2024 and MSRV 1.85 ([#1653])
-- Let `Fill` be implemented for element types, not sliceable types ([#1652])
-- Fix `OsError::raw_os_error` on UEFI targets by returning `Option<usize>` ([#1665])
-- Replace fn `TryRngCore::read_adapter(..) -> RngReadAdapter` with simpler struct `RngReader` ([#1669])
-- Remove fns `SeedableRng::from_os_rng`, `try_from_os_rng` ([#1674])
-- Remove `Clone` support for `StdRng`, `ReseedingRng` ([#1677])
-- Use `postcard` instead of `bincode` to test the serde feature ([#1693])
-- Avoid excessive allocation in `IteratorRandom::sample` when `amount` is much larger than iterator size ([#1695])
-- Rename `os_rng` -> `sys_rng`, `OsRng` -> `SysRng`, `OsError` -> `SysError` ([#1697])
-- Rename `Rng` -> `RngExt` as upstream `rand_core` has renamed `RngCore` -> `Rng` ([#1717])
-
-### Additions
-- Add fns `IndexedRandom::choose_iter`, `choose_weighted_iter` ([#1632])
-- Pub export `Xoshiro128PlusPlus`, `Xoshiro256PlusPlus` prngs ([#1649])
-- Pub export `ChaCha8Rng`, `ChaCha12Rng`, `ChaCha20Rng` behind `chacha` feature ([#1659])
-- Fn `rand::make_rng() -> R where R: SeedableRng` ([#1734])
-
-### Removals
-- Removed `ReseedingRng` ([#1722])
-- Removed unused feature "nightly" ([#1732])
-- Removed feature `small_rng` ([#1732])
-
-[#1632]: https://github.com/rust-random/rand/pull/1632
-[#1642]: https://github.com/rust-random/rand/pull/1642
-[#1649]: https://github.com/rust-random/rand/pull/1649
-[#1652]: https://github.com/rust-random/rand/pull/1652
-[#1653]: https://github.com/rust-random/rand/pull/1653
-[#1659]: https://github.com/rust-random/rand/pull/1659
-[#1665]: https://github.com/rust-random/rand/pull/1665
-[#1669]: https://github.com/rust-random/rand/pull/1669
-[#1674]: https://github.com/rust-random/rand/pull/1674
-[#1677]: https://github.com/rust-random/rand/pull/1677
-[#1693]: https://github.com/rust-random/rand/pull/1693
-[#1695]: https://github.com/rust-random/rand/pull/1695
-[#1697]: https://github.com/rust-random/rand/pull/1697
-[#1717]: https://github.com/rust-random/rand/pull/1717
-[#1722]: https://github.com/rust-random/rand/pull/1722
-[#1732]: https://github.com/rust-random/rand/pull/1732
-[#1734]: https://github.com/rust-random/rand/pull/1734
-
-## [0.9.2] - 2025-07-20
-
-### Deprecated
-- Deprecate `rand::rngs::mock` module and `StepRng` generator ([#1634])
-
-### Additions
-- Enable `WeightedIndex<usize>` (de)serialization ([#1646])
-
-## [0.9.1] - 2025-04-17
-
-### Security and unsafe
-- Revise "not a crypto library" policy again ([#1565])
-- Remove `zerocopy` dependency from `rand` ([#1579])
-
-### Fixes
-- Fix feature `simd_support` for recent nightly rust ([#1586])
-
-### Changes
-- Allow `fn rand::seq::index::sample_weighted` and `fn IndexedRandom::choose_multiple_weighted` to return fewer than `amount` results ([#1623]), reverting an undocumented change ([#1382]) to the previous release.
-
-### Additions
-- Add `rand::distr::Alphabetic` distribution. ([#1587])
-- Re-export `rand_core` ([#1604])
-
-[#1565]: https://github.com/rust-random/rand/pull/1565
-[#1579]: https://github.com/rust-random/rand/pull/1579
-[#1586]: https://github.com/rust-random/rand/pull/1586
-[#1587]: https://github.com/rust-random/rand/pull/1587
-[#1604]: https://github.com/rust-random/rand/pull/1604
-[#1623]: https://github.com/rust-random/rand/pull/1623
-[#1634]: https://github.com/rust-random/rand/pull/1634
-[#1646]: https://github.com/rust-random/rand/pull/1646
-
-## [0.9.0] - 2025-01-27
-
-### Security and unsafe
-- Policy: "rand is not a crypto library" ([#1514])
-- Remove fork-protection from `ReseedingRng` and `ThreadRng`. Instead, it is recommended to call `ThreadRng::reseed` on fork. ([#1379])
-- Use `zerocopy` to replace some `unsafe` code ([#1349], [#1393], [#1446], [#1502])
-
-### Dependencies
-- Bump the MSRV to 1.63.0 ([#1207], [#1246], [#1269], [#1341], [#1416], [#1536]); note that 1.60.0 may work for dependents when using `--ignore-rust-version`
-- Update to `rand_core` v0.9.0 ([#1558])
-
-### Features
-- Support `std` feature without `getrandom` or `rand_chacha` ([#1354])
-- Enable feature `small_rng` by default ([#1455])
-- Remove implicit feature `rand_chacha`; use `std_rng` instead. ([#1473])
-- Rename feature `serde1` to `serde` ([#1477])
-- Rename feature `getrandom` to `os_rng` ([#1537])
-- Add feature `thread_rng` ([#1547])
-
-### API changes: rand_core traits
-- Add fn `RngCore::read_adapter` implementing `std::io::Read` ([#1267])
-- Add trait `CryptoBlockRng: BlockRngCore`; make `trait CryptoRng: RngCore` ([#1273])
-- Add traits `TryRngCore`, `TryCryptoRng` ([#1424], [#1499])
-- Rename `fn SeedableRng::from_rng` -> `try_from_rng` and add infallible variant `fn from_rng` ([#1424])
-- Rename `fn SeedableRng::from_entropy` -> `from_os_rng` and add fallible variant `fn try_from_os_rng` ([#1424])
-- Add bounds `Clone` and `AsRef` to associated type `SeedableRng::Seed` ([#1491])
-
-### API changes: Rng trait and top-level fns
-- Rename fn `rand::thread_rng()` to `rand::rng()` and remove from the prelude ([#1506])
-- Remove fn `rand::random()` from the prelude ([#1506])
-- Add top-level fns `random_iter`, `random_range`, `random_bool`, `random_ratio`, `fill` ([#1488])
-- Re-introduce fn `Rng::gen_iter` as `random_iter` ([#1305], [#1500])
-- Rename fn `Rng::gen` to `random` to avoid conflict with the new `gen` keyword in Rust 2024 ([#1438])
-- Rename fns `Rng::gen_range` to `random_range`, `gen_bool` to `random_bool`, `gen_ratio` to `random_ratio` ([#1505])
-- Annotate panicking methods with `#[track_caller]` ([#1442], [#1447])
-
-### API changes: RNGs
-- Fix `<SmallRng as SeedableRng>::Seed` size to 256 bits ([#1455])
-- Remove first parameter (`rng`) of `ReseedingRng::new` ([#1533])
-
-### API changes: Sequences
-- Split trait `SliceRandom` into `IndexedRandom`, `IndexedMutRandom`, `SliceRandom` ([#1382])
-- Add `IndexedRandom::choose_multiple_array`, `index::sample_array` ([#1453], [#1469])
-
-### API changes: Distributions: renames
-- Rename module `rand::distributions` to `rand::distr` ([#1470])
-- Rename distribution `Standard` to `StandardUniform` ([#1526])
-- Move `distr::Slice` -> `distr::slice::Choose`, `distr::EmptySlice` -> `distr::slice::Empty` ([#1548])
-- Rename trait `distr::DistString` -> `distr::SampleString` ([#1548])
-- Rename `distr::DistIter` -> `distr::Iter`, `distr::DistMap` -> `distr::Map` ([#1548])
-
-### API changes: Distributions
-- Relax `Sized` bound on `Distribution<T> for &D` ([#1278])
-- Remove impl of `Distribution<Option<T>>` for `StandardUniform` ([#1526])
-- Let distribution `StandardUniform` support all `NonZero*` types ([#1332])
-- Fns `{Uniform, UniformSampler}::{new, new_inclusive}` return a `Result` (instead of potentially panicking) ([#1229])
-- Distribution `Uniform` implements `TryFrom` instead of `From` for ranges ([#1229])
-- Add `UniformUsize` ([#1487])
-- Remove support for generating `isize` and `usize` values with `StandardUniform`, `Uniform` (except via `UniformUsize`) and `Fill` and usage as a `WeightedAliasIndex` weight ([#1487])
-- Add impl `DistString` for distributions `Slice<char>` and `Uniform<char>` ([#1315])
-- Add fn `Slice::num_choices` ([#1402])
-- Add fn `p()` for distribution `Bernoulli` to access probability ([#1481])
-
-### API changes: Weighted distributions
-- Add `pub` module `rand::distr::weighted`, moving `WeightedIndex` there ([#1548])
-- Add trait `weighted::Weight`, allowing `WeightedIndex` to trap overflow ([#1353])
-- Add fns `weight, weights, total_weight` to distribution `WeightedIndex` ([#1420])
-- Rename enum `WeightedError` to `weighted::Error`, revising variants ([#1382]) and mark as `#[non_exhaustive]` ([#1480])
-
-### API changes: SIMD
-- Switch to `std::simd`, expand SIMD & docs ([#1239])
-
-### Reproducibility-breaking changes
-- Make `ReseedingRng::reseed` discard remaining data from the last block generated ([#1379])
-- Change fn `SmallRng::seed_from_u64` implementation ([#1203])
-- Allow `UniformFloat::new` samples and `UniformFloat::sample_single` to yield `high` ([#1462])
-- Fix portability of distribution `Slice` ([#1469])
-- Make `Uniform` for `usize` portable via `UniformUsize` ([#1487])
-- Fix `IndexdRandom::choose_multiple_weighted` for very small seeds and optimize for large input length / low memory ([#1530])
-
-### Reproducibility-breaking optimisations
-- Optimize fn `sample_floyd`, affecting output of `rand::seq::index::sample` and `rand::seq::SliceRandom::choose_multiple` ([#1277])
-- New, faster algorithms for `IteratorRandom::choose` and `choose_stable` ([#1268])
-- New, faster algorithms for `SliceRandom::shuffle` and `partial_shuffle` ([#1272])
-- Optimize distribution `Uniform`: use Canon's method (single sampling) / Lemire's method (distribution sampling) for faster sampling (breaks value stability; [#1287])
-- Optimize fn `sample_single_inclusive` for floats (+~20% perf) ([#1289])
-
-### Other optimisations
-- Improve `SmallRng` initialization performance ([#1482])
-- Optimise SIMD widening multiply ([#1247])
-
-### Other
-- Add `Cargo.lock.msrv` file ([#1275])
-- Reformat with `rustfmt` and enforce ([#1448])
-- Apply Clippy suggestions and enforce ([#1448], [#1474])
-- Move all benchmarks to new `benches` crate ([#1329], [#1439]) and migrate to Criterion ([#1490])
-
-### Documentation
-- Improve `ThreadRng` related docs ([#1257])
-- Docs: enable experimental `--generate-link-to-definition` feature ([#1327])
-- Better doc of crate features, use `doc_auto_cfg` ([#1411], [#1450])
-
-[#1203]: https://github.com/rust-random/rand/pull/1203
-[#1207]: https://github.com/rust-random/rand/pull/1207
-[#1229]: https://github.com/rust-random/rand/pull/1229
-[#1239]: https://github.com/rust-random/rand/pull/1239
-[#1246]: https://github.com/rust-random/rand/pull/1246
-[#1247]: https://github.com/rust-random/rand/pull/1247
-[#1257]: https://github.com/rust-random/rand/pull/1257
-[#1267]: https://github.com/rust-random/rand/pull/1267
-[#1268]: https://github.com/rust-random/rand/pull/1268
-[#1269]: https://github.com/rust-random/rand/pull/1269
-[#1272]: https://github.com/rust-random/rand/pull/1272
-[#1273]: https://github.com/rust-random/rand/pull/1273
-[#1275]: https://github.com/rust-random/rand/pull/1275
-[#1277]: https://github.com/rust-random/rand/pull/1277
-[#1278]: https://github.com/rust-random/rand/pull/1278
-[#1287]: https://github.com/rust-random/rand/pull/1287
-[#1289]: https://github.com/rust-random/rand/pull/1289
-[#1305]: https://github.com/rust-random/rand/pull/1305
-[#1315]: https://github.com/rust-random/rand/pull/1315
-[#1327]: https://github.com/rust-random/rand/pull/1327
-[#1329]: https://github.com/rust-random/rand/pull/1329
-[#1332]: https://github.com/rust-random/rand/pull/1332
-[#1341]: https://github.com/rust-random/rand/pull/1341
-[#1349]: https://github.com/rust-random/rand/pull/1349
-[#1353]: https://github.com/rust-random/rand/pull/1353
-[#1354]: https://github.com/rust-random/rand/pull/1354
-[#1379]: https://github.com/rust-random/rand/pull/1379
-[#1382]: https://github.com/rust-random/rand/pull/1382
-[#1393]: https://github.com/rust-random/rand/pull/1393
-[#1402]: https://github.com/rust-random/rand/pull/1402
-[#1411]: https://github.com/rust-random/rand/pull/1411
-[#1416]: https://github.com/rust-random/rand/pull/1416
-[#1420]: https://github.com/rust-random/rand/pull/1420
-[#1424]: https://github.com/rust-random/rand/pull/1424
-[#1438]: https://github.com/rust-random/rand/pull/1438
-[#1439]: https://github.com/rust-random/rand/pull/1439
-[#1442]: https://github.com/rust-random/rand/pull/1442
-[#1446]: https://github.com/rust-random/rand/pull/1446
-[#1447]: https://github.com/rust-random/rand/pull/1447
-[#1448]: https://github.com/rust-random/rand/pull/1448
-[#1450]: https://github.com/rust-random/rand/pull/1450
-[#1453]: https://github.com/rust-random/rand/pull/1453
-[#1455]: https://github.com/rust-random/rand/pull/1455
-[#1462]: https://github.com/rust-random/rand/pull/1462
-[#1469]: https://github.com/rust-random/rand/pull/1469
-[#1470]: https://github.com/rust-random/rand/pull/1470
-[#1473]: https://github.com/rust-random/rand/pull/1473
-[#1474]: https://github.com/rust-random/rand/pull/1474
-[#1477]: https://github.com/rust-random/rand/pull/1477
-[#1480]: https://github.com/rust-random/rand/pull/1480
-[#1481]: https://github.com/rust-random/rand/pull/1481
-[#1482]: https://github.com/rust-random/rand/pull/1482
-[#1487]: https://github.com/rust-random/rand/pull/1487
-[#1488]: https://github.com/rust-random/rand/pull/1488
-[#1490]: https://github.com/rust-random/rand/pull/1490
-[#1491]: https://github.com/rust-random/rand/pull/1491
-[#1499]: https://github.com/rust-random/rand/pull/1499
-[#1500]: https://github.com/rust-random/rand/pull/1500
-[#1502]: https://github.com/rust-random/rand/pull/1502
-[#1505]: https://github.com/rust-random/rand/pull/1505
-[#1506]: https://github.com/rust-random/rand/pull/1506
-[#1514]: https://github.com/rust-random/rand/pull/1514
-[#1526]: https://github.com/rust-random/rand/pull/1526
-[#1530]: https://github.com/rust-random/rand/pull/1530
-[#1533]: https://github.com/rust-random/rand/pull/1533
-[#1536]: https://github.com/rust-random/rand/pull/1536
-[#1537]: https://github.com/rust-random/rand/pull/1537
-[#1547]: https://github.com/rust-random/rand/pull/1547
-[#1548]: https://github.com/rust-random/rand/pull/1548
-[#1558]: https://github.com/rust-random/rand/pull/1558
-
-## [0.8.5] - 2021-08-20
-
-### Fixes
-- Fix build on non-32/64-bit architectures ([#1144])
-- Fix "min_const_gen" feature for `no_std` ([#1173])
-- Check `libc::pthread_atfork` return value with panic on error ([#1178])
-- More robust reseeding in case `ReseedingRng` is used from a fork handler ([#1178])
-- Fix nightly: remove unused `slice_partition_at_index` feature ([#1215])
-- Fix nightly + `simd_support`: update `packed_simd` ([#1216])
-
-### Rngs
-- `StdRng`: Switch from HC128 to ChaCha12 on emscripten ([#1142]).
-  We now use ChaCha12 on all platforms.
-
-### Documentation
-- Added docs about rand's use of const generics ([#1150])
-- Better random chars example ([#1157])
-
-[#1142]: https://github.com/rust-random/rand/pull/1142
-[#1144]: https://github.com/rust-random/rand/pull/1144
-[#1150]: https://github.com/rust-random/rand/pull/1150
-[#1157]: https://github.com/rust-random/rand/pull/1157
-[#1173]: https://github.com/rust-random/rand/pull/1173
-[#1178]: https://github.com/rust-random/rand/pull/1178
-[#1215]: https://github.com/rust-random/rand/pull/1215
-[#1216]: https://github.com/rust-random/rand/pull/1216
-
-## [0.8.4] - 2021-06-15
-
-### Additions
-- Use const-generics to support arrays of all sizes ([#1104])
-- Implement `Clone` and `Copy` for `Alphanumeric` ([#1126])
-- Add `Distribution::map` to derive a distribution using a closure ([#1129])
-- Add `Slice` distribution ([#1107])
-- Add `DistString` trait with impls for `Standard` and `Alphanumeric` ([#1133])
-
-### Other
-- Reorder asserts in `Uniform` float distributions for easier debugging of non-finite arguments ([#1094], [#1108])
-- Add range overflow check in `Uniform` float distributions ([#1108])
-- Deprecate `rngs::adapter::ReadRng` ([#1130])
-
-## [0.8.3] - 2021-01-25
-
-### Fixes
-- Fix `no-std` + `alloc` build by gating `choose_multiple_weighted` on `std` ([#1088])
-
-## [0.8.2] - 2021-01-12
-
-### Fixes
-- Fix panic in `UniformInt::sample_single_inclusive` and `Rng::gen_range` when providing a full integer range (eg `0..=MAX`) ([#1087])
-
-## [0.8.1] - 2020-12-31
-
-### Other
-- Enable all stable features in the playground ([#1081])
-## [0.8.0] - 2020-12-18
-
-### Platform support
-- The minimum supported Rust version is now 1.36 ([#1011])
-- `getrandom` updated to v0.2 ([#1041])
-- Remove `wasm-bindgen` and `stdweb` feature flags. For details of WASM support, see the [getrandom documentation](https://docs.rs/getrandom/latest). ([#948])
-- `ReadRng::next_u32` and `next_u64` now use little-Endian conversion instead of native-Endian, affecting results on Big-Endian platforms ([#1061])
-- The `nightly` feature no longer implies the `simd_support` feature ([#1048])
-- Fix `simd_support` feature to work on current nightlies ([#1056])
-
-### Rngs
-- `ThreadRng` is no longer `Copy` to enable safe usage within thread-local destructors ([#1035])
-- `gen_range(a, b)` was replaced with `gen_range(a..b)`. `gen_range(a..=b)` is also supported. Note that `a` and `b` can no longer be references or SIMD types. ([#744], [#1003])
-- Replace `AsByteSliceMut` with `Fill` and add support for `[bool], [char], [f32], [f64]` ([#940])
-- Restrict `rand::rngs::adapter` to `std` ([#1027]; see also [#928])
-- `StdRng`: add new `std_rng` feature flag (enabled by default, but might need to be used if disabling default crate features) ([#948])
-- `StdRng`: Switch from ChaCha20 to ChaCha12 for better performance ([#1028])
-- `SmallRng`: Replace PCG algorithm with xoshiro{128,256}++ ([#1038])
-
-### Sequences
-- Add `IteratorRandom::choose_stable` as an alternative to `choose` which does not depend on size hints ([#1057])
-- Improve accuracy and performance of `IteratorRandom::choose` ([#1059])
-- Implement `IntoIterator` for `IndexVec`, replacing the `into_iter` method ([#1007])
-- Add value stability tests for `seq` module ([#933])
-
-### Misc
-- Support `PartialEq` and `Eq` for `StdRng`, `SmallRng` and `StepRng` ([#979])
-- Added a `serde1` feature and added Serialize/Deserialize to `UniformInt` and `WeightedIndex` ([#974])
-- Drop some unsafe code ([#962], [#963], [#1011])
-- Reduce packaged crate size ([#983])
-- Migrate to GitHub Actions from Travis+AppVeyor ([#1073])
-
-### Distributions
-- `Alphanumeric` samples bytes instead of chars ([#935])
-- `Uniform` now supports `char`, enabling `rng.gen_range('A'..='Z')` ([#1068])
-- Add `UniformSampler::sample_single_inclusive` ([#1003])
-
-#### Weighted sampling
-- Implement weighted sampling without replacement ([#976], [#1013])
-- `rand::distributions::alias_method::WeightedIndex` was moved to `rand_distr::WeightedAliasIndex`. The simpler alternative `rand::distribution::WeightedIndex` remains. ([#945])
-- Improve treatment of rounding errors in `WeightedIndex::update_weights` ([#956])
-- `WeightedIndex`: return error on NaN instead of panic ([#1005])
-
-### Documentation
-- Document types supported by `random` ([#994])
-- Document notes on password generation ([#995])
-- Note that `SmallRng` may not be the best choice for performance and in some other cases ([#1038])
-- Use `doc(cfg)` to annotate feature-gated items ([#1019])
-- Adjust README ([#1065])
-
-[#744]: https://github.com/rust-random/rand/pull/744
-[#933]: https://github.com/rust-random/rand/pull/933
-[#935]: https://github.com/rust-random/rand/pull/935
-[#940]: https://github.com/rust-random/rand/pull/940
-[#945]: https://github.com/rust-random/rand/pull/945
-[#948]: https://github.com/rust-random/rand/pull/948
-[#956]: https://github.com/rust-random/rand/pull/956
-[#962]: https://github.com/rust-random/rand/pull/962
-[#963]: https://github.com/rust-random/rand/pull/963
-[#974]: https://github.com/rust-random/rand/pull/974
-[#976]: https://github.com/rust-random/rand/pull/976
-[#979]: https://github.com/rust-random/rand/pull/979
-[#983]: https://github.com/rust-random/rand/pull/983
-[#994]: https://github.com/rust-random/rand/pull/994
-[#995]: https://github.com/rust-random/rand/pull/995
-[#1003]: https://github.com/rust-random/rand/pull/1003
-[#1005]: https://github.com/rust-random/rand/pull/1005
-[#1007]: https://github.com/rust-random/rand/pull/1007
-[#1011]: https://github.com/rust-random/rand/pull/1011
-[#1013]: https://github.com/rust-random/rand/pull/1013
-[#1019]: https://github.com/rust-random/rand/pull/1019
-[#1027]: https://github.com/rust-random/rand/pull/1027
-[#1028]: https://github.com/rust-random/rand/pull/1028
-[#1035]: https://github.com/rust-random/rand/pull/1035
-[#1038]: https://github.com/rust-random/rand/pull/1038
-[#1041]: https://github.com/rust-random/rand/pull/1041
-[#1048]: https://github.com/rust-random/rand/pull/1048
-[#1056]: https://github.com/rust-random/rand/pull/1056
-[#1057]: https://github.com/rust-random/rand/pull/1057
-[#1059]: https://github.com/rust-random/rand/pull/1059
-[#1061]: https://github.com/rust-random/rand/pull/1061
-[#1065]: https://github.com/rust-random/rand/pull/1065
-[#1068]: https://github.com/rust-random/rand/pull/1068
-[#1073]: https://github.com/rust-random/rand/pull/1073
-
-## [0.7.3] - 2020-01-10
-
-### Fixes
-- The `Bernoulli` distribution constructors now reports an error on NaN and on `denominator == 0`. ([#925])
-- Use `std::sync::Once` to register fork handler, avoiding possible atomicity violation ([#928])
-- Fix documentation on the precision of generated floating-point values
-
-### Changes
-- Unix: make libc dependency optional; only use fork protection with std feature ([#928])
-
-### Additions
-- Implement `std::error::Error` for `BernoulliError` ([#919])
-
-## [0.7.2] - 2019-09-16
-
-### Fixes
-- Fix dependency on `rand_core` 0.5.1 ([#890])
-
-### Additions
-- Unit tests for value stability of distributions added ([#888])
-
-## [0.7.1] - 2019-09-13
-
-### Yanked
-This release was yanked since it depends on `rand_core::OsRng` added in 0.5.1 but specifies a dependency on version 0.5.0 ([#890]), causing broken builds when updating from `rand 0.7.0` without also updating `rand_core`.
-
-### Fixes
-- Fix `no_std` behaviour, appropriately enable c2-chacha's `std` feature ([#844])
-- `alloc` feature in `no_std` is available since Rust 1.36 ([#856])
-- Fix or squelch issues from Clippy lints ([#840])
-
-### Additions
-- Add a `no_std` target to CI to continuously evaluate `no_std` status ([#844])
-- `WeightedIndex`: allow adjusting a sub-set of weights ([#866])
-
-## [0.7.0] - 2019-06-28
-
-### Fixes
-- Fix incorrect pointer usages revealed by Miri testing ([#780], [#781])
-- Fix (tiny!) bias in `Uniform` for 8- and 16-bit ints ([#809])
-
-### Crate
-- Bumped MSRV (min supported Rust version) to 1.32.0
-- Updated to Rust Edition 2018 ([#823], [#824])
-- Removed dependence on `rand_xorshift`, `rand_isaac`, `rand_jitter` crates ([#759], [#765])
-- Remove dependency on `winapi` ([#724])
-- Removed all `build.rs` files ([#824])
-- Removed code already deprecated in version 0.6 ([#757])
-- Removed the serde1 feature (It's still available for backwards compatibility, but it does not do anything. [#830])
-- Many documentation changes
-
-### rand_core
-- Updated to `rand_core` 0.5.0
-- `Error` type redesigned with new API ([#800])
-- Move `from_entropy` method to `SeedableRng` and remove `FromEntropy` ([#800])
-- `SeedableRng::from_rng` is now expected to be value-stable ([#815])
-
-### Standard RNGs
-- OS interface moved from `rand_os` to new `getrandom` crate ([#765], [getrandom](https://github.com/rust-random/getrandom))
-- Use ChaCha for `StdRng` and `ThreadRng` ([#792])
-- Feature-gate `SmallRng` ([#792])
-- `ThreadRng` now supports `Copy` ([#758])
-- Deprecated `EntropyRng` ([#765])
-- Enable fork protection of `ReseedingRng` without `std` ([#724])
-
-### Distributions
-- Many distributions have been moved to `rand_distr` ([#761])
-- `Bernoulli::new` constructor now returns a `Result` ([#803])
-- `Distribution::sample_iter` adjusted for more flexibility ([#758])
-- Added `distributions::weighted::alias_method::WeightedIndex` for `O(1)` sampling ([#692])
-- Support sampling `NonZeroU*` types with the `Standard` distribution ([#728])
-- Optimised `Binomial` distribution sampling ([#735], [#740], [#752])
-- Optimised SIMD float sampling ([#739])
-
-### Sequences
-- Make results portable across 32- and 64-bit by using `u32` samples for `usize` where possible ([#809])
-
-[#692]: https://github.com/rust-random/rand/pull/692
-[#724]: https://github.com/rust-random/rand/pull/724
-[#728]: https://github.com/rust-random/rand/pull/728
-[#735]: https://github.com/rust-random/rand/pull/735
-[#739]: https://github.com/rust-random/rand/pull/739
-[#740]: https://github.com/rust-random/rand/pull/740
-[#752]: https://github.com/rust-random/rand/pull/752
-[#757]: https://github.com/rust-random/rand/pull/757
-[#758]: https://github.com/rust-random/rand/pull/758
-[#759]: https://github.com/rust-random/rand/pull/759
-[#761]: https://github.com/rust-random/rand/pull/761
-[#765]: https://github.com/rust-random/rand/pull/765
-[#780]: https://github.com/rust-random/rand/pull/780
-[#781]: https://github.com/rust-random/rand/pull/781
-[#792]: https://github.com/rust-random/rand/pull/792
-[#800]: https://github.com/rust-random/rand/pull/800
-[#803]: https://github.com/rust-random/rand/pull/803
-[#809]: https://github.com/rust-random/rand/pull/809
-[#815]: https://github.com/rust-random/rand/pull/815
-[#823]: https://github.com/rust-random/rand/pull/823
-[#824]: https://github.com/rust-random/rand/pull/824
-[#830]: https://github.com/rust-random/rand/pull/830
-[#840]: https://github.com/rust-random/rand/pull/840
-[#844]: https://github.com/rust-random/rand/pull/844
-[#856]: https://github.com/rust-random/rand/pull/856
-[#866]: https://github.com/rust-random/rand/pull/866
-[#888]: https://github.com/rust-random/rand/pull/888
-[#890]: https://github.com/rust-random/rand/pull/890
-[#919]: https://github.com/rust-random/rand/pull/919
-[#925]: https://github.com/rust-random/rand/pull/925
-[#928]: https://github.com/rust-random/rand/pull/928
-
-## [0.6.5] - 2019-01-28
-
-### Crates
-- Update `rand_core` to 0.4 ([#703])
-- Move `JitterRng` to its own crate ([#685])
-- Add a wasm-bindgen test crate ([#696])
-
-### Platforms
-- Fuchsia: Replaced fuchsia-zircon with fuchsia-cprng
-
-### Doc
-- Use RFC 1946 for doc links ([#691])
-- Fix some doc links and notes ([#711])
-
-## [0.6.4] - 2019-01-08
-
-### Fixes
-- Move wasm-bindgen shims to correct crate ([#686])
-- Make `wasm32-unknown-unknown` compile but fail at run-time if missing bindings ([#686])
-
-## [0.6.3] - 2019-01-04
-
-### Fixes
-- Make the `std` feature require the optional `rand_os` dependency ([#675])
-- Re-export the optional WASM dependencies of `rand_os` from `rand` to avoid breakage ([#674])
-
-## [0.6.2] - 2019-01-04
-
-### Additions
-- Add `Default` for `ThreadRng` ([#657])
-- Move `rngs::OsRng` to `rand_os` sub-crate; clean up code; use as dependency ([#643])
-- Add `rand_xoshiro` sub-crate, plus benchmarks ([#642], [#668])
-
-### Fixes
-- Fix bias in `UniformInt::sample_single` ([#662])
-- Use `autocfg` instead of `rustc_version` for rustc version detection ([#664])
-- Disable `i128` and `u128` if the `target_os` is `emscripten` ([#671]: work-around Emscripten limitation)
-- CI fixes ([#660], [#671])
-
-### Optimisations
-- Optimise memory usage of `UnitCircle` and `UnitSphereSurface` distributions (no PR)
-
-## [0.6.1] - 2018-11-22
-- Support sampling `Duration` also for `no_std` (only since Rust 1.25) ([#649])
-- Disable default features of `libc` ([#647])
-
-## [0.6.0] - 2018-11-14
-
-### Project organisation
-- Rand has moved from [rust-lang-nursery](https://github.com/rust-lang-nursery/rand) to [rust-random](https://github.com/rust-random/rand)! ([#578])
-- Created [The Rust Random Book](https://rust-random.github.io/book/) ([source](https://github.com/rust-random/book))
-- Update copyright and licence notices ([#591], [#611])
-- Migrate policy documentation from the wiki ([#544])
-
-### Platforms
-- Add fork protection on Unix ([#466])
-- Added support for wasm-bindgen ([#541], [#559], [#562], [#600])
-- Enable `OsRng` for powerpc64, sparc and sparc64 ([#609])
-- Use `syscall` from `libc` on Linux instead of redefining it ([#629])
-
-### RNGs
-- Switch `SmallRng` to use PCG ([#623])
-- Implement `Pcg32` and `Pcg64Mcg` generators ([#632])
-- Move ISAAC RNGs to a dedicated crate ([#551])
-- Move Xorshift RNG to its own crate ([#557])
-- Move ChaCha and HC128 RNGs to dedicated crates ([#607], [#636])
-- Remove usage of `Rc` from `ThreadRng` ([#615])
-
-### Sampling and distributions
-- Implement `Rng.gen_ratio()` and `Bernoulli::new_ratio()` ([#491])
-- Make `Uniform` strictly respect `f32` / `f64` high/low bounds ([#477])
-- Allow `gen_range` and `Uniform` to work on non-`Copy` types ([#506])
-- `Uniform` supports inclusive ranges: `Uniform::from(a..=b)`. This is automatically enabled for Rust >= 1.27. ([#566])
-- Implement `TrustedLen` and `FusedIterator` for `DistIter` ([#620])
-
-#### New distributions
-- Add the `Dirichlet` distribution ([#485])
-- Added sampling from the unit sphere and circle ([#567])
-- Implement the triangular distribution ([#575])
-- Implement the Weibull distribution ([#576])
-- Implement the Beta distribution ([#574])
-
-#### Optimisations
-- Optimise `Bernoulli::new` ([#500])
-- Optimise `char` sampling ([#519])
-- Optimise sampling of `std::time::Duration` ([#583])
-
-### Sequences
-- Redesign the `seq` module ([#483], [#515])
-- Add `WeightedIndex` and `choose_weighted` ([#518], [#547])
-- Optimised and changed return type of the `sample_indices` function ([#479])
-- Use `Iterator::size_hint()` to speed up `IteratorRandom::choose` ([#593])
-
-### SIMD
-- Support for generating SIMD types ([#523], [#542], [#561], [#630])
-
-### Other
-- Revise CI scripts ([#632], [#635])
-- Remove functionality already deprecated in 0.5 ([#499])
-- Support for `i128` and `u128` is automatically enabled for Rust >= 1.26. This renders the `i128_support` feature obsolete. It still exists for backwards compatibility but does not have any effect. This breaks programs using Rand with `i128_support` on nightlies older than Rust 1.26. ([#571])
-
-[#466]: https://github.com/rust-random/rand/pull/466
-[#477]: https://github.com/rust-random/rand/pull/477
-[#479]: https://github.com/rust-random/rand/pull/479
-[#483]: https://github.com/rust-random/rand/pull/483
-[#485]: https://github.com/rust-random/rand/pull/485
-[#491]: https://github.com/rust-random/rand/pull/491
-[#499]: https://github.com/rust-random/rand/pull/499
-[#500]: https://github.com/rust-random/rand/pull/500
-[#506]: https://github.com/rust-random/rand/pull/506
-[#515]: https://github.com/rust-random/rand/pull/515
-[#518]: https://github.com/rust-random/rand/pull/518
-[#519]: https://github.com/rust-random/rand/pull/519
-[#523]: https://github.com/rust-random/rand/pull/523
-[#541]: https://github.com/rust-random/rand/pull/541
-[#542]: https://github.com/rust-random/rand/pull/542
-[#544]: https://github.com/rust-random/rand/pull/544
-[#547]: https://github.com/rust-random/rand/pull/547
-[#551]: https://github.com/rust-random/rand/pull/551
-[#557]: https://github.com/rust-random/rand/pull/557
-[#559]: https://github.com/rust-random/rand/pull/559
-[#561]: https://github.com/rust-random/rand/pull/561
-[#562]: https://github.com/rust-random/rand/pull/562
-[#566]: https://github.com/rust-random/rand/pull/566
-[#567]: https://github.com/rust-random/rand/pull/567
-[#571]: https://github.com/rust-random/rand/pull/571
-[#574]: https://github.com/rust-random/rand/pull/574
-[#575]: https://github.com/rust-random/rand/pull/575
-[#576]: https://github.com/rust-random/rand/pull/576
-[#578]: https://github.com/rust-random/rand/pull/578
-[#583]: https://github.com/rust-random/rand/pull/583
-[#591]: https://github.com/rust-random/rand/pull/591
-[#593]: https://github.com/rust-random/rand/pull/593
-[#600]: https://github.com/rust-random/rand/pull/600
-[#607]: https://github.com/rust-random/rand/pull/607
-[#609]: https://github.com/rust-random/rand/pull/609
-[#611]: https://github.com/rust-random/rand/pull/611
-[#615]: https://github.com/rust-random/rand/pull/615
-[#620]: https://github.com/rust-random/rand/pull/620
-[#623]: https://github.com/rust-random/rand/pull/623
-[#629]: https://github.com/rust-random/rand/pull/629
-[#630]: https://github.com/rust-random/rand/pull/630
-[#632]: https://github.com/rust-random/rand/pull/632
-[#635]: https://github.com/rust-random/rand/pull/635
-[#636]: https://github.com/rust-random/rand/pull/636
-[#642]: https://github.com/rust-random/rand/pull/642
-[#643]: https://github.com/rust-random/rand/pull/643
-[#647]: https://github.com/rust-random/rand/pull/647
-[#649]: https://github.com/rust-random/rand/pull/649
-[#657]: https://github.com/rust-random/rand/pull/657
-[#660]: https://github.com/rust-random/rand/pull/660
-[#662]: https://github.com/rust-random/rand/pull/662
-[#664]: https://github.com/rust-random/rand/pull/664
-[#668]: https://github.com/rust-random/rand/pull/668
-[#671]: https://github.com/rust-random/rand/pull/671
-[#674]: https://github.com/rust-random/rand/pull/674
-[#675]: https://github.com/rust-random/rand/pull/675
-[#685]: https://github.com/rust-random/rand/pull/685
-[#686]: https://github.com/rust-random/rand/pull/686
-[#691]: https://github.com/rust-random/rand/pull/691
-[#696]: https://github.com/rust-random/rand/pull/696
-[#703]: https://github.com/rust-random/rand/pull/703
-[#711]: https://github.com/rust-random/rand/pull/711
-
-## [0.5.5] - 2018-08-07
-
-### Documentation
-- Fix links in documentation ([#582])
-
-## [0.5.4] - 2018-07-11
-
-### Platform support
-- Make `OsRng` work via WASM/stdweb for WebWorkers
-
-## [0.5.3] - 2018-06-26
-
-### Platform support
-- OpenBSD, Bitrig: fix compilation (broken in 0.5.1) ([#530])
-
-## [0.5.2] - 2018-06-18
-
-### Platform support
-- Hide `OsRng` and `JitterRng` on unsupported platforms ([#512]; fixes [#503])
-
-## [0.5.1] - 2018-06-08
-
-### New distributions
-- Added Cauchy distribution. ([#474], [#486])
-- Added Pareto distribution. ([#495])
-
-### Platform support and `OsRng`
-- Remove blanket Unix implementation. ([#484])
-- Remove Wasm unimplemented stub. ([#484])
-- Dragonfly BSD: read from `/dev/random`. ([#484])
-- Bitrig: use `getentropy` like OpenBSD. ([#484])
-- Solaris: (untested) use `getrandom` if available, otherwise `/dev/random`. ([#484])
-- Emscripten, `stdweb`: split the read up in chunks. ([#484])
-- Emscripten, Haiku: don't do an extra blocking read from `/dev/random`. ([#484])
-- Linux, NetBSD, Solaris: read in blocking mode on first use in `fill_bytes`. ([#484])
-- Fuchsia, CloudABI: fix compilation (broken in Rand 0.5). ([#484])
-
-## [0.5.0] - 2018-05-21
-
-### Crate features and organisation
-- Minimum Rust version update: 1.22.0. ([#239])
-- Create a separate `rand_core` crate. ([#288])
-- Deprecate `rand_derive`. ([#256])
-- Add `prelude` (and module reorganisation). ([#435])
-- Add `log` feature. Logging is now available in `JitterRng`, `OsRng`, `EntropyRng` and `ReseedingRng`. ([#246])
-- Add `serde1` feature for some PRNGs. ([#189])
-- `stdweb` feature for `OsRng` support on WASM via stdweb. ([#272], [#336])
-
-### `Rng` trait
-- Split `Rng` into `RngCore` and `Rng` extension trait. `next_u32`, `next_u64` and `fill_bytes` are now part of `RngCore`. ([#265])
-- Add `Rng::sample`. ([#256])
-- Deprecate `Rng::gen_weighted_bool`. ([#308])
-- Add `Rng::gen_bool`. ([#308])
-- Remove `Rng::next_f32` and `Rng::next_f64`. ([#273])
-- Add optimized `Rng::fill` and `Rng::try_fill` methods. ([#247])
-- Deprecate `Rng::gen_iter`. ([#286])
-- Deprecate `Rng::gen_ascii_chars`. ([#279])
-
-### `rand_core` crate
-- `rand` now depends on new `rand_core` crate ([#288])
-- `RngCore` and `SeedableRng` are now part of `rand_core`. ([#288])
-- Add modules to help implementing RNGs `impl` and `le`. ([#209], [#228])
-- Add `Error` and `ErrorKind`. ([#225])
-- Add `CryptoRng` marker trait. ([#273])
-- Add `BlockRngCore` trait. ([#281])
-- Add `BlockRng` and `BlockRng64` wrappers to help implementations. ([#281], [#325])
-- Revise the `SeedableRng` trait. ([#233])
-- Remove default implementations for `RngCore::next_u64` and `RngCore::fill_bytes`. ([#288])
-- Add `RngCore::try_fill_bytes`. ([#225])
-
-### Other traits and types
-- Add `FromEntropy` trait. ([#233], [#375])
-- Add `SmallRng` wrapper. ([#296])
-- Rewrite `ReseedingRng` to only work with `BlockRngCore` (substantial performance improvement). ([#281])
-- Deprecate `weak_rng`. Use `SmallRng` instead. ([#296])
-- Deprecate `AsciiGenerator`. ([#279])
-
-### Random number generators
-- Switch `StdRng` and `thread_rng` to HC-128. ([#277])
-- `StdRng` must now be created with `from_entropy` instead of `new`
-- Change `thread_rng` reseeding threshold to 32 MiB. ([#277])
-- PRNGs no longer implement `Copy`. ([#209])
-- `Debug` implementations no longer show internals. ([#209])
-- Implement `Clone` for `ReseedingRng`, `JitterRng`, OsRng`. ([#383], [#384])
-- Implement serialization for `XorShiftRng`, `IsaacRng` and `Isaac64Rng` under the `serde1` feature. ([#189])
-- Implement `BlockRngCore` for `ChaChaCore` and `Hc128Core`. ([#281])
-- All PRNGs are now portable across big- and little-endian architectures. ([#209])
-- `Isaac64Rng::next_u32` no longer throws away half the results. ([#209])
-- Add `IsaacRng::new_from_u64` and `Isaac64Rng::new_from_u64`. ([#209])
-- Add the HC-128 CSPRNG `Hc128Rng`. ([#210])
-- Change ChaCha20 to have 64-bit counter and 64-bit stream. ([#349])
-- Changes to `JitterRng` to get its size down from 2112 to 24 bytes. ([#251])
-- Various performance improvements to all PRNGs.
-
-### Platform support and `OsRng`
-- Add support for CloudABI. ([#224])
-- Remove support for NaCl. ([#225])
-- WASM support for `OsRng` via stdweb, behind the `stdweb` feature. ([#272], [#336])
-- Use `getrandom` on more platforms for Linux, and on Android. ([#338])
-- Use the `SecRandomCopyBytes` interface on macOS. ([#322])
-- On systems that do not have a syscall interface, only keep a single file descriptor open for `OsRng`. ([#239])
-- On Unix, first try a single read from `/dev/random`, then `/dev/urandom`. ([#338])
-- Better error handling and reporting in `OsRng` (using new error type). ([#225])
-- `OsRng` now uses non-blocking when available. ([#225])
-- Add `EntropyRng`, which provides `OsRng`, but has `JitterRng` as a fallback. ([#235])
-
-### Distributions
-- New `Distribution` trait. ([#256])
-- Add `Distribution::sample_iter` and `Rng::::sample_iter`. ([#361])
-- Deprecate `Rand`, `Sample` and `IndependentSample` traits. ([#256])
-- Add a `Standard` distribution (replaces most `Rand` implementations). ([#256])
-- Add `Binomial` and `Poisson` distributions. ([#96])
-- Add `Bernoulli` dsitribution. ([#411])
-- Add `Alphanumeric` distribution. ([#279])
-- Remove `Closed01` distribution, add `OpenClosed01`. ([#274], [#420])
-- Rework `Range` type, making it possible to implement it for user types. ([#274])
-- Rename `Range` to `Uniform`. ([#395])
-- Add `Uniform::new_inclusive` for inclusive ranges. ([#274])
-- Use widening multiply method for much faster integer range reduction. ([#274])
-- `Standard` distribution for `char` uses `Uniform` internally. ([#274])
-- `Standard` distribution for `bool` uses sign test. ([#274])
-- Implement `Standard` distribution for `Wrapping<T>`. ([#436])
-- Implement `Uniform` distribution for `Duration`. ([#427])
-
-[#96]: https://github.com/rust-random/rand/pull/96
-[#189]: https://github.com/rust-random/rand/pull/189
-[#209]: https://github.com/rust-random/rand/pull/209
-[#210]: https://github.com/rust-random/rand/pull/210
-[#224]: https://github.com/rust-random/rand/pull/224
-[#225]: https://github.com/rust-random/rand/pull/225
-[#228]: https://github.com/rust-random/rand/pull/228
-[#233]: https://github.com/rust-random/rand/pull/233
-[#235]: https://github.com/rust-random/rand/pull/235
-[#239]: https://github.com/rust-random/rand/pull/239
-[#246]: https://github.com/rust-random/rand/pull/246
-[#247]: https://github.com/rust-random/rand/pull/247
-[#251]: https://github.com/rust-random/rand/pull/251
-[#256]: https://github.com/rust-random/rand/pull/256
-[#265]: https://github.com/rust-random/rand/pull/265
-[#272]: https://github.com/rust-random/rand/pull/272
-[#273]: https://github.com/rust-random/rand/pull/273
-[#274]: https://github.com/rust-random/rand/pull/274
-[#277]: https://github.com/rust-random/rand/pull/277
-[#279]: https://github.com/rust-random/rand/pull/279
-[#281]: https://github.com/rust-random/rand/pull/281
-[#286]: https://github.com/rust-random/rand/pull/286
-[#288]: https://github.com/rust-random/rand/pull/288
-[#296]: https://github.com/rust-random/rand/pull/296
-[#308]: https://github.com/rust-random/rand/pull/308
-[#322]: https://github.com/rust-random/rand/pull/322
-[#325]: https://github.com/rust-random/rand/pull/325
-[#336]: https://github.com/rust-random/rand/pull/336
-[#338]: https://github.com/rust-random/rand/pull/338
-[#349]: https://github.com/rust-random/rand/pull/349
-[#361]: https://github.com/rust-random/rand/pull/361
-[#375]: https://github.com/rust-random/rand/pull/375
-[#383]: https://github.com/rust-random/rand/pull/383
-[#384]: https://github.com/rust-random/rand/pull/384
-[#395]: https://github.com/rust-random/rand/pull/395
-[#411]: https://github.com/rust-random/rand/pull/411
-[#420]: https://github.com/rust-random/rand/pull/420
-[#427]: https://github.com/rust-random/rand/pull/427
-[#435]: https://github.com/rust-random/rand/pull/435
-[#436]: https://github.com/rust-random/rand/pull/436
-[#474]: https://github.com/rust-random/rand/pull/474
-[#484]: https://github.com/rust-random/rand/pull/484
-[#486]: https://github.com/rust-random/rand/pull/486
-[#495]: https://github.com/rust-random/rand/pull/495
-[#503]: https://github.com/rust-random/rand/pull/503
-[#512]: https://github.com/rust-random/rand/pull/512
-[#530]: https://github.com/rust-random/rand/pull/530
-[#582]: https://github.com/rust-random/rand/pull/582
-## [0.4.6] - 2019-01-26
-
-### Platforms
-- Fuchsia: Replaced fuchsia-zircon with fuchsia-cprng
-
-## [0.4.5] - 2019-01-09
-
-### Fixed
-- Remove dependency on default features of `rand_core` ([#689])
-
-## [0.4.4] - 2019-01-08
-
-Version yanked due to semver-breaking change ([#688]).
-
-### Added
-- SGX support
-
-## [0.4.3] - 2018-08-16
-
-### Fixed
-- Use correct syscall number for PowerPC ([#589])
-
-## [0.4.2] - 2018-01-06
-
-### Changed
-- Use `winapi` on Windows
-- Update for Fuchsia OS
-- Remove dev-dependency on `log`
-
-## [0.4.1] - 2017-12-17
-
-### Added
-- `no_std` support
-
-## [0.4.0-pre.0] - 2017-12-11
-
-### Added
-- `JitterRng` added as a high-quality alternative entropy source using the system timer
-- new `seq` module with `sample_iter`, `sample_slice`, etc.
-- WASM support via dummy implementations (fail at run-time)
-- Additional benchmarks, covering generators and new seq code
-
-### Changed
-- `thread_rng` uses `JitterRng` if seeding from system time fails (slower but more secure than previous method)
-
-### Deprecated
-- `sample` function deprecated (replaced by `sample_iter`)
-
-[#589]: https://github.com/rust-random/rand/pull/589
-[#688]: https://github.com/rust-random/rand/pull/688
-[#689]: https://github.com/rust-random/rand/pull/689
-
-## [0.3.22] - 2018-02-05
-Code replaced with a compatibility layer over rand 0.4.
-
-## [0.3.20] - 2018-01-06
-### Changed
-- Remove dev-dependency on `log`
-- Update `fuchsia-zircon` dependency to 0.3.2
-
-
-## [0.3.19] - 2017-12-27
-### Changed
-- Require `log <= 0.3.8` for dev builds
-- Update `fuchsia-zircon` dependency to 0.3
-- Fix broken links in docs (to unblock compiler docs testing CI)
-
-
-## [0.3.18] - 2017-11-06
-### Changed
-- `thread_rng` is seeded from the system time if `OsRng` fails
-- `weak_rng` now uses `thread_rng` internally
-
-
-## [0.3.17] - 2017-10-07
-### Changed
- - Fuchsia: Magenta was renamed Zircon
-
-## [0.3.16] - 2017-07-27
-### Added
-- Implement Debug for mote non-public types
-- implement `Rand` for (i|u)i128
-- Support for Fuchsia
-
-### Changed
-- Add inline attribute to SampleRange::construct_range.
-  This improves the benchmark for sample in 11% and for shuffle in 16%.
-- Use `RtlGenRandom` instead of `CryptGenRandom`
-
-
-## [0.3.15] - 2016-11-26
-### Added
-- Add `Rng` trait method `choose_mut`
-- Redox support
-
-### Changed
-- Use `arc4rand` for `OsRng` on FreeBSD.
-- Use `arc4random(3)` for `OsRng` on OpenBSD.
-
-### Fixed
-- Fix filling buffers 4 GiB or larger with `OsRng::fill_bytes` on Windows
-
-
-## [0.3.14] - 2016-02-13
-### Fixed
-- Inline definitions from winapi/advapi32, which decreases build times
-
-
-## [0.3.13] - 2016-01-09
-### Fixed
-- Compatible with Rust 1.7.0-nightly (needed some extra type annotations)
-
-
-## [0.3.12] - 2015-11-09
-### Changed
-- Replaced the methods in `next_f32` and `next_f64` with the technique described
-  Saito & Matsumoto at MCQMC'08. The new method should exhibit a slightly more
-  uniform distribution.
-- Depend on libc 0.2
-
-### Fixed
-- Fix iterator protocol issue in `rand::sample`
-
-
-## [0.3.11] - 2015-08-31
-### Added
-- Implement `Rand` for arrays with n <= 32
-
-
-## [0.3.10] - 2015-08-17
-### Added
-- Support for NaCl platforms
-
-### Changed
-- Allow `Rng` to be `?Sized`, impl for `&mut R` and `Box<R>` where `R: ?Sized + Rng`
-
-
-## [0.3.9] - 2015-06-18
-### Changed
-- Use `winapi` for Windows API things
-
-### Fixed
-- Fixed test on stable/nightly
-- Fix `getrandom` syscall number for aarch64-unknown-linux-gnu
-
-
-## [0.3.8] - 2015-04-23
-### Changed
-- `log` is a dev dependency
-
-### Fixed
-- Fix race condition of atomics in `is_getrandom_available`
-
-
-## [0.3.7] - 2015-04-03
-### Fixed
-- Derive Copy/Clone changes
-
-
-## [0.3.6] - 2015-04-02
-### Changed
-- Move to stable Rust!
-
-
-## [0.3.5] - 2015-04-01
-### Fixed
-- Compatible with Rust master
-
-
-## [0.3.4] - 2015-03-31
-### Added
-- Implement Clone for `Weighted`
-
-### Fixed
-- Compatible with Rust master
-
-
-## [0.3.3] - 2015-03-26
-### Fixed
-- Fix compile on Windows
-
-
-## [0.3.2] - 2015-03-26
-
-
-## [0.3.1] - 2015-03-26
-### Fixed
-- Fix compile on Windows
-
-
-## [0.3.0] - 2015-03-25
-### Changed
-- Update to use log version 0.3.x
-
-
-## [0.2.1] - 2015-03-22
-### Fixed
-- Compatible with Rust master
-- Fixed iOS compilation
-
-
-## [0.2.0] - 2015-03-06
-### Fixed
-- Compatible with Rust master (move from `old_io` to `std::io`)
-
-
-## [0.1.4] - 2015-03-04
-### Fixed
-- Compatible with Rust master (use wrapping ops)
-
-
-## [0.1.3] - 2015-02-20
-### Fixed
-- Compatible with Rust master
-
-### Removed
-- Removed Copy implementations from RNGs
-
-
-## [0.1.2] - 2015-02-03
-### Added
-- Imported functionality from `std::rand`, including:
-  - `StdRng`, `SeedableRng`, `TreadRng`, `weak_rng()`
-  - `ReaderRng`: A wrapper around any Reader to treat it as an RNG.
-- Imported documentation from `std::rand`
-- Imported tests from `std::rand`
-
-
-## 0.1.1 - 2015-02-03
-### Added
-- Migrate to a cargo-compatible directory structure.
-
-### Fixed
-- Do not use entropy during `gen_weighted_bool(1)`
-
-
-## Rust 0.12.0 - 2014-10-09
-### Added
-- Impl Rand for tuples of arity 11 and 12
-- Include ChaCha pseudorandom generator
-- Add `next_f64` and `next_f32` to Rng
-- Implement Clone for PRNGs
-
-### Changed
-- Rename `TaskRng` to `ThreadRng` and `task_rng` to `thread_rng` (since a
-  runtime is removed from Rust).
-
-### Fixed
-- Improved performance of ISAAC and ISAAC64 by 30% and 12 % respectively, by
-  informing the optimiser that indexing is never out-of-bounds.
-
-### Removed
-- Removed the Deprecated `choose_option`
-
-
-## Rust 0.11.0 - 2014-07-02
-### Added
-- document when to use `OSRng` in cryptographic context, and explain why we use `/dev/urandom` instead of `/dev/random`
-- `Rng::gen_iter()` which will return an infinite stream of random values
-- `Rng::gen_ascii_chars()` which will return an infinite stream of random ascii characters
-
-### Changed
-- Now only depends on libcore!
-- Remove `Rng.choose()`, rename `Rng.choose_option()` to `.choose()`
-- Rename OSRng to OsRng
-- The WeightedChoice structure is no longer built with a `Vec<Weighted<T>>`,
-  but rather a `&mut [Weighted<T>]`. This means that the WeightedChoice
-  structure now has a lifetime associated with it.
-- The `sample` method on `Rng` has been moved to a top-level function in the
-  `rand` module due to its dependence on `Vec`.
-
-### Removed
-- `Rng::gen_vec()` was removed. Previous behavior can be regained with
-  `rng.gen_iter().take(n).collect()`
-- `Rng::gen_ascii_str()` was removed. Previous behavior can be regained with
-  `rng.gen_ascii_chars().take(n).collect()`
-- {IsaacRng, Isaac64Rng, XorShiftRng}::new() have all been removed. These all
-  relied on being able to use an OSRng for seeding, but this is no longer
-  available in librand (where these types are defined). To retain the same
-  functionality, these types now implement the `Rand` trait so they can be
-  generated with a random seed from another random number generator. This allows
-  the stdlib to use an OSRng to create seeded instances of these RNGs.
-- Rand implementations for `Box<T>` and `@T` were removed. These seemed to be
-  pretty rare in the codebase, and it allows for librand to not depend on
-  liballoc.  Additionally, other pointer types like Rc<T> and Arc<T> were not
-  supported.
-- Remove a slew of old deprecated functions
-
-
-## [Rust 0.10] - 2014-04-03
-### Changed
-- replace `Rng.shuffle's` functionality with `.shuffle_mut`
-- bubble up IO errors when creating an OSRng
-
-### Fixed
-- Use `fill()` instead of `read()`
-- Rewrite OsRng in Rust for windows
-
-## 0.10-pre - 2014-03-02
-### Added
-- Separate `rand` out of the standard library
-
-[Unreleased]: https://github.com/rust-random/rand/compare/0.10.1...HEAD
-[0.10.1]: https://github.com/rust-random/rand/compare/0.10.0...0.10.1
-[0.10.0]: https://github.com/rust-random/rand/compare/0.9.2...0.10.0
-[0.9.2]: https://github.com/rust-random/rand/compare/0.9.1...0.9.2
-[0.9.1]: https://github.com/rust-random/rand/compare/0.9.0...0.9.1
-[0.9.0]: https://github.com/rust-random/rand/compare/0.8.5...0.9.0
-[0.8.5]: https://github.com/rust-random/rand/compare/0.8.4...0.8.5
-[0.8.4]: https://github.com/rust-random/rand/compare/0.8.3...0.8.4
-[0.8.3]: https://github.com/rust-random/rand/compare/0.8.2...0.8.3
-[0.8.2]: https://github.com/rust-random/rand/compare/0.8.1...0.8.2
-[0.8.1]: https://github.com/rust-random/rand/compare/0.8.0...0.8.1
-[0.8.0]: https://github.com/rust-random/rand/compare/0.7.3...0.8.0
-[0.7.3]: https://github.com/rust-random/rand/compare/0.7.2...0.7.3
-[0.7.2]: https://github.com/rust-random/rand/compare/0.7.1...0.7.2
-[0.7.1]: https://github.com/rust-random/rand/compare/0.7.0...0.7.1
-[0.7.0]: https://github.com/rust-random/rand/compare/0.6.5...0.7.0
-[0.6.5]: https://github.com/rust-random/rand/compare/0.6.4...0.6.5
-[0.6.4]: https://github.com/rust-random/rand/compare/0.6.3...0.6.4
-[0.6.3]: https://github.com/rust-random/rand/compare/0.6.2...0.6.3
-[0.6.2]: https://github.com/rust-random/rand/compare/0.6.1...0.6.2
-[0.6.1]: https://github.com/rust-random/rand/compare/0.6.0...0.6.1
-[0.6.0]: https://github.com/rust-random/rand/compare/0.5.5...0.6.0
-[0.5.5]: https://github.com/rust-random/rand/compare/0.5.4...0.5.5
-[0.5.4]: https://github.com/rust-random/rand/compare/0.5.3...0.5.4
-[0.5.3]: https://github.com/rust-random/rand/compare/0.5.2...0.5.3
-[0.5.2]: https://github.com/rust-random/rand/compare/0.5.1...0.5.2
-[0.5.1]: https://github.com/rust-random/rand/compare/0.5.0...0.5.1
-[0.5.0]: https://github.com/rust-random/rand/compare/0.4.6...0.5.0
-[0.4.6]: https://github.com/rust-random/rand/compare/0.4.5...0.4.6
-[0.4.5]: https://github.com/rust-random/rand/compare/0.4.4...0.4.5
-[0.4.4]: https://github.com/rust-random/rand/compare/0.4.3...0.4.4
-[0.4.3]: https://github.com/rust-random/rand/compare/0.4.2...0.4.3
-[0.4.2]: https://github.com/rust-random/rand/compare/0.4.1...0.4.2
-[0.4.1]: https://github.com/rust-random/rand/compare/0.4.0-pre.0...0.4.1
-[0.4.0-pre.0]: https://github.com/rust-random/rand/compare/0.3.22...0.4.0-pre.0
-[0.3.22]: https://github.com/rust-random/rand/compare/0.3.20...0.3.22
-[0.3.20]: https://github.com/rust-random/rand/compare/0.3.19...0.3.20
-[0.3.19]: https://github.com/rust-random/rand/compare/0.3.18...0.3.19
-[0.3.18]: https://github.com/rust-random/rand/compare/0.3.17...0.3.18
-[0.3.17]: https://github.com/rust-random/rand/compare/0.3.16...0.3.17
-[0.3.16]: https://github.com/rust-random/rand/compare/0.3.15...0.3.16
-[0.3.15]: https://github.com/rust-random/rand/compare/0.3.14...0.3.15
-[0.3.14]: https://github.com/rust-random/rand/compare/0.3.13...0.3.14
-[0.3.13]: https://github.com/rust-random/rand/compare/0.3.12...0.3.13
-[0.3.12]: https://github.com/rust-random/rand/compare/0.3.11...0.3.12
-[0.3.11]: https://github.com/rust-random/rand/compare/0.3.10...0.3.11
-[0.3.10]: https://github.com/rust-random/rand/compare/0.3.9...0.3.10
-[0.3.9]: https://github.com/rust-random/rand/compare/0.3.8...0.3.9
-[0.3.8]: https://github.com/rust-random/rand/compare/0.3.7...0.3.8
-[0.3.7]: https://github.com/rust-random/rand/compare/0.3.6...0.3.7
-[0.3.6]: https://github.com/rust-random/rand/compare/0.3.5...0.3.6
-[0.3.5]: https://github.com/rust-random/rand/compare/0.3.4...0.3.5
-[0.3.4]: https://github.com/rust-random/rand/compare/0.3.3...0.3.4
-[0.3.3]: https://github.com/rust-random/rand/compare/0.3.2...0.3.3
-[0.3.2]: https://github.com/rust-random/rand/compare/0.3.1...0.3.2
-[0.3.1]: https://github.com/rust-random/rand/compare/0.3.0...0.3.1
-[0.3.0]: https://github.com/rust-random/rand/compare/0.2.1...0.3.0
-[0.2.1]: https://github.com/rust-random/rand/compare/0.2.0...0.2.1
-[0.2.0]: https://github.com/rust-random/rand/compare/0.1.4...0.2.0
-[0.1.3]: https://github.com/rust-random/rand/compare/0.1.3...0.1.4
-[0.1.3]: https://github.com/rust-random/rand/compare/0.1.2...0.1.3
-[0.1.2]: https://github.com/rust-random/rand/compare/0.1.1...0.1.2
-```
-
-### Text 495
-
-Shipped by:
-
-- rand 0.10.3 (crate): `COPYRIGHT`
-
-```text
-Copyrights in the Rand project are retained by their contributors. No
-copyright assignment is required to contribute to the Rand project.
-
-For full authorship information, see the version control history.
-
-Except as otherwise noted (below and/or in individual files), Rand is
-licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
-<http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-<LICENSE-MIT> or <http://opensource.org/licenses/MIT>, at your option.
-
-The Rand project includes code from the Rust project
-published under these same licenses.
-```
-
-### Text 496
-
-Shipped by:
-
-- rand 0.10.3 (crate): `LICENSE-APACHE`
-
-```text
-                              Apache License
-                        Version 2.0, January 2004
-                     https://www.apache.org/licenses/
-
-TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
-
-1. Definitions.
-
-   "License" shall mean the terms and conditions for use, reproduction,
-   and distribution as defined by Sections 1 through 9 of this document.
-
-   "Licensor" shall mean the copyright owner or entity authorized by
-   the copyright owner that is granting the License.
-
-   "Legal Entity" shall mean the union of the acting entity and all
-   other entities that control, are controlled by, or are under common
-   control with that entity. For the purposes of this definition,
-   "control" means (i) the power, direct or indirect, to cause the
-   direction or management of such entity, whether by contract or
-   otherwise, or (ii) ownership of fifty percent (50%) or more of the
-   outstanding shares, or (iii) beneficial ownership of such entity.
-
-   "You" (or "Your") shall mean an individual or Legal Entity
-   exercising permissions granted by this License.
-
-   "Source" form shall mean the preferred form for making modifications,
-   including but not limited to software source code, documentation
-   source, and configuration files.
-
-   "Object" form shall mean any form resulting from mechanical
-   transformation or translation of a Source form, including but
-   not limited to compiled object code, generated documentation,
-   and conversions to other media types.
-
-   "Work" shall mean the work of authorship, whether in Source or
-   Object form, made available under the License, as indicated by a
-   copyright notice that is included in or attached to the work
-   (an example is provided in the Appendix below).
-
-   "Derivative Works" shall mean any work, whether in Source or Object
-   form, that is based on (or derived from) the Work and for which the
-   editorial revisions, annotations, elaborations, or other modifications
-   represent, as a whole, an original work of authorship. For the purposes
-   of this License, Derivative Works shall not include works that remain
-   separable from, or merely link (or bind by name) to the interfaces of,
-   the Work and Derivative Works thereof.
-
-   "Contribution" shall mean any work of authorship, including
-   the original version of the Work and any modifications or additions
-   to that Work or Derivative Works thereof, that is intentionally
-   submitted to Licensor for inclusion in the Work by the copyright owner
-   or by an individual or Legal Entity authorized to submit on behalf of
-   the copyright owner. For the purposes of this definition, "submitted"
-   means any form of electronic, verbal, or written communication sent
-   to the Licensor or its representatives, including but not limited to
-   communication on electronic mailing lists, source code control systems,
-   and issue tracking systems that are managed by, or on behalf of, the
-   Licensor for the purpose of discussing and improving the Work, but
-   excluding communication that is conspicuously marked or otherwise
-   designated in writing by the copyright owner as "Not a Contribution."
-
-   "Contributor" shall mean Licensor and any individual or Legal Entity
-   on behalf of whom a Contribution has been received by Licensor and
-   subsequently incorporated within the Work.
-
-2. Grant of Copyright License. Subject to the terms and conditions of
-   this License, each Contributor hereby grants to You a perpetual,
-   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-   copyright license to reproduce, prepare Derivative Works of,
-   publicly display, publicly perform, sublicense, and distribute the
-   Work and such Derivative Works in Source or Object form.
-
-3. Grant of Patent License. Subject to the terms and conditions of
-   this License, each Contributor hereby grants to You a perpetual,
-   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-   (except as stated in this section) patent license to make, have made,
-   use, offer to sell, sell, import, and otherwise transfer the Work,
-   where such license applies only to those patent claims licensable
-   by such Contributor that are necessarily infringed by their
-   Contribution(s) alone or by combination of their Contribution(s)
-   with the Work to which such Contribution(s) was submitted. If You
-   institute patent litigation against any entity (including a
-   cross-claim or counterclaim in a lawsuit) alleging that the Work
-   or a Contribution incorporated within the Work constitutes direct
-   or contributory patent infringement, then any patent licenses
-   granted to You under this License for that Work shall terminate
-   as of the date such litigation is filed.
-
-4. Redistribution. You may reproduce and distribute copies of the
-   Work or Derivative Works thereof in any medium, with or without
-   modifications, and in Source or Object form, provided that You
-   meet the following conditions:
-
-   (a) You must give any other recipients of the Work or
-       Derivative Works a copy of this License; and
-
-   (b) You must cause any modified files to carry prominent notices
-       stating that You changed the files; and
-
-   (c) You must retain, in the Source form of any Derivative Works
-       that You distribute, all copyright, patent, trademark, and
-       attribution notices from the Source form of the Work,
-       excluding those notices that do not pertain to any part of
-       the Derivative Works; and
-
-   (d) If the Work includes a "NOTICE" text file as part of its
-       distribution, then any Derivative Works that You distribute must
-       include a readable copy of the attribution notices contained
-       within such NOTICE file, excluding those notices that do not
-       pertain to any part of the Derivative Works, in at least one
-       of the following places: within a NOTICE text file distributed
-       as part of the Derivative Works; within the Source form or
-       documentation, if provided along with the Derivative Works; or,
-       within a display generated by the Derivative Works, if and
-       wherever such third-party notices normally appear. The contents
-       of the NOTICE file are for informational purposes only and
-       do not modify the License. You may add Your own attribution
-       notices within Derivative Works that You distribute, alongside
-       or as an addendum to the NOTICE text from the Work, provided
-       that such additional attribution notices cannot be construed
-       as modifying the License.
-
-   You may add Your own copyright statement to Your modifications and
-   may provide additional or different license terms and conditions
-   for use, reproduction, or distribution of Your modifications, or
-   for any such Derivative Works as a whole, provided Your use,
-   reproduction, and distribution of the Work otherwise complies with
-   the conditions stated in this License.
-
-5. Submission of Contributions. Unless You explicitly state otherwise,
-   any Contribution intentionally submitted for inclusion in the Work
-   by You to the Licensor shall be under the terms and conditions of
-   this License, without any additional terms or conditions.
-   Notwithstanding the above, nothing herein shall supersede or modify
-   the terms of any separate license agreement you may have executed
-   with Licensor regarding such Contributions.
-
-6. Trademarks. This License does not grant permission to use the trade
-   names, trademarks, service marks, or product names of the Licensor,
-   except as required for reasonable and customary use in describing the
-   origin of the Work and reproducing the content of the NOTICE file.
-
-7. Disclaimer of Warranty. Unless required by applicable law or
-   agreed to in writing, Licensor provides the Work (and each
-   Contributor provides its Contributions) on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-   implied, including, without limitation, any warranties or conditions
-   of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
-   PARTICULAR PURPOSE. You are solely responsible for determining the
-   appropriateness of using or redistributing the Work and assume any
-   risks associated with Your exercise of permissions under this License.
-
-8. Limitation of Liability. In no event and under no legal theory,
-   whether in tort (including negligence), contract, or otherwise,
-   unless required by applicable law (such as deliberate and grossly
-   negligent acts) or agreed to in writing, shall any Contributor be
-   liable to You for damages, including any direct, indirect, special,
-   incidental, or consequential damages of any character arising as a
-   result of this License or out of the use or inability to use the
-   Work (including but not limited to damages for loss of goodwill,
-   work stoppage, computer failure or malfunction, or any and all
-   other commercial damages or losses), even if such Contributor
-   has been advised of the possibility of such damages.
-
-9. Accepting Warranty or Additional Liability. While redistributing
-   the Work or Derivative Works thereof, You may choose to offer,
-   and charge a fee for, acceptance of support, warranty, indemnity,
-   or other liability obligations and/or rights consistent with this
-   License. However, in accepting such obligations, You may act only
-   on Your own behalf and on Your sole responsibility, not on behalf
-   of any other Contributor, and only if You agree to indemnify,
-   defend, and hold each Contributor harmless for any liability
-   incurred by, or claims asserted against, such Contributor by reason
-   of your accepting any such warranty or additional liability.
-
-END OF TERMS AND CONDITIONS
-```
-
-### Text 497
-
-Shipped by:
-
-- rand 0.10.3 (crate): `LICENSE-MIT`
-
-```text
-Copyright 2018 Developers of the Rand project
-Copyright (c) 2014 The Rust Project Developers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-```
-
-### Text 498
-
-Shipped by:
-
-- rand 0.10.3 (crate): `README.md`
-
-```text
-# Rand
-
-[![Test Status](https://github.com/rust-random/rand/actions/workflows/test.yml/badge.svg?event=push)](https://github.com/rust-random/rand/actions)
-[![Crate](https://img.shields.io/crates/v/rand.svg)](https://crates.io/crates/rand)
-[![Book](https://img.shields.io/badge/book-master-yellow.svg)](https://rust-random.github.io/book/)
-[![API](https://docs.rs/rand/badge.svg)](https://docs.rs/rand)
-
-Rand is a set of crates supporting (pseudo-)random generators:
-
--   Built over a standard RNG trait: [`rand_core::RngCore`](https://docs.rs/rand_core/latest/rand_core/trait.RngCore.html)
--   With fast implementations of both [strong](https://rust-random.github.io/book/guide-rngs.html#cryptographically-secure-pseudo-random-number-generators-csprngs) and
-    [small](https://rust-random.github.io/book/guide-rngs.html#basic-pseudo-random-number-generators-prngs) generators: [`rand::rngs`](https://docs.rs/rand/latest/rand/rngs/index.html), and more RNGs: [`chacha20`](https://docs.rs/chacha20), [`rand_xoshiro`](https://docs.rs/rand_xoshiro/), [`rand_pcg`](https://docs.rs/rand_pcg/), [`rand_sfc`](https://docs.rs/rand_sfc/), [`rand_seeder`](https://docs.rs/rand_seeder/), [rngs repo](https://github.com/rust-random/rngs/)
--   [`rand::rng`](https://docs.rs/rand/latest/rand/fn.rng.html) is an asymptotically-fast, automatically-seeded and reasonably strong generator available on all `std` targets
--   Direct support for seeding generators from the [getrandom] crate
-
-With broad support for random value generation and random processes:
-
--   [`StandardUniform`](https://docs.rs/rand/latest/rand/distr/struct.StandardUniform.html) random value sampling,
-    [`Uniform`](https://docs.rs/rand/latest/rand/distr/struct.Uniform.html)-ranged value sampling
-    and [more](https://docs.rs/rand/latest/rand/distr/index.html)
--   Samplers for a large number of non-uniform random number distributions via our own
-    [`rand_distr`](https://docs.rs/rand_distr) and via
-    the [`statrs`](https://docs.rs/statrs)
--   Random processes (mostly choose and shuffle) via [`rand::seq`](https://docs.rs/rand/latest/rand/seq/index.html) traits
-
-All with:
-
--   [Portably reproducible output](https://rust-random.github.io/book/portability.html)
--   `#[no_std]` compatibility (partial)
--   *Many* performance optimisations thanks to contributions from the wide
-    user-base
-
-Rand **is not**:
-
--   Small (LoC). Most low-level crates are small, but the higher-level `rand`
-    and `rand_distr` each contain a lot of functionality.
--   Simple (implementation). We have a strong focus on correctness, speed and flexibility, but
-    not simplicity. If you prefer a small-and-simple library, there are
-    alternatives including [fastrand](https://crates.io/crates/fastrand)
-    and [oorandom](https://crates.io/crates/oorandom).
--   Primarily a cryptographic library. `rand` does provide some generators which
-    aim to support unpredictable value generation under certain constraints;
-    see [SECURITY.md](https://github.com/rust-random/rand/blob/master/SECURITY.md) for details.
-    Users are expected to determine for themselves
-    whether `rand`'s functionality meets their own security requirements.
-
-Documentation:
-
--   [The Rust Rand Book](https://rust-random.github.io/book)
--   [API reference (docs.rs)](https://docs.rs/rand)
-
-
-## Versions
-
-Rand is *mature* (suitable for general usage, with infrequent breaking releases
-which minimise breakage) but not yet at 1.0. Current `MAJOR.MINOR` versions are:
-
--   Version 0.10 was released in February 2026.
-
-See the [CHANGELOG](https://github.com/rust-random/rand/blob/master/CHANGELOG.md) or [Upgrade Guide](https://rust-random.github.io/book/update.html) for more details.
-
-## Crate Features
-
-Rand is built with these features enabled by default:
-
--   `std` enables functionality dependent on the `std` lib
--   `alloc` (implied by `std`) enables functionality requiring an allocator; a
-    significant portion of sequence and distribution functionality requires this
--   `sys_rng` enables `rand::rngs::SysRng` (uses the [getrandom] crate)
--   `std_rng` enables `rand::rngs::StdRng` (uses the [chacha20] crate)
--   `thread_rng` (implies `std`, `std_rng`, `sys_rng`) enables `rand::rngs::ThreadRng` and `rand::rng()`
-
-Optionally, the following dependencies can be enabled:
-
--   `chacha` enables `rand::rngs::{ChaCha8Rng, ChaCha12Rng, ChaCha20Rng}` (uses the [chacha20] crate)
-
-Additionally, these features configure Rand:
-
--   `simd_support` (experimental) enables sampling of SIMD values (uniformly
-    random SIMD integers and floats). Since `std::simd` is not yet stable this
-    feature requires nightly Rust and may cause build failures.
--   `unbiased` use unbiased sampling for algorithms supporting this option: Uniform distribution.
-
-    (By default, bias affecting no more than one in  2^48 samples is accepted.)
-
-    Note: enabling this option is expected to affect reproducibility of results.
-
-## Portability
-
-### Reproducibility
-
-Achieving reproducible results requires not only deterministic algorithms with fixed inputs but also a commitment to stability of algorithms and some platform-specific considerations. A subset of `rand` does aim to support reproducibility; read more about this in the book: [Portability](https://rust-random.github.io/book/portability.html).
-
-### WebAssembly support
-
-The [WASI](https://github.com/WebAssembly/WASI/tree/main) and Emscripten
-targets are directly supported. The `wasm32-unknown-unknown` target is not
-*automatically* supported. To enable support for this target, refer to the
-[`getrandom` documentation for WebAssembly](https://docs.rs/getrandom/latest/getrandom/#webassembly-support).
-Alternatively, the `sys_rng` feature may be disabled.
-
-# License
-
-Rand is distributed under the terms of both the MIT license and the
-Apache License (Version 2.0).
-
-See [LICENSE-APACHE](https://github.com/rust-random/rand/blob/master/LICENSE-APACHE) and [LICENSE-MIT](https://github.com/rust-random/rand/blob/master/LICENSE-MIT), and
-[COPYRIGHT](https://github.com/rust-random/rand/blob/master/COPYRIGHT) for details.
-
-[getrandom]: https://crates.io/crates/getrandom
-[chacha20]: https://crates.io/crates/chacha20
-```
-
-### Text 499
-
-Shipped by:
-
-- rand_core 0.10.1 (crate): `CHANGELOG.md`
-
-```text
-# Changelog
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [0.10.1] - 2026-04-13
-
-### Fixed
-- Reference to the `rand` crate in `TryRng` docs ([#75])
-
-[0.10.1]: https://github.com/rust-random/rand_core/compare/v0.10.0...v0.10.1
-
-[#75]: https://github.com/rust-random/rand_core/pull/75
-
-## [0.10.0] - 2026-02-01
-
-This release makes a number of significant changes which we hope will be the
-last significant breakage before 1.0. Code has moved from the [rust-random/rand]
-repository to its own [rust-random/rand_core].
-
-### User-facing API changes
-
-#### Changed
-- Edition changed to 2024 and MSRV bumped to 1.85 ([rand#1668])
-- `RngCore` and `TryRngCore` are renamed to `Rng` and `TryRng` respectively ([#54])
-- `Rng` is now an extension trait of `TryRng<Error = Infallible>` ([#45])
-- `TryRng::Error` is bound on `core::error::Error` instead of `Debug + Display` ([#58])
-- Relax `Sized` bound on impls of `SeedableRng` ([rand#1641])
-
-#### Added
-- `SeedableRng::{fork, try_fork}` methods ([#17])
-- Re-export of `core::convert::Infallible` ([#56])
-
-#### Removed
-- `TryRng::read_adapter` method (replaced with `rand::RngReader`) ([rand#1669])
-- `os_rng` crate feature ([rand#1674])
-- `OsRng` and `OsError` structs ([rand#1674])
-- `SeedableRng::from_os_rng` and `SeedableRng::try_from_os_rng` methods ([rand#1674])
-- `getrandom` dependency ([rand#1674])
-- `std` crate feature ([rand#1674])
-- Optional `serde` dependency ([#28])
-- `UnwrapMut` struct and `Rng::unwrap_mut` method ([#45])
-- `Rng::unwrap_err` method in favor of explicit wrapping in `UnwrapErr` ([#53])
-
-### API changes to PRNG implementation helpers
-
-### Added
-- `BlockRng::reconstruct` and `BlockRng::remaining_results` methods ([#36])
-- `block::Generator::drop` method ([#35])
-- `BlockRng::word_offset` method ([#44])
-
-### Changed
-- Replaced `le` helper functions with new `utils` helpers ([rand#1667], [#34], [#38], [#45])
-- Rename `BlockRng::generate_and_set` method to `reset_and_skip` ([#44])
-- Rename `block::BlockRngCore` trait to `block::Generator` ([#26])
-- Rename `BlockRngCore::Results` associated type to `Output` and remove type bounds on it ([#26])
-
-### Removed
-- Implementation of `Rng` for `BlockRng`, making the latter more generic ([#34])
-- `BlockRng64` struct ([#34])
-- `BlockRng::reset` method ([#44])
-- `BlockRng::index` method (replaced with `BlockRng::word_offset`) ([#44])
-- `Generator::Item` associated type ([#26])
-- `CryptoBlockRng` ([#69])
-
-[0.10.0]: https://github.com/rust-random/rand_core/compare/v0.9.3...v0.10.0
-
-[rand#1641]: https://github.com/rust-random/rand/pull/1641
-[rand#1667]: https://github.com/rust-random/rand/pull/1667
-[rand#1668]: https://github.com/rust-random/rand/pull/1668
-[rand#1669]: https://github.com/rust-random/rand/pull/1669
-[rand#1674]: https://github.com/rust-random/rand/pull/1674
-[#17]: https://github.com/rust-random/rand_core/pull/17
-[#26]: https://github.com/rust-random/rand_core/pull/28
-[#28]: https://github.com/rust-random/rand_core/pull/28
-[#34]: https://github.com/rust-random/rand_core/pull/34
-[#35]: https://github.com/rust-random/rand_core/pull/35
-[#36]: https://github.com/rust-random/rand_core/pull/36
-[#38]: https://github.com/rust-random/rand_core/pull/38
-[#44]: https://github.com/rust-random/rand_core/pull/44
-[#45]: https://github.com/rust-random/rand_core/pull/45
-[#53]: https://github.com/rust-random/rand_core/pull/53
-[#54]: https://github.com/rust-random/rand_core/pull/54
-[#56]: https://github.com/rust-random/rand_core/pull/56
-[#58]: https://github.com/rust-random/rand_core/pull/58
-[#69]: https://github.com/rust-random/rand_core/pull/69
-
-[rust-random/rand]: https://github.com/rust-random/rand
-[rust-random/rand_core]: https://github.com/rust-random/rand_core
-
-## [0.9.3] - 2025-02-29
-### Other
-- Remove `zerocopy` dependency ([rand#1607])
-- Deprecate `rand_core::impls::fill_via_u32_chunks`, `fill_via_u64_chunks` ([rand#1607])
-
-[0.9.3]: https://github.com/rust-random/rand_core/compare/v0.9.2...v0.9.3
-
-[rand#1607]: https://github.com/rust-random/rand/pull/1607
-
-## [0.9.2] - 2025-02-22
-### API changes
-- Relax `Sized` bound on impls of `TryRngCore`, `TryCryptoRng` and `UnwrapMut` ([rand#1593])
-- Add `UnwrapMut::re` to reborrow the inner rng with a tighter lifetime ([rand#1595])
-
-[0.9.2]: https://github.com/rust-random/rand_core/compare/v0.9.1...v0.9.2
-
-[rand#1593]: https://github.com/rust-random/rand/pull/1593
-[rand#1595]: https://github.com/rust-random/rand/pull/1595
-
-## [0.9.1] - 2025-02-16
-### API changes
-- Add `TryRngCore::unwrap_mut`, providing an impl of `RngCore` over `&mut rng` ([rand#1589])
-
-[0.9.1]: https://github.com/rust-random/rand_core/compare/v0.9.0...v0.9.1
-
-[rand#1589]: https://github.com/rust-random/rand/pull/1589
-
-## [0.9.0] - 2025-01-27
-### Dependencies and features
-- Bump the MSRV to 1.63.0 ([rand#1536]); note that 1.60.0 may work for dependents when using `--ignore-rust-version`
-- Update to `getrandom` v0.3.0 ([rand#1558])
-- Use `zerocopy` to replace some `unsafe` code ([rand#1349], [rand#1393], [rand#1446], [rand#1502])
-- Rename feature `serde1` to `serde` ([rand#1477])
-- Rename feature `getrandom` to `os_rng` ([rand#1537])
-
-### API changes
-- Allow `rand_core::impls::fill_via_u*_chunks` to mutate source ([rand#1182])
-- Add fn `RngCore::read_adapter` implementing `std::io::Read` ([rand#1267])
-- Add trait `CryptoBlockRng: BlockRngCore`; make `trait CryptoRng: RngCore` replacing `CryptoRngCore` ([rand#1273])
-- Add traits `TryRngCore`, `TryCryptoRng` ([rand#1424], [rand#1499])
-- Rename `fn SeedableRng::from_rng` -> `try_from_rng` and add infallible variant `fn from_rng` ([rand#1424])
-- Rename `fn SeedableRng::from_entropy` -> `from_os_rng` and add fallible variant `fn try_from_os_rng` ([rand#1424])
-- Add bounds `Clone` and `AsRef` to associated type `SeedableRng::Seed` ([rand#1491])
-
-[0.9.0]: https://github.com/rust-random/rand_core/compare/v0.6.4...v0.9.0
-
-[rand#1182]: https://github.com/rust-random/rand/pull/1182
-[rand#1267]: https://github.com/rust-random/rand/pull/1267
-[rand#1273]: https://github.com/rust-random/rand/pull/1273
-[rand#1349]: https://github.com/rust-random/rand/pull/1349
-[rand#1393]: https://github.com/rust-random/rand/pull/1393
-[rand#1424]: https://github.com/rust-random/rand/pull/1424
-[rand#1446]: https://github.com/rust-random/rand/pull/1446
-[rand#1477]: https://github.com/rust-random/rand/pull/1477
-[rand#1491]: https://github.com/rust-random/rand/pull/1491
-[rand#1499]: https://github.com/rust-random/rand/pull/1499
-[rand#1502]: https://github.com/rust-random/rand/pull/1502
-[rand#1536]: https://github.com/rust-random/rand/pull/1536
-[rand#1537]: https://github.com/rust-random/rand/pull/1537
-[rand#1558]: https://github.com/rust-random/rand/pull/1558
-
-## [0.6.4] - 2022-09-15
-- Fix unsoundness in `<BlockRng64 as RngCore>::next_u32` ([rand#1160])
-- Reduce use of `unsafe` and improve gen_bytes performance ([rand#1180])
-- Add `CryptoRngCore` trait ([rand#1187], [rand#1230])
-
-[0.6.4]: https://github.com/rust-random/rand_core/compare/v0.6.3...v0.6.4
-
-[rand#1160]: https://github.com/rust-random/rand/pull/1160
-[rand#1180]: https://github.com/rust-random/rand/pull/1180
-[rand#1187]: https://github.com/rust-random/rand/pull/1187
-[rand#1230]: https://github.com/rust-random/rand/pull/1230
-
-## [0.6.3] - 2021-06-15
-### Changed
-- Improved bound for `serde` impls on `BlockRng` ([rand#1130])
-- Minor doc additions ([rand#1118])
-
-[0.6.3]: https://github.com/rust-random/rand_core/compare/v0.6.2...v0.6.3
-
-[rand#1118]: https://github.com/rust-random/rand/pull/1118
-[rand#1130]: https://github.com/rust-random/rand/pull/1130
-
-## [0.6.2] - 2021-02-12
-### Fixed
-- Fixed assertions in `le::read_u32_into` and `le::read_u64_into` which could
-  have allowed buffers not to be fully populated ([rand#1096])
-
-[0.6.2]: https://github.com/rust-random/rand_core/compare/v0.6.1...v0.6.2
-
-[rand#1096]: https://github.com/rust-random/rand/pull/1096
-
-## [0.6.1] - 2021-01-03
-### Fixed
-- Avoid panic when using `RngCore::seed_from_u64` with a seed which is not a
-  multiple of four ([rand#1082])
-### Other
-- Enable all stable features in the playground ([rand#1081])
-
-[0.6.1]: https://github.com/rust-random/rand_core/compare/v0.6.0...v0.6.1
-
-[rand#1081]: https://github.com/rust-random/rand/pull/1081
-[rand#1082]: https://github.com/rust-random/rand/pull/1082
-
-## [0.6.0] - 2020-12-08
-### Breaking changes
-- Bump MSRV to 1.36, various code improvements ([rand#1011])
-- Update to getrandom v0.2 ([rand#1041])
-- Fix: `next_u32_via_fill` and `next_u64_via_fill` now use LE as documented ([rand#1061])
-
-### Other
-- Reduce usage of `unsafe` ([rand#962], [rand#963], [rand#1011])
-- Annotate feature-gates in documentation ([rand#1019])
-- Document available error codes ([rand#1061])
-- Various documentation tweaks
-- Fix some clippy warnings ([rand#1036])
-- Apply rustfmt ([rand#926])
-
-[0.6.0]: https://github.com/rust-random/rand_core/compare/v0.5.1...v0.6.0
-
-[rand#926]: https://github.com/rust-random/rand/pull/926
-[rand#962]: https://github.com/rust-random/rand/pull/962
-[rand#963]: https://github.com/rust-random/rand/pull/963
-[rand#1011]: https://github.com/rust-random/rand/pull/1011
-[rand#1019]: https://github.com/rust-random/rand/pull/1019
-[rand#1036]: https://github.com/rust-random/rand/pull/1036
-[rand#1041]: https://github.com/rust-random/rand/pull/1041
-[rand#1061]: https://github.com/rust-random/rand/pull/1061
-
-## [0.5.1] - 2019-08-28
-- `OsRng` added to `rand_core` ([rand#863])
-- `Error::INTERNAL_START` and `Error::CUSTOM_START` constants ([rand#864])
-- `Error::raw_os_error` method ([rand#864])
-- `Debug` and `Display` formatting for `getrandom` error codes without `std` ([rand#864])
-### Changed
-- `alloc` feature in `no_std` is available since Rust 1.36 ([rand#856])
-- Added `#[inline]` to `Error` conversion methods ([rand#864])
-
-[0.5.1]: https://github.com/rust-random/rand_core/compare/v0.5.0...v0.5.1
-
-[rand#863]: https://github.com/rust-random/rand/pull/863
-[rand#864]: https://github.com/rust-random/rand/pull/864
-[rand#856]: https://github.com/rust-random/rand/pull/856
-[rand#864]: https://github.com/rust-random/rand/pull/864
-
-## [0.5.0] - 2019-06-06
-### Changed
-- Enable testing with Miri and fix incorrect pointer usages ([rand#779], [rand#780], [rand#781], [rand#783], [rand#784])
-- Rewrite `Error` type and adjust API ([rand#800])
-- Adjust usage of `#[inline]` for `BlockRng` and `BlockRng64`
-
-[0.5.0]: https://github.com/rust-random/rand_core/compare/v0.4.0...v0.5.0
-
-[rand#779]: https://github.com/rust-random/rand/pull/779
-[rand#780]: https://github.com/rust-random/rand/pull/780
-[rand#781]: https://github.com/rust-random/rand/pull/781
-[rand#783]: https://github.com/rust-random/rand/pull/783
-[rand#784]: https://github.com/rust-random/rand/pull/784
-[rand#800]: https://github.com/rust-random/rand/pull/800
-
-## [0.4.0] - 2019-01-24
-### Changed
-- Disable the `std` feature by default ([rand#702])
-
-[0.4.0]: https://github.com/rust-random/rand_core/compare/v0.3.0...v0.4.0
-
-[rand#702]: https://github.com/rust-random/rand/pull/702
-
-## [0.3.0] - 2018-09-24
-### Added
-- Add `SeedableRng::seed_from_u64` for convenient seeding. ([rand#537])
-
-[0.3.0]: https://github.com/rust-random/rand_core/compare/v0.2.1...v0.3.0
-
-[rand#537]: https://github.com/rust-random/rand/pull/537
-
-## [0.2.1] - 2018-06-08
-### Added
-- References to a `CryptoRng` now also implement `CryptoRng`. ([rand#470])
-
-[0.2.1]: https://github.com/rust-random/rand_core/compare/v0.2.0...v0.2.1
-
-[rand#470]: https://github.com/rust-random/rand/pull/470
-
-## [0.2.0] - 2018-05-21
-### Changed
-- Enable the `std` feature by default. ([rand#409])
-- Remove `BlockRng{64}::inner` and `BlockRng::inner_mut`; instead making `core` public
-- Change `BlockRngCore::Results` bound to also require `AsMut<[Self::Item]>`. ([rand#419])
-### Added
-- Add `BlockRng{64}::index` and `BlockRng{64}::generate_and_set`. ([rand#374], [rand#419])
-- Implement `std::io::Read` for RngCore. ([rand#434])
-
-[0.2.0]: https://github.com/rust-random/rand_core/compare/v0.1.0...v0.2.0
-
-[rand#374]: https://github.com/rust-random/rand/pull/374
-[rand#409]: https://github.com/rust-random/rand/pull/409
-[rand#419]: https://github.com/rust-random/rand/pull/419
-[rand#434]: https://github.com/rust-random/rand/pull/434
-
-## [0.1.0] - 2018-04-17
-(Split out of the Rand crate, changes here are relative to rand 0.4.2.)
-### Added
-- `RngCore` and `SeedableRng` are now part of `rand_core`. ([rand#288])
-- Add modules to help implementing RNGs `impl` and `le`. ([rand#209], [rand#228])
-- Add `Error` and `ErrorKind`. ([rand#225])
-- Add `CryptoRng` marker trait. ([rand#273])
-- Add `BlockRngCore` trait. ([rand#281])
-- Add `BlockRng` and `BlockRng64` wrappers to help implementations. ([rand#281], [rand#325])
-- Add `RngCore::try_fill_bytes`. ([rand#225])
-### Changed
-- Revise the `SeedableRng` trait. ([rand#233])
-- Remove default implementations for `RngCore::next_u64` and `RngCore::fill_bytes`. ([rand#288])
-
-[0.1.0]: https://github.com/rust-random/rand_core/compare/v0.0.0...v0.1.0
-
-[rand#209]: https://github.com/rust-random/rand/pull/209
-[rand#225]: https://github.com/rust-random/rand/pull/225
-[rand#228]: https://github.com/rust-random/rand/pull/228
-[rand#233]: https://github.com/rust-random/rand/pull/233
-[rand#273]: https://github.com/rust-random/rand/pull/273
-[rand#281]: https://github.com/rust-random/rand/pull/281
-[rand#288]: https://github.com/rust-random/rand/pull/288
-[rand#325]: https://github.com/rust-random/rand/pull/325
-```
-
-### Text 500
-
-Shipped by:
-
-- rand_core 0.10.1 (crate): `COPYRIGHT`
-
-```text
-Copyrights in the Rand project are retained by their contributors. No
-copyright assignment is required to contribute to the Rand project.
-
-For full authorship information, see the version control history.
-
-Except as otherwise noted (below and/or in individual files), Rand is
-licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
-<http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-<LICENSE-MIT> or <http://opensource.org/licenses/MIT>, at your option.
-```
-
-### Text 501
-
-Shipped by:
-
-- rand_core 0.10.1 (crate): `LICENSE-APACHE`
-
-```text
-                              Apache License
-                        Version 2.0, January 2004
-                     https://www.apache.org/licenses/
-
-TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
-
-1. Definitions.
-
-   "License" shall mean the terms and conditions for use, reproduction,
-   and distribution as defined by Sections 1 through 9 of this document.
-
-   "Licensor" shall mean the copyright owner or entity authorized by
-   the copyright owner that is granting the License.
-
-   "Legal Entity" shall mean the union of the acting entity and all
-   other entities that control, are controlled by, or are under common
-   control with that entity. For the purposes of this definition,
-   "control" means (i) the power, direct or indirect, to cause the
-   direction or management of such entity, whether by contract or
-   otherwise, or (ii) ownership of fifty percent (50%) or more of the
-   outstanding shares, or (iii) beneficial ownership of such entity.
-
-   "You" (or "Your") shall mean an individual or Legal Entity
-   exercising permissions granted by this License.
-
-   "Source" form shall mean the preferred form for making modifications,
-   including but not limited to software source code, documentation
-   source, and configuration files.
-
-   "Object" form shall mean any form resulting from mechanical
-   transformation or translation of a Source form, including but
-   not limited to compiled object code, generated documentation,
-   and conversions to other media types.
-
-   "Work" shall mean the work of authorship, whether in Source or
-   Object form, made available under the License, as indicated by a
-   copyright notice that is included in or attached to the work
-   (an example is provided in the Appendix below).
-
-   "Derivative Works" shall mean any work, whether in Source or Object
-   form, that is based on (or derived from) the Work and for which the
-   editorial revisions, annotations, elaborations, or other modifications
-   represent, as a whole, an original work of authorship. For the purposes
-   of this License, Derivative Works shall not include works that remain
-   separable from, or merely link (or bind by name) to the interfaces of,
-   the Work and Derivative Works thereof.
-
-   "Contribution" shall mean any work of authorship, including
-   the original version of the Work and any modifications or additions
-   to that Work or Derivative Works thereof, that is intentionally
-   submitted to Licensor for inclusion in the Work by the copyright owner
-   or by an individual or Legal Entity authorized to submit on behalf of
-   the copyright owner. For the purposes of this definition, "submitted"
-   means any form of electronic, verbal, or written communication sent
-   to the Licensor or its representatives, including but not limited to
-   communication on electronic mailing lists, source code control systems,
-   and issue tracking systems that are managed by, or on behalf of, the
-   Licensor for the purpose of discussing and improving the Work, but
-   excluding communication that is conspicuously marked or otherwise
-   designated in writing by the copyright owner as "Not a Contribution."
-
-   "Contributor" shall mean Licensor and any individual or Legal Entity
-   on behalf of whom a Contribution has been received by Licensor and
-   subsequently incorporated within the Work.
-
-2. Grant of Copyright License. Subject to the terms and conditions of
-   this License, each Contributor hereby grants to You a perpetual,
-   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-   copyright license to reproduce, prepare Derivative Works of,
-   publicly display, publicly perform, sublicense, and distribute the
-   Work and such Derivative Works in Source or Object form.
-
-3. Grant of Patent License. Subject to the terms and conditions of
-   this License, each Contributor hereby grants to You a perpetual,
-   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-   (except as stated in this section) patent license to make, have made,
-   use, offer to sell, sell, import, and otherwise transfer the Work,
-   where such license applies only to those patent claims licensable
-   by such Contributor that are necessarily infringed by their
-   Contribution(s) alone or by combination of their Contribution(s)
-   with the Work to which such Contribution(s) was submitted. If You
-   institute patent litigation against any entity (including a
-   cross-claim or counterclaim in a lawsuit) alleging that the Work
-   or a Contribution incorporated within the Work constitutes direct
-   or contributory patent infringement, then any patent licenses
-   granted to You under this License for that Work shall terminate
-   as of the date such litigation is filed.
-
-4. Redistribution. You may reproduce and distribute copies of the
-   Work or Derivative Works thereof in any medium, with or without
-   modifications, and in Source or Object form, provided that You
-   meet the following conditions:
-
-   (a) You must give any other recipients of the Work or
-       Derivative Works a copy of this License; and
-
-   (b) You must cause any modified files to carry prominent notices
-       stating that You changed the files; and
-
-   (c) You must retain, in the Source form of any Derivative Works
-       that You distribute, all copyright, patent, trademark, and
-       attribution notices from the Source form of the Work,
-       excluding those notices that do not pertain to any part of
-       the Derivative Works; and
-
-   (d) If the Work includes a "NOTICE" text file as part of its
-       distribution, then any Derivative Works that You distribute must
-       include a readable copy of the attribution notices contained
-       within such NOTICE file, excluding those notices that do not
-       pertain to any part of the Derivative Works, in at least one
-       of the following places: within a NOTICE text file distributed
-       as part of the Derivative Works; within the Source form or
-       documentation, if provided along with the Derivative Works; or,
-       within a display generated by the Derivative Works, if and
-       wherever such third-party notices normally appear. The contents
-       of the NOTICE file are for informational purposes only and
-       do not modify the License. You may add Your own attribution
-       notices within Derivative Works that You distribute, alongside
-       or as an addendum to the NOTICE text from the Work, provided
-       that such additional attribution notices cannot be construed
-       as modifying the License.
-
-   You may add Your own copyright statement to Your modifications and
-   may provide additional or different license terms and conditions
-   for use, reproduction, or distribution of Your modifications, or
-   for any such Derivative Works as a whole, provided Your use,
-   reproduction, and distribution of the Work otherwise complies with
-   the conditions stated in this License.
-
-5. Submission of Contributions. Unless You explicitly state otherwise,
-   any Contribution intentionally submitted for inclusion in the Work
-   by You to the Licensor shall be under the terms and conditions of
-   this License, without any additional terms or conditions.
-   Notwithstanding the above, nothing herein shall supersede or modify
-   the terms of any separate license agreement you may have executed
-   with Licensor regarding such Contributions.
-
-6. Trademarks. This License does not grant permission to use the trade
-   names, trademarks, service marks, or product names of the Licensor,
-   except as required for reasonable and customary use in describing the
-   origin of the Work and reproducing the content of the NOTICE file.
-
-7. Disclaimer of Warranty. Unless required by applicable law or
-   agreed to in writing, Licensor provides the Work (and each
-   Contributor provides its Contributions) on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-   implied, including, without limitation, any warranties or conditions
-   of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
-   PARTICULAR PURPOSE. You are solely responsible for determining the
-   appropriateness of using or redistributing the Work and assume any
-   risks associated with Your exercise of permissions under this License.
-
-8. Limitation of Liability. In no event and under no legal theory,
-   whether in tort (including negligence), contract, or otherwise,
-   unless required by applicable law (such as deliberate and grossly
-   negligent acts) or agreed to in writing, shall any Contributor be
-   liable to You for damages, including any direct, indirect, special,
-   incidental, or consequential damages of any character arising as a
-   result of this License or out of the use or inability to use the
-   Work (including but not limited to damages for loss of goodwill,
-   work stoppage, computer failure or malfunction, or any and all
-   other commercial damages or losses), even if such Contributor
-   has been advised of the possibility of such damages.
-
-9. Accepting Warranty or Additional Liability. While redistributing
-   the Work or Derivative Works thereof, You may choose to offer,
-   and charge a fee for, acceptance of support, warranty, indemnity,
-   or other liability obligations and/or rights consistent with this
-   License. However, in accepting such obligations, You may act only
-   on Your own behalf and on Your sole responsibility, not on behalf
-   of any other Contributor, and only if You agree to indemnify,
-   defend, and hold each Contributor harmless for any liability
-   incurred by, or claims asserted against, such Contributor by reason
-   of your accepting any such warranty or additional liability.
-
-END OF TERMS AND CONDITIONS
-
-APPENDIX: How to apply the Apache License to your work.
-
-   To apply the Apache License to your work, attach the following
-   boilerplate notice, with the fields enclosed by brackets "[]"
-   replaced with your own identifying information. (Don't include
-   the brackets!)  The text should be enclosed in the appropriate
-   comment syntax for the file format. We also recommend that a
-   file or class name and description of purpose be included on the
-   same "printed page" as the copyright notice for easier
-   identification within third-party archives.
-```
-
-### Text 502
-
-Shipped by:
-
-- rand_core 0.10.1 (crate): `LICENSE-MIT`
-
-```text
-Copyright (c) 2018-2026 The Rand Project Developers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-```
-
-### Text 503
-
-Shipped by:
-
-- rand_core 0.10.1 (crate): `README.md`
-
-```text
-# rand_core: core random number generation traits
-
-<div class="badges">
-
-[![crate][crate-badge]][crate-link]
-[![Docs][docs-image]][docs-link]
-[![Apache2/MIT licensed][license-image]][license-link]
-[![Build Status][build-image]][build-link]
-
-</div>
-
-This crate provides a collection of traits used by implementations of Random Number Generation (RNG)
-algorithms. Additionally, it includes helper utilities that assist with the implementation
-of these traits.
-
-Note that the traits focus solely on the core RNG functionality. Most users should prefer
-the [`rand`] crate, which offers more advanced RNG capabilities built on these core traits,
-such as sampling from restricted ranges, generating floating-point numbers, list permutations,
-and more.
-
-[`rand`]: https://docs.rs/rand
-
-## License
-
-The crate is licensed under either of:
-
-* [Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0)
-* [MIT license](http://opensource.org/licenses/MIT)
-
-at your option.
-
-[//]: # (badges)
-
-[crate-badge]: https://img.shields.io/crates/v/rand_core.svg
-[crate-link]: https://crates.io/crates/rand_core
-[docs-image]: https://docs.rs/rand_core/badge.svg
-[docs-link]: https://docs.rs/rand_core
-[license-image]: https://img.shields.io/badge/license-Apache2.0/MIT-blue.svg
-[build-image]: https://github.com/rust-random/rand_core/actions/workflows/test.yml/badge.svg?branch=master
-[license-link]: #license
-[build-link]: https://github.com/rust-random/rand_core/actions/workflows/test.yml?query=branch:master
-```
-
-### Text 504
+### Text 490
 
 Shipped by:
 
@@ -68359,7 +65064,7 @@ Shipped by:
 * Initial release.
 ```
 
-### Text 505
+### Text 491
 
 Shipped by:
 
@@ -68389,7 +65094,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 506
+### Text 492
 
 Shipped by:
 
@@ -68409,7 +65114,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 3. This notice may not be removed or altered from any source distribution.
 ```
 
-### Text 507
+### Text 493
 
 Shipped by:
 
@@ -68440,7 +65145,7 @@ When the `wasm-bindgen-0-2` feature is enabled, the MSRV of this crate will be
 raised to the MSRV of the latest version of `wasm-bindgen`.
 ```
 
-### Text 508
+### Text 494
 
 Shipped by:
 
@@ -68472,7 +65177,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 509
+### Text 495
 
 Shipped by:
 
@@ -68518,7 +65223,7 @@ See https://react.dev/
 See https://react.dev/reference/react
 ````
 
-### Text 510
+### Text 496
 
 Shipped by:
 
@@ -68587,7 +65292,7 @@ See https://react.dev/reference/react-dom/client
 See https://react.dev/reference/react-dom/server
 ````
 
-### Text 511
+### Text 497
 
 Shipped by:
 
@@ -68719,7 +65424,7 @@ be dual licensed as above, without any additional terms or conditions.
 </sub>
 ````
 
-### Text 512
+### Text 498
 
 Shipped by:
 
@@ -70541,7 +67246,7 @@ A number of bugs have been fixed:
   `Captures` now has a `Debug` impl.
 ````
 
-### Text 513
+### Text 499
 
 Shipped by:
 
@@ -70889,7 +67594,7 @@ License Agreement
 ([LICENSE-UNICODE](https://www.unicode.org/copyright.html#License)).
 ````
 
-### Text 514
+### Text 500
 
 Shipped by:
 
@@ -71156,7 +67861,7 @@ regex but `\pL(?-u)\xFF` (matches any Unicode `Letter` followed by the literal
 byte `\xFF`) is, for example.
 ```
 
-### Text 515
+### Text 501
 
 Shipped by:
 
@@ -71167,7 +67872,7 @@ Benchmarks for this crate have been moved into the rebar project:
 https://github.com/BurntSushi/rebar
 ```
 
-### Text 516
+### Text 502
 
 Shipped by:
 
@@ -71293,7 +67998,7 @@ don't think anyone has ever release the internals of a regex engine as a
 library before. So it will be interesting to see how it plays out!
 ````
 
-### Text 517
+### Text 503
 
 Shipped by:
 
@@ -71398,7 +68103,7 @@ Stated differently, the coupling between `regex` and `regex-syntax` exists only
 at the level of the concrete syntax.
 ````
 
-### Text 518
+### Text 504
 
 Shipped by:
 
@@ -71464,7 +68169,7 @@ use or other dealings in these Data Files or Software without prior
 written authorization of the copyright holder.
 ```
 
-### Text 519
+### Text 505
 
 Shipped by:
 
@@ -71646,7 +68351,7 @@ Shipped by:
 - `set_parent` support for Windows (#14)
 ````
 
-### Text 520
+### Text 506
 
 Shipped by:
 
@@ -71676,7 +68381,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 521
+### Text 507
 
 Shipped by:
 
@@ -71707,7 +68412,7 @@ Refer to the [documentation](https://docs.rs/rfd) for more details.
 Please refer to [Linux & BSD backends](https://docs.rs/rfd/latest/rfd/#linux--bsd-backends) for information about the needed dependencies to be able to compile on Linux.
 ```
 
-### Text 522
+### Text 508
 
 Shipped by:
 
@@ -71737,7 +68442,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 523
+### Text 509
 
 Shipped by:
 
@@ -71761,7 +68466,7 @@ Before working on a new feature, open an issue to discuss your plans. We'll tell
 New features should include unit tests and integration tests if applicable, so that future development don't break your code.
 ```
 
-### Text 524
+### Text 510
 
 Shipped by:
 
@@ -71817,7 +68522,7 @@ See the upgrade path in [UPGRADE.md](UPGRADE.md).
 The source code is released under the Apache 2.0 license.
 ````
 
-### Text 525
+### Text 511
 
 Shipped by:
 
@@ -71854,7 +68559,7 @@ Please report any upgrading issues or feedback to the project's issue tracker.
     3. Upgrade to the next major version.
 ```
 
-### Text 526
+### Text 512
 
 Shipped by:
 
@@ -71870,7 +68575,7 @@ Shipped by:
 The source code is released under the Apache 2.0 license.
 ```
 
-### Text 527
+### Text 513
 
 Shipped by:
 
@@ -72004,7 +68709,7 @@ This documents all notable changes to
   - verify_raw_std
 ```
 
-### Text 528
+### Text 514
 
 Shipped by:
 
@@ -72035,7 +68740,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 529
+### Text 515
 
 Shipped by:
 
@@ -72128,7 +68833,7 @@ Contributions are welcome. By submitting a pull request you are agreeing to
 make you work available under the license terms of the Rust-argon2 project.
 ````
 
-### Text 530
+### Text 516
 
 Shipped by:
 
@@ -72178,7 +68883,7 @@ Shipped by:
 - Implement `Clone` for `FxHasher` struct
 ```
 
-### Text 531
+### Text 517
 
 Shipped by:
 
@@ -72190,7 +68895,7 @@ Shipped by:
 The Code of Conduct for this repository [can be found online](https://www.rust-lang.org/conduct.html).
 ```
 
-### Text 532
+### Text 518
 
 Shipped by:
 
@@ -72241,7 +68946,7 @@ rustc-hash = { version = "2.1", default-features = false }
 ```
 ````
 
-### Text 533
+### Text 519
 
 Shipped by:
 
@@ -72415,7 +69120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial release
 ```
 
-### Text 534
+### Text 520
 
 Shipped by:
 
@@ -72450,7 +69155,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 535
+### Text 521
 
 Shipped by:
 
@@ -72557,7 +69262,7 @@ dual licensed as above, without any additional terms or conditions.
 [XSalsa]: https://cr.yp.to/snuffle/xsalsa-20081128.pdf
 ````
 
-### Text 536
+### Text 522
 
 Shipped by:
 
@@ -72588,7 +69293,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### Text 537
+### Text 523
 
 Shipped by:
 
@@ -72646,7 +69351,7 @@ In general, this crate will be conservative with respect to the minimum
 supported version of Rust.
 ````
 
-### Text 538
+### Text 524
 
 Shipped by:
 
@@ -72664,7 +69369,7 @@ The public API for this package is not yet finalized.
 The React team thanks [Anton Podviaznikov](https://podviaznikov.com/) for donating the `scheduler` package name.
 ```
 
-### Text 539
+### Text 525
 
 Shipped by:
 
@@ -72697,7 +69402,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 540
+### Text 526
 
 Shipped by:
 
@@ -72993,7 +69698,7 @@ schemars = { version = "0.8", features = ["chrono"] }
 ```
 ````
 
-### Text 541
+### Text 527
 
 Shipped by:
 
@@ -73005,7 +69710,7 @@ Shipped by:
 If a test fails because a generated schema did not match the expected JSON, then the actual schema will be written to a JSON file in this directory.
 ```
 
-### Text 542
+### Text 528
 
 Shipped by:
 
@@ -73302,7 +70007,7 @@ schemars = { version = "0.9.0", features = ["chrono04"] }
 ```
 ````
 
-### Text 543
+### Text 529
 
 Shipped by:
 
@@ -73606,7 +70311,7 @@ schemars = { version = "1.0", features = ["chrono04"] }
 ```
 ````
 
-### Text 544
+### Text 530
 
 Shipped by:
 
@@ -73640,7 +70345,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 545
+### Text 531
 
 Shipped by:
 
@@ -73751,7 +70456,7 @@ fn g() {
   - Add macro `defer!`
 ````
 
-### Text 546
+### Text 532
 
 Shipped by:
 
@@ -73789,7 +70494,7 @@ fn main() {
 }
 ```
 
-### Text 547
+### Text 533
 
 Shipped by:
 
@@ -73988,7 +70693,7 @@ if you would like to support older Rust versions.
 - Initial release
 ```
 
-### Text 548
+### Text 534
 
 Shipped by:
 
@@ -74018,7 +70723,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 549
+### Text 535
 
 Shipped by:
 
@@ -74105,7 +70810,7 @@ without any additional terms or conditions.
 [LICENSE-MIT]: https://github.com/iqlusioninc/crates/blob/main/secrecy/LICENSE-MIT
 ```
 
-### Text 550
+### Text 536
 
 Shipped by:
 
@@ -74115,7 +70820,7 @@ Shipped by:
 - `parser.rs` no longer wraps values in quotes (`"..."`) but expects their `to_css` impl to already wrap it ([Gecko Bug 1854809](https://bugzilla.mozilla.org/show_bug.cgi?id=1854809))
 ```
 
-### Text 551
+### Text 537
 
 Shipped by:
 
@@ -74148,7 +70853,7 @@ If you don’t already have a tree data structure,
 consider using [Kuchiki](https://github.com/kuchiki-rs/kuchiki) itself.
 ```
 
-### Text 552
+### Text 538
 
 Shipped by:
 
@@ -74239,7 +70944,7 @@ be dual licensed as above, without any additional terms or conditions.
 </sub>
 ````
 
-### Text 553
+### Text 539
 
 Shipped by:
 
@@ -74363,7 +71068,7 @@ dual licensed as above, without any additional terms or conditions.
 </sub>
 ````
 
-### Text 554
+### Text 540
 
 Shipped by:
 
@@ -74438,7 +71143,7 @@ closed without a response after some time.
 [discourse]: https://users.rust-lang.org
 ````
 
-### Text 555
+### Text 541
 
 Shipped by:
 
@@ -74646,7 +71351,7 @@ be dual licensed as above, without any additional terms or conditions.
 </sub>
 ````
 
-### Text 556
+### Text 542
 
 Shipped by:
 
@@ -74683,7 +71388,7 @@ as shown in the following build timings.
 | <img src="https://github.com/user-attachments/assets/6b6cff5e-3e45-4ac7-9db1-d99ee8b9f5f7"> |
 ```
 
-### Text 557
+### Text 543
 
 Shipped by:
 
@@ -74738,7 +71443,7 @@ instead of the Rust moderation team.
 [Rust Code of Conduct]: https://www.rust-lang.org/policies/code-of-conduct
 ````
 
-### Text 558
+### Text 544
 
 Shipped by:
 
@@ -75135,7 +71840,7 @@ be dual licensed as above, without any additional terms or conditions.
 </sub>
 ````
 
-### Text 559
+### Text 545
 
 Shipped by:
 
@@ -75201,7 +71906,7 @@ be dual licensed as above, without any additional terms or conditions.
 </sub>
 ````
 
-### Text 560
+### Text 546
 
 Shipped by:
 
@@ -75238,7 +71943,7 @@ license, shall be dual-licensed as above, without any additional terms or
 conditions.
 ```
 
-### Text 561
+### Text 547
 
 Shipped by:
 
@@ -76680,7 +73385,7 @@ A diff of the lock-file makes it seem that `serde_with` depends on new crates, e
 * Reserve name on crates.io
 ````
 
-### Text 562
+### Text 548
 
 Shipped by:
 
@@ -76715,7 +73420,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 563
+### Text 549
 
 Shipped by:
 
@@ -76934,7 +73639,7 @@ be dual-licensed as above, without any additional terms or conditions.
 [`CONTRIBUTING.md`]: https://github.com/jonasbb/serde_with/blob/master/CONTRIBUTING.md
 ````
 
-### Text 564
+### Text 550
 
 Shipped by:
 
@@ -77029,7 +73734,7 @@ For example, the derives [`DeserializeFromStr`] and [`SerializeDisplay`] require
 [with-annotation]: https://serde.rs/field-attrs.html#with
 ````
 
-### Text 565
+### Text 551
 
 Shipped by:
 
@@ -77370,7 +74075,7 @@ some_other_lib::define_some_type!();
 [serde_with#185]: https://github.com/jonasbb/serde_with/issues/185
 ````
 
-### Text 566
+### Text 552
 
 Shipped by:
 
@@ -78061,7 +74766,7 @@ value: u128,
 [`MapSkipError`]: crate::MapSkipError
 ````
 
-### Text 567
+### Text 553
 
 Shipped by:
 
@@ -78527,7 +75232,7 @@ Initial Release
     Existing `skip_serializing_if` will never be modified and those fields keep their behavior.
 ````
 
-### Text 568
+### Text 554
 
 Shipped by:
 
@@ -78558,7 +75263,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 569
+### Text 555
 
 Shipped by:
 
@@ -78646,7 +75351,7 @@ Unless you explicitly state otherwise, any contribution intentionally submitted 
 as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
 ````
 
-### Text 570
+### Text 556
 
 Shipped by:
 
@@ -78762,7 +75467,7 @@ Releases are made every time this repository rebases its changes on top of the l
 Stylo is licensed under MPL 2.0
 ````
 
-### Text 571
+### Text 557
 
 Shipped by:
 
@@ -78959,7 +75664,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## 0.1.0 (2016-05-06)
 ```
 
-### Text 572
+### Text 558
 
 Shipped by:
 
@@ -78995,7 +75700,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 573
+### Text 559
 
 Shipped by:
 
@@ -79063,7 +75768,7 @@ dual licensed as above, without any additional terms or conditions.
 [1]: https://en.wikipedia.org/wiki/SHA-2
 ```
 
-### Text 574
+### Text 560
 
 Shipped by:
 
@@ -79301,7 +76006,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## 0.1.0 (2016-05-06)
 ```
 
-### Text 575
+### Text 561
 
 Shipped by:
 
@@ -79338,7 +76043,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 576
+### Text 562
 
 Shipped by:
 
@@ -79493,7 +76198,7 @@ dual licensed as above, without any additional terms or conditions.
 [`digest`]: https://docs.rs/digest
 ````
 
-### Text 577
+### Text 563
 
 Shipped by:
 
@@ -79514,7 +76219,7 @@ Shipped by:
   - Defer modulo until right before u16 overflow
 ```
 
-### Text 578
+### Text 564
 
 Shipped by:
 
@@ -79544,7 +76249,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 579
+### Text 565
 
 Shipped by:
 
@@ -79696,7 +76401,7 @@ Thank you to the contributors of the following projects.
 Feel free to submit a issue or pull request. :smile:
 ````
 
-### Text 580
+### Text 566
 
 Shipped by:
 
@@ -79712,7 +76417,7 @@ http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
 option.
 ```
 
-### Text 581
+### Text 567
 
 Shipped by:
 
@@ -79738,7 +76443,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 582
+### Text 568
 
 Shipped by:
 
@@ -79840,7 +76545,7 @@ The only safe methods in that trait are `write()` and `finish()`.
 It is thus recommended to use SipHash (and all other hash functions, actually) as documented above.
 ````
 
-### Text 583
+### Text 569
 
 Shipped by:
 
@@ -79874,7 +76579,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 584
+### Text 570
 
 Shipped by:
 
@@ -79909,7 +76614,7 @@ v.sort();
 ```
 ````
 
-### Text 585
+### Text 571
 
 Shipped by:
 
@@ -80003,7 +76708,7 @@ for inclusion in this project by you, as defined in the Apache-2.0 license,
 shall be dual licensed as above, without any additional terms or conditions.
 ```
 
-### Text 586
+### Text 572
 
 Shipped by:
 
@@ -80140,7 +76845,7 @@ Shipped by:
 Initial published version with support for Linux (X11 and Wayland), Mac OS (but buggy), and Windows.
 ```
 
-### Text 587
+### Text 573
 
 Shipped by:
 
@@ -80350,7 +77055,7 @@ Apache License
    limitations under the License.
 ```
 
-### Text 588
+### Text 574
 
 Shipped by:
 
@@ -80378,7 +77083,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 589
+### Text 575
 
 Shipped by:
 
@@ -80550,7 +77255,7 @@ same MSRV policy.
 See the [changelog](CHANGELOG.md) for a list of this package's versions and the changes made in each version.
 ````
 
-### Text 590
+### Text 576
 
 Shipped by:
 
@@ -80584,7 +77289,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 591
+### Text 577
 
 Shipped by:
 
@@ -80616,7 +77321,7 @@ features = [ "alloc" ]
 ```
 ````
 
-### Text 592
+### Text 578
 
 Shipped by:
 
@@ -80650,7 +77355,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 593
+### Text 579
 
 Shipped by:
 
@@ -80737,7 +77442,7 @@ fn compute_something(input: &foo::FooAtom) -> u32 {
 ```
 ````
 
-### Text 594
+### Text 580
 
 Shipped by:
 
@@ -80979,7 +77684,7 @@ vector of results (thanks @ovarene)
 http://scarcitycomputing.blogspot.com/2013/04/damerau-levenshtein-edit-distance.html
 ````
 
-### Text 595
+### Text 581
 
 Shipped by:
 
@@ -81011,7 +77716,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 596
+### Text 582
 
 Shipped by:
 
@@ -81122,7 +77827,7 @@ Benchmarks require a Nightly toolchain. Run `$ cargo +nightly bench`.
 [Docker]:https://docs.docker.com/engine/installation/
 ````
 
-### Text 597
+### Text 583
 
 Shipped by:
 
@@ -81150,7 +77855,7 @@ Please include as much of the information listed below as you can to help us bet
 This information will help us triage your report more quickly.
 ```
 
-### Text 598
+### Text 584
 
 Shipped by:
 
@@ -81441,7 +78146,7 @@ be dual licensed as above, without any additional terms or conditions.
 </sub>
 ````
 
-### Text 599
+### Text 585
 
 Shipped by:
 
@@ -81747,7 +78452,7 @@ be dual licensed as above, without any additional terms or conditions.
 </sub>
 ````
 
-### Text 600
+### Text 586
 
 Shipped by:
 
@@ -81763,7 +78468,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 601
+### Text 587
 
 Shipped by:
 
@@ -81929,7 +78634,7 @@ For more example usage, consider investigating the `abomonation_derive` crate,
 which makes use of this crate, and is fairly simple.
 ````
 
-### Text 602
+### Text 588
 
 Shipped by:
 
@@ -81956,7 +78661,7 @@ PackageDownloadLocation: git+ssh://github.com/tauri-apps/tao.git
 Creator: Person: Daniel Thompson-Yvetot
 ```
 
-### Text 603
+### Text 589
 
 Shipped by:
 
@@ -82045,7 +78750,7 @@ In the future, we want to make these features more modular as separate crates. S
 For the complete list of sponsors please visit our [website](https://tauri.app#sponsors) and [Open Collective](https://opencollective.com/tauri).
 ````
 
-### Text 604
+### Text 590
 
 Shipped by:
 
@@ -82096,7 +78801,7 @@ Logo: CC-BY-NC-ND
 - Original Tauri Logo Designs by [Daniel Thompson-Yvetot](https://github.com/nothingismagick) and [Guillaume Chau](https://github.com/akryum)
 ```
 
-### Text 605
+### Text 591
 
 Shipped by:
 
@@ -82108,7 +78813,7 @@ Shipped by:
 Tauri iOS API.
 ```
 
-### Text 606
+### Text 592
 
 Shipped by:
 
@@ -82557,7 +79262,7 @@ Denies the version command without any pre-configured scope.
 </table>
 ```
 
-### Text 607
+### Text 593
 
 Shipped by:
 
@@ -82690,7 +79395,7 @@ Denies the unlisten command without any pre-configured scope.
 </table>
 ```
 
-### Text 608
+### Text 594
 
 Shipped by:
 
@@ -82850,7 +79555,7 @@ Denies the size command without any pre-configured scope.
 </table>
 ```
 
-### Text 609
+### Text 595
 
 Shipped by:
 
@@ -83469,7 +80174,7 @@ Denies the text command without any pre-configured scope.
 </table>
 ```
 
-### Text 610
+### Text 596
 
 Shipped by:
 
@@ -83710,7 +80415,7 @@ Denies the resolve_directory command without any pre-configured scope.
 </table>
 ```
 
-### Text 611
+### Text 597
 
 Shipped by:
 
@@ -83762,7 +80467,7 @@ Denies the close command without any pre-configured scope.
 </table>
 ```
 
-### Text 612
+### Text 598
 
 Shipped by:
 
@@ -84111,7 +80816,7 @@ Denies the set_visible command without any pre-configured scope.
 </table>
 ```
 
-### Text 613
+### Text 599
 
 Shipped by:
 
@@ -84608,7 +81313,7 @@ Denies the webview_size command without any pre-configured scope.
 </table>
 ```
 
-### Text 614
+### Text 600
 
 Shipped by:
 
@@ -86715,7 +83420,7 @@ Denies the unminimize command without any pre-configured scope.
 </table>
 ```
 
-### Text 615
+### Text 601
 
 Shipped by:
 
@@ -86758,7 +83463,7 @@ Emitters can emit to any and all listeners.
 - `once_any` (available only through `Manager` trait): Listens to a single event to any target (aka event sniffer).
 ```
 
-### Text 616
+### Text 602
 
 Shipped by:
 
@@ -86810,7 +83515,7 @@ Logo: CC-BY-NC-ND
 - Original Tauri Logo Designs by [Daniel Thompson-Yvetot](https://github.com/nothingismagick) and [Guillaume Chau](https://github.com/akryum)
 ```
 
-### Text 617
+### Text 603
 
 Shipped by:
 
@@ -86861,7 +83566,7 @@ Logo: CC-BY-NC-ND
 - Original Tauri Logo Designs by [Daniel Thompson-Yvetot](https://github.com/nothingismagick) and [Guillaume Chau](https://github.com/akryum)
 ```
 
-### Text 618
+### Text 604
 
 Shipped by:
 
@@ -87247,12 +83952,11 @@ apps/plugins-workspace/commit/717ae670978feb4492fac1f295998b93f2b9347f)([#371](h
 g.
 ```
 
-### Text 619
+### Text 605
 
 Shipped by:
 
 - tauri-plugin-dialog 2.8.4 (crate): `SECURITY.md`
-- tauri-plugin-notification 2.8.0 (crate): `SECURITY.md`
 
 ```text
 # Security Policy
@@ -87280,7 +83984,7 @@ Please disclose a vulnerability or security relevant issue here: [https://github
 Alternatively, you can also contact us by email via [security@tauri.app](mailto:security@tauri.app).
 ```
 
-### Text 620
+### Text 606
 
 Shipped by:
 
@@ -87292,7 +83996,7 @@ Shipped by:
 A description of this package.
 ```
 
-### Text 621
+### Text 607
 
 Shipped by:
 
@@ -87455,7 +84159,7 @@ Denies the confirm command without any pre-configured scope. (**DEPRECATED**: Th
 </table>
 ```
 
-### Text 622
+### Text 608
 
 Shipped by:
 
@@ -87732,7 +84436,7 @@ Shipped by:
 - [`717ae67`](https://github.com/tauri-apps/plugins-workspace/commit/717ae670978feb4492fac1f295998b93f2b9347f)([#371](https://github.com/tauri-apps/plugins-workspace/pull/371)) First v2 alpha release!
 ```
 
-### Text 623
+### Text 609
 
 Shipped by:
 
@@ -87832,7 +84536,7 @@ Code: (c) 2015 - Present - The Tauri Programme within The Commons Conservancy.
 MIT or MIT/Apache 2.0 where applicable.
 ````
 
-### Text 624
+### Text 610
 
 Shipped by:
 
@@ -87890,7 +84594,7 @@ The scope is defined at compile time in the used permissions but the user or app
 - Exploits in the underlying rust `std::fs` library
 ```
 
-### Text 625
+### Text 611
 
 Shipped by:
 
@@ -91765,901 +88469,7 @@ This enables all file write related commands without any pre-configured accessib
 </table>
 ````
 
-### Text 626
-
-Shipped by:
-
-- tauri-plugin-notification 2.8.0 (crate): `CHANGELOG.md`
-
-```text
-# Changelog
-
-## [2.8.0]
-
-- [`52fa7754`](https://github.com/tauri-apps/plugins-workspace/commit/52fa7754b9d621fd2f04faa60ac4c17902d4a475) ([#3738](https://github.com/tauri-apps/plugins-workspace/pull/3738) by [@renovate](https://github.com/tauri-apps/plugins-workspace/../../renovate)) Updated dependency rand to 0.10
-
-### feat
-
-- [`f36ba7ba`](https://github.com/tauri-apps/plugins-workspace/commit/f36ba7ba48695776bc11cce0bfdc45678ec24f72) ([#3282](https://github.com/tauri-apps/plugins-workspace/pull/3282) by [@Et3rnel](https://github.com/tauri-apps/plugins-workspace/../../Et3rnel)) Added chronometer support for Android notifications with `when`, `usesChronometer`, and `chronometerCountDown` options. This allows displaying an automatically updating elapsed time counter directly in the notification, useful for time-tracking apps, ongoing calls, or timers.
-
-## [2.7.0]
-
-- [`4356356d`](https://github.com/tauri-apps/plugins-workspace/commit/4356356dab3b87faffcc2f0fc62aec23aede78cc) ([#3588](https://github.com/tauri-apps/plugins-workspace/pull/3588) by [@The-Best-Codes](https://github.com/tauri-apps/plugins-workspace/../../The-Best-Codes)) Fix notifications closing right after they show on GNOME: on Linux and the BSDs, every notification is now sent on the D-Bus connection the plugin keeps open.
-
-### feat
-
-- [`4356356d`](https://github.com/tauri-apps/plugins-workspace/commit/4356356dab3b87faffcc2f0fc62aec23aede78cc) ([#3588](https://github.com/tauri-apps/plugins-workspace/pull/3588) by [@The-Best-Codes](https://github.com/tauri-apps/plugins-workspace/../../The-Best-Codes)) Add `NotificationBuilder::on_close` on Linux and the BSDs, a Rust callback that runs once the notification server reports the notification closed.
-
-## [2.6.0]
-
-- [`42ae8b45`](https://github.com/tauri-apps/plugins-workspace/commit/42ae8b4501f3628cddeab3973eb38a7593304cc8) ([#3684](https://github.com/tauri-apps/plugins-workspace/pull/3684)) On iOS, mark the plugin's `init_plugin_*` entry point `public` so release builds made with Xcode 27 keep it global and link.
-
-### feat
-
-- [`46381516`](https://github.com/tauri-apps/plugins-workspace/commit/46381516b7bd7b6915ded698d93e92760b4221d7) ([#3671](https://github.com/tauri-apps/plugins-workspace/pull/3671)) Report actions on desktop: a click on a notification (`tap`) or on one of the actions of its action type reaches `onAction` and the new Rust `Notification::on_action`, which also works on mobile. `registerActionTypes`, `removeActive` (Linux and the BSDs) and the listener commands no longer fail with "command not found" on desktop.
-
-    The `onAction` callback is now typed with the new `ActionPerformed` interface, which is what every platform sends, instead of `Options`. Callbacks annotated with `Options` must be updated.
-
-## [2.5.1]
-
-- [`569ee82c`](https://github.com/tauri-apps/plugins-workspace/commit/569ee82cf61a358b4c73ba52f2e99f3317ec05d0) Fix the docs.rs build for Android: the build script now detects docs.rs through the `DOCS_RS` environment variable, since `cfg(docsrs)` is never set for build scripts.
-
-## [2.5.0]
-
-- [`c8c373b4`](https://github.com/tauri-apps/plugins-workspace/commit/c8c373b48bbf06b57c481dad4cf0a68638c68478) Fixed broken mobile APIs:
-
-    - `channels()` invoked the `listChannels` command, which the `allow-list-channels` permission does not match; it now invokes `list_channels`.
-    - Unregistering an `onNotificationReceived` or `onAction` listener invokes the `remove_listener` command, which had no permission. It is now declared and part of the `default` permission set (`allow-remove-listener`).
-    - `cancelAll()` was rejected on Android and iOS, which required the list of notifications to cancel. It now cancels every pending notification.
-    - `active()` resolved with `{ values: [...] }` instead of an array on Android.
-- [`684feb25`](https://github.com/tauri-apps/plugins-workspace/commit/684feb2510f468f002c57f7bdebf675cf5c1b1d9) ([#3617](https://github.com/tauri-apps/plugins-workspace/pull/3617)) Fixed `isPermissionGranted()` always resolving to `false` on Windows. The initialization script short-circuited the permission check to avoid invoking the backend, but read the permission back before it had been set, so it settled on `denied` instead of `granted`.
-- [`ae3c808e`](https://github.com/tauri-apps/plugins-workspace/commit/ae3c808eb60086f32b1d67bb8ccc525b95333e77) ([#3602](https://github.com/tauri-apps/plugins-workspace/pull/3602)) The plugin's global API script (used with `app.withGlobalTauri`) now resolves the core API from `window.__TAURI__` instead of bundling its own copy of `@tauri-apps/api`. Values created with the core API are now accepted by plugin APIs in global mode (e.g. an `Image` from `window.__TAURI__.image` passed to `clipboardManager.writeImage`, which previously failed the `instanceof` check against the plugin's private copy), and the script is considerably smaller.
-- [`9b29b601`](https://github.com/tauri-apps/plugins-workspace/commit/9b29b601f387ded1f4adb4386623a3c035a5598c) Update MSRV to 1.90 to match tauri.
-- [`a87a3c7d`](https://github.com/tauri-apps/plugins-workspace/commit/a87a3c7d4491bf25589a0b24c285fcd5df3d6337) Update documentation.
-
-## [2.4.0]
-
-- [`db9c5998`](https://github.com/tauri-apps/plugins-workspace/commit/db9c5998feff9384f9cbbefcbe0d45937c00a1fc) ([#3531](https://github.com/tauri-apps/plugins-workspace/pull/3531) by [@Legend-Master](https://github.com/tauri-apps/plugins-workspace/../../Legend-Master)) Fix missing `consumer-rules.pro` on Gradle v9.
-- [`304292d7`](https://github.com/tauri-apps/plugins-workspace/commit/304292d740a666d3903ab58329860fc0fdde2818) ([#2805](https://github.com/tauri-apps/plugins-workspace/pull/2805) by [@Innominus](https://github.com/tauri-apps/plugins-workspace/../../Innominus)) - Add Rust builders for mobile notification action types.
-    - Fix Android action-group entries being stored under the action type ID instead of sequential indices, causing later actions to overwrite earlier ones.
-
-## \[2.3.3]
-
-- [`93426f85`](https://github.com/tauri-apps/plugins-workspace/commit/93426f85120f49beb9f40222bff45185a32d54a9) Fixed an issue that caused docs.rs builds to fail. No user facing changes.
-
-## \[2.3.2]
-
-- [`6c9b61fb`](https://github.com/tauri-apps/plugins-workspace/commit/6c9b61fb658145d13893626112fc489f7458aa17) ([#3039](https://github.com/tauri-apps/plugins-workspace/pull/3039) by [@FabianLars](https://github.com/tauri-apps/plugins-workspace/../../FabianLars)) On Android, updated compileSdk to 36.
-
-## \[2.3.1]
-
-- [`8abb31ee`](https://github.com/tauri-apps/plugins-workspace/commit/8abb31ee59c68197102c0aa699d690b34646ec3c) ([#2905](https://github.com/tauri-apps/plugins-workspace/pull/2905) by [@ChristianPavilonis](https://github.com/tauri-apps/plugins-workspace/../../ChristianPavilonis)) Fix notification scheduling on iOS.
-- [`2d03e2ea`](https://github.com/tauri-apps/plugins-workspace/commit/2d03e2eac2c19ad997d81d23836ab6a219252ffb) ([#2678](https://github.com/tauri-apps/plugins-workspace/pull/2678) by [@Keerthi421](https://github.com/tauri-apps/plugins-workspace/../../Keerthi421)) Added sound support for desktop notifications which was previously only available on mobile platforms.
-
-## \[2.3.0]
-
-- [`f209b2f2`](https://github.com/tauri-apps/plugins-workspace/commit/f209b2f23cb29133c97ad5961fb46ef794dbe063) ([#2804](https://github.com/tauri-apps/plugins-workspace/pull/2804) by [@renovate](https://github.com/tauri-apps/plugins-workspace/../../renovate)) Updated tauri to 2.6
-
-## \[2.2.3]
-
-- [`f634e524`](https://github.com/tauri-apps/plugins-workspace/commit/f634e5248ebe428f8305a59f74c13fc15147fb8e) This is an "empty" release to update the plugins' source files on crates.io and docs.rs. This should fix docs.rs build failures for projects using tauri plugins as dependencies.
-
-## \[2.2.2]
-
-- [`a1b3fa27`](https://github.com/tauri-apps/plugins-workspace/commit/a1b3fa27f11022c9b6622b4fab12d93239eb05de) ([#2515](https://github.com/tauri-apps/plugins-workspace/pull/2515) by [@FabianLars](https://github.com/tauri-apps/plugins-workspace/../../FabianLars)) Re-exported the `Geolocation`, `Haptics`, `Notification`, and `Os` structs so that they show up on docs.rs.
-
-## \[2.2.1]
-
-- [`da5c59e2`](https://github.com/tauri-apps/plugins-workspace/commit/da5c59e2fe879d177e3cfd52fcacce85440423cb) ([#2271](https://github.com/tauri-apps/plugins-workspace/pull/2271) by [@renovate](https://github.com/tauri-apps/plugins-workspace/../../renovate)) Updated `zbus` dependency to version 5. No API changes.
-
-## \[2.2.0]
-
-- [`3a79266b`](https://github.com/tauri-apps/plugins-workspace/commit/3a79266b8cf96a55b1ae6339d725567d45a44b1d) ([#2173](https://github.com/tauri-apps/plugins-workspace/pull/2173) by [@FabianLars](https://github.com/tauri-apps/plugins-workspace/../../FabianLars)) Bumped all plugins to `v2.2.0`. From now, the versions for the Rust and JavaScript packages of each plugin will be in sync with each other.
-
-## \[2.0.1]
-
-- [`a1a82208`](https://github.com/tauri-apps/plugins-workspace/commit/a1a82208ed4ab87f83310be0dc95428aec9ab241) ([#1873](https://github.com/tauri-apps/plugins-workspace/pull/1873) by [@lucasfernog](https://github.com/tauri-apps/plugins-workspace/../../lucasfernog)) Downgrade MSRV to 1.77.2 to support Windows 7.
-
-## \[2.0.0]
-
-- [`e2c4dfb6`](https://github.com/tauri-apps/plugins-workspace/commit/e2c4dfb6af43e5dd8d9ceba232c315f5febd55c1) Update to tauri v2 stable release.
-
-## \[2.0.0-rc.5]
-
-- [`fb85e5dd`](https://github.com/tauri-apps/plugins-workspace/commit/fb85e5dd76688f3ae836890160f9bde843b70167) ([#1785](https://github.com/tauri-apps/plugins-workspace/pull/1785)) Update to tauri 2.0.0-rc.12.
-
-## \[2.0.0-rc.4]
-
-- [`3d301c65`](https://github.com/tauri-apps/plugins-workspace/commit/3d301c654e6f5e7f343e0e0cbb57648002e98f04) ([#1737](https://github.com/tauri-apps/plugins-workspace/pull/1737) by [@lucasfernog](https://github.com/tauri-apps/plugins-workspace/../../lucasfernog)) The notification body is now optional on iOS to match the other platforms.
-
-## \[2.0.0-rc.1]
-
-- [`e2e97db5`](https://github.com/tauri-apps/plugins-workspace/commit/e2e97db51983267f5be84d4f6f0278d58834d1f5) ([#1701](https://github.com/tauri-apps/plugins-workspace/pull/1701) by [@lucasfernog](https://github.com/tauri-apps/plugins-workspace/../../lucasfernog)) Use `PermissionState` from the `tauri` crate, which now also includes a "prompt with rationale" variant for Android (returned when your app must explain to the user why it needs the permission).
-- [`e2e97db5`](https://github.com/tauri-apps/plugins-workspace/commit/e2e97db51983267f5be84d4f6f0278d58834d1f5) ([#1701](https://github.com/tauri-apps/plugins-workspace/pull/1701) by [@lucasfernog](https://github.com/tauri-apps/plugins-workspace/../../lucasfernog)) **Breaking change**: The permission type when using the API is now `'granted' | 'denied' | 'prompt' | 'prompt-with-rationale'` instead of `'granted' | 'denied' | 'default'` for consistency with Rust types. When using the `window.Notification` API the type is unchanged to match the Web API type.
-- [`e2e97db5`](https://github.com/tauri-apps/plugins-workspace/commit/e2e97db51983267f5be84d4f6f0278d58834d1f5) ([#1701](https://github.com/tauri-apps/plugins-workspace/pull/1701) by [@lucasfernog](https://github.com/tauri-apps/plugins-workspace/../../lucasfernog)) Update to tauri 2.0.0-rc.8
-
-## \[2.0.0-rc.2]
-
-- [`b9147758`](https://github.com/tauri-apps/plugins-workspace/commit/b914775898c2bee7ceb20bd17ee595005cd17a64) ([#1679](https://github.com/tauri-apps/plugins-workspace/pull/1679) by [@lucasfernog](https://github.com/tauri-apps/plugins-workspace/../../lucasfernog)) Explicitly set a minimum macOS version for the Swift package.
-
-## \[2.0.0-rc.1]
-
-### changes
-
-- [`6b079cfd`](https://github.com/tauri-apps/plugins-workspace/commit/6b079cfdd107c94abc2c7300f6af00bac3ff4040) ([#1649](https://github.com/tauri-apps/plugins-workspace/pull/1649) by [@ahqsoftwares](https://github.com/tauri-apps/plugins-workspace/../../ahqsoftwares)) Remove targetSdk from build.kts files as it is deprecated and will be removed from DSL v9.0
-
-## \[2.0.0-rc.0]
-
-- [`9887d1`](https://github.com/tauri-apps/plugins-workspace/commit/9887d14bd0e971c4c0f5c1188fc4005d3fc2e29e) Update to tauri RC.
-
-## \[2.0.0-beta.8]
-
-- [`99d6ac0f`](https://github.com/tauri-apps/plugins-workspace/commit/99d6ac0f9506a6a4a1aa59c728157190a7441af6) ([#1606](https://github.com/tauri-apps/plugins-workspace/pull/1606) by [@FabianLars](https://github.com/tauri-apps/plugins-workspace/../../FabianLars)) The JS packages now specify the *minimum* `@tauri-apps/api` version instead of a single exact version.
-- [`6de87966`](https://github.com/tauri-apps/plugins-workspace/commit/6de87966ecc00ad9d91c25be452f1f46bd2b7e1f) ([#1597](https://github.com/tauri-apps/plugins-workspace/pull/1597) by [@Legend-Master](https://github.com/tauri-apps/plugins-workspace/../../Legend-Master)) Update to tauri beta.25.
-
-## \[2.0.0-beta.11]
-
-- [`725ff429`](https://github.com/tauri-apps/plugins-workspace/commit/725ff4295e56df9c30c099813bd64b96fe61b945) ([#1556](https://github.com/tauri-apps/plugins-workspace/pull/1556) by [@FabianLars](https://github.com/tauri-apps/plugins-workspace/../../FabianLars)) Fixed an issue that caused the `notification` plugin's initialization script to cause the WebView on Windows to throw a `STATUS_ACCESS_VIOLATION` error on remote websites.
-
-## \[2.0.0-beta.7]
-
-- [`22a17980`](https://github.com/tauri-apps/plugins-workspace/commit/22a17980ff4f6f8c40adb1b8f4ffc6dae2fe7e30) ([#1537](https://github.com/tauri-apps/plugins-workspace/pull/1537) by [@lucasfernog](https://github.com/tauri-apps/plugins-workspace/../../lucasfernog)) Update to tauri beta.24.
-
-## \[2.0.0-beta.6]
-
-- [`76daee7a`](https://github.com/tauri-apps/plugins-workspace/commit/76daee7aafece34de3092c86e531cf9eb1138989) ([#1512](https://github.com/tauri-apps/plugins-workspace/pull/1512) by [@renovate](https://github.com/tauri-apps/plugins-workspace/../../renovate)) Update to tauri beta.23.
-
-## \[2.0.0-beta.8]
-
-- [`3779fb50`](https://github.com/tauri-apps/plugins-workspace/commit/3779fb50634fba4d7e7eb0bfecc2216349b9d64d) ([#1432](https://github.com/tauri-apps/plugins-workspace/pull/1432) by [@lucasfernog](https://github.com/tauri-apps/plugins-workspace/../../lucasfernog)) Use notify_rust from crates.io instead of local fork.
-
-## \[2.0.0-beta.5]
-
-- [`9013854f`](https://github.com/tauri-apps/plugins-workspace/commit/9013854f42a49a230b9dbb9d02774765528a923f)([#1382](https://github.com/tauri-apps/plugins-workspace/pull/1382)) Update to tauri beta.22.
-
-## \[2.0.0-beta.4]
-
-- [`430bd6f4`](https://github.com/tauri-apps/plugins-workspace/commit/430bd6f4f379bee5d232ae6b098ae131db7f178a)([#1363](https://github.com/tauri-apps/plugins-workspace/pull/1363)) Update to tauri beta.20.
-
-## \[2.0.0-beta.3]
-
-- [`bd1ed590`](https://github.com/tauri-apps/plugins-workspace/commit/bd1ed5903ffcce5500310dac1e59e8c67674ef1e)([#1237](https://github.com/tauri-apps/plugins-workspace/pull/1237)) Update to tauri beta.17.
-
-## \[2.0.0-beta.4]
-
-- [`326df688`](https://github.com/tauri-apps/plugins-workspace/commit/326df6883998d416fc0837583ed972854628bb52)([#1236](https://github.com/tauri-apps/plugins-workspace/pull/1236)) Fixes command argument parsing on iOS.
-
-## \[2.0.0-beta.3]
-
-- [`a04ea2f`](https://github.com/tauri-apps/plugins-workspace/commit/a04ea2f38294d5a3987578283badc8eec87a7752)([#1071](https://github.com/tauri-apps/plugins-workspace/pull/1071)) The global API script is now only added to the binary when the `withGlobalTauri` config is true.
-- [`62ce5df`](https://github.com/tauri-apps/plugins-workspace/commit/62ce5df52ca3c86786e711ef193a206e7b0dc0cf)([#1096](https://github.com/tauri-apps/plugins-workspace/pull/1096)) Fix development mode check to set the app ID on macOS.
-
-## \[2.0.0-beta.2]
-
-- [`99bea25`](https://github.com/tauri-apps/plugins-workspace/commit/99bea2559c2c0648c2519c50a18cd124dacef57b)([#1005](https://github.com/tauri-apps/plugins-workspace/pull/1005)) Update to tauri beta.8.
-
-## \[2.0.0-beta.1]
-
-- [`569defb`](https://github.com/tauri-apps/plugins-workspace/commit/569defbe9492e38938554bb7bdc1be9151456d21) Update to tauri beta.4.
-
-## \[2.0.0-beta.0]
-
-- [`d198c01`](https://github.com/tauri-apps/plugins-workspace/commit/d198c014863ee260cb0de88a14b7fc4356ef7474)([#862](https://github.com/tauri-apps/plugins-workspace/pull/862)) Update to tauri beta.
-- [`1b1d795`](https://github.com/tauri-apps/plugins-workspace/commit/1b1d795b5866e5524a9a9925f0fb7b2f8e3e3675)([#874](https://github.com/tauri-apps/plugins-workspace/pull/874)) Export the missing `Schedule` class.
-- [`8dea78a`](https://github.com/tauri-apps/plugins-workspace/commit/8dea78ac7dcb502159e66bad464094696aa257d4)([#909](https://github.com/tauri-apps/plugins-workspace/pull/909)) Fixes deserialization and implementation bugs with scheduled notifications on Android.
-
-## \[2.0.0-alpha.5]
-
-- [`387c2f9`](https://github.com/tauri-apps/plugins-workspace/commit/387c2f9e0ce4c75c07ffa3fd76391a25b58f5daf)([#802](https://github.com/tauri-apps/plugins-workspace/pull/802)) Update to @tauri-apps/api v2.0.0-alpha.13.
-
-## \[2.0.0-alpha.4]
-
-- [`387c2f9`](https://github.com/tauri-apps/plugins-workspace/commit/387c2f9e0ce4c75c07ffa3fd76391a25b58f5daf)([#802](https://github.com/tauri-apps/plugins-workspace/pull/802)) Update to @tauri-apps/api v2.0.0-alpha.12.
-
-## \[2.0.0-alpha.3]
-
-- [`e438e0a`](https://github.com/tauri-apps/plugins-workspace/commit/e438e0a62d4b430a5159f05f13ecd397dd891a0d)([#676](https://github.com/tauri-apps/plugins-workspace/pull/676)) Update to @tauri-apps/api v2.0.0-alpha.11.
-
-## \[2.0.0-alpha.2]
-
-- [`5c13736`](https://github.com/tauri-apps/plugins-workspace/commit/5c137365c60790e8d4037d449e8237aa3fffdab0)([#673](https://github.com/tauri-apps/plugins-workspace/pull/673)) Update to @tauri-apps/api v2.0.0-alpha.9.
-
-## \[2.0.0-alpha.3]
-
-- [`4e2cef9`](https://github.com/tauri-apps/plugins-workspace/commit/4e2cef9b702bbbb9cf4ee17de50791cb21f1b2a4)([#593](https://github.com/tauri-apps/plugins-workspace/pull/593)) Update to alpha.12.
-
-## \[2.0.0-alpha.1]
-
-- [`d74fc0a`](https://github.com/tauri-apps/plugins-workspace/commit/d74fc0a097996e90a37be8f57d50b7d1f6ca616f)([#555](https://github.com/tauri-apps/plugins-workspace/pull/555)) Update to alpha.11.
-
-## \[2.0.0-alpha.1]
-
-- [`d8b4aca`](https://github.com/tauri-apps/plugins-workspace/commit/d8b4aca69f628b170804ecb982e2c319d026ef47)([#414](https://github.com/tauri-apps/plugins-workspace/pull/414)) Use `window.__TAURI_INVOKE__` instead of `window.__TAURI__` in init.js, fixes usage in apps without `withGlobalTauri` enabled.
-- [`7d71ad4`](https://github.com/tauri-apps/plugins-workspace/commit/7d71ad4e587bcf47ea34645f5b226945e487b765) Play a default sound when showing a notification on Windows.
-
-## \[2.0.0-alpha.0]
-
-- [`717ae67`](https://github.com/tauri-apps/plugins-workspace/commit/717ae670978feb4492fac1f295998b93f2b9347f)([#371](https://github.com/tauri-apps/plugins-workspace/pull/371)) First v2 alpha release!
-`d8b4aca`](https://github.com/tauri-apps/plugins-workspace/commit/d8b4aca69f628b170804ecb982e2c319d026ef47)([#414](https://github.com/tauri-apps/plugins-workspace/pull/414)) Use `window.__TAURI_INVOKE__` instead of `window.__TAURI__` in init.js, fixes usage in apps without `withGlobalTauri` enabled.
-- [`7d71ad4`](https://github.com/tauri-apps/plugins-workspace/commit/7d71ad4e587bcf47ea34645f5b226945e487b765) Play a default sound when showing a notification on Windows.
-
-## \[2.0.0-alpha.0]
-
-- [`717ae67`](https://github.com/tauri-apps/plugins-workspace/commit/717ae670978feb4492fac1f295998b93f2b9347f)([#371](https://github.com/tauri-apps/plugins-workspace/pull/371)) First v2 alpha release!
-```
-
-### Text 627
-
-Shipped by:
-
-- tauri-plugin-notification 2.8.0 (crate): `README.md`
-
-````text
-![plugin-notification](https://github.com/tauri-apps/plugins-workspace/raw/v2/plugins/notification/banner.png)
-
-Send message notifications (brief auto-expiring OS window element) to your user. Can also be used with the Notification Web API.
-
-| Platform | Supported |
-| -------- | --------- |
-| Linux    | ✓         |
-| Windows  | ✓         |
-| macOS    | ✓         |
-| Android  | ✓         |
-| iOS      | ✓         |
-
-## Install
-
-_This plugin requires a Rust version of at least **1.90**_
-
-There are three general methods of installation that we can recommend.
-
-1. Use crates.io and npm (easiest, and requires you to trust that our publishing pipeline worked)
-2. Pull sources directly from Github using git tags / revision hashes (most secure)
-3. Git submodule install this repo in your tauri project and then use file protocol to ingest the source (most secure, but inconvenient to use)
-
-Install the Core plugin by adding the following to your `Cargo.toml` file:
-
-`src-tauri/Cargo.toml`
-
-```toml
-[dependencies]
-tauri-plugin-notification = "2.0.0"
-# alternatively with Git:
-tauri-plugin-notification = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v2" }
-```
-
-You can install the JavaScript Guest bindings using your preferred JavaScript package manager:
-
-```sh
-pnpm add @tauri-apps/plugin-notification
-# or
-npm add @tauri-apps/plugin-notification
-# or
-yarn add @tauri-apps/plugin-notification
-```
-
-## Usage
-
-First you need to register the core plugin with Tauri:
-
-`src-tauri/src/lib.rs`
-
-```rust
-fn main() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init())
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
-```
-
-Then you need to add the permissions to your capabilities file:
-
-`src-tauri/capabilities/main.json`
-
-```json
-{
-  ...
-  "permissions": [
-    ...
-    "notification:default"
-  ],
-  ...
-}
-```
-
-Afterwards all the plugin's APIs are available through the JavaScript guest bindings:
-
-```javascript
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification
-} from '@tauri-apps/plugin-notification'
-
-async function checkPermission() {
-  if (!(await isPermissionGranted())) {
-    return (await requestPermission()) === 'granted'
-  }
-  return true
-}
-
-export async function enqueueNotification(title, body) {
-  if (!(await checkPermission())) {
-    return
-  }
-  sendNotification({ title, body })
-}
-```
-
-### Notification with Sound
-
-You can add sound to your notifications on all platforms (desktop and mobile):
-
-```javascript
-import { sendNotification } from '@tauri-apps/plugin-notification'
-import { platform } from '@tauri-apps/api/os'
-
-// Basic notification with sound
-sendNotification({
-  title: 'New Message',
-  body: 'You have a new message',
-  sound: 'notification.wav' // Path to sound file
-})
-
-// Platform-specific sounds
-async function sendPlatformSpecificNotification() {
-  const platformName = platform()
-
-  let soundPath
-  if (platformName === 'darwin') {
-    // On macOS: use system sounds or sound files in the app bundle
-    soundPath = 'Ping' // macOS system sound
-  } else if (platformName === 'linux') {
-    // On Linux: use XDG theme sounds or file paths
-    soundPath = 'message-new-instant' // XDG theme sound
-  } else {
-    // On Windows: use file paths
-    soundPath = 'notification.wav'
-  }
-
-  sendNotification({
-    title: 'Platform-specific Notification',
-    body: 'This notification uses platform-specific sound',
-    sound: soundPath
-  })
-}
-```
-
-## Contributing
-
-PRs accepted. Please make sure to read the Contributing Guide before making a pull request.
-
-## Partners
-
-<table>
-  <tbody>
-    <tr>
-      <td align="center" valign="middle">
-        <a href="https://crabnebula.dev" target="_blank">
-          <img src="https://github.com/tauri-apps/plugins-workspace/raw/v2/.github/sponsors/crabnebula.svg" alt="CrabNebula" width="283">
-        </a>
-      </td>
-    </tr>
-  </tbody>
-</table>
-
-For the complete list of sponsors please visit our [website](https://tauri.app#sponsors) and [Open Collective](https://opencollective.com/tauri).
-
-## License
-
-Code: (c) 2015 - Present - The Tauri Programme within The Commons Conservancy.
-
-MIT or MIT/Apache 2.0 where applicable.
-````
-
-### Text 628
-
-Shipped by:
-
-- tauri-plugin-notification 2.8.0 (crate): `ios/README.md`
-
-```text
-# Tauri Plugin {{ plugin_name_original }}
-
-A description of this package.
-```
-
-### Text 629
-
-Shipped by:
-
-- tauri-plugin-notification 2.8.0 (crate): `permissions/autogenerated/reference.md`
-
-```text
-## Default Permission
-
-This permission set configures which
-notification features are by default exposed.
-
-#### Granted Permissions
-
-It allows all notification related features.
-
-#### This default permission set includes the following:
-
-- `allow-is-permission-granted`
-- `allow-request-permission`
-- `allow-notify`
-- `allow-register-action-types`
-- `allow-register-listener`
-- `allow-remove-listener`
-- `allow-cancel`
-- `allow-get-pending`
-- `allow-remove-active`
-- `allow-get-active`
-- `allow-check-permissions`
-- `allow-show`
-- `allow-batch`
-- `allow-list-channels`
-- `allow-delete-channel`
-- `allow-create-channel`
-- `allow-permission-state`
-
-## Permission Table
-
-<table>
-<tr>
-<th>Identifier</th>
-<th>Description</th>
-</tr>
-
-
-<tr>
-<td>
-
-`notification:allow-batch`
-
-</td>
-<td>
-
-Enables the batch command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-batch`
-
-</td>
-<td>
-
-Denies the batch command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-cancel`
-
-</td>
-<td>
-
-Enables the cancel command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-cancel`
-
-</td>
-<td>
-
-Denies the cancel command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-check-permissions`
-
-</td>
-<td>
-
-Enables the check_permissions command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-check-permissions`
-
-</td>
-<td>
-
-Denies the check_permissions command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-create-channel`
-
-</td>
-<td>
-
-Enables the create_channel command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-create-channel`
-
-</td>
-<td>
-
-Denies the create_channel command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-delete-channel`
-
-</td>
-<td>
-
-Enables the delete_channel command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-delete-channel`
-
-</td>
-<td>
-
-Denies the delete_channel command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-get-active`
-
-</td>
-<td>
-
-Enables the get_active command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-get-active`
-
-</td>
-<td>
-
-Denies the get_active command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-get-pending`
-
-</td>
-<td>
-
-Enables the get_pending command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-get-pending`
-
-</td>
-<td>
-
-Denies the get_pending command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-is-permission-granted`
-
-</td>
-<td>
-
-Enables the is_permission_granted command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-is-permission-granted`
-
-</td>
-<td>
-
-Denies the is_permission_granted command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-list-channels`
-
-</td>
-<td>
-
-Enables the list_channels command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-list-channels`
-
-</td>
-<td>
-
-Denies the list_channels command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-notify`
-
-</td>
-<td>
-
-Enables the notify command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-notify`
-
-</td>
-<td>
-
-Denies the notify command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-permission-state`
-
-</td>
-<td>
-
-Enables the permission_state command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-permission-state`
-
-</td>
-<td>
-
-Denies the permission_state command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-register-action-types`
-
-</td>
-<td>
-
-Enables the register_action_types command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-register-action-types`
-
-</td>
-<td>
-
-Denies the register_action_types command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-register-listener`
-
-</td>
-<td>
-
-Enables the register_listener command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-register-listener`
-
-</td>
-<td>
-
-Denies the register_listener command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-remove-active`
-
-</td>
-<td>
-
-Enables the remove_active command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-remove-active`
-
-</td>
-<td>
-
-Denies the remove_active command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-remove-listener`
-
-</td>
-<td>
-
-Enables the remove_listener command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-remove-listener`
-
-</td>
-<td>
-
-Denies the remove_listener command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-request-permission`
-
-</td>
-<td>
-
-Enables the request_permission command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-request-permission`
-
-</td>
-<td>
-
-Denies the request_permission command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:allow-show`
-
-</td>
-<td>
-
-Enables the show command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`notification:deny-show`
-
-</td>
-<td>
-
-Denies the show command without any pre-configured scope.
-
-</td>
-</tr>
-</table>
-```
-
-### Text 630
+### Text 612
 
 Shipped by:
 
@@ -92712,7 +88522,7 @@ Logo: CC-BY-NC-ND
 - Original Tauri Logo Designs by [Daniel Thompson-Yvetot](https://github.com/nothingismagick) and [Guillaume Chau](https://github.com/akryum)
 ```
 
-### Text 631
+### Text 613
 
 Shipped by:
 
@@ -92765,7 +88575,7 @@ Logo: CC-BY-NC-ND
 - Original Tauri Logo Designs by [Daniel Thompson-Yvetot](https://github.com/nothingismagick) and [Guillaume Chau](https://github.com/akryum)
 ```
 
-### Text 632
+### Text 614
 
 Shipped by:
 
@@ -92816,298 +88626,7 @@ Logo: CC-BY-NC-ND
 - Original Tauri Logo Designs by [Daniel Thompson-Yvetot](https://github.com/nothingismagick) and [Guillaume Chau](https://github.com/akryum)
 ```
 
-### Text 633
-
-Shipped by:
-
-- tauri-winrt-notification 0.8.1 (crate): `.changes/README.md`
-
-````text
-# Changes
-
-##### via https://github.com/jbolda/covector
-
-As you create PRs and make changes that require a version bump, please add a new markdown file in this folder. You do not note the version _number_, but rather the type of bump that you expect: major, minor, or patch. The filename is not important, as long as it is a `.md`, but we recommend it represents the overall change for our sanity.
-
-When you select the version bump required, you do _not_ need to consider dependencies. Only note the package with the actual change, and any packages that depend on that package will be bumped automatically in the process.
-
-Use the following format:
-
-```md
----
-"winrt-notifications": patch
----
-
-Change summary goes here
-```
-
-Summaries do not have a specific character limit, but are text only. These summaries are used within the (future implementation of) changelogs. They will give context to the change and also point back to the original PR if more details and context are needed.
-
-Changes will be designated as a `major`, `minor` or `patch` as further described in [semver](https://semver.org/).
-
-Given a version number MAJOR.MINOR.PATCH, increment the:
-
-- MAJOR version when you make incompatible API changes,
-- MINOR version when you add functionality in a backwards compatible manner, and
-- PATCH version when you make backwards compatible bug fixes.
-
-Additional labels for pre-release and build metadata are available as extensions to the MAJOR.MINOR.PATCH format, but will be discussed prior to usage (as extra steps will be necessary in consideration of merging and publishing).
-````
-
-### Text 634
-
-Shipped by:
-
-- tauri-winrt-notification 0.8.1 (crate): `CHANGELOG.md`
-
-```text
-# Changelog
-
-## \[0.8.1]
-
-- [`31e18ea`](https://github.com/tauri-apps/winrt-notification/commit/31e18ea433a5c26f882335fb9556b82c726fa000) ([#60](https://github.com/tauri-apps/winrt-notification/pull/60) by [@FabianLars](https://github.com/tauri-apps/winrt-notification/../../FabianLars)) Fixed an issue that caused audio and buttons to be missing since `0.8.0`.
-
-## \[0.8.0]
-
-- [`da13f08`](https://github.com/tauri-apps/winrt-notification/commit/da13f080d96599cd8b5d5b99f0abffbb01e9081d) ([#56](https://github.com/tauri-apps/winrt-notification/pull/56) by [@FabianLars](https://github.com/tauri-apps/winrt-notification/../../FabianLars)) Raise MSRV to `1.82`.
-- [`5f6cc46`](https://github.com/tauri-apps/winrt-notification/commit/5f6cc46e333d57d9d204fc0b8a821915310a766c) ([#57](https://github.com/tauri-apps/winrt-notification/pull/57) by [@FabianLars](https://github.com/tauri-apps/winrt-notification/../../FabianLars)) Removed manual string escape in favor of calling Windows APIs.
-- [`da13f08`](https://github.com/tauri-apps/winrt-notification/commit/da13f080d96599cd8b5d5b99f0abffbb01e9081d) ([#56](https://github.com/tauri-apps/winrt-notification/pull/56) by [@FabianLars](https://github.com/tauri-apps/winrt-notification/../../FabianLars)) Update `windows` crate to `0.62`. `on_activated` now takes an `Fn` instead of `FnMut`.
-
-## \[0.7.3]
-
-- [`09a4135`](https://github.com/tauri-apps/winrt-notification/commit/09a4135a871c6ead29832dca5698948fb30bf94b) ([#53](https://github.com/tauri-apps/winrt-notification/pull/53) by [@FabianLars](https://github.com/tauri-apps/winrt-notification/../../FabianLars)) Drop quick-xml dependency.
-
-## \[0.7.2]
-
-- [`a7ec562`](https://github.com/tauri-apps/winrt-notification/commit/a7ec5622c4670d59845ff43b74a7c01b52a1945a) ([#46](https://github.com/tauri-apps/winrt-notification/pull/46) by [@renovate](https://github.com/tauri-apps/winrt-notification/../../renovate)) Update `windows` crate to `0.61`.
-
-## \[0.7.1]
-
-- [`3ab4d18`](https://github.com/tauri-apps/winrt-notification/commit/3ab4d1867bcf91313989093e05869fd5fd40e79b) ([#43](https://github.com/tauri-apps/winrt-notification/pull/43) by [@FabianLars](https://github.com/tauri-apps/winrt-notification/../../FabianLars)) Update `windows` crate to 0.60. This bumps the MSRV to 1.74.
-
-## \[0.7.0]
-
-- [`987f44f`](https://github.com/tauri-apps/winrt-notification/commit/987f44fe4793ea9b52682adc52d700c581097b4d) ([#37](https://github.com/tauri-apps/winrt-notification/pull/37) by [@iKineticate](https://github.com/tauri-apps/winrt-notification/../../iKineticate)) Added progress bar APIs, `Toast::progress` and `Toast::set_progress`
-
-## \[0.6.0]
-
-- [`30d14af`](https://github.com/tauri-apps/winrt-notification/commit/30d14afed61a8a42c408f8a6665cdc4429bfc06b) ([#33](https://github.com/tauri-apps/winrt-notification/pull/33) by [@amrbashir](https://github.com/tauri-apps/winrt-notification/../../amrbashir)) Update `windows` crate to `0.58`
-
-## \[0.5.0]
-
-- [`34b1516`](https://github.com/tauri-apps/winrt-notification/commit/34b1516d8ba07e8ab3ceed3181784902979c0886) Update `windows` crate to `0.57` and updated MSRV to `1.70`
-
-## \[0.4.0]
-
-- [`ac6dd7e`](https://github.com/tauri-apps/winrt-notification/commit/ac6dd7e8fe6193722f963e7b08aab0a150134fe8)([#29](https://github.com/tauri-apps/winrt-notification/pull/29)) Added `Error` enum and a `Result` alias type. Also changed `Toast::on_activated`, `Toast::on_dismissed` and `Toas::show` to use the new `Result` alias type.
-
-## \[0.3.1]
-
-- [`5cf720a`](https://github.com/tauri-apps/winrt-notification/commit/5cf720a71ce03f72ba726292096008f3b9aa81a9)([#27](https://github.com/tauri-apps/winrt-notification/pull/27)) Add `Toast::on_dismissed` handler.
-
-## \[0.3.0]
-
-- [`c0b9b2f`](https://github.com/tauri-apps/winrt-notification/commit/c0b9b2fc149c0b0cb5846c263f2db709218426ff)([#25](https://github.com/tauri-apps/winrt-notification/pull/25)) Add support for adding buttons using `Toast::add_button`. This also comes with a change to `Toast::on_activated` wich will now take an `Option<String>` argument, containing which button was pressed if any.
-
-## \[0.2.1]
-
-- [`657a812`](https://github.com/tauri-apps/winrt-notification/commit/657a812db80182a1853232fcd87e0fa8483bdc8f)([#22](https://github.com/tauri-apps/winrt-notification/pull/22)) Update `windows` crate to `0.56`
-
-## \[0.2.0]
-
-- [`1427bbf`](https://github.com/tauri-apps/winrt-notification/commit/1427bbfadc0152d2d42b25d6385f43ce551e3aeb)([#18](https://github.com/tauri-apps/winrt-notification/pull/18)) Update MSRV to `1.62`
-- [`1427bbf`](https://github.com/tauri-apps/winrt-notification/commit/1427bbfadc0152d2d42b25d6385f43ce551e3aeb)([#18](https://github.com/tauri-apps/winrt-notification/pull/18)) Update `windows` crate to `0.54`
-
-## \[0.1.3]
-
-- [`7aa2785`](https://github.com/tauri-apps/winrt-notification/commit/7aa27850c28470006cf75357d9de5474a0139e50) Update `windows` crate to `0.51`
-
-## \[0.1.2]
-
-- [`7c19ca4`](https://github.com/tauri-apps/winrt-notification/commit/7c19ca45410e5d6575f00137dcdb49a903346b4b)([#9](https://github.com/tauri-apps/winrt-notification/pull/9)) Add `Toast::on_activated` to add a handler to run when the toast is activated.
-
-## \[0.1.1]
-
-- [`2387db8`](https://github.com/tauri-apps/winrt-notification/commit/2387db87b0620d7cb6341d931c22454058b7b2da)([#7](https://github.com/tauri-apps/winrt-notification/pull/7)) Fix parsing loopable sounds from string as well.
-
-## \[0.1.0]
-
-- Set MSRV to 1.59
-  - [ebca119](https://github.com/tauri-apps/winrt-notification/commit/ebca1199adfb913dd3b701693d11b076bf063e9a) Split changefile on 2022-08-13
-  - [b2b7e4c](https://github.com/tauri-apps/winrt-notification/commit/b2b7e4cd894bdc3f22057532436499204348ea1a) Reduce msrv to 1.56 on 2022-08-14
-  - [b83f6f8](https://github.com/tauri-apps/winrt-notification/commit/b83f6f839e3774d4e229bee44e2f55eb0aa84bfb) Update to 0.39 on 2022-08-25
-- Update windows-rs version to 0.39
-  - [005a107](https://github.com/tauri-apps/winrt-notification/commit/005a107d8c747e99aaf54a73f738f732dbc71bc8) Add changefile on 2022-08-13
-  - [ebca119](https://github.com/tauri-apps/winrt-notification/commit/ebca1199adfb913dd3b701693d11b076bf063e9a) Split changefile on 2022-08-13
-  - [c9e8361](https://github.com/tauri-apps/winrt-notification/commit/c9e8361b5c31bde63e33ce42ee95b5d207860974) chore: update changefile on 2022-08-16
-  - [b83f6f8](https://github.com/tauri-apps/winrt-notification/commit/b83f6f839e3774d4e229bee44e2f55eb0aa84bfb) Update to 0.39 on 2022-08-25
-
-## 0.5.1
-
-- Re-export windows::runtime::Result
-- Add support for scenarios
-
-## 0.5.0
-
-- Updated dependencies
-- Added support for gnu targets without msys
-
-## 0.4.0
-
-- Updated dependencies
-
-## 0.3.1
-
-- Allow the crate build with the gnu toolchain with msys [#4][i4]
-
-## 0.3.0
-
-- Switched to the windows-rs crate, dropped winapi and winrt crate.
-
-## 0.2.4
-
-- Made most enums Copy/Clonable.
-
-## 0.2.3
-
-- Fixed issue where toasts weren't appearing after a windows update.
-
-## 0.2.2
-
-- Fixed linking issue introduced with winapi 0.3.4 [#4][i4]
-
-## 0.2.1
-
-- Implemented from_str on Sound enum.
-
-## 0.2.0
-
-- Added Windows 8.1 support [#3][i3]
-- Incremented winrt dependency
-
-## 0.1.5
-
-- Re-export winrt::Error [#2][i2].
-- Added workaround for AppId issue [#1][i1].
-
-## 0.1.4
-
-- Initial release
-
-[i1]: https://github.com/allenbenz/winrt-notification/issues/1
-
-[i2]: https://github.com/allenbenz/winrt-notification/issues/2
-
-[i3]: https://github.com/allenbenz/winrt-notification/issues/3
-
-[i4]: https://github.com/allenbenz/winrt-notification/issues/4
-```
-
-### Text 635
-
-Shipped by:
-
-- tauri-winrt-notification 0.8.1 (crate): `LICENSE.spdx`
-
-```text
-SPDXVersion: SPDX-2.1
-DataLicense: CC0-1.0
-PackageName: winrt-notification
-DataFormat: SPDXRef-1
-PackageSupplier: Organization: The Tauri Programme in the Commons Conservancy
-PackageHomePage: https://tauri.app
-PackageLicenseDeclared: Apache-2.0
-PackageLicenseDeclared: MIT
-PackageCopyrightText: 2022-2022, The Tauri Programme in the Commons Conservancy
-PackageSummary: <text>An incomplete wrapper over the WinRT toast api.
-                </text>
-PackageComment: <text>The package includes the following libraries; see
-Relationship information.
-                </text>
-Created: 2019-05-20T09:00:00Z
-PackageDownloadLocation: git://github.com/tauri-apps/winrt-notification
-PackageDownloadLocation: git+https://github.com/tauri-apps/winrt-notification.git
-PackageDownloadLocation: git+ssh://github.com/tauri-apps/winrt-notification.git
-Creator: Person: Daniel Thompson-Yvetot
-```
-
-### Text 636
-
-Shipped by:
-
-- tauri-winrt-notification 0.8.1 (crate): `README.md`
-
-````text
-# winrt-notification
-
-[![license](https://img.shields.io/crates/l/tauri-winrt-notification.svg)](https://crates.io/crates/tauri-winrt-notification/)
-[![documentation](https://img.shields.io/crates/v/tauri-winrt-notification?style=flat-square)](https://docs.rs/tauri-winrt-notification)
-
-
-An incomplete wrapper over the WinRT toast api
-
-Tested in Windows 10 and 8.1. Untested in Windows 8, might work.
-
-Todo:
-* Add support for Adaptive Content
-
-Known Issues:
-* Will not work for Windows 7.
-
-Limitations:
-* Windows 8.1 only supports a single image, the last image (icon, hero, image) will be the one on the toast
-
-## Usage
-
-```toml
-#Cargo.toml
-[dependencies]
-tauri-winrt-notification = "0.5.1"
-```
-
-## Examples
-
-```rust
-extern crate winrt_notification;
-use tauri_winrt_notification::{Duration, Sound, Toast};
-
-fn main() {
-    Toast::new(Toast::POWERSHELL_APP_ID)
-        .title("Look at this flip!")
-        .text1("(╯°□°）╯︵ ┻━┻")
-        .sound(Some(Sound::SMS))
-        .duration(Duration::Short)
-        .show()
-        .expect("unable to toast");
-}
-```
-
-```rust
-extern crate winrt_notification;
-use std::path::Path;
-use tauri_winrt_notification::{IconCrop, Toast};
-
-fn main() {
-    Toast::new("Your AppUserModeId")
-        .hero(&Path::new("C:\\absolute\\path\\to\\image.jpeg"), "alt text")
-        .icon(
-            &Path::new("c:/this/style/works/too/image.png"),
-            IconCrop::Circular,
-            "alt text",
-        )
-        .title("Lots of pictures here")
-        .text1("One above the text as the hero")
-        .text2("One to the left as an icon, and several below")
-        .image(&Path::new("c:/photos/sun.png"), "the sun")
-        .image(&Path::new("c:/photos/moon.png"), "the moon")
-        .sound(None) // will be silent
-        .show()
-        .expect("unable to toast");
-}
-```
-````
-
-### Text 637
+### Text 615
 
 Shipped by:
 
@@ -93141,7 +88660,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 638
+### Text 616
 
 Shipped by:
 
@@ -93246,7 +88765,7 @@ as a byte offset.
 [2-3 finger tree]: https://www.staff.city.ac.uk/~ross/papers/FingerTree.html
 ```
 
-### Text 639
+### Text 617
 
 Shipped by:
 
@@ -93491,7 +89010,7 @@ be dual licensed as above, without any additional terms or conditions.
 </sub>
 ````
 
-### Text 640
+### Text 618
 
 Shipped by:
 
@@ -93875,7 +89394,7 @@ Fixes:
 * Fixed multi-page TIFF encoding writing incorrect offsets.
 ```
 
-### Text 641
+### Text 619
 
 Shipped by:
 
@@ -93905,7 +89424,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 642
+### Text 620
 
 Shipped by:
 
@@ -93972,7 +89491,7 @@ fuzzing harness can be run with recommended settings using
 `cargo fuzz run decode_image -snone -- -timeout=5`.
 ```
 
-### Text 643
+### Text 621
 
 Shipped by:
 
@@ -93989,7 +89508,7 @@ usda/*.tif
   license: Public Domain
 ```
 
-### Text 644
+### Text 622
 
 Shipped by:
 
@@ -94002,7 +89521,7 @@ kodim*.png: Eastman Kodak Company, released for unrestricted use
 Transparency.png: Public Domain, according to Wikimedia
 ```
 
-### Text 645
+### Text 623
 
 Shipped by:
 
@@ -94032,7 +89551,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 646
+### Text 624
 
 Shipped by:
 
@@ -94092,7 +89611,7 @@ time by you, as defined in the Apache-2.0 license, shall be dual licensed as abo
 additional terms or conditions.
 ```
 
-### Text 647
+### Text 625
 
 Shipped by:
 
@@ -94158,7 +89677,7 @@ bitmasking to provide basic string manipulation operations:
 For more information on development, authorship, contributing etc. please visit [`ICU4X home page`](https://github.com/unicode-org/icu4x).
 ````
 
-### Text 648
+### Text 626
 
 Shipped by:
 
@@ -94201,7 +89720,7 @@ With `tinyvec`, any uncaught bugs *can't* lead to UB, because the crate is safe 
 If you want that absolute level of assurance against UB, use `tinyvec`.
 ```
 
-### Text 649
+### Text 627
 
 Shipped by:
 
@@ -94353,7 +89872,7 @@ Shipped by:
 Initial Stable Release.
 ```
 
-### Text 650
+### Text 628
 
 Shipped by:
 
@@ -94473,7 +89992,7 @@ cargo test --test debugger_visualizer --features debugger_visualizer -- --test-t
 ```
 ````
 
-### Text 651
+### Text 629
 
 Shipped by:
 
@@ -94493,7 +90012,7 @@ When a crash is found:
 ```
 ````
 
-### Text 652
+### Text 630
 
 Shipped by:
 
@@ -99465,7 +94984,7 @@ another. This changelog entry contains a highlight
 - Initial crate released based on [RFC](https://github.com/tokio-rs/tokio-rfcs/pull/3).
 ````
 
-### Text 653
+### Text 631
 
 Shipped by:
 
@@ -99495,7 +95014,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 654
+### Text 632
 
 Shipped by:
 
@@ -99765,7 +95284,7 @@ for inclusion in Tokio by you shall be licensed as MIT, without any additional
 terms or conditions.
 ````
 
-### Text 655
+### Text 633
 
 Shipped by:
 
@@ -100051,7 +95570,7 @@ let n = arc_stream.by_ref().read(buf).await?;
 ```
 ````
 
-### Text 656
+### Text 634
 
 Shipped by:
 
@@ -100089,7 +95608,7 @@ license, shall be dual-licensed as above, without any additional terms or
 conditions.
 ```
 
-### Text 657
+### Text 635
 
 Shipped by:
 
@@ -100119,7 +95638,7 @@ license, shall be dual-licensed as above, without any additional terms or
 conditions.
 ```
 
-### Text 658
+### Text 636
 
 Shipped by:
 
@@ -100149,7 +95668,7 @@ at your option.
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
 ```
 
-### Text 659
+### Text 637
 
 Shipped by:
 
@@ -100181,7 +95700,7 @@ license, shall be dual-licensed as above, without any additional terms or
 conditions.
 ```
 
-### Text 660
+### Text 638
 
 Shipped by:
 
@@ -101259,12 +96778,11 @@ Thanks to @oli-cosmian and @Kobzol for contributing to this release!
 - Initial release
 ```
 
-### Text 661
+### Text 639
 
 Shipped by:
 
 - tracing 0.1.44 (crate): `LICENSE`
-- tracing-attributes 0.1.31 (crate): `LICENSE`
 - tracing-core 0.1.36 (crate): `LICENSE`
 
 ```text
@@ -101295,7 +96813,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 662
+### Text 640
 
 Shipped by:
 
@@ -101773,593 +97291,7 @@ for inclusion in Tokio by you, shall be licensed as MIT, without any additional
 terms or conditions.
 ````
 
-### Text 663
-
-Shipped by:
-
-- tracing-attributes 0.1.31 (crate): `CHANGELOG.md`
-
-````text
-# 0.1.31 (November 26, 2025)
-
-### Added
-
-- Support constant expressions as instrument field names ([#3158])
-
-[#3158]: https://github.com/tokio-rs/tracing/pull/#3158
-
-# 0.1.30 (June 17, 2025)
-
-### Fixed
-
-- Fix `tracing::instrument` regression around shadowing ([#3311])
-
-[#3311]: https://github.com/tokio-rs/tracing/pull/3311
-
-# 0.1.29 (June 6, 2025)
-
-### Changed
-
-- Bump MSRV to 1.65 ([#3033])
-
-### Fixed
-
-- Let `dead_code` lint work on `#[instrument]`ed functions ([#3108])
-- Globally qualify attribute paths ([#3126])
-
-[#3033]: https://github.com/tokio-rs/tracing/pull/3033
-[#3108]: https://github.com/tokio-rs/tracing/pull/3108
-[#3126]: https://github.com/tokio-rs/tracing/pull/3126
-
-# 0.1.28 (November 26, 2024)
-
-### Changed
-
-- Bump MSRV to 1.63 ([#2793])
-
-### Fixed
-
-- Added missing RecordTypes for instrument ([#2781])
-- Change order of async and unsafe modifier ([#2864])
-- Extract match scrutinee ([#2880])
-- Allow field path segments to be keywords ([#2925])
-- Support const values for `target` and `name` ([#2941])
-
-### Documented
-
-- Fix backporting error in attributes ([#2780])
-
-[#2780]: https://github.com/tokio-rs/tracing/pull/2780
-[#2781]: https://github.com/tokio-rs/tracing/pull/2781
-[#2793]: https://github.com/tokio-rs/tracing/pull/2793
-[#2864]: https://github.com/tokio-rs/tracing/pull/2864
-[#2880]: https://github.com/tokio-rs/tracing/pull/2880
-[#2925]: https://github.com/tokio-rs/tracing/pull/2925
-[#2941]: https://github.com/tokio-rs/tracing/pull/2941
-
-# 0.1.27 (October 13, 2023)
-
-### Changed
-
-- Bump minimum version of proc-macro2 to 1.0.60 ([#2732])
-- Generate less dead code for async block return type hint ([#2709])
-
-### Fixed
-
-- Fix a compilation error in `#[instrument]` when the `"log"` feature is enabled ([#2599])
-
-[#2732]: https://github.com/tokio-rs/tracing/pull/2732
-[#2709]: https://github.com/tokio-rs/tracing/pull/2709
-[#2599]: https://github.com/tokio-rs/tracing/pull/2599
-
-# 0.1.26 (June 21th, 2023)
-
-This release of `tracing-attributes` fixes warnings due to `allow` attributes in
-generated code that allow lints which may not exist on earlier versions of rustc.
-
-### Fixed
-
-- Allow `unknown_lints` in macro-generated code ([#2626])
-
-Thanks to @mladedav for contributing to this release!
-
-# 0.1.25 (June 19th, 2023)
-
-This release of `tracing-attributes` fixes the Clippy lint
-[`let_with_type_underscore`] in code generated by the `#[instrument]`
-attribute in Rust 1.70+.
-
-### Fixed
-
-- Allow [`clippy::let_with_type_underscore`] in macro-generated code ([#2609])
-
-Thanks to @coolreader19 for contributing to this release!
-
-[#2609]: https://github.com/tokio-rs/tracing/pull/2609
-
-[`let_with_type_underscore`]: http://rust-lang.github.io/rust-clippy/rust-1.70.0/index.html#let_with_type_underscore
-
-# 0.1.24 (April 24th, 2023)
-
-This release of `tracing-attributes` adds support for passing an optional
-`level` to the `err` and `ret` arguments to `#[instrument]`, allowing the level
-of the generated return-value event to be overridden. For example,
-
-```rust
-#[instrument(err(level = "info"))]
-fn my_great_function() -> Result<(), &'static str> {
-    // ...
-}
-```
-
-will emit an `INFO`-level event if the function returns an `Err`.
-
-In addition, this release updates the [`syn`] dependency to v2.x.x.
-
-### Added
-
-- `level` argument to `err` and `ret` to override the level of the generated
-  return value event ([#2335])
-- Improved compiler error message when `#[instrument]` is added to a `const fn`
-  ([#2418])
-
-### Changed
-
-- Updated `syn` dependency to 2.0 ([#2516])
-
-### Fixed
-
-- Fix `clippy::unreachable` warnings in `#[instrument]`-generated code ([#2356])
-- Removed unused "visit" feature flag from `syn` dependency ([#2530])
-
-### Documented
-
-- Documented default level for `err` ([#2433])
-- Improved documentation for levels in `#[instrument]` ([#2350])
-
-Thanks to @nitnelave, @jsgf, @Abhicodes-crypto, @LukeMathWalker, @andrewpollack,
-@quad, @klensy, @davidpdrsn, and @dbidwell94 for contributign to this release!
-
-[`syn`]: https://crates.io/crates/syn
-[#2335]: https://github.com/tokio-rs/tracing/pull/2335
-[#2418]: https://github.com/tokio-rs/tracing/pull/2418
-[#2516]: https://github.com/tokio-rs/tracing/pull/2516
-[#2356]: https://github.com/tokio-rs/tracing/pull/2356
-[#2530]: https://github.com/tokio-rs/tracing/pull/2530
-[#2433]: https://github.com/tokio-rs/tracing/pull/2433
-[#2350]: https://github.com/tokio-rs/tracing/pull/2350
-
-# 0.1.23 (October 6, 2022)
-
-This release of `tracing-attributes` fixes a bug where compiler diagnostic spans
-for type errors in `#[instrument]`ed `async fn`s have the location of the
-`#[instrument]` attribute rather than the location of the actual error, and a
-bug where inner attributes in `#[instrument]`ed functions would cause a compiler
-error.
-
-### Fixed
-
-- Fix incorrect handling of inner attributes in `#[instrument]`ed functions ([#2307])
-- Add fake return to improve spans generated for type errors in `async fn`s ([#2270])
-- Updated `syn` dependency to fix compilation with `-Z minimal-versions`
-  ([#2246])
-
-Thanks to new contributors @compiler-errors and @e-nomem, as well as @CAD97, for
-contributing to this release!
-
-[#2307]: https://github.com/tokio-rs/tracing/pull/2307
-[#2270]: https://github.com/tokio-rs/tracing/pull/2270
-[#2246]: https://github.com/tokio-rs/tracing/pull/2246
-
-# 0.1.22 (July 1, 2022)
-
-This release fixes an issue where using the `err` or `ret` arguments to
-`#[instrument]` along with an overridden target, such as
-
-```rust
-#[instrument(target = "...", err, ret)]
-```
-
-would not propagate the overridden target to the events generated for
-errors/return values.
-
-### Fixed
-
-- Error and return value events generated by `#[instrument(err)]` or
-  `#[instrument(ret)]` not inheriting an overridden target ([#2184])
-- Incorrect default level in documentation ([#2119])
-
-Thanks to new contributor @tbraun96 for contributing to this release!
-
-[#2184]: https://github.com/tokio-rs/tracing/pull/2184
-[#2119]: https://github.com/tokio-rs/tracing/pull/2119
-
-# 0.1.21 (April 26, 2022)
-
-This release adds support for setting explicit parent and follows-from spans
-in the `#[instrument]` attribute.
-
-### Added
-
-- `#[instrument(follows_from = ...)]` argument for setting one or more
-  follows-from span ([#2093])
-- `#[instrument(parent = ...)]` argument for overriding the generated span's
-  parent ([#2091])
-
-### Fixed
-
-- Extra braces around `async` blocks in expanded code (causes a Clippy warning)
-  ([#2090])
-- Broken documentation links ([#2068], [#2077])
-
-Thanks to @jarrodldavis, @ben0x539, and new contributor @jswrenn for
-contributing to this release!
-
-
-[#2093]: https://github.com/tokio-rs/tracing/pull/2093
-[#2091]: https://github.com/tokio-rs/tracing/pull/2091
-[#2090]: https://github.com/tokio-rs/tracing/pull/2090
-[#2077]: https://github.com/tokio-rs/tracing/pull/2077
-[#2068]: https://github.com/tokio-rs/tracing/pull/2068
-
-# 0.1.20 (March 8, 2022)
-
-### Fixed
-
-- Compilation failure with `--minimal-versions` due to a too-permissive `syn`
-  dependency ([#1960])
-
-### Changed
-
-- Bumped minimum supported Rust version (MSRV) to 1.49.0 ([#1913])
-
-Thanks to new contributor @udoprog for contributing to this release!
-
-[#1960]: https://github.com/tokio-rs/tracing/pull/1960
-[#1913]: https://github.com/tokio-rs/tracing/pull/1913
-
-# 0.1.19 (February 3, 2022)
-
-This release introduces a new `#[instrument(ret)]` argument to emit an event
-with the return value of an instrumented function.
-
-### Added
-
-- `#[instrument(ret)]` to record the return value of a function ([#1716])
-- added `err(Debug)` argument to cause `#[instrument(err)]` to record errors
-  with `Debug` rather than `Display ([#1631])
-
-### Fixed
-
-- incorrect code generation for functions returning async blocks ([#1866])
-- incorrect diagnostics when using `rust-analyzer` ([#1634])
-
-Thanks to @Swatinem, @hkmatsumoto, @cynecx, and @ciuncan for contributing to
-this release!
-
-[#1716]: https://github.com/tokio-rs/tracing/pull/1716
-[#1631]: https://github.com/tokio-rs/tracing/pull/1631
-[#1634]: https://github.com/tokio-rs/tracing/pull/1634
-[#1866]: https://github.com/tokio-rs/tracing/pull/1866
-
-# 0.1.18 (October 5, 2021)
-
-This release fixes issues introduced in v0.1.17.
-
-### Fixed
-
-- fixed mismatched types compiler error that may occur when using
-  `#[instrument]` on an `async fn` that returns an `impl Trait` value that
-  includes a closure ([#1616])
-- fixed false positives for `clippy::suspicious_else_formatting` warnings due to
-  rust-lang/rust-clippy#7760 and rust-lang/rust-clippy#6249 ([#1617])
-- fixed `clippy::let_unit_value` lints when using `#[instrument]` ([#1614])
-
-[#1617]: https://github.com/tokio-rs/tracing/pull/1617
-[#1616]: https://github.com/tokio-rs/tracing/pull/1616
-[#1614]: https://github.com/tokio-rs/tracing/pull/1614
-
-# 0.1.17 (YANKED) (October 1, 2021)
-
-This release significantly improves performance when `#[instrument]`-generated
-spans are below the maximum enabled level.
-
-### Added
-
-- improve performance when skipping `#[instrument]`-generated spans below the
-  max level ([#1600], [#1605])
-
-Thanks to @oli-obk for contributing to this release!
-
-[#1600]: https://github.com/tokio-rs/tracing/pull/1600
-[#1605]: https://github.com/tokio-rs/tracing/pull/1605
-
-# 0.1.16 (September 13, 2021)
-
-This release adds a new `#[instrument(skip_all)]` option to skip recording *all*
-arguments to an instrumented function as fields. Additionally, it adds support
-for recording arguments that are `tracing` primitive types as typed values,
-rather than as `fmt::Debug`.
-
-### Added
-
-- add `skip_all` option to `#[instrument]` ([#1548])
-- record primitive types as primitive values rather than as `fmt::Debug`
-  ([#1378])
-- added support for `f64`s as typed values ([#1522])
-
-Thanks to @Folyd and @jsgf for contributing to this release!
-
-[#1548]: https://github.com/tokio-rs/tracing/pull/1548
-[#1378]: https://github.com/tokio-rs/tracing/pull/1378
-[#1522]: https://github.com/tokio-rs/tracing/pull/1524
-
-# 0.1.15 (March 12, 2021)
-
-### Fixed
-
-- `#[instrument]` on functions returning `Box::pin`ned futures incorrectly
-  skipping function bodies prior to returning a future ([#1297])
-
-Thanks to @nightmared for contributing to this release!
-
-[#1297]: https://github.com/tokio-rs/tracing/pull/1297
-
-# 0.1.14 (March 10, 2021)
-
-### Fixed
-
-- Compatibility between `#[instrument]` and `async-trait` v0.1.43 and newer
-  ([#1228])
-
-Thanks to @nightmared for lots of hard work on this fix!
-
-[#1228]: https://github.com/tokio-rs/tracing/pull/1228
-
-# 0.1.13 (February 17, 2021)
-
-### Fixed
-
-- Compiler error when using `#[instrument(err)]` on functions which return `impl
-  Trait` ([#1236])
-
-[#1236]: https://github.com/tokio-rs/tracing/pull/1236
-
-# 0.1.12 (February 4, 2021)
-
-### Fixed
-
-- Compiler error when using `#[instrument(err)]` on functions with mutable
-  parameters ([#1167])
-- Missing function visibility modifier when using `#[instrument]` with
-  `async-trait` ([#977])
-- Multiple documentation fixes and improvements ([#965], [#981], [#1215])
-
-### Changed
-
-- `tracing-futures` dependency is no longer required when using `#[instrument]`
-  on async functions ([#808])
-
-Thanks to @nagisa, @Txuritan, @TaKO8Ki, and @okready for contributing to this
-release!
-
-[#1167]: https://github.com/tokio-rs/tracing/pull/1167
-[#977]: https://github.com/tokio-rs/tracing/pull/977
-[#965]: https://github.com/tokio-rs/tracing/pull/965
-[#981]: https://github.com/tokio-rs/tracing/pull/981
-[#1215]: https://github.com/tokio-rs/tracing/pull/1215
-[#808]: https://github.com/tokio-rs/tracing/pull/808
-
-# 0.1.11 (August 18, 2020)
-
-### Fixed
-
-- Corrected wrong minimum supported Rust version note in docs (#941)
-- Removed unused `syn` features (#928)
-
-Thanks to new contributor @jhpratt for contributing to this release!
-
-# 0.1.10 (August 10, 2020)
-
-### Added
-
-- Support for using `self` in field expressions when instrumenting `async-trait`
-  functions (#875)
-- Several documentation improvements (#832, #897, #911, #913)
-
-Thanks to @anton-dutov and @nightmared for contributing to this release!
-
-# 0.1.9 (July 8, 2020)
-
-### Added
-
-- Support for arbitrary expressions as fields in `#[instrument]` (#672)
-
-### Changed
-
-- `#[instrument]` now emits a compiler warning when ignoring unrecognized
-  input (#672, #786)
-
-# 0.1.8 (May 13, 2020)
-
-### Added
-
-- Support for using `#[instrument]` on methods that are part of [`async-trait`]
-  trait implementations (#711)
-- Optional `#[instrument(err)]` argument to automatically emit an event if an
-  instrumented function returns `Err` (#637)
-
-Thanks to @ilana and @nightmared for contributing to this release!
-
-[`async-trait`]: https://crates.io/crates/async-trait
-
-# 0.1.7 (February 26, 2020)
-
-### Added
-
-- Support for adding arbitrary literal fields to spans generated by
-  `#[instrument]` (#569)
-- `#[instrument]` now emits a helpful compiler error when attempting to skip a
-  function parameter (#600)
-
-Thanks to @Kobzol for contributing to this release!
-
-# 0.1.6 (December 20, 2019)
-
-### Added
-
--  Updated documentation (#468)
-
-# 0.1.5 (October 22, 2019)
-
-### Added
-
-- Support for destructuring in arguments to `#[instrument]`ed functions (#397)
-- Generated field for `self` parameters when `#[instrument]`ing methods (#397)
-
-# 0.1.4 (September 26, 2019)
-
-### Added
-
-- Optional `skip` argument to `#[instrument]` for excluding function parameters
-  from generated spans (#359)
-
-# 0.1.3 (September 12, 2019)
-
-### Fixed
-
-- Fixed `#[instrument]`ed async functions not compiling on `nightly-2019-09-11`
-  or newer (#342)
-
-# 0.1.2 (August 19, 2019)
-
-### Changed
-
-- Updated `syn` and `quote` dependencies to 1.0 (#292)
-- Removed direct dependency on `proc-macro2` to avoid potential version
-  conflicts (#296)
-
-### Fixed
-
-- Outdated idioms in examples (#271, #273)
-
-# 0.1.1 (August 9, 2019)
-
-### Changed
-
-- Using the `#[instrument]` attribute on `async fn`s no longer requires a
-  feature flag (#258)
-
-### Fixed
-
-- The `#[instrument]` macro now works on generic functions (#262)
-
-# 0.1.0 (August 8, 2019)
-
-- Initial release
-````
-
-### Text 664
-
-Shipped by:
-
-- tracing-attributes 0.1.31 (crate): `README.md`
-
-````text
-![Tracing — Structured, application-level diagnostics][splash]
-
-[splash]: https://raw.githubusercontent.com/tokio-rs/tracing/main/assets/splash.svg
-
-# tracing-attributes
-
-Macro attributes for application-level tracing.
-
-[![Crates.io][crates-badge]][crates-url]
-[![Documentation][docs-badge]][docs-url]
-[![Documentation (v0.2.x)][docs-v0.2.x-badge]][docs-v0.2.x-url]
-[![MIT licensed][mit-badge]][mit-url]
-[![Build Status][actions-badge]][actions-url]
-[![Discord chat][discord-badge]][discord-url]
-
-[Documentation][docs-url] | [Chat][discord-url]
-
-[crates-badge]: https://img.shields.io/crates/v/tracing-attributes.svg
-[crates-url]: https://crates.io/crates/tracing-attributes/0.1.31
-[docs-badge]: https://docs.rs/tracing-attributes/badge.svg
-[docs-url]: https://docs.rs/tracing-attributes/0.1.31
-[docs-v0.2.x-badge]: https://img.shields.io/badge/docs-v0.2.x-blue
-[docs-v0.2.x-url]: https://tracing.rs/tracing_attributes
-[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
-[mit-url]: LICENSE
-[actions-badge]: https://github.com/tokio-rs/tracing/workflows/CI/badge.svg
-[actions-url]:https://github.com/tokio-rs/tracing/actions?query=workflow%3ACI
-[discord-badge]: https://img.shields.io/discord/500028886025895936?logo=discord&label=discord&logoColor=white
-[discord-url]: https://discord.gg/EeF3cQw
-
-## Overview
-
-[`tracing`] is a framework for instrumenting Rust programs to collect
-structured, event-based diagnostic information. This crate provides the
-`#[instrument]` attribute for automatically instrumenting functions using
-`tracing`.
-
-Note that this macro is also re-exported by the main `tracing` crate.
-
-*Compiler support: [requires `rustc` 1.65+][msrv]*
-
-[msrv]: #supported-rust-versions
-
-## Usage
-
-First, add this to your `Cargo.toml`:
-
-```toml
-[dependencies]
-tracing-attributes = "0.1.31"
-```
-
-
-This crate provides the `#[instrument]` attribute for instrumenting a function
-with a `tracing` [span]. For example:
-
-```rust
-use tracing_attributes::instrument;
-
-#[instrument]
-pub fn my_function(my_arg: usize) {
-    // ...
-}
-```
-
-[`tracing`]: https://crates.io/crates/tracing
-[span]: https://docs.rs/tracing/latest/tracing/span/index.html
-
-## Supported Rust Versions
-
-Tracing is built against the latest stable release. The minimum supported
-version is 1.65. The current Tracing version is not guaranteed to build on Rust
-versions earlier than the minimum supported version.
-
-Tracing follows the same compiler support policies as the rest of the Tokio
-project. The current stable Rust compiler and the three most recent minor
-versions before it will always be supported. For example, if the current stable
-compiler version is 1.69, the minimum supported version will not be increased
-past 1.66, three minor versions prior. Increasing the minimum supported compiler
-version is not considered a semver breaking change as long as doing so complies
-with this policy.
-
-## License
-
-This project is licensed under the [MIT license](LICENSE).
-
-### Contribution
-
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in Tokio by you, shall be licensed as MIT, without any additional
-terms or conditions.
-````
-
-### Text 665
+### Text 641
 
 Shipped by:
 
@@ -102981,7 +97913,7 @@ Thanks to @oli-cosmian for contributing to this release!
 - Initial release
 ```
 
-### Text 666
+### Text 642
 
 Shipped by:
 
@@ -103111,7 +98043,7 @@ for inclusion in Tokio by you, shall be licensed as MIT, without any additional
 terms or conditions.
 ````
 
-### Text 667
+### Text 643
 
 Shipped by:
 
@@ -103141,7 +98073,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 668
+### Text 644
 
 Shipped by:
 
@@ -103169,7 +98101,7 @@ PackageDownloadLocation: git+ssh://github.com/tauri-apps/tray-icon.git
 Creator: Person: Daniel Thompson-Yvetot
 ```
 
-### Text 669
+### Text 645
 
 Shipped by:
 
@@ -103322,7 +98254,7 @@ tray_icon::menu::MenuEvent::set_event_handler(Some(move |event| {
 Apache-2.0/MIT
 ````
 
-### Text 670
+### Text 646
 
 Shipped by:
 
@@ -103389,7 +98321,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## 0.1.0 (2017-11-26)
 ```
 
-### Text 671
+### Text 647
 
 Shipped by:
 
@@ -103424,7 +98356,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 672
+### Text 648
 
 Shipped by:
 
@@ -103490,7 +98422,7 @@ dual licensed as above, without any additional terms or conditions.
 [1]: https://en.wikipedia.org/wiki/Twofish
 ```
 
-### Text 673
+### Text 649
 
 Shipped by:
 
@@ -103622,7 +98554,7 @@ be dual licensed as above, without any additional terms or conditions.
 </sub>
 ````
 
-### Text 674
+### Text 650
 
 Shipped by:
 
@@ -103774,7 +98706,7 @@ against this Rust version.
   #51)
 ```
 
-### Text 675
+### Text 651
 
 Shipped by:
 
@@ -103984,7 +98916,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-### Text 676
+### Text 652
 
 Shipped by:
 
@@ -104014,7 +98946,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 677
+### Text 653
 
 Shipped by:
 
@@ -104024,7 +98956,7 @@ Shipped by:
 MIT OR Apache-2.0
 ```
 
-### Text 678
+### Text 654
 
 Shipped by:
 
@@ -104100,7 +99032,7 @@ for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
 dual licensed as above, without any additional terms or conditions.
 ````
 
-### Text 679
+### Text 655
 
 Shipped by:
 
@@ -104148,7 +99080,7 @@ dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
 ```
 
-### Text 680
+### Text 656
 
 Shipped by:
 
@@ -104437,7 +99369,7 @@ for inclusion in this crate by you, as defined in the Apache-2.0 license, shall
 be licensed as just described, without any additional terms or conditions.
 ````
 
-### Text 681
+### Text 657
 
 Shipped by:
 
@@ -104453,7 +99385,7 @@ notice may not be copied, modified, or distributed except
 according to those terms.
 ```
 
-### Text 682
+### Text 658
 
 Shipped by:
 
@@ -104604,7 +99536,7 @@ Yanked due to accidental breakage and MSRV mistag.
 * Upgrade to Unicode 9.0.0.
 ````
 
-### Text 683
+### Text 659
 
 Shipped by:
 
@@ -104631,7 +99563,7 @@ Please see [UPGRADING.md](https://github.com/servo/rust-url/blob/main/UPGRADING.
 `url` depends on the `idna` crate. By default, `idna` uses [ICU4X](https://github.com/unicode-org/icu4x/) as its Unicode back end. If you wish to opt for different tradeoffs between correctness, run-time performance, binary size, compile time, and MSRV, please see the [README of the latest version of the `idna_adapter` crate](https://docs.rs/crate/idna_adapter/latest) for how to opt into a different Unicode back end.
 ```
 
-### Text 684
+### Text 660
 
 Shipped by:
 
@@ -104661,7 +99593,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 685
+### Text 661
 
 Shipped by:
 
@@ -104706,7 +99638,7 @@ The code of conduct from the Deno repository applies here too:
 https://github.com/denoland/deno/blob/main/.github/CODE_OF_CONDUCT.md.
 ````
 
-### Text 686
+### Text 662
 
 Shipped by:
 
@@ -104757,7 +99689,7 @@ licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
 <LICENSE-MIT> or <http://opensource.org/licenses/MIT>, at your option.
 ```
 
-### Text 687
+### Text 663
 
 Shipped by:
 
@@ -104792,7 +99724,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 688
+### Text 664
 
 Shipped by:
 
@@ -104867,7 +99799,7 @@ online.
 The initial release.
 ```
 
-### Text 689
+### Text 665
 
 Shipped by:
 
@@ -104901,7 +99833,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 690
+### Text 666
 
 Shipped by:
 
@@ -104951,7 +99883,7 @@ performance, please check that the optimizer optimizes panics away at `opt_level
 Please ensure that `cargo test` succeeds.
 ```
 
-### Text 691
+### Text 667
 
 Shipped by:
 
@@ -104980,7 +99912,7 @@ Test code is dedicated to the Public Domain when so designated (see
 the individual files for PD/CC0-dedicated sections).
 ```
 
-### Text 692
+### Text 668
 
 Shipped by:
 
@@ -105024,7 +99956,7 @@ The crate is missing constructors from some obvious source types, such as
 * Initial version
 ```
 
-### Text 693
+### Text 669
 
 Shipped by:
 
@@ -105059,7 +99991,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 694
+### Text 670
 
 Shipped by:
 
@@ -105157,7 +100089,7 @@ for inclusion in the work by you, as defined in the Apache-2.0 license, shall
 be dual licensed as above, without any additional terms or conditions.
 ````
 
-### Text 695
+### Text 671
 
 Shipped by:
 
@@ -105305,7 +100237,7 @@ time python ./compare/walk.py $DIR
 On my system, the performance of `walkdir`, `find` and `nftw` is comparable.
 ````
 
-### Text 696
+### Text 672
 
 Shipped by:
 
@@ -105388,7 +100320,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.1.0]: https://github.com/daxpedda/web-time/releases/tag/v0.1.0
 ```
 
-### Text 697
+### Text 673
 
 Shipped by:
 
@@ -105598,7 +100530,7 @@ Shipped by:
    limitations under the License.
 ```
 
-### Text 698
+### Text 674
 
 Shipped by:
 
@@ -105628,7 +100560,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 699
+### Text 675
 
 Shipped by:
 
@@ -105772,7 +100704,7 @@ conditions.
 [`wasm-bindgen`]: https://crates.io/crates/wasm-bindgen
 ````
 
-### Text 700
+### Text 676
 
 Shipped by:
 
@@ -106889,7 +101821,7 @@ z
 zoomAndPan
 ```
 
-### Text 701
+### Text 677
 
 Shipped by:
 
@@ -106930,7 +101862,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - use `cargo add` command in README so it's version independent
 ```
 
-### Text 702
+### Text 678
 
 Shipped by:
 
@@ -106963,7 +101895,7 @@ There are also some utilities for dealing with `PWSTR` in/out-params that may be
 The Windows crate requires a Windows Metadata (`winmd`) file describing the API. The one used in this crate was generated with the [webview2-win32md](https://github.com/wravery/webview2-win32md) project. This crate needs it to use the `#[implement]` macro from the Windows crate.
 ````
 
-### Text 703
+### Text 679
 
 Shipped by:
 
@@ -106986,7 +101918,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - update windows-rs dependencies to 0.61 release
 ```
 
-### Text 704
+### Text 680
 
 Shipped by:
 
@@ -107000,7 +101932,7 @@ This crate implements macros which generate callback implementations for WebView
 This crate is only intended for use in [webview2-com](https://crates.io/crates/webview2-com).
 ```
 
-### Text 705
+### Text 681
 
 Shipped by:
 
@@ -107035,7 +101967,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - update bindings to 1.0.3351.48
 ```
 
-### Text 706
+### Text 682
 
 Shipped by:
 
@@ -107049,7 +101981,7 @@ This crate implements unsafe Rust bindings for the [WebView2](https://aka.ms/web
 This crate has a friendlier wrapper in [webview2-com](https://crates.io/crates/webview2-com).
 ```
 
-### Text 707
+### Text 683
 
 Shipped by:
 
@@ -107144,7 +102076,7 @@ Shipped by:
   ~70MB/s encode, ~230MB/s decode
 ```
 
-### Text 708
+### Text 684
 
 Shipped by:
 
@@ -107174,7 +102106,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 709
+### Text 685
 
 Shipped by:
 
@@ -107202,7 +102134,7 @@ exists but currently turns off almost all interfaces.
 All code is dual licensed MIT OR Apache-2.0.
 ```
 
-### Text 710
+### Text 686
 
 Shipped by:
 
@@ -107230,7 +102162,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 711
+### Text 687
 
 Shipped by:
 
@@ -107329,7 +102261,7 @@ fn main() {
 Do you use `winapi` in your projects? If so, you may be interested in financially supporting me on [Patreon](https://www.patreon.com/retep998). Companies in particular are especially encouraged to donate (I'm looking at you [Microsoft](https://github.com/Azure/iotedge/tree/master/edgelet)).
 ````
 
-### Text 712
+### Text 688
 
 Shipped by:
 
@@ -107402,7 +102334,7 @@ In general, this crate will be conservative with respect to the minimum
 supported version of Rust.
 ```
 
-### Text 713
+### Text 689
 
 Shipped by:
 
@@ -107441,7 +102373,7 @@ Given a version number MAJOR.MINOR.PATCH, increment the:
 Additional labels for pre-release and build metadata are available as extensions to the MAJOR.MINOR.PATCH format, but will be discussed prior to usage (as extra steps will be necessary in consideration of merging and publishing).
 ````
 
-### Text 714
+### Text 690
 
 Shipped by:
 
@@ -107560,7 +102492,7 @@ Shipped by:
   - [78acb98](https://github.com/tauri-apps/window-vibrancy/commit/78acb9800f9a67ff5793de0b45b78225d91e2947) chore(readme): remove installation section on 2022-03-05
 ```
 
-### Text 715
+### Text 691
 
 Shipped by:
 
@@ -107590,7 +102522,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 716
+### Text 692
 
 Shipped by:
 
@@ -107618,7 +102550,7 @@ PackageDownloadLocation: git+ssh://github.com/tauri-apps/window-vibrancy.git
 Creator: Person: Daniel Thompson-Yvetot
 ```
 
-### Text 717
+### Text 693
 
 Shipped by:
 
@@ -107729,7 +102661,7 @@ For a more complete example of usage with [tauri](https://tauri.app/), see [`exa
 </p>
 ````
 
-### Text 718
+### Text 694
 
 Shipped by:
 
@@ -107954,7 +102886,7 @@ Shipped by:
    limitations under the License.
 ```
 
-### Text 719
+### Text 695
 
 Shipped by:
 
@@ -107999,7 +102931,7 @@ Shipped by:
     SOFTWARE
 ```
 
-### Text 720
+### Text 696
 
 Shipped by:
 
@@ -108061,7 +102993,7 @@ fn main() -> Result<()> {
 ```
 ````
 
-### Text 721
+### Text 697
 
 Shipped by:
 
@@ -108116,7 +103048,7 @@ assert_eq!(map.Lookup(h!("two")).unwrap(), 2);
 ```
 ````
 
-### Text 722
+### Text 698
 
 Shipped by:
 
@@ -108132,7 +103064,7 @@ The [windows-core](https://crates.io/crates/windows-core) crate provides core ty
 * [Releases](https://github.com/microsoft/windows-rs/releases)
 ```
 
-### Text 723
+### Text 699
 
 Shipped by:
 
@@ -108172,7 +103104,7 @@ assert_eq!(ready.join().unwrap(), 456);
 ```
 ````
 
-### Text 724
+### Text 700
 
 Shipped by:
 
@@ -108184,7 +103116,7 @@ Shipped by:
 See [windows-core](https://crates.io/crates/windows-core) for more information.
 ```
 
-### Text 725
+### Text 701
 
 Shipped by:
 
@@ -108196,7 +103128,7 @@ Shipped by:
 See [windows-core](https://crates.io/crates/windows-core) for more information.
 ```
 
-### Text 726
+### Text 702
 
 Shipped by:
 
@@ -108231,7 +103163,7 @@ unsafe {
 ```
 ````
 
-### Text 727
+### Text 703
 
 Shipped by:
 
@@ -108247,7 +103179,7 @@ The [windows-numerics](https://crates.io/crates/windows-numerics) crate provides
 * [Releases](https://github.com/microsoft/windows-rs/releases)
 ```
 
-### Text 728
+### Text 704
 
 Shipped by:
 
@@ -108288,7 +103220,7 @@ fn main() -> Result<()> {
 ```
 ````
 
-### Text 729
+### Text 705
 
 Shipped by:
 
@@ -108331,7 +103263,7 @@ fn main() {
 ```
 ````
 
-### Text 730
+### Text 706
 
 Shipped by:
 
@@ -108471,7 +103403,7 @@ fn main() {
 ```
 ````
 
-### Text 731
+### Text 707
 
 Shipped by:
 
@@ -108520,7 +103452,7 @@ unsafe {
 ```
 ````
 
-### Text 732
+### Text 708
 
 Shipped by:
 
@@ -108617,7 +103549,7 @@ fn main() {
 ```
 ````
 
-### Text 733
+### Text 709
 
 Shipped by:
 
@@ -108742,7 +103674,7 @@ Removing the `sleep` call will likely produce very different results:
 This is because the thread pool is careful not to overschedule and will happily reuse a small number of threads when the closures finish quickly.
 ````
 
-### Text 734
+### Text 710
 
 Shipped by:
 
@@ -108781,7 +103713,7 @@ if OsVersion::current() >= OsVersion::new(10, 0, 0, 12345) {
 ```
 ````
 
-### Text 735
+### Text 711
 
 Shipped by:
 
@@ -108808,7 +103740,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 736
+### Text 712
 
 Shipped by:
 
@@ -108843,7 +103775,7 @@ for the original [`nom` crate](https://crates.io/crates/nom).
 </a>
 ```
 
-### Text 737
+### Text 713
 
 Shipped by:
 
@@ -108919,7 +103851,7 @@ assert_eq!(message.to_string(), "Hello, Alice!");
 For more information on development, authorship, contributing etc. please visit [`ICU4X home page`](https://github.com/unicode-org/icu4x).
 ````
 
-### Text 738
+### Text 714
 
 Shipped by:
 
@@ -110272,7 +105204,7 @@ Targeting \*-pc-windows-gnu works now, but it has some [limitations](https://git
   - [fed0ee7](https://github.com/tauri-apps/wry/commit/fed0ee772100ad19a344a85266618c7bcf7cb649) File drop handlers ([#96](https://github.com/tauri-apps/wry/pull/96)) on 2021-03-09
 ```
 
-### Text 739
+### Text 715
 
 Shipped by:
 
@@ -110302,7 +105234,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 740
+### Text 716
 
 Shipped by:
 
@@ -110331,7 +105263,7 @@ PackageDownloadLocation: git+ssh://github.com/tauri-apps/wry.git
 Creator: Person: Daniel Thompson-Yvetot
 ```
 
-### Text 741
+### Text 717
 
 Shipped by:
 
@@ -110672,7 +105604,7 @@ Open `chrome://inspect/#devices` in Chrome to get the devtools window.
 Open Safari > Develop > [Your Device Name] > [Your WebView].
 ````
 
-### Text 742
+### Text 718
 
 Shipped by:
 
@@ -110992,7 +105924,7 @@ Apache-2.0/MIT
 [`tracing`]: https://docs.rs/tracing
 ````
 
-### Text 743
+### Text 719
 
 Shipped by:
 
@@ -111020,7 +105952,7 @@ At the current time we do not have the financial ability to reward bounties,
 but in extreme cases will at our discretion consider a reward.
 ```
 
-### Text 744
+### Text 720
 
 Shipped by:
 
@@ -111060,7 +105992,7 @@ See the documentation of [`Yoke`] for more details.
 For more information on development, authorship, contributing etc. please visit [`ICU4X home page`](https://github.com/unicode-org/icu4x).
 ```
 
-### Text 745
+### Text 721
 
 Shipped by:
 
@@ -111080,7 +106012,7 @@ Custom derives for `Yokeable` from the `yoke` crate.
 For more information on development, authorship, contributing etc. please visit [`ICU4X home page`](https://github.com/unicode-org/icu4x).
 ```
 
-### Text 746
+### Text 722
 
 Shipped by:
 
@@ -111153,7 +106085,7 @@ when more than one applies, use all of them.
   source of truth for unsafe-code authoring and review methodology.
 ````
 
-### Text 747
+### Text 723
 
 Shipped by:
 
@@ -111205,7 +106137,7 @@ we un-yanked these versions.
 [issue-679]: https://github.com/google/zerocopy/issues/679
 ```
 
-### Text 748
+### Text 724
 
 Shipped by:
 
@@ -111416,7 +106348,7 @@ Shipped by:
    limitations under the License.
 ```
 
-### Text 749
+### Text 725
 
 Shipped by:
 
@@ -111450,7 +106382,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### Text 750
+### Text 726
 
 Shipped by:
 
@@ -111485,7 +106417,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 751
+### Text 727
 
 Shipped by:
 
@@ -111613,7 +106545,7 @@ log][yank-log].
 [yank-log]: https://github.com/google/zerocopy/blob/main/zerocopy/CHANGELOG.md#yanks-and-regressions
 ```
 
-### Text 752
+### Text 728
 
 Shipped by:
 
@@ -111844,7 +106776,7 @@ making Rust a little more secure!
 Disclaimer: Zerocopy is not an officially supported Google product.
 ````
 
-### Text 753
+### Text 729
 
 Shipped by:
 
@@ -111866,7 +106798,7 @@ See the documentation of [`ZeroFrom`] for more details.
 For more information on development, authorship, contributing etc. please visit [`ICU4X home page`](https://github.com/unicode-org/icu4x).
 ```
 
-### Text 754
+### Text 730
 
 Shipped by:
 
@@ -111886,7 +106818,7 @@ Custom derives for `ZeroFrom` from the `zerofrom` crate.
 For more information on development, authorship, contributing etc. please visit [`ICU4X home page`](https://github.com/unicode-org/icu4x).
 ```
 
-### Text 755
+### Text 731
 
 Shipped by:
 
@@ -112210,7 +107142,7 @@ a pure Rust solution.
 - Initial release
 ```
 
-### Text 756
+### Text 732
 
 Shipped by:
 
@@ -112244,7 +107176,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### Text 757
+### Text 733
 
 Shipped by:
 
@@ -112349,7 +107281,7 @@ dual licensed as above, without any additional terms or conditions.
 [good cryptographic hygiene]: https://github.com/veorq/cryptocoding#clean-memory-of-secret-data
 ````
 
-### Text 758
+### Text 734
 
 Shipped by:
 
@@ -112456,7 +107388,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial 1.0 release
 ```
 
-### Text 759
+### Text 735
 
 Shipped by:
 
@@ -112506,7 +107438,7 @@ dual licensed as above, without any additional terms or conditions.
 [zeroize]: https://github.com/RustCrypto/utils/tree/master/zeroize
 ```
 
-### Text 760
+### Text 736
 
 Shipped by:
 
@@ -112566,7 +107498,7 @@ cargo doc --document-private-items --all-features --no-deps --open
 For more information on development, authorship, contributing etc. please visit [`ICU4X home page`](https://github.com/unicode-org/icu4x).
 ````
 
-### Text 761
+### Text 737
 
 Shipped by:
 
@@ -112772,7 +107704,7 @@ is appended for baseline comparisons, e.g. `zeromap/lookup/small/hashmap`.
 For more information on development, authorship, contributing etc. please visit [`ICU4X home page`](https://github.com/unicode-org/icu4x).
 ````
 
-### Text 762
+### Text 738
 
 Shipped by:
 
@@ -112792,7 +107724,7 @@ Proc macros for generating `ULE`, `VarULE` impls and types for the `zerovec` cra
 For more information on development, authorship, contributing etc. please visit [`ICU4X home page`](https://github.com/unicode-org/icu4x).
 ```
 
-### Text 763
+### Text 739
 
 Shipped by:
 
@@ -112820,7 +107752,7 @@ freely, subject to the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 ```
 
-### Text 764
+### Text 740
 
 Shipped by:
 
@@ -112858,7 +107790,7 @@ assert_eq!(decompressed, input);
 ```
 ````
 
-### Text 765
+### Text 741
 
 Shipped by:
 
@@ -112909,7 +107841,7 @@ library.
 <a href="LICENSE-MIT">MIT license</a>.
 ````
 
-### Text 766
+### Text 742
 
 Shipped by:
 
@@ -112940,7 +107872,7 @@ Improve documentation on various parts
 Initial version
 ```
 
-### Text 767
+### Text 743
 
 Shipped by:
 
@@ -112971,7 +107903,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### Text 768
+### Text 744
 
 Shipped by:
 
@@ -113000,7 +107932,7 @@ freely, subject to the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 ```
 
-### Text 769
+### Text 745
 
 Shipped by:
 
@@ -113024,7 +107956,7 @@ Currently,it contains.
 - Decoder and encoder options
 ```
 
-### Text 770
+### Text 746
 
 Shipped by:
 
@@ -113112,7 +108044,7 @@ Benchmarks may not reflect real world usage(threads, other I/O machine bottlenec
 [rayon]:https://github.com/rayon-rs/rayon
 ```
 
-### Text 771
+### Text 747
 
 Shipped by:
 
@@ -113216,7 +108148,7 @@ Shipped by:
 [5225225]:https://github.com/5225225
 ```
 
-### Text 772
+### Text 748
 
 Shipped by:
 

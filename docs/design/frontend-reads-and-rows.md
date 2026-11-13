@@ -11,7 +11,7 @@ view shows. A view names a read from the `nativeReads` table. Each entry of that
 token that only `useNativeRead` can run, so a view cannot call a read itself.
 
 The reads live in `reads`, in `desktop/src/native.ts`, beside the one boundary function `invoke`.
-`api` in `desktop/src/api.ts` holds only actions. Only four files may import `native.ts`, and
+`api` in `desktop/src/api.ts` holds only actions. Only three files may import `native.ts`, and
 only `native.ts` may import the Tauri IPC (U2-R1-05). The guard test `desktop/src/readGuard.test.ts`
 reads the import graph of `desktop/src` with the TypeScript parser and checks it by the resolved
 module, never by the name of a binding. An alias, a re-export by name or by `export *`, a helper
@@ -57,17 +57,14 @@ The rules:
 | Activity | journal | mount, Refresh, after a journal recovery | Refresh is disabled while a read runs |
 | Settings | key list, for the count | mount, a new polled count, retry | a new polled count while a read is pending |
 | Settings | backup details | mount, Refresh backup info | none: the control is disabled while it runs |
-| Settings | reminder setting | mount, retry | the reply of a saved setting (`apply`) |
 | Key detail | history of one key | the history list opens, retry | close and open again, another key, view expiry |
 | App | status | the 3 second poll and events | allowed: the poll keeps its own request, epoch and transition identity |
 | App | warnings | mount and the 3 second poll | allowed: the reply arrives through the event that `native.ts` owns |
-| Attention notifier | reminder setting, key list | a 30 second timer, focus, blur, visibility | allowed: it shows nothing and stops when it unmounts |
 
-The guard test names the four files that may import `native.ts`, each with its reason: `api.ts`
-for the actions, `nativeRead.ts` for the mechanism, `App.tsx` for the two polls, and the attention
-notifier. It also fails when an allowed file no longer reaches its module, so the list cannot grow
-stale. A new member of `reads` or of `api` must be classed as a read or an action, or the guard
-test fails.
+The guard test names the three files that may import `native.ts`, each with its reason: `api.ts`
+for the actions, `nativeRead.ts` for the mechanism and `App.tsx` for the two polls. It also fails
+when an allowed file no longer reaches its module, so the list cannot grow stale. A new member of
+`reads` or of `api` must be classed as a read or an action, or the guard test fails.
 
 ### What each view now shows
 
@@ -371,7 +368,7 @@ from the vault, so it is not under the mechanism. Each form clears it when it cl
   and the move to the Recycle Bin. In the Recycle Bin: the rows, the buttons, the confirmation and
   the notices. The rows of Activity. The options and the texts of Use keys. Judged safe: Use keys
   lists no key, only scopes, and its preview comes from native code. The vault name in Settings is
-  not a key. The attention notification gives a count only. The native windows are class K and
+  not a key. The native windows are class K and
   native code. The format-upgrade and journal-recovery dialogs name no key. The reminder sort
   draws nothing. The fields of the edit form keep the stored values. `rowFactsGuard.test.ts`
   keeps the class closed.

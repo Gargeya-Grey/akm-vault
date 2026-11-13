@@ -9,7 +9,7 @@
 A session-scoped effect has three phases.
 
 1. **Prepare.** Do all the slow work outside the session gate: the key derivation, the temporary file, the suspended process. Nothing that a user or another program can see happens yet, or what happens can be undone.
-2. **Commit.** Take the gate. Check that the session (and, where it is bound, the vault revision) is still the one that the request was made for. Then do one short act: replace the vault file, resume the process, rename the settings file, hand the toast to Windows. Release the gate.
+2. **Commit.** Take the gate. Check that the session (and, where it is bound, the vault revision) is still the one that the request was made for. Then do one short act: replace the vault file, resume the process, rename the settings file. Release the gate.
 3. **Revoke.** When the check refuses or the act fails, undo the preparation after the gate is released: delete the temporary file, terminate the suspended process.
 
 `Session::commit` is the one function that does phase 2. It is the only code that makes a `Held` witness, and every act takes `&Held`. So code that checks first and acts after the gate is released has nothing to pass, and does not compile.
@@ -24,20 +24,20 @@ Every effect in `desktop/src-tauri/src` that acts for a session. "Before" is the
 | 2 | Start the terminal | `launch.rs` `run_launch` | Session and revision that the user reviewed | `while_current` held the gate while `CreateProcessW` ran, so a lock waited for process creation. | The process is created suspended, outside the gate (`process.rs`). `Session::commit` checks and resumes it. A refusal terminates it. |
 | 3 | Copy the launch values out of the vault | `launch.rs` `disclose_for_launch` | Session and revision | `while_current` around `env_vars`. | `Session::commit` around `env_vars`. Nothing to revoke: the copy is in memory and is zeroed on drop. |
 | 4 | Save the last vault path | `settings.rs` `save_vault_path`, called from `commands.rs` `open_vault` | The ticket of the opening | `while_current` around a whole write: folder creation, temporary file, rename. | The temporary file is written outside the gate, under a new random name with `create_new` (`write_beside`, U1-R1-05). `Session::commit` renames it. After a refusal, a failed rename or a panic, the drop of the prepared file deletes it. |
-| 5 | Show a notification | `reminders.rs` `notify` | The session that the page names | `while_session` around a file read, a permission query and the hand-over. | The file read and the permission query run outside the gate. `Session::commit` does the hand-over only. |
+| 5 | Show a notification | Removed on 2026-11-13, with the native notification. | | | |
 | 6 | Copy to the clipboard | `session.rs` `copy_value` | Session, revision and presentation | Check, act outside the gate, check again (unit 1h, D1). The checks did not bind the revision, and a refusal at the second check took the copy back only after a lock. | Both checks bind the revision (U1-R1-01). Every refusal at the second check takes the published copy back (U1-R1-02). See decision 3. |
 | 7 | Publish an exported file | `session.rs` `publish`, `commands.rs` `env_save` | Session and revision | Check, prepare, check, publish outside the gate. Contract 9: publication may finish after a lock and reports it. | Not changed. See decision 4. |
 | 8 | Reveal a value to the page | `session.rs` `reveal` | Session, revision and presentation | The check and the hand-back of the value share one gate hold. The check did not bind the revision. | The check also binds the revision (U1-R1-01). It has no outside effect: the value goes back in the reply. |
 | 9 | Journal records (`run-requested`, export, recovery) | core `disclose_env`, `AuditLog` | Session, checked before | Outside the gate, because the journal takes a blocking file lock. | Not changed. Owner's option (a): a lock during the record is prompt, and the record can exist for an act that never happened. |
 | 10 | Recover a damaged journal | `commands.rs` `run_recovery` | Session and revision | A read access. A lock after the recovery answered `locked`. | Not changed by the commit point. The rename of the journal runs with no gate. A lock after the rename answers `completedWhileLocked` (section 9.2). See limit 4. |
 
-Effects that are not session-scoped, and so stay out of this mechanism: the reminder preference (`reminders.json`, `Reminders::set_enabled`), which is an application preference; vault creation, which happens before a session exists and keeps its `completedWhileLocked` receipt; and the lock notice, which the lock itself sends.
+Effects that are not session-scoped, and so stay out of this mechanism: vault creation, which happens before a session exists and keeps its `completedWhileLocked` receipt; and the lock notice, which the lock itself sends.
 
 ## 3. The mechanism
 
 ### 3.1 Types
 
-- `Binding` names what the act is bound to. `Ticket(ticket)` is a session that a native step holds. `Named(id)` is the session that a page request names. `Revision(snapshot)` is a session and a vault revision.
+- `Binding` names what the act is bound to. `Ticket(ticket)` is a session that a native step holds. `Revision(snapshot)` is a session and a vault revision.
 - `Effect` is a prepared act. `act(&mut self, &Held) -> Result<Output, CommandError>` runs under the gate. `revoke(&mut self) -> Result<(), String>` runs after the gate is released, when the check refused or the act failed. A revoke error becomes an application warning with fixed text.
 - `Session::commit(binding, &mut effect)` takes the gate, checks the binding, runs `act`, releases the gate, and revokes on any error.
 
@@ -91,14 +91,14 @@ Events: **lock** (an explicit lock, idle expiry, a Windows lock, suspend); **new
 | Stall in prepare (`CreateProcessW` is slow) | A lock is prompt: no gate is held. The commit then refuses, and the process is terminated. | Same: the commit refuses. | | |
 | Stall in commit (`ResumeThread` is slow) | The lock waits for this one call. See limit 2. | | | |
 
-### 4.3 The settings write and the notification
+### 4.3 The settings write
 
 | Moment | Lock or new session | Vault change | Hide or reload | Lost reply |
 |---|---|---|---|---|
-| Prepared (settings: temporary file; notification: preference and permission read) | The commit refuses. Settings: the temporary file is deleted, the fence does not move, the answer is "superseded". Notification: nothing is shown, the answer is `locked`. | No effect: neither is bound to the revision. | No effect. | The settings write is a native step with no reply of its own. A lost notification reply loses only the delivery state. |
-| Committed | The file is renamed, or the toast is handed to Windows. A lock after that changes nothing. | | | |
+| Prepared (temporary file) | The commit refuses. The temporary file is deleted, the fence does not move, the answer is "superseded". | No effect: it is not bound to the revision. | No effect. | The settings write is a native step with no reply of its own. |
+| Committed | The file is renamed. A lock after that changes nothing. | | | |
 | Stall in prepare | A lock is prompt. | | | |
-| Stall in commit | The lock waits for one rename or one hand-over. See limits 1 and 3. | | | |
+| Stall in commit | The lock waits for one rename. See limit 1. | | | |
 
 ## 5. Where the launch values live
 
@@ -113,11 +113,11 @@ Gone with this unit: the copies in `std::process::Command` (its environment map 
 
 1. A lock waits for one vault file replacement that is in progress. The replacement is one `rename` (or one hard link for a new vault). An antivirus or a cloud client can make it slow.
 2. A lock waits for one `ResumeThread` that is in progress.
-3. A lock waits for one notification hand-over to Windows that is in progress.
+3. Removed on 2026-11-13, with the native notification.
 4. The recovery of a damaged journal renames files in the journal folder with no gate. The core hook in this unit is in the vault save path only. A lock during the rename is prompt. The answer after it is `completedWhileLocked`, because the journal moved.
 5. Not verified: whether Windows shows the new console window of a suspended process before it is resumed. If it does, a refused start shows a console that closes at once. It needs the owner present to watch.
 6. A clipboard take-back that fails (decision 3) is not tried again in the same call. After a lock, the next tick or lock tries again. After a revision or view change, the lease's own expiry tries again, at most 30 seconds later.
-7. The settings and reminder files delete their temporary file by its random name, not by a handle (U1-R1-05). Another program that renamed that file and put its own at the name would lose it. No program is known to do that.
+7. The settings file deletes its temporary file by its random name, not by a handle (U1-R1-05). Another program that renamed that file and put its own at the name would lose it. No program is known to do that.
 
 ## 7. Tests
 
@@ -137,7 +137,6 @@ Gone with this unit: the copies in `std::process::Command` (its environment map 
 | 5, the environment block | `the_block_holds_the_selected_variables_and_no_removed_name_and_ends_in_two_zeros`, `an_empty_block_is_two_zeros` |
 | 4.3, the settings write | `a_ticket_that_no_longer_owns_the_session_writes_nothing`, `review1_2_a_retiring_opening_cannot_interleave_between_the_ownership_check_and_the_settings_write` |
 | Inventory 4, a temporary file that AKM did not create (U1-R1-05) | `u1_r1_05_a_sentinel_at_the_old_fixed_name_survives_every_way_a_preparation_ends`, `u1_r1_05_two_interleaved_stores_each_publish_their_own_content` |
-| 4.3, the notification | `review1_7_lock_and_a_new_opening_wait_for_a_notification_that_passed_validation`, `review1_7_a_request_made_for_an_older_session_shows_nothing` |
 | Inventory 6 and 8, the revision of the read | `u1_r1_01_a_value_that_left_the_vault_is_refused_after_a_same_session_change` |
 | Decision 3, the take-back of a refused copy | `u1_r1_02_a_copy_refused_after_its_publication_is_taken_back_row_by_row` |
 | 1, the structural guard | `every_session_scoped_act_goes_through_the_commit_point` |
@@ -145,7 +144,7 @@ Gone with this unit: the copies in `std::process::Command` (its environment map 
 The structural guard reads every file in `desktop/src-tauri/src` and the save path of the core. It is a tripwire for the usual spelling, not a proof: it matches source text, so a renamed import (`use std::process::Command as Child`), a re-export or a macro passes it (U1-R1-06). The compiler enforces only the `Held` witness. The guard fails when:
 
 - a second place makes a `Held`, or the one place is not `commit_point`;
-- a function that is not an act (`act`, `resume`, `show`) takes a `Held`;
+- a function that is not an act (`act`, `resume`) takes a `Held`;
 - a file other than `process.rs` creates, resumes or terminates a process, or uses `std::process::Command`;
 - a file other than `session.rs` installs a vault commit gate;
 - the core replaces the vault file outside the `replace` closure that the gate runs.

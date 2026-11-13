@@ -20,7 +20,6 @@ email dan@danburkert.com
 email danielrh@dropbox.com
 email daniil.liferenko@gmail.com
 email danny@dannyguo.com
-email dbarsky@amazon.com
 email dbojan@gmail.com
 email douman@gmx.se
 email dtolnay@gmail.com
@@ -66,7 +65,6 @@ email gesau@hotmail.co.uk
 email git-spam-no-reply9815368754983@oli-obk.de
 email github-tech@jeltef.nl
 email github@pureftpd.org
-email hendrik@hoodie.de
 email hsivonen@hsivonen.fi
 email https://lists.iana.org//hyperkitty/list/tz-announce@iana.org/thread/NVHSX2PAQIT44U5FCCEVNJJYXQMMTJSA
 email https://lists.iana.org//hyperkitty/list/tz-announce@iana.org/thread/VX2Z3CBO6KHTYZNBBKFFWM7ZCI6TVCXP
