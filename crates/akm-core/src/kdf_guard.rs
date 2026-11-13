@@ -25,6 +25,9 @@ pub const MAX_ARGON2_MEMORY: u64 = 4 * GIB;
 pub const MAX_ARGON2_ITERATIONS: u64 = 100_000;
 /// Argon2 lanes.
 pub const MAX_ARGON2_PARALLELISM: u64 = 256;
+/// Argon2 work: memory in bytes times passes (FV-22). 64 GiB-passes is, for example, 1 GiB
+/// with 64 passes or 64 MiB with 1,024 passes. AKM's own vaults use 64 MiB with 3.
+pub const MAX_ARGON2_WORK: u64 = 64 * GIB;
 /// AES-KDF rounds.
 pub const MAX_AES_ROUNDS: u64 = 2_000_000_000;
 
@@ -129,6 +132,18 @@ impl Cost {
             Self::Argon2 { parallelism, .. } if parallelism > MAX_ARGON2_PARALLELISM => refuse(
                 format!("{parallelism} Argon2 lanes"),
                 format!("{MAX_ARGON2_PARALLELISM} Argon2 lanes"),
+            ),
+            Self::Argon2 {
+                memory, iterations, ..
+            } if memory.saturating_mul(iterations) > MAX_ARGON2_WORK => refuse(
+                format!(
+                    "{} of Argon2 memory with {iterations} passes",
+                    bytes_text(memory)
+                ),
+                format!(
+                    "{} GiB-passes of Argon2 work (memory times passes)",
+                    MAX_ARGON2_WORK / GIB
+                ),
             ),
             _ => Ok(()),
         }
@@ -793,7 +808,8 @@ mod tests {
     fn a_header_at_each_limit_is_within_it_and_one_over_is_refused() {
         let at = [
             crafted::argon2(false, MAX_ARGON2_MEMORY, 3, 4),
-            crafted::argon2(true, 64 << 20, MAX_ARGON2_ITERATIONS, 4),
+            // 64 KiB, so that memory times passes stays within its own bound (FV-22).
+            crafted::argon2(true, 64 << 10, MAX_ARGON2_ITERATIONS, 4),
             crafted::argon2(true, 64 << 20, 3, 256),
             crafted::aes4(MAX_AES_ROUNDS),
             crafted::aes3(MAX_AES_ROUNDS),
@@ -813,6 +829,39 @@ mod tests {
             let text = check(&bytes).unwrap_err().to_string();
             assert!(text.contains(limit), "{limit}: {text}");
             assert!(text.contains("limit"), "{text}");
+        }
+    }
+
+    /// FV-22: memory and passes are each within their own bound, but together they ask for
+    /// far too much work. One combined bound, memory times passes, refuses the reviewer's
+    /// header (4 GiB and 100,000 passes) and names the bound. AKM's own settings and a strong
+    /// real setting pass, and the bound holds at its value on both sides.
+    #[test]
+    fn argon2_memory_times_passes_has_one_combined_bound() {
+        let mib = 1u64 << 20;
+        let refused = crafted::argon2(true, MAX_ARGON2_MEMORY, MAX_ARGON2_ITERATIONS, 4);
+        let text = check(&refused).unwrap_err().to_string();
+        assert!(text.contains("64 GiB-passes"), "{text}");
+        assert!(
+            text.contains("4 GiB") && text.contains("100000 passes"),
+            "{text}"
+        );
+        for (memory, passes, within) in [
+            (64 * mib, 3, true),
+            (GIB, 20, true),
+            (GIB, 64, true),
+            (GIB, 65, false),
+            (64 * mib, 1024, true),
+            (64 * mib, 1025, false),
+            (MAX_ARGON2_MEMORY, 16, true),
+            (MAX_ARGON2_MEMORY, 17, false),
+        ] {
+            let result = check(&crafted::argon2(false, memory, passes, 4));
+            assert_eq!(
+                result.is_ok(),
+                within,
+                "{memory} bytes, {passes} passes: {result:?}"
+            );
         }
     }
 

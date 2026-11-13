@@ -2183,6 +2183,7 @@ mod tests {
         let cases = [
             (crafted::argon2(true, 1 << 40, 3, 4), "4 GiB"),
             (crafted::argon2(false, 64 << 20, u64::MAX, 4), "100000"),
+            (crafted::argon2(true, 4 << 30, 100_000, 4), "64 GiB-passes"),
             (crafted::argon2(true, 64 << 20, 3, u32::MAX), "256"),
             (crafted::aes4(u64::MAX), "2000000000"),
             (crafted::aes3(3_000_000_000), "2000000000"),
