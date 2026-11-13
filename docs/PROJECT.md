@@ -60,7 +60,7 @@ These contracts do not claim that every nearby seam is complete. Open defects ar
 - Explicit upgrades replaced automatic format changes. Password policy for newly created vaults is a minimum of 12 Unicode characters, not a claim of password strength.
 - Conflict refusal and reload replaced lifetime reader locks. Automatic cross-device merging remains deliberately absent.
 - Scope confirmation, generation-owned receipts, handle-owned exports and Windows clipboard synthesis handling were added after reproduced adversarial failures. They are preservation requirements, not optional refactors.
-- Source fixes, runtime proof and a numerical score are separate gates. The latest full numerical assessment is the 87.5/100 [second full review](reviews/2026-11-13-full-review-2.md) of 13 Nov 2026. The [first full review](reviews/2026-11-13-full-review.md) of that day gave 83.5/100. The [rescore of 9 Nov](reviews/2026-11-09-full-rescore.md) gave 66.25/100, and the [baseline review](reviews/2026-10-30-baseline.md) 40.5/100.
+- Source fixes, runtime proof and a numerical score are separate gates. The latest full numerical assessment is the 91.75/100 [third full review](reviews/2026-11-14-full-review-3.md) of 14 Nov 2026. The [second full review](reviews/2026-11-13-full-review-2.md) of 13 Nov 2026 gave 87.5/100, and the [first full review](reviews/2026-11-13-full-review.md) of that day gave 83.5/100. The [rescore of 9 Nov](reviews/2026-11-09-full-rescore.md) gave 66.25/100, and the [baseline review](reviews/2026-10-30-baseline.md) 40.5/100.
 
 ## Source map
 

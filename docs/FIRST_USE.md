@@ -1,6 +1,6 @@
 # First use with real keys
 
-This page is for the owner, who decided on 2026-11-07 to use AKM for their own keys before the release gate. That gate is an independent full review above 90/100. The latest measured score is 87.5/100 ([second full review](reviews/2026-11-13-full-review-2.md)). Two of its six reviewers would not yet keep their own keys in the desktop app, and the four others would use the CLI for a reveal until the tests below are run. This page does not change that, and the decision and its risk are the owner's.
+This page is for the owner, who decided on 2026-11-07 to use AKM for their own keys before the release gate. That gate is an independent full review above 90/100, followed by the owner's own testing. The latest measured score is 91.75/100 ([third full review](reviews/2026-11-14-full-review-3.md), 14 Nov 2026), so the tests on this page are what remains of the gate. Two of its six reviewers would not yet keep their own keys in the desktop app, and the four others would use the CLI for a reveal until the tests below are run. This page does not change that, and the decision and its risk are the owner's.
 
 ## Before the first real key
 

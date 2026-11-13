@@ -93,6 +93,7 @@ Acceptance: expired, overdue, unknown-date and no-key states; locked and hidden 
 - Done on 2026-11-09: five independent reviewers scored `c0a7d3b` at 66.25/100 ([record](reviews/2026-11-09-full-rescore.md)). The kdbxweb and KeePassXC suites passed on that build. The open work is the FR rows in [FINDINGS.md](FINDINGS.md). A later score needs a new full review.
 - Done on 2026-11-13: six independent reviewers scored `1d5cc82` at 83.5/100 ([record](reviews/2026-11-13-full-review.md)). The open work is the FV rows in [FINDINGS.md](FINDINGS.md).
 - Done on 2026-11-13, after one fix round and a test audit: six new independent reviewers scored `51cbb0e` at 87.5/100 ([record](reviews/2026-11-13-full-review-2.md)). The open work is the FW rows in [FINDINGS.md](FINDINGS.md).
+- Done on 2026-11-14, after fix rounds 2 and 3: six new independent reviewers scored `dff3d5c` at 91.75/100 ([record](reviews/2026-11-14-full-review-3.md)), above the bar of 90. The open work is the FX rows in [FINDINGS.md](FINDINGS.md) and the owner-present tests of [FIRST_USE.md](FIRST_USE.md).
 
 ## Security proposals (not authorized)
 
