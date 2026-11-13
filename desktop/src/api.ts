@@ -87,8 +87,9 @@ export const api = {
     return seconds;
   },
   add: (draft: KeyDraft) => invoke<KeyView>("key_add", { draft }),
+  /** Null when the key already had these values, so nothing was saved. */
   update: (id: string, draft: KeyDraft) =>
-    invoke<KeyView>("key_update", { id, draft }),
+    invoke<KeyView | null>("key_update", { id, draft }),
   remove: (id: string) => invoke<void>("key_remove", { id }),
   rotate: (id: string, secret: string) => invoke<RotationReceipt>("key_rotate", { id, secret }),
   restore: (id: string) => invoke<KeyView>("key_restore", { id }),

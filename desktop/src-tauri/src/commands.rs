@@ -453,7 +453,7 @@ pub async fn key_add(
     let session = state.0.clone();
     let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Write, move |vault| {
-        let key = vault.add(draft.into_input(None)?)?;
+        let key = vault.add(draft.apply(akm_core::ApiKeyInput::default())?)?;
         Ok(KeyView::from(&key))
     })
     .await
@@ -465,15 +465,25 @@ pub async fn key_update(
     session_id: String,
     id: String,
     draft: KeyDraft,
-) -> Result<KeyView, CommandError> {
+) -> Result<Option<KeyView>, CommandError> {
     let session = state.0.clone();
     let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Write, move |vault| {
-        let existing = vault.edit_input(&id)?;
-        let key = vault.update(&id, draft.into_input(Some(existing))?)?;
-        Ok(KeyView::from(&key))
+        update_key(vault, &id, draft)
     })
     .await
+}
+
+/// FW-03: starts from the stored key and changes only the fields that the request names, as
+/// `akm edit` does. `None` when the key already had these values, so nothing was saved.
+fn update_key(
+    vault: &mut Vault,
+    id: &str,
+    draft: KeyDraft,
+) -> Result<Option<KeyView>, CommandError> {
+    let stored = vault.get_by_id(id)?;
+    let key = vault.update(id, draft.apply(vault.edit_input(id)?)?)?;
+    Ok((key != stored).then(|| KeyView::from(&key)))
 }
 
 #[tauri::command]
@@ -1574,6 +1584,203 @@ mod tests {
             .unwrap()
             .value;
         assert_eq!(history, 1);
+    }
+
+    /// A stored key that no form could type: text with spaces at both ends, a scope that holds a
+    /// comma, an expiry with a time of day and a rotation interval (FW-03).
+    fn padded_key() -> akm_core::ApiKeyInput {
+        let mut key = akm_core::ApiKeyInput::new("Fake padded key", "fake-padded-secret");
+        key.username = Some(" AKIAFAKEEXAMPLE ".into());
+        key.issuer = Some(" Fake issuer ".into());
+        key.project = Some(" demo ".into());
+        key.environment = Some(" dev ".into());
+        key.scopes = vec!["resource,subresource".into(), " read ".into()];
+        key.env_var = Some("PADDED_TOKEN".into());
+        key.url = Some(" https://example.invalid/keys ".into());
+        key.notes = Some(" padded notes ".into());
+        key.tags = vec!["alpha".into(), "beta".into()];
+        key.expires_at = Some("2030-05-06T07:08:09Z".parse().unwrap());
+        key.rotation_days = Some(90);
+        key
+    }
+
+    /// A key as the page sees it, less the two values that every save changes.
+    fn view_without_save_marks(key: &akm_core::ApiKey) -> serde_json::Value {
+        let mut view = serde_json::to_value(KeyView::from(key)).unwrap();
+        let fields = view.as_object_mut().unwrap();
+        fields.remove("updatedAt");
+        fields.remove("historyCount");
+        view
+    }
+
+    /// FW-03, through the command function, a save and a reopen. Each row names one field, and
+    /// the last row clears every field that can be empty. What a row names changes: a text is
+    /// cleaned as an add cleans it, and an empty text, an empty list or `null` clears. Every
+    /// other field, the ID, the secret and the time of the last secret change read back exactly
+    /// as they were stored.
+    #[test]
+    fn an_update_changes_only_the_fields_that_it_names() {
+        use serde_json::{json, Value};
+        let (session, directory) = test_session();
+        let cleared = [
+            "username",
+            "issuer",
+            "project",
+            "environment",
+            "envVar",
+            "url",
+            "notes",
+            "expiresAt",
+            "rotationDays",
+            "rotationDueAt",
+        ];
+        let rows: Vec<(Value, Vec<(&str, Value)>)> = vec![
+            (
+                json!({"notes": " new notes "}),
+                vec![("notes", json!("new notes"))],
+            ),
+            (
+                json!({"title": " Renamed key "}),
+                vec![("title", json!("Renamed key"))],
+            ),
+            (
+                json!({"username": " AKIANEWFAKE "}),
+                vec![("username", json!("AKIANEWFAKE"))],
+            ),
+            (
+                json!({"issuer": "New issuer"}),
+                vec![("issuer", json!("New issuer"))],
+            ),
+            (
+                json!({"project": " other "}),
+                vec![("project", json!("other"))],
+            ),
+            (
+                json!({"environment": "prod"}),
+                vec![("environment", json!("prod"))],
+            ),
+            (
+                json!({"envVar": "OTHER_TOKEN"}),
+                vec![
+                    ("envVar", json!("OTHER_TOKEN")),
+                    ("resolvedEnvVar", json!("OTHER_TOKEN")),
+                ],
+            ),
+            (
+                json!({"url": "https://example.invalid/new"}),
+                vec![("url", json!("https://example.invalid/new"))],
+            ),
+            (
+                json!({"scopes": [" write ", ""]}),
+                vec![("scopes", json!(["write"]))],
+            ),
+            (json!({"tags": ["gamma"]}), vec![("tags", json!(["gamma"]))]),
+            (
+                json!({"expiresAt": "2031-02-03T04:05:06Z"}),
+                vec![("expiresAt", json!("2031-02-03T04:05:06Z"))],
+            ),
+            (
+                json!({"rotationDays": 30}),
+                vec![("rotationDays", json!(30))],
+            ),
+            (
+                json!({
+                    "username": "", "issuer": null, "project": "", "environment": " ",
+                    "envVar": "", "url": "", "notes": "", "scopes": [], "tags": [],
+                    "expiresAt": null, "rotationDays": null,
+                }),
+                cleared
+                    .iter()
+                    .map(|field| (*field, Value::Null))
+                    .chain([
+                        ("scopes", json!([])),
+                        ("tags", json!([])),
+                        ("resolvedEnvVar", json!("FAKE_PADDED_KEY")),
+                    ])
+                    .collect(),
+            ),
+        ];
+        let stored = session
+            .access(Access::Write, None, |vault| {
+                rows.iter()
+                    .map(|_| Ok(vault.add(padded_key())?))
+                    .collect::<Result<Vec<_>, CommandError>>()
+            })
+            .unwrap()
+            .value;
+        let mut expected = Vec::new();
+        for ((request, changes), stored) in rows.into_iter().zip(stored) {
+            let draft: KeyDraft = serde_json::from_value(request.clone()).unwrap();
+            let reply = session
+                .access(Access::Write, None, |vault| {
+                    update_key(vault, &stored.id, draft)
+                })
+                .unwrap()
+                .value;
+            assert!(reply.is_some(), "{request}: a change is saved");
+            let mut view = view_without_save_marks(&stored);
+            for (field, value) in changes {
+                view[field] = value;
+            }
+            if let Some(days) = request["rotationDays"].as_i64() {
+                let due = stored.secret_changed_at.unwrap() + chrono::Duration::days(days);
+                view["rotationDueAt"] = json!(due);
+            }
+            expected.push((request, stored.id, view));
+        }
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        for (request, id, view) in expected {
+            let key = reopened.get_by_id(&id).unwrap();
+            assert_eq!(view_without_save_marks(&key), view, "{request}");
+            assert_eq!(
+                crate::test_support::secret_of(&reopened, &id),
+                "fake-padded-secret",
+                "{request}"
+            );
+        }
+    }
+
+    /// FW-03. An update that names no field, or keeps the secret, writes nothing and answers
+    /// `None`, as `akm edit` says "No change". The title cannot be cleared. The vault file keeps
+    /// its bytes.
+    #[test]
+    fn an_update_that_changes_nothing_writes_nothing_and_says_so() {
+        use serde_json::json;
+        let (session, directory) = test_session();
+        let path = directory.path().join("vault.kdbx");
+        let stored = session
+            .access(Access::Write, None, |vault| Ok(vault.add(padded_key())?))
+            .unwrap()
+            .value;
+        let bytes = std::fs::read(&path).unwrap();
+        let update = |request: serde_json::Value| {
+            let draft: KeyDraft = serde_json::from_value(request).unwrap();
+            session
+                .access(Access::Write, None, |vault| {
+                    update_key(vault, &stored.id, draft)
+                })
+                .map(|completed| completed.value)
+        };
+        for request in [json!({}), json!({"secret": ""}), json!({"secret": null})] {
+            assert!(update(request.clone()).unwrap().is_none(), "{request}");
+            assert_eq!(std::fs::read(&path).unwrap(), bytes, "{request}");
+        }
+        for request in [
+            json!({"title": ""}),
+            json!({"title": "   "}),
+            json!({"title": null}),
+        ] {
+            assert_eq!(
+                update(request.clone()).err().unwrap().kind,
+                "invalid",
+                "{request}"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), bytes, "{request}");
+        }
     }
 
     #[test]

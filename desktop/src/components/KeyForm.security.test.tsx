@@ -7,100 +7,91 @@ const mock = vi.hoisted(() => ({ update: vi.fn().mockResolvedValue({}) }));
 vi.mock("../api", () => ({ api: mock, errorText: String }));
 afterEach(cleanup);
 
-test("a notes-only edit preserves an existing access-key username", async () => {
-  const item: KeyView = {
-    id: "native-entry-uuid", title: "AWS", username: "AKIAEXAMPLE", issuer: "AWS",
-    project: "demo", environment: "dev", scopes: [], envVar: "AWS_SECRET_ACCESS_KEY",
-    resolvedEnvVar: "AWS_SECRET_ACCESS_KEY", url: null, notes: null, tags: [],
-    expiresAt: null, rotationDays: null, createdAt: null, updatedAt: null, rotationDueAt: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0,
-  };
-  render(<KeyForm item={item} onSaved={() => {}} onClose={() => {}} />);
-  fireEvent.change(screen.getByLabelText("Notes"), { target: { value: "A new note" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-  await waitFor(() => expect(mock.update).toHaveBeenCalled());
-  expect(mock.update.mock.calls[0][1]).toMatchObject({ username: "AKIAEXAMPLE", secret: null, notes: "A new note" });
-});
-
-// The form shows some stored values in a lossy text form (a list joined with commas, an instant
-// as a date). A field that the user did not touch goes back exactly as it was stored.
+// FW-03: an edit names only the fields that the user changed. Native code keeps every field that
+// the request does not name exactly as it was stored, so the form never sends a stored value back.
 const stored: KeyView = {
   id: "native-entry-uuid", title: " Padded title ", username: null, issuer: " Issuer ",
   project: " demo", environment: "dev ", scopes: ["literal,scope", "read"], envVar: "PADDED_KEY",
-  resolvedEnvVar: "PADDED_KEY", url: " https://example.invalid ", notes: "  two leading spaces", tags: ["a,b", "c"],
+  resolvedEnvVar: "PADDED_KEY", url: " https://example.invalid ", notes: "  two leading spaces", tags: ["a", "c"],
   expiresAt: "2027-03-15T00:00:45Z", rotationDays: 36500, createdAt: null, updatedAt: null, rotationDueAt: null,
   secretChangedAt: null, secretChange: "unknown", historyCount: 0,
 };
 
-test("an edit of one field sends every untouched field back exactly as it was stored", async () => {
+async function save(item: KeyView, edit: () => void) {
   mock.update.mockClear();
-  render(<KeyForm item={stored} onSaved={() => {}} onClose={() => {}} />);
-  fireEvent.change(screen.getByLabelText("Issuer"), { target: { value: "New issuer" } });
+  render(<KeyForm item={item} onSaved={() => {}} onClose={() => {}} />);
+  edit();
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(mock.update).toHaveBeenCalled());
-  expect(mock.update.mock.calls[0][1]).toEqual({
-    title: " Padded title ", secret: null, username: null, issuer: "New issuer", project: " demo", environment: "dev ",
-    scopes: ["literal,scope", "read"], envVar: "PADDED_KEY", url: " https://example.invalid ", notes: "  two leading spaces",
-    tags: ["a,b", "c"], expiresAt: "2027-03-15T00:00:45Z", rotationDays: 36500,
+  return mock.update.mock.calls[0][1];
+}
+const type = (label: string | RegExp, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
+
+test("a notes-only edit names only the notes", async () => {
+  expect(await save(stored, () => type("Notes", "A new note"))).toEqual({ notes: "A new note" });
+});
+
+test("an edit of one field names only that field, as the user typed it", async () => {
+  expect(await save(stored, () => type("Issuer", " New issuer "))).toEqual({ issuer: " New issuer " });
+});
+
+test("a field changed and changed back to the text that the form showed is not named", async () => {
+  const draft = await save(stored, () => {
+    type("Notes", "A new note");
+    type("Notes", "  two leading spaces");
+    type("Expires", "2028-01-01");
+    type("Expires", "2027-03-15");
+    type("Issuer", "New issuer");
   });
+  expect(draft).toEqual({ issuer: "New issuer" });
+});
+
+test("an edit that changes no field names none", async () => {
+  expect(await save(stored, () => {})).toEqual({});
 });
 
 // FV-12: the form shows the stored username and can change it.
 const withUsername: KeyView = { ...stored, username: " AKIAFAKEEXAMPLE " };
 
-test("the edit form shows the stored username, and an untouched username goes back as it was stored", async () => {
-  mock.update.mockClear();
-  render(<KeyForm item={withUsername} onSaved={() => {}} onClose={() => {}} />);
-  expect((screen.getByLabelText("Username") as HTMLInputElement).value).toBe(" AKIAFAKEEXAMPLE ");
-  fireEvent.change(screen.getByLabelText("Notes"), { target: { value: "A new note" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-  await waitFor(() => expect(mock.update).toHaveBeenCalled());
-  expect(mock.update.mock.calls[0][1]).toMatchObject({ username: " AKIAFAKEEXAMPLE ", notes: "A new note" });
-});
-
-test("an edit of the username sends the new value and every other field as it was stored", async () => {
-  mock.update.mockClear();
-  render(<KeyForm item={withUsername} onSaved={() => {}} onClose={() => {}} />);
-  fireEvent.change(screen.getByLabelText("Username"), { target: { value: " AKIANEWFAKE " } });
-  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-  await waitFor(() => expect(mock.update).toHaveBeenCalled());
-  expect(mock.update.mock.calls[0][1]).toEqual({
-    title: " Padded title ", secret: null, username: "AKIANEWFAKE", issuer: " Issuer ", project: " demo", environment: "dev ",
-    scopes: ["literal,scope", "read"], envVar: "PADDED_KEY", url: " https://example.invalid ", notes: "  two leading spaces",
-    tags: ["a,b", "c"], expiresAt: "2027-03-15T00:00:45Z", rotationDays: 36500,
+test("the edit form shows the stored username, and an edit of it names only the username", async () => {
+  const draft = await save(withUsername, () => {
+    expect((screen.getByLabelText("Username") as HTMLInputElement).value).toBe(" AKIAFAKEEXAMPLE ");
+    type("Username", " AKIANEWFAKE ");
   });
+  expect(draft).toEqual({ username: " AKIANEWFAKE " });
 });
 
-test("a cleared username sends an empty text, because native code keeps the stored username when the page sends none", async () => {
-  mock.update.mockClear();
-  render(<KeyForm item={withUsername} onSaved={() => {}} onClose={() => {}} />);
-  fireEvent.change(screen.getByLabelText("Username"), { target: { value: "" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-  await waitFor(() => expect(mock.update).toHaveBeenCalled());
-  expect(mock.update.mock.calls[0][1].username).toBe("");
+test("a cleared field is named with an empty text or null, which clears it", async () => {
+  const draft = await save(withUsername, () => {
+    type("Username", "");
+    type("Tags", "");
+    type("Expires", "");
+    type(/Rotat/, "");
+  });
+  expect(draft).toEqual({ username: "", tags: [], expiresAt: null, rotationDays: null });
 });
 
-test("the add form sends the username that the user typed", async () => {
+test("the add form names every field", async () => {
   const add = vi.fn().mockResolvedValue({});
   Object.assign(mock, { add });
   render(<KeyForm onSaved={() => {}} onClose={() => {}} />);
-  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Fake AWS" } });
-  fireEvent.change(screen.getByLabelText("Secret"), { target: { value: "fake-secret-value" } });
-  fireEvent.change(screen.getByLabelText("Username"), { target: { value: "AKIAFAKEEXAMPLE" } });
+  type("Title", "Fake AWS");
+  type("Secret", "fake-secret-value");
+  type("Username", "AKIAFAKEEXAMPLE");
   fireEvent.click(screen.getByRole("button", { name: "Add key" }));
   await waitFor(() => expect(add).toHaveBeenCalled());
-  expect(add.mock.calls[0][0]).toMatchObject({ title: "Fake AWS", username: "AKIAFAKEEXAMPLE" });
+  expect(add.mock.calls[0][0]).toEqual({
+    title: "Fake AWS", secret: "fake-secret-value", username: "AKIAFAKEEXAMPLE", issuer: "", project: "", environment: "",
+    envVar: "", url: "", notes: "", scopes: [], tags: [], expiresAt: null, rotationDays: null,
+  });
 });
 
-test("a field that the user changed is read from the form's text", async () => {
-  mock.update.mockClear();
-  render(<KeyForm item={stored} onSaved={() => {}} onClose={() => {}} />);
-  fireEvent.change(screen.getByLabelText("Scopes"), { target: { value: "read, write" } });
-  fireEvent.change(screen.getByLabelText("Expires"), { target: { value: "2028-01-01" } });
-  fireEvent.change(screen.getByLabelText(/Rotat/), { target: { value: "20000" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-  await waitFor(() => expect(mock.update).toHaveBeenCalled());
-  // 20000 days is inside the core's bound (36500) and was outside the form's old bound (3650).
-  expect(mock.update.mock.calls[0][1]).toMatchObject({
-    title: " Padded title ", scopes: ["read", "write"], tags: ["a,b", "c"], expiresAt: "2028-01-01T23:59:59Z", rotationDays: 20000,
+test("a changed list, expiry and rotation are read from the form's text", async () => {
+  const draft = await save(stored, () => {
+    type("Scopes", "read, write");
+    type("Expires", "2028-01-01");
+    type(/Rotat/, "20000");
   });
+  // 20000 days is inside the core's bound (36500) and was outside the form's old bound (3650).
+  expect(draft).toEqual({ scopes: ["read", "write"], expiresAt: "2028-01-01T23:59:59Z", rotationDays: 20000 });
 });

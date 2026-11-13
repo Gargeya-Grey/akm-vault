@@ -40,7 +40,8 @@ function serve({ keys = [], recycled = [], journal = [] }: Served) {
       const entries = journal.map((entry, index) => ({ seq: String(index + 1), ts: "2026-06-01T10:00:00Z", action: "add-completed", detail: null, project: null, environment: null, ...entry }));
       return { path: "C:/fake/journal/j-0.jsonl", entries, state: "consistent", damage: null, identity: "confirmed", notices: [], brokenAt: null, problemLine: null, totalEntries: entries.length };
     }
-    if (command === "key_update") return { ...keys.find((each) => each.id === args?.id)!, ...(args?.draft as object) };
+    // As native code: a request that names no field saves nothing and answers null (FW-03).
+    if (command === "key_update") return Object.keys(args?.draft as object).length === 0 ? null : { ...keys.find((each) => each.id === args?.id)!, ...(args?.draft as object) };
     if (command === "vault_status") return { sessionId: "fake", path: "C:/fake/a.kdbx", exists: true, unlocked: true, keyCount: keys.length, vaultName: "A", needsUpgrade: false };
     throw new Error(`unexpected command ${command}`);
   });
@@ -128,7 +129,7 @@ test("a value draws its invisible, directional and repeated-space characters as 
   expect(screen.getByRole("heading", { name: "Project ⟨U+202E⟩demo" })).toBeTruthy();
 });
 
-test("the edit form and the search use the stored value, not the drawn one", async () => {
+test("the edit form and the search use the stored value, and an untouched value is not sent back", async () => {
   await showKeys([key({ id: ID.a1, title: "Spaced", issuer: "Acme  Cloud" }), key({ id: ID.a2, title: "Plain", issuer: "Acme Cloud" })]);
   fireEvent.change(screen.getByRole("searchbox"), { target: { value: "acme  cloud" } });
   expect(rows().map((row) => row.getAttribute("aria-label"))).toEqual(["Open Spaced"]);
@@ -138,7 +139,18 @@ test("the edit form and the search use the stored value, not the drawn one", asy
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save changes" })); });
   const update = native.sent.find((call) => call.command === "key_update");
   expect(update?.args?.id).toBe(ID.a1);
-  expect((update?.args?.draft as { issuer: string }).issuer).toBe("Acme  Cloud");
+  expect(update?.args?.draft).toEqual({});
+});
+
+test("an edit that native code did not save says so, and does not claim a save (FW-03)", async () => {
+  await showKeys([key({ id: ID.a1, title: "Unchanged title" })]);
+  fireEvent.click(rows()[0]);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save changes" })); });
+  expect(screen.queryByRole("dialog", { name: "Edit key" })).toBeNull();
+  const notice = screen.getByText(/nothing was saved/).textContent ?? "";
+  expect(notice).toContain("No change: “Unchanged title” (ID ");
+  expect(screen.queryByText(/The vault file has been rewritten/)).toBeNull();
 });
 
 test("the save notice names the title that was saved, not the title of the last render (U2-R2-06)", async () => {

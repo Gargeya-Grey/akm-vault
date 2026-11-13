@@ -11,7 +11,8 @@ import { useDialogFocus } from "./useDialogFocus";
 interface Props {
   /** Present when editing; absent when adding. */
   item?: KeyView;
-  onSaved: (item: KeyView) => void;
+  /** Null when an edit changed nothing, so native code saved nothing. */
+  onSaved: (item: KeyView | null) => void;
   onClose: () => void;
 }
 
@@ -41,7 +42,8 @@ function splitList(value: string): string[] {
 /** The longest rotation interval that the core accepts (`MAX_ROTATION_DAYS`). */
 const MAX_ROTATION_DAYS = 36500;
 
-/** The text that the form shows for each stored field. Some of it is a lossy view of the value. */
+/** The text that the form shows for each stored field. Some of it is a lossy view of the value, so
+ * an edit sends only the fields whose text the user changed. */
 function shownText(item?: KeyView) {
   return {
     title: item?.title ?? "",
@@ -58,8 +60,6 @@ function shownText(item?: KeyView) {
     rotation: item?.rotationDays !== null && item?.rotationDays !== undefined ? String(item.rotationDays) : "",
   };
 }
-
-const text = (value: string) => value.trim() || null;
 
 export function KeyForm({ item, onSaved, onClose }: Props) {
   const editing = item !== undefined;
@@ -105,16 +105,12 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
       return;
     }
 
-    // A field that the user did not touch goes back exactly as it was stored: the form's text
-    // cannot hold a comma inside a list item, a time of day, or a space at an end.
-    function field<T>(now: string, was: string, stored: T | undefined, read: (now: string) => T): T {
-      return stored !== undefined && now === was ? stored : read(now);
-    }
+    // An edit names only the fields whose text the user changed (FW-03). Native code keeps every
+    // other field exactly as it was stored, and cleans a named text as an add does.
+    const changed = (now: string, was: string) => !editing || now !== was;
 
     let rotationDays: number | null = null;
-    if (item !== undefined && rotation === shown.rotation) {
-      rotationDays = item.rotationDays;
-    } else if (rotation.trim()) {
+    if (changed(rotation, shown.rotation) && rotation.trim()) {
       const parsed = Number(rotation);
       if (!Number.isInteger(parsed) || parsed <= 0 || parsed > MAX_ROTATION_DAYS) {
         setError(`Rotation must be a whole number of days between 1 and ${MAX_ROTATION_DAYS}.`);
@@ -123,22 +119,20 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
       rotationDays = parsed;
     }
 
-    const draft: KeyDraft = {
-      title: field(title, shown.title, item?.title, (now) => now.trim()),
-      secret: secret ? secret : null,
-      // An empty text clears a stored username: native code keeps the stored one when it gets none.
-      username: field(username, shown.username, item?.username, (now) => now.trim()),
-      issuer: field(issuer, shown.issuer, item?.issuer, text),
-      project: field(project, shown.project, item?.project, text),
-      environment: field(environment, shown.environment, item?.environment, text),
-      scopes: field(scopes, shown.scopes, item?.scopes, splitList),
-      envVar: field(envVar, shown.envVar, item?.envVar, text),
-      url: field(url, shown.url, item?.url, text),
-      notes: field(notes, shown.notes, item?.notes, text),
-      tags: field(tags, shown.tags, item?.tags, splitList),
-      expiresAt: field(expires, shown.expires, item?.expiresAt, (now) => (now ? dateOnlyExpiry(now) : null)),
-      rotationDays,
-    };
+    const draft: KeyDraft = {};
+    if (changed(title, shown.title)) draft.title = title;
+    if (secret) draft.secret = secret;
+    if (changed(username, shown.username)) draft.username = username;
+    if (changed(issuer, shown.issuer)) draft.issuer = issuer;
+    if (changed(project, shown.project)) draft.project = project;
+    if (changed(environment, shown.environment)) draft.environment = environment;
+    if (changed(envVar, shown.envVar)) draft.envVar = envVar;
+    if (changed(url, shown.url)) draft.url = url;
+    if (changed(scopes, shown.scopes)) draft.scopes = splitList(scopes);
+    if (changed(tags, shown.tags)) draft.tags = splitList(tags);
+    if (changed(notes, shown.notes)) draft.notes = notes;
+    if (changed(expires, shown.expires)) draft.expiresAt = expires ? dateOnlyExpiry(expires) : null;
+    if (changed(rotation, shown.rotation)) draft.rotationDays = rotationDays;
 
     setBusy(true);
     try {

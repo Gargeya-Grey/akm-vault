@@ -139,10 +139,19 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     setEnvironment("");
   }
 
-  function saved(item: KeyView) {
+  function saved(item: KeyView | null) {
+    const edited = formItem;
+    setFormItem(undefined);
+    if (item === null) {
+      // The key already had these values, so native code saved nothing (FW-03).
+      if (edited) {
+        setSelectedId(edited.id);
+        setFlash(`No change: ${namedKey(factsOf(edited))} already has these values, so nothing was saved.`);
+      }
+      return;
+    }
     read.apply((current) => [...current.filter((key) => key.id !== item.id), item]);
     setSelectedId(item.id);
-    setFormItem(undefined);
     setFlash(`Saved ${namedKey(keyRowFacts(item, now, shortId))}. The vault file has been rewritten.`);
   }
 

@@ -58,20 +58,28 @@ export interface RecycledKey {
   deletedAt: string | null;
 }
 
+/**
+ * A key as the page sends it (FW-03). An add names every field. An edit names only the fields that
+ * the user changed: native code keeps a field that the request leaves out exactly as it was stored.
+ * An empty text, an empty list or `null` clears a field, and native code cleans a text as an add
+ * does. The title cannot be cleared. A secret that is left out or empty keeps the stored secret.
+ */
 export interface KeyDraft {
-  title: string;
-  secret?: string | null;
-  username?: string | null;
-  issuer?: string | null;
-  project?: string | null;
-  environment?: string | null;
-  scopes: string[];
-  envVar?: string | null;
-  url?: string | null;
-  notes?: string | null;
-  tags: string[];
-  expiresAt: string | null;
-  rotationDays: number | null;
+  title?: string;
+  secret?: string;
+  username?: string;
+  issuer?: string;
+  project?: string;
+  environment?: string;
+  scopes?: string[];
+  envVar?: string;
+  url?: string;
+  notes?: string;
+  tags?: string[];
+  /** A date or an RFC 3339 time; `null` clears the expiry. */
+  expiresAt?: string | null;
+  /** `null` clears the interval. */
+  rotationDays?: number | null;
 }
 
 export interface AuditEntry {
