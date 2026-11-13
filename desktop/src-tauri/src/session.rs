@@ -1174,23 +1174,21 @@ impl Session {
     }
 
     pub fn copy_stamped(&self, secret: Stamped<Zeroizing<String>>) -> Result<(), CommandError> {
-        self.copy_value(
-            secret.snapshot.ticket,
-            Some(secret.snapshot.presentation),
-            secret.value,
-        )
+        self.copy_value(secret.snapshot.ticket, Some(secret.snapshot), secret.value)
     }
 
+    /// `read` is the snapshot that the value was read under. Without one (a test), only the
+    /// session is checked.
     fn copy_value(
         &self,
         ticket: Ticket,
-        presentation: Option<u64>,
+        read: Option<Snapshot>,
         text: Zeroizing<String>,
     ) -> Result<(), CommandError> {
         // The cell serializes copy with cleanup. No Vault mutex and no gate is held while the
         // OS clipboard is used, so a lock is never delayed by the copy (design D1).
         let mut cell = self.cell();
-        let result = self.copy_held(&mut cell, ticket, presentation, text);
+        let result = self.copy_held(&mut cell, ticket, read, text);
         self.settle_held(&mut cell, false, true);
         result
     }
@@ -1199,19 +1197,13 @@ impl Session {
         &self,
         cell: &mut LeaseCell,
         ticket: Ticket,
-        presentation: Option<u64>,
+        read: Option<Snapshot>,
         text: Zeroizing<String>,
     ) -> Result<(), CommandError> {
         let check = |this: &Self| -> Result<(), CommandError> {
             let mut gate = this.gate_deferred()?;
             let current = this.current(&mut gate)?;
-            if current.ticket != ticket {
-                return Err(CommandError::locked());
-            }
-            if presentation.is_some_and(|expected| expected != current.presentation) {
-                return Err(view_changed());
-            }
-            Ok(())
+            deliverable(current, read.unwrap_or(Snapshot { ticket, ..current }))
         };
         check(self)?;
         let before = cell.clipboard.owned_generation();
@@ -1233,12 +1225,7 @@ impl Session {
     pub fn reveal(&self, secret: Stamped<Zeroizing<String>>) -> Result<String, CommandError> {
         let mut gate = self.gate()?;
         let current = self.current(&mut gate)?;
-        if current.ticket != secret.snapshot.ticket {
-            return Err(CommandError::locked());
-        }
-        if current.presentation != secret.snapshot.presentation {
-            return Err(view_changed());
-        }
+        deliverable(current, secret.snapshot)?;
         Ok(secret.value.as_str().to_owned())
     }
 
@@ -1383,6 +1370,29 @@ fn owned_by(gate: &Gate, current: Snapshot, session_id: &str) -> Result<(), Comm
         .filter(|owner| owner.ticket == current.ticket && owner.id == id)
         .map(|_| ())
         .ok_or_else(CommandError::locked)
+}
+
+/// A value read from the vault leaves AKM (a reveal or a copy) only while the session, the vault
+/// revision and the view that it was read under are all still current. A same-session write or
+/// reload after the read moves the revision, so the old value is refused (U1-R1-01).
+fn deliverable(current: Snapshot, read: Snapshot) -> Result<(), CommandError> {
+    if current.ticket != read.ticket {
+        return Err(CommandError::locked());
+    }
+    if current.revision != read.revision {
+        return Err(vault_changed());
+    }
+    if current.presentation != read.presentation {
+        return Err(view_changed());
+    }
+    Ok(())
+}
+
+fn vault_changed() -> CommandError {
+    CommandError::new(
+        "stalePreview",
+        "The vault changed. Start this operation again.",
+    )
 }
 
 fn view_changed() -> CommandError {

@@ -4209,4 +4209,58 @@ mod tests {
             "the user is asked before anything moves"
         );
     }
+
+    /// U1-R1-01: a value read from the vault is not delivered after a same-session change.
+    /// Between the read and the delivery, a rotate, a remove or a reload moves the revision.
+    /// Each of the four delivery paths then refuses with stalePreview, and the clipboard keeps
+    /// the user's own text.
+    #[test]
+    fn u1_r1_01_a_value_that_left_the_vault_is_refused_after_a_same_session_change() {
+        for change in ["rotate", "remove", "reload"] {
+            for path in ["single reveal", "single copy", "bulk preview", "bulk copy"] {
+                let f = disclosing();
+                f.clipboard.lock().unwrap().text = "fake-user-value".into();
+                let expected = f.session.snapshot().unwrap();
+                let scope =
+                    ExportScope::new(Some("app".into()), Some("dev".into()), false).unwrap();
+                let stamped = if path.starts_with("single") {
+                    requested_key_at(&f.session, expected, &f.keys[0], KeyDisclosure::Reveal)
+                        .unwrap()
+                } else {
+                    extract_export_at(&f.session, expected, &scope, "fake target").unwrap()
+                };
+                let id = f.keys[0].clone();
+                match change {
+                    "rotate" => drop(
+                        f.session
+                            .access(Access::Write, None, |vault| {
+                                rotate_key(vault, &id, "fake-rotated-value".into())
+                            })
+                            .unwrap(),
+                    ),
+                    "remove" => drop(
+                        f.session
+                            .access(Access::Write, None, |vault| Ok(vault.remove(&id)?))
+                            .unwrap(),
+                    ),
+                    _ => drop(
+                        f.session
+                            .access(Access::Reload, None, |vault| Ok(vault.reload()?))
+                            .unwrap(),
+                    ),
+                }
+                let delivered = if path.ends_with("copy") {
+                    f.session.copy_stamped(stamped).map(|()| String::new())
+                } else {
+                    f.session.reveal(stamped)
+                };
+                assert_eq!(
+                    delivered.unwrap_err().kind,
+                    "stalePreview",
+                    "{change}, {path}: the old value is refused"
+                );
+                assert_eq!(clipboard_text(&f), "fake-user-value", "{change}, {path}");
+            }
+        }
+    }
 }
