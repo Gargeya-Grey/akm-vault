@@ -5,7 +5,173 @@ use std::sync::{Arc, Barrier};
 
 use akm_core::audit::{AuditLog, AuditState};
 use akm_core::journal::{Identity, JournalRoot, NoticeKind, VaultEvidence};
+use akm_core::vault::VaultWarningKind;
+use akm_core::{ApiKeyInput, KeyDisclosure, Vault};
+use keepass::db::fields;
+use keepass::{Database, DatabaseKey};
 use sha2::{Digest, Sha256};
+
+const VAULT_PASSWORD: &str = "fake journal vault password";
+
+/// An outside program rewrites the vault: the same vault ID, every secret changed, so the
+/// file holds a version that no journal recorded.
+fn rewrite_externally(path: &Path, secret: &str) {
+    let key = DatabaseKey::new().with_password(VAULT_PASSWORD);
+    let mut db = Database::parse(&fs::read(path).unwrap(), key.clone()).unwrap();
+    db.foreach_entry_mut(|mut entry| entry.set_protected(fields::PASSWORD, secret));
+    db.save(&mut fs::File::create(path).unwrap(), key).unwrap();
+}
+
+/// CORE-R2-03, the reviewer's closing test: a bound vault is replaced by a clone that an
+/// outside program rewrote, the clone is opened, and the file changes again before any read
+/// of the Activity or any disclosure. The stale snapshot is unconfirmed, with a notice; each
+/// disclosure from it is refused until the vault is reopened; and nothing about the clone is
+/// recorded in the mapping.
+#[test]
+fn a_stale_snapshot_of_an_unseen_clone_is_never_confirmed() {
+    let f = Fixture::new();
+    let path = f.directory.path().join("vault.kdbx");
+    let mut vault =
+        Vault::create_in(&path, VAULT_PASSWORD, None, JournalRoot::at(&f.root)).unwrap();
+    let key = vault
+        .add(ApiKeyInput::new("Fake key", "fake-original"))
+        .unwrap();
+    drop(vault);
+
+    rewrite_externally(&path, "fake-clone");
+    let clone = Vault::open_in(&path, VAULT_PASSWORD, JournalRoot::at(&f.root)).unwrap();
+    assert_eq!(
+        clone.audit_log().snapshot(10).unwrap().identity,
+        Identity::Unconfirmed
+    );
+
+    rewrite_externally(&path, "fake-later");
+    let mapping = fs::read(f.root.join("mapping.json")).unwrap();
+    let snapshot = clone.audit_log().snapshot(10).unwrap();
+    assert_eq!(
+        snapshot.identity,
+        Identity::Unconfirmed,
+        "the stale snapshot"
+    );
+    assert!(
+        snapshot
+            .notices
+            .iter()
+            .any(|notice| notice.kind == NoticeKind::IdentityUnconfirmed),
+        "{:?}",
+        snapshot.notices
+    );
+    for attempt in 0..2 {
+        let found = clone.get_by_id(&key.id).unwrap();
+        let refused = clone
+            .disclose_key(KeyDisclosure::Reveal, &found, Some("test"))
+            .unwrap_err();
+        assert!(
+            refused.to_string().contains("Reopen the vault"),
+            "disclosure {attempt}: {refused}"
+        );
+    }
+    assert_eq!(
+        fs::read(f.root.join("mapping.json")).unwrap(),
+        mapping,
+        "nothing about the clone was learned"
+    );
+}
+
+/// CORE-R2-03: the supported case stays. A stale snapshot whose version the journal recorded
+/// (the session's own save) is confirmed, with no notice and no warning.
+#[test]
+fn a_stale_snapshot_of_a_recorded_version_stays_confirmed() {
+    let f = Fixture::new();
+    let path = f.directory.path().join("vault.kdbx");
+    let mut vault =
+        Vault::create_in(&path, VAULT_PASSWORD, None, JournalRoot::at(&f.root)).unwrap();
+    let key = vault
+        .add(ApiKeyInput::new("Fake key", "fake-original"))
+        .unwrap();
+    vault.take_warning_records();
+
+    rewrite_externally(&path, "fake-outside");
+    let snapshot = vault.audit_log().snapshot(10).unwrap();
+    assert_eq!(snapshot.identity, Identity::Confirmed);
+    assert!(
+        snapshot
+            .notices
+            .iter()
+            .all(|notice| notice.kind != NoticeKind::IdentityUnconfirmed),
+        "{:?}",
+        snapshot.notices
+    );
+    let found = vault.get_by_id(&key.id).unwrap();
+    vault
+        .disclose_key(KeyDisclosure::Reveal, &found, Some("test"))
+        .unwrap();
+    let warnings = vault.take_warning_records();
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != VaultWarningKind::JournalLineageUnconfirmed),
+        "{warnings:?}"
+    );
+}
+
+/// CORE-R2-03, the sibling at a new path: an outside program rewrites a bound vault in place,
+/// so the file keeps its file ID, and the file is renamed. The journal follows the file, but
+/// only the file ID and the vault ID vouch for the version, so the session is unconfirmed
+/// until a record passes the warning on. That record settles the version and the new path.
+#[test]
+fn a_moved_file_that_changed_outside_akm_is_unconfirmed_until_a_record_warns() {
+    let f = Fixture::new();
+    let path = f.directory.path().join("vault.kdbx");
+    let mut vault =
+        Vault::create_in(&path, VAULT_PASSWORD, None, JournalRoot::at(&f.root)).unwrap();
+    let key = vault
+        .add(ApiKeyInput::new("Fake key", "fake-original"))
+        .unwrap();
+    let journal = vault.audit_log().journal_path().unwrap().unwrap();
+    drop(vault);
+
+    rewrite_externally(&path, "fake-outside");
+    let moved = f.directory.path().join("moved.kdbx");
+    fs::rename(&path, &moved).unwrap();
+    let mut vault = Vault::open_in(&moved, VAULT_PASSWORD, JournalRoot::at(&f.root)).unwrap();
+    let snapshot = vault.audit_log().snapshot(10).unwrap();
+    assert_eq!(snapshot.identity, Identity::Unconfirmed);
+    assert!(
+        snapshot
+            .notices
+            .iter()
+            .any(|notice| notice.kind == NoticeKind::IdentityUnconfirmed),
+        "{:?}",
+        snapshot.notices
+    );
+
+    assert_eq!(
+        disclosure_warnings(&mut vault, &key.id),
+        1,
+        "the record warns"
+    );
+    assert_eq!(
+        vault.audit_log().journal_path().unwrap().unwrap(),
+        journal,
+        "the journal follows the file"
+    );
+    assert_eq!(
+        vault.audit_log().snapshot(10).unwrap().identity,
+        Identity::Confirmed,
+        "the warned record settled the version"
+    );
+    assert_eq!(disclosure_warnings(&mut vault, &key.id), 0, "settled once");
+}
+
+/// The lineage warnings of one disclosure through the vault, a record that reports them.
+fn disclosure_warnings(vault: &mut Vault, id: &str) -> usize {
+    let found = vault.get_by_id(id).unwrap();
+    vault
+        .disclose_key(KeyDisclosure::Reveal, &found, Some("test"))
+        .unwrap();
+    lineage_warnings(vault)
+}
 
 struct Fixture {
     directory: tempfile::TempDir,
