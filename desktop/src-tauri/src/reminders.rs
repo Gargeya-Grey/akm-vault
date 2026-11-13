@@ -145,14 +145,12 @@ impl ReminderStore for FileReminders {
 }
 
 fn write_atomic(path: &Path, stored: &Stored) -> Result<(), CommandError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| CommandError::new("io", error.to_string()))?;
-    }
-    let tmp = path.with_extension("json.tmp");
     let body = serde_json::to_vec_pretty(stored).map_err(CommandError::internal)?;
-    fs::write(&tmp, body).map_err(|error| CommandError::new("io", error.to_string()))?;
-    fs::rename(&tmp, path).map_err(|error| CommandError::new("io", error.to_string()))?;
-    Ok(())
+    let tmp = crate::settings::write_beside(path, &body)?;
+    fs::rename(&tmp, path).map_err(|error| {
+        let _ = fs::remove_file(&tmp);
+        CommandError::new("io", error.to_string())
+    })
 }
 
 struct Gate {
@@ -605,6 +603,38 @@ mod tests {
             !FileReminders::new(Some(file)).enabled(),
             "an unreadable file means off"
         );
+    }
+
+    /// U1-R1-05 sweep (class F): a file at the old fixed name belongs to someone else. A saved
+    /// and a failed choice leave it as it was, and leave no temporary file of their own.
+    #[test]
+    fn u1_r1_05_a_sentinel_at_the_old_fixed_name_survives_a_saved_and_a_failed_choice() {
+        for fails in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let file = directory.path().join("reminders.json");
+            if fails {
+                fs::create_dir(&file).unwrap();
+            }
+            let sentinel = file.with_extension("json.tmp");
+            fs::write(&sentinel, "fake-file-of-another-process").unwrap();
+            let saved = FileReminders::new(Some(file.clone())).set_enabled(true);
+            assert_eq!(saved.is_err(), fails);
+            assert_eq!(
+                fs::read_to_string(&sentinel).unwrap(),
+                "fake-file-of-another-process",
+                "fails: {fails}"
+            );
+            let mut names: Vec<String> = fs::read_dir(directory.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            assert_eq!(
+                names,
+                ["reminders.json", "reminders.json.tmp"],
+                "fails: {fails}"
+            );
+        }
     }
 
     #[test]
