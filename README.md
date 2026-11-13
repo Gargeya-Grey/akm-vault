@@ -1,8 +1,8 @@
 # AKM: a Windows API-key manager
 
 **Untrusted development build. Use fake keys only.** The latest full review
-scored the implementation 66.25/100 on 9 November 2026. See the
-[full rescore](docs/reviews/2026-11-09-full-rescore.md). The
+scored the implementation 83.5/100 on 13 November 2026. See the
+[full review](docs/reviews/2026-11-13-full-review.md). The
 [baseline review](docs/reviews/2026-10-30-baseline.md) scored 40.5/100. Fixing the reported bugs
 does not itself establish a new score or certify security. The release gate is an
 independent re-review above 90, followed by real-use testing before wider

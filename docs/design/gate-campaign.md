@@ -94,7 +94,7 @@ The owner asked for the cause of the problem and told the planner to act as the 
 
 ### What the numbers say
 
-- **The score was not measured since 9 Nov.** It is still 66.25/100. The campaign added 45,652 lines and removed 4,194 (`main..gate/integration`) with no new measurement.
+- **The score was not measured since 9 Nov** (true when this was written; the full review of 13 Nov gave 83.5/100). It was 66.25/100. The campaign added 45,652 lines and removed 4,194 (`main..gate/integration`) with no new measurement.
 - **Each fix round wrote a new subsystem.** Lines added and removed by round: unit 1, 3,657 and 694 (native code); unit 2 round 1, 3,593 and 779; unit 3 round 1, 4,674 and 500; unit 4 round 1, 2,143 and 312.
 - **Each review after a round found about as many P2 findings as the one before.** Unit 1: 5. Unit 3: 6. Unit 4: 4. Unit 2: 4, then 1.
 - **Old fixes hold.** Unit 1 review 1 tried a second scenario on about 35 earlier rows and found no defect. Unit 2 review 2 found 8 fixes sound. Unit 3 review 2 verified 7 of 11.

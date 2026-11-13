@@ -238,34 +238,64 @@ From the [full rescore](reviews/2026-11-09-full-rescore.md), on `c0a7d3b`: 66.25
 
 | ID | Severity | Status | Area | Class | Problem |
 |---|---|---|---|---|---|
-| FR-01 | High, reproduced | Promise narrowed (CORE-R2-01; PROJECT.md contract 2) | E | F | `vault.rs` backup pruning recognizes files by name only. One save deleted three files beside the vault that AKM did not create. |
-| FR-02 | High, injection reproduced | Fixed, not accepted (CORE-R2-02, `10235a6`; the table stays a finite list) | D | Incomplete deny list | The reserved-variable list misses Cargo execution controls such as `RUSTC_WRAPPER`, so an imported `.env` can name a program that a later `akm run cargo` executes with the scope's secrets. |
-| FR-03 | High, inspection | Fixed, not accepted (unit 1 review 1 found no defect in the fix) | D | Missing authority | A compromised page can read the session ID and request a bulk `env_export` or `env_copy` with no native approval. |
-| FR-04 | Medium, inspection | Fixed, not accepted (unit 1 review 1 found no defect in the fix) | C | C | A failed desktop export ignores the result of its delete request, so a plaintext temporary file can remain with no warning. |
-| FR-05 | Medium, inspection | Fixed, not accepted (core review 2 verified the fix) | C | Inherited permissions | A vault and its backups inherit the folder's permissions. |
-| FR-06 | Low, reproduced | Limit stated (THREAT_MODEL.md, "Disclosed limits") | C | Disclosed limit | A purged key stays in the encrypted backups, and AKM has no operation to retire them. |
-| FR-07 | Low, inspection | Limit stated (THREAT_MODEL.md, "Disclosed limits") | C | Disclosed limit | The journal has no independent integrity anchor. |
-| FR-08 | Medium, inspection | Fixed, not accepted (core review 2 verified the fix) | D | Memory hygiene | Some secret strings are not zeroized, for example on the `--secret-stdin` path. |
-| FR-09 | Low, inspection | Limit stated (THREAT_MODEL.md, "Disclosed limits") | D | Disclosed limit | `AKM_PASSWORD` stays in the parent process environment. |
-| FR-10 | Medium, inspection | Fixed, not accepted (FIRST_USE.md no longer says that a copy "is cleared") | A | D | FIRST_USE.md says a clipboard copy "is cleared"; cleanup is best effort. |
-| FR-11 | Low, inspection | Fixed, not accepted (campaign unit 2, `cbb4606`) | A | D | The unlock screen states KDBX 4.1 with AES-256 and Argon2id for every vault, including older vaults that it opens. |
-| FR-12 | Medium, reproduced | Fixed, not accepted (CORE-R2-03 and CORE-R2-04, fix round 2) | B | B | An unseen clone that replaces a bound vault joins the original's journal through the shared root ID. Same premise as P2R2-04. |
-| FR-13 | Medium, inspection | Fixed, not accepted (the app opens a terminal with one project's keys; unit 1 review 1 found no defect in the terminal rows) | G | Missing workflow | The app cannot launch a program with scoped keys. Deducted once, in G. |
-| FR-14 | Medium, reproduced in the CLI | Fixed, not accepted (core review 2 verified the fix; unit 1 review 1 found no defect in the fix) | B | Missing workflow | After journal damage, a GUI user has no way to keep the old bytes and resume. |
-| FR-15 | Medium, reproduced | Fixed, not accepted (core review 2 verified the fix) | F | Unchecked arithmetic | A rotation interval of `4294967295` days is accepted, and `list` and `get` then panic. |
-| FR-16 | Medium, reproduced | Fixed, not accepted (core review 2 verified the fix) | F | Validation at use only | Add and rotate accept a secret with a NUL, which AKM cannot inject or export. |
-| FR-17 | Low, reproduced | Fixed, not accepted (core review 2 verified the fix) | F | Unicode | Title matching folds ASCII case only. |
-| FR-18 | Low, reproduced | Fixed, not accepted (core review 2 verified the fix) | F | Lost precision | Fractional seconds of an expiry are dropped. |
-| FR-19 | Medium, reproduced in the accessibility tree | Fixed, not accepted (`4e6cc50`: the descriptions of same-title keys differ by ID) | G | H | Same-title keys have identical accessible names and descriptions. |
-| FR-20 | Medium, inspection | Fixed, not accepted (the key drawer lists the earlier versions; no review has named this row) | G | Missing workflow | Detailed key history exists only in the CLI. |
-| FR-21 | Low, reproduced | Fixed, not accepted (unit 2, read mechanism; test: "a failed read does not say that the vault is empty, and it can be tried again") | G | Failure shown as empty | A failed first read shows an error and also "No keys yet". |
-| FR-22 | Medium, inspection | Fixed, not accepted (core review 2 verified the fix) | H | Weak test | The import-isolation and failed-rename tests compare metadata, which excludes secrets. The `akm run` test has one scope. |
-| FR-23 | Medium, inspection | Fixed, not accepted (unit 4 review 2 verified the fix; CI has not run since 8 Nov 2026) | H | Missing check | CI does not run `check_dependencies.ps1`. |
-| FR-24 | Low | Fixed, not accepted (unit 4 review 2 verified the fix) | H | D | `verify.mjs` says "byte for byte" and compares selected fields. `check_docs.py` misses vertical tab and form feed, and accepts a non-test function name. |
-| FR-25 | Medium, inspection | Fixed, not accepted (LICENSE, SECURITY.md and THIRD_PARTY_NOTICES.md exist; the notices were rebuilt in unit 4 fix round 2) | I | Missing artifact | No licence text, third-party notices or SECURITY.md. |
+| FR-01 | High, reproduced | Closed (promise narrowed in PROJECT.md contract 2; the full review of 13 Nov found that unlisted files survive seven saves) | E | F | `vault.rs` backup pruning recognizes files by name only. One save deleted three files beside the vault that AKM did not create. |
+| FR-02 | High, injection reproduced | Partial (full review of 13 Nov: the Cargo, compiler, Git and credential-file names are refused; versioned Lua names pass, FV-08) | D | Incomplete deny list | The reserved-variable list misses Cargo execution controls such as `RUSTC_WRAPPER`, so an imported `.env` can name a program that a later `akm run cargo` executes with the scope's secrets. |
+| FR-03 | High, inspection | Partial (full review of 13 Nov: a bulk preview and a bulk copy need a native approval; a slow read of single keys remains, FV-09) | D | Missing authority | A compromised page can read the session ID and request a bulk `env_export` or `env_copy` with no native approval. |
+| FR-04 | Medium, inspection | Partial (full review of 13 Nov: a failed cleanup gives a warning; the warning can name the wrong file, FV-07) | C | C | A failed desktop export ignores the result of its delete request, so a plaintext temporary file can remain with no warning. |
+| FR-05 | Medium, inspection | Closed (the full review of 13 Nov tried a new scenario and the fix held) | C | Inherited permissions | A vault and its backups inherit the folder's permissions. |
+| FR-06 | Low, reproduced | Limit stated (THREAT_MODEL.md, "Disclosed limits"; it cost 0.5 point again on 13 Nov) | C | Disclosed limit | A purged key stays in the encrypted backups, and AKM has no operation to retire them. |
+| FR-07 | Low, inspection | Limit stated (THREAT_MODEL.md, "Disclosed limits"; it cost 0.5 point again on 13 Nov) | C | Disclosed limit | The journal has no independent integrity anchor. |
+| FR-08 | Medium, inspection | Partial (full review of 13 Nov: stdin input is cleared; the dotenv text and the child's environment copies are not, FV-10) | D | Memory hygiene | Some secret strings are not zeroized, for example on the `--secret-stdin` path. |
+| FR-09 | Low, inspection | Limit stated (THREAT_MODEL.md, "Disclosed limits"; it cost 0.5 point again on 13 Nov) | D | Disclosed limit | `AKM_PASSWORD` stays in the parent process environment. |
+| FR-10 | Medium, inspection | Closed (the full review of 13 Nov tried a new scenario and the fix held) | A | D | FIRST_USE.md says a clipboard copy "is cleared"; cleanup is best effort. |
+| FR-11 | Low, inspection | Closed (the full review of 13 Nov tried a new scenario and the fix held) | A | D | The unlock screen states KDBX 4.1 with AES-256 and Argon2id for every vault, including older vaults that it opens. |
+| FR-12 | Medium, reproduced | Closed (the full review of 13 Nov tried a new scenario and the fix held) | B | B | An unseen clone that replaces a bound vault joins the original's journal through the shared root ID. Same premise as P2R2-04. |
+| FR-13 | Medium, inspection | Closed (the full review of 13 Nov tried a new scenario and the fix held) | G | Missing workflow | The app cannot launch a program with scoped keys. Deducted once, in G. |
+| FR-14 | Medium, reproduced in the CLI | Partial (full review of 13 Nov: a damaged journal file has a recovery that keeps the old bytes; a damaged mapping file has none, FV-01) | B | Missing workflow | After journal damage, a GUI user has no way to keep the old bytes and resume. |
+| FR-15 | Medium, reproduced | Closed (the full review of 13 Nov tried a new scenario and the fix held) | F | Unchecked arithmetic | A rotation interval of `4294967295` days is accepted, and `list` and `get` then panic. |
+| FR-16 | Medium, reproduced | Closed (the full review of 13 Nov tried a new scenario and the fix held) | F | Validation at use only | Add and rotate accept a secret with a NUL, which AKM cannot inject or export. |
+| FR-17 | Low, reproduced | Closed (the full review of 13 Nov tried a new scenario and the fix held) | F | Unicode | Title matching folds ASCII case only. |
+| FR-18 | Low, reproduced | Closed for the CLI (the full review of 13 Nov: a fraction is refused with no change). The desktop form dropped the time of day: FV-02 | F | Lost precision | Fractional seconds of an expiry are dropped. |
+| FR-19 | Medium, reproduced in the accessibility tree | Closed (the full review of 13 Nov tried a new scenario and the fix held) | G | H | Same-title keys have identical accessible names and descriptions. |
+| FR-20 | Medium, inspection | Closed (the full review of 13 Nov tried a new scenario and the fix held) | G | Missing workflow | Detailed key history exists only in the CLI. |
+| FR-21 | Low, reproduced | Closed (the full review of 13 Nov tried a new scenario and the fix held) | G | Failure shown as empty | A failed first read shows an error and also "No keys yet". |
+| FR-22 | Medium, inspection | Closed (the full review of 13 Nov tried a new scenario and the fix held) | H | Weak test | The import-isolation and failed-rename tests compare metadata, which excludes secrets. The `akm run` test has one scope. |
+| FR-23 | Medium, inspection | Partial (full review of 13 Nov: the workflow runs the checks; no CI run exists for this head, FV-17) | H | Missing check | CI does not run `check_dependencies.ps1`. |
+| FR-24 | Low | Partial (full review of 13 Nov: the interchange wording and the control characters hold; a disabled workflow step passes as evidence, FV-15) | H | D | `verify.mjs` says "byte for byte" and compares selected fields. `check_docs.py` misses vertical tab and form feed, and accepts a non-test function name. |
+| FR-25 | Medium, inspection | Partial (full review of 13 Nov: the files exist in the source; the installer ships none of them, FV-20) | I | Missing artifact | No licence text, third-party notices or SECURITY.md. |
 | FR-26 | Medium, inspection | Open (publication gate: U4-C-04) | I | Private data in history | Machine paths and old evidence are in the tracked tree and in Git history. Review them before any public push. |
-| FR-27 | High, inspection, not scored | Fixed, not accepted (unit 4 review 2 verified the fix) | Tools | F | `akm-verify.ps1` treats a matching temporary folder with a readable `session.json` as its own and removes it. |
+| FR-27 | High, inspection, not scored | Closed (the full review of 13 Nov: the defaults come from the environment; a long path stops the helper's cleanup, FV-16) | Tools | F | `akm-verify.ps1` treats a matching temporary folder with a readable `session.json` as its own and removes it. |
 | FR-28 | Inspection, not scored | Fixed, not accepted (core review 2 verified the fix; CORE-R2-06 added the bounds) | E | Resource bound | Opening a vault applies its KDF parameters with no AKM limit, so a malicious vault may exhaust memory. |
+
+## Full review (2026-11-13)
+
+From the [full review](reviews/2026-11-13-full-review.md), on `1d5cc82` (product code of `d3b6fb1`): 83.5/100. The severity and the kind are the reviewers' words. A row marked "no points" was reported by a reviewer of another area. The points of FV-08 are in the first security reviewer's score, which the total does not use; the row is real all the same.
+
+| ID | Severity | Status | Area | Kind | Problem |
+|---|---|---|---|---|---|
+| FV-01 | Medium | Open | B | design | One damaged journal mapping file stops every disclosure for every vault of the device, and `audit --verify` too. The recovery flow needs a snapshot that it cannot get in this state. Reproduced with two fake vaults. `crates/akm-core/src/journal.rs:747`, `desktop/src-tauri/src/commands.rs:679`. 1.0 point. |
+| FV-02 | Medium | Fixed, not accepted (`f5f55a6`: an untouched field goes back as it was stored; two tests that failed first) | E | defect | A desktop edit of one field changes fields that the user did not touch: an expiry with a time of day moves to the end of its date, and a scope or a tag that holds a comma is split. Three reviewers reproduced it. `desktop/src/components/KeyForm.tsx:53`. 2.0 points. |
+| FV-03 | Medium | Open | E | defect | A save through a file symbolic link replaces the link and leaves the target stale: only the lock path is made canonical. Inspection; the reviewer could not create a link. `crates/akm-core/src/vault.rs:1121`. 1.0 point. |
+| FV-04 | Medium | Open | F | missing | The CLI has no command that edits the metadata of a key (project, environment, variable name, issuer, expiry). Four reviewers named it. `crates/akm-cli/src/main.rs:122`. 1.0 point. |
+| FV-05 | Low | Fixed, not accepted (`f5f55a6`: the form's bound equals the core's bound) | F | defect | The desktop form refuses a rotation interval above 3650 days; the core accepts 36500, so a key with a valid stored interval could not be edited. `desktop/src/components/KeyForm.tsx:92`. 0.25 point. |
+| FV-06 | Medium | Open | C | defect | A CLI export follows a parent folder that was replaced by a junction after the destination check: the plaintext file goes to the other folder, with its private permissions. Reproduced by holding the journal mapping lock between the check and the write. `crates/akm-cli/src/export.rs:162`. Class A. 1.5 points. |
+| FV-07 | Medium | Open | C | defect | After a failed cleanup of a desktop export, the warning names the name that AKM remembers. When the temporary file was renamed and another file took its name, the warning tells the user to delete the other file. Reproduced with the production module. `desktop/src-tauri/src/private_export.rs:227`. 1.0 point. |
+| FV-08 | High | Open | D | limit | The reserved names miss the versioned Lua variables (`LUA_INIT_5_4`, `LUA_PATH_5_4`, `LUA_CPATH_5_4`): add, export and `run` accept them. Reproduced by the first security reviewer only. `crates/akm-core/src/model.rs:784`. Fourth review that breaks this class (FR-02, CORE-R1-02, CORE-R2-02). 2.0 points in that reviewer's score. |
+| FV-09 | Medium | Open | D | design | A compromised page can read five single keys in each minute without a native approval, and `vault_activity` keeps the session open. Both security reviewers, by inspection; neither found a way to compromise the page. `desktop/src-tauri/src/session.rs:723`. 1.0 point. |
+| FV-10 | Low | Open | D | limit | Plaintext copies that AKM does not clear: the dotenv text (`crates/akm-core/src/dotenv.rs:46`) and the values in the child's `Command` (`crates/akm-cli/src/child.rs:55`). 0.5 point. |
+| FV-11 | Low | Open | D | limit | `akm add --secret <value>` puts a secret on the command line, where the process list and the shell history can keep it. `crates/akm-cli/src/main.rs:116`. 0.5 point. |
+| FV-12 | Low | Open | G | missing | The desktop app does not show a stored username, in the drawer or in the edit form. `desktop/src/components/KeyDetail.tsx:182`. 0.5 point. |
+| FV-13 | Low | Open | G | defect | An import that ends after the user went back to Keys leaves the key list stale until the user leaves the view and returns. Reproduced with a mocked native side. `desktop/src/components/KeysView.tsx:53`. 0.5 point. |
+| FV-14 | Medium | Gap (owner present) | H | proof | Nobody ran the real clipboard, the native import and terminal windows, a hide, an OS lock, a suspend or an idle wait on this build. Counted once, in H. 1.0 point. |
+| FV-15 | Low | Open | H | defect | `check_docs.py` accepts a workflow step as evidence when the step has `if: false` or only prints the command text. Reproduced. `tools/check_docs.py:415`. 0.25 point. |
+| FV-16 | Low | Open | H | defect | The verification helper's `clean` stops on a backup path of 260 characters and leaves its session and state folders. Reproduced. `.agents/skills/verify-akm/scripts/akm-verify.ps1:130`. 0.25 point. |
+| FV-17 | Low | Gap (owner gate: CI billing) | H | release | No CI run exists for this head or for the changed workflow (0.25 point). An independent rebuild with the same bytes is not shown (0.25 point, a disclosed limit). |
+| FV-18 | Medium | Open (owner gate: signing) | I | release | The builds are unsigned, and the manual release channel has no key and no signed release. `docs/RELEASING.md:52`. 1.0 point. |
+| FV-19 | Low | Gap (owner gate) | I | release | Install, reinstall and uninstall were not run on a clean computer; the prepared job tests a reinstall of the same version only. `docs/TESTING.md:152`. 0.5 point. The private paths in the tree (FR-26, U4-C-04) cost 0.5 point more. |
+| FV-20 | Low | Open | I | release | The installer and the app ship no licence text and no notices. `docs/RELEASING.md:17`. 0.25 point. |
+| FV-21 | Medium | Open | C, no points | defect | On a backup path longer than 260 characters the private file creation fails, the fallback writes the file with the folder's permissions, and the save reports success with a warning. In a shared fake folder both dated backups could be read by Everyone. Reproduced by the verification reviewer, outside its areas. `crates/akm-core/src/private_fs.rs:395` and `:155`. |
+| FV-22 | Medium | Open | E, no points | defect | The key-derivation guard checks memory and passes separately: a vault header that asks for 4 GiB and 100000 passes is accepted. The guard's answer was reproduced; the derivation was not run. Reported by the first security reviewer, outside its areas. `crates/akm-core/src/kdf_guard.rs:24`. |
+| FV-23 | Low | Open | F, no points | missing | AKM lists the earlier versions of a key but shows no old value and restores no version: that needs KeePassXC or a backup. Reported by the first security reviewer. `desktop/src-tauri/src/commands.rs:520`. |
 
 ## Core and CLI review 1 (2026-11-13)
 
@@ -432,11 +462,11 @@ From [UI rebuild review 2](reviews/2026-11-08-ui-rebuild-review2.md), on `d63c2a
 
 | ID | Severity | Status | Unit | Class | Problem |
 |---|---|---|---|---|---|
-| UI-R2-01 | P2 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | H | The Recycle Bin clips project, environment and history to one line, and its delete confirmation names only the title. Two entries with one title cannot be told apart before a permanent delete. |
-| UI-R2-02 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | Stale value | Settings keeps the first list count and prefers it over every later status. The count can stay old. |
-| UI-R2-03 | P3 | Fixed, not accepted (guard and mutant, campaign unit 2, `cbb4606`) | UI rebuild | H | A result that holds only keys with no project shows no "No project" heading, so its rows name no project. |
-| UI-R2-04 | P3 | Fixed, not accepted (campaign unit 2, `cbb4606`) | UI rebuild | H | The key list clips a long variable name. |
-| UI-R2-05 | P3 | Fixed, not accepted (guard and mutant, campaign unit 2, `cbb4606`) | UI rebuild | H | The key list dropped the project total and the dash for a key with no expiry date. |
+| UI-R2-01 | P2 | Closed (the full review of 13 Nov tried a new scenario and the fix held) | UI rebuild | H | The Recycle Bin clips project, environment and history to one line, and its delete confirmation names only the title. Two entries with one title cannot be told apart before a permanent delete. |
+| UI-R2-02 | P3 | Closed (the full review of 13 Nov tried a new scenario and the fix held) | UI rebuild | Stale value | Settings keeps the first list count and prefers it over every later status. The count can stay old. |
+| UI-R2-03 | P3 | Closed (the full review of 13 Nov tried a new scenario and the fix held) | UI rebuild | H | A result that holds only keys with no project shows no "No project" heading, so its rows name no project. |
+| UI-R2-04 | P3 | Closed (the full review of 13 Nov tried a new scenario and the fix held) | UI rebuild | H | The key list clips a long variable name. |
+| UI-R2-05 | P3 | Closed (the full review of 13 Nov tried a new scenario and the fix held) | UI rebuild | H | The key list dropped the project total and the dash for a key with no expiry date. |
 
 ## UI rebuild review 1 (2026-11-08)
 
