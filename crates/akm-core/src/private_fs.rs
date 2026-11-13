@@ -14,6 +14,58 @@ fn refuse(message: impl std::fmt::Display) -> Error {
     Error::Journal(message.to_string())
 }
 
+#[cfg(test)]
+thread_local! {
+    static READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts the bytes that a bounded read takes from a file, so that a test can prove by a
+/// count that a file past its bound is refused before it is read (CORE-R2-06).
+pub(crate) fn count_read(bytes: u64) {
+    #[cfg(test)]
+    READ.with(|read| read.set(read.get().saturating_add(bytes)));
+    let _ = bytes;
+}
+
+/// The bytes counted by [`count_read`] on this thread since the last call.
+#[cfg(test)]
+pub(crate) fn take_read_count() -> u64 {
+    READ.with(|read| read.replace(0))
+}
+
+/// Reads the whole of an open file, or refuses it with `FileTooLarge` when it is longer than
+/// `limit` bytes. The length comes from the handle before the read, and the read stops one
+/// byte past the limit, so a file that grows during the read costs no more (CORE-R2-06).
+pub(crate) fn read_bounded(file: &mut File, limit: u64) -> std::io::Result<Vec<u8>> {
+    if file.metadata()?.len() > limit {
+        return Err(too_large(limit));
+    }
+    read_limited(file, limit)
+}
+
+fn too_large(limit: u64) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::FileTooLarge,
+        format!("the file is longer than the {limit} bytes that AKM reads"),
+    )
+}
+
+/// Reads a stream to its end, or refuses it with `FileTooLarge` once it gives more than
+/// `limit` bytes. It reads at most one byte past the limit, so a file that grows after its
+/// length was checked costs no more (CORE-R2-06).
+pub(crate) fn read_limited(reader: impl std::io::Read, limit: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    reader
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    count_read(bytes.len() as u64);
+    if bytes.len() as u64 > limit {
+        return Err(too_large(limit));
+    }
+    Ok(bytes)
+}
+
 /// How a journal file is opened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OpenMode {
@@ -122,12 +174,14 @@ pub(crate) fn check_private(path: &Path) -> Result<()> {
 
 #[cfg(windows)]
 pub(crate) use imp::{
-    create_private_dir, file_id, move_new, open_dir, open_file, reject_links, remove_file_if,
+    create_private_dir, file_id, link_count, move_new, open_dir, open_file, reject_links,
+    remove_file_if,
 };
 
 #[cfg(not(windows))]
 pub(crate) use other::{
-    create_private_dir, file_id, move_new, open_dir, open_file, reject_links, remove_file_if,
+    create_private_dir, file_id, link_count, move_new, open_dir, open_file, reject_links,
+    remove_file_if,
 };
 
 #[cfg(not(windows))]
@@ -154,6 +208,20 @@ mod other {
         None
     }
 
+    /// See the Windows `link_count`.
+    pub(crate) fn link_count(file: &File) -> std::io::Result<u32> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Ok(u32::try_from(file.metadata()?.nlink()).unwrap_or(u32::MAX))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = file;
+            Ok(1)
+        }
+    }
+
     pub(crate) fn reject_links(_: &Path) -> Result<()> {
         Err(unsupported())
     }
@@ -175,7 +243,15 @@ mod other {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(error) => return Err(error),
         };
-        if !metadata.is_file() || !holds(&std::fs::read(path)?) {
+        if !metadata.is_file() {
+            return Ok(false);
+        }
+        let bytes = match read_bounded(&mut File::open(path)?, crate::vault::MAX_VAULT_BYTES) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if !holds(&bytes) {
             return Ok(false);
         }
         std::fs::remove_file(path)?;
@@ -276,7 +352,6 @@ mod imp {
         path: &Path,
         holds: impl FnOnce(&[u8]) -> bool,
     ) -> io::Result<bool> {
-        use std::io::Read;
         use std::os::windows::fs::OpenOptionsExt;
         let mut file = match fs::OpenOptions::new()
             .access_mode(FILE_GENERIC_READ | DELETE)
@@ -292,8 +367,11 @@ mod imp {
         if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
             return Ok(false);
         }
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
+        let bytes = match super::read_bounded(&mut file, crate::vault::MAX_VAULT_BYTES) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::FileTooLarge => return Ok(false),
+            Err(error) => return Err(error),
+        };
         if !holds(&bytes) {
             return Ok(false);
         }
@@ -647,6 +725,11 @@ mod imp {
         Ok(Some(file))
     }
 
+    /// The number of names (hard links) of an open file (CORE-R2-05).
+    pub(crate) fn link_count(file: &File) -> io::Result<u32> {
+        Ok(information(file)?.nNumberOfLinks)
+    }
+
     /// Volume serial number and file index of an existing file, if the file system has them.
     pub(crate) fn file_id(path: &Path) -> Option<String> {
         let file = open_raw(
@@ -690,6 +773,19 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::storage_allows;
+    use super::{read_limited, take_read_count};
+
+    /// CORE-R2-06: the stream bound holds by itself, for a file that grows after its length
+    /// was checked. At the limit the bytes are read; one byte past it, the read is refused
+    /// after at most one byte more.
+    #[test]
+    fn a_bounded_read_refuses_a_stream_one_byte_past_its_limit() {
+        assert_eq!(read_limited(&[7u8; 8][..], 8).unwrap(), [7u8; 8]);
+        take_read_count();
+        let error = read_limited(&[7u8; 4096][..], 8).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::FileTooLarge);
+        assert_eq!(take_read_count(), 9, "one byte past the limit, no more");
+    }
 
     #[test]
     fn storage_rule_accepts_only_local_disks_that_keep_permissions() {

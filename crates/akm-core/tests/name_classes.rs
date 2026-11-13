@@ -1,222 +1,207 @@
-//! CORE-R1-02 and FR-02: one function gives every variable name one of three classes.
-//! Reserved names are refused everywhere; credential names have a narrow shape; every other
-//! name is stored and handed over as before, and the import confirmation can show it apart.
-//! Every test uses fake data and literal expected values.
+//! FR-02, CORE-R1-02 and CORE-R2-02: one function, `reserved_class`, decides from a variable
+//! name whether AKM keeps it out of a child process. A name that no rule reserves is free.
+//! AKM has no credential class: every free name is stored, imported, planned and handed over
+//! in the same way, whatever words it holds. Every test uses fake data and literal expected
+//! values.
 
-use akm_core::model::{name_class, reserved_class, NameClass, ReservedClass};
-use akm_core::Vault;
+use akm_core::model::{reserved_class, ReservedClass};
+use akm_core::{ApiKeyInput, EnvDisclosure, Vault};
 
 const PASSWORD: &str = "correct horse battery staple";
 
-/// Each row: a name and its class. The table holds the cc forms of the review, a credential
-/// shape on each side of every near miss, and names that are neither.
-const TABLE: &[(&str, NameClass)] = &[
-    // Reserved: the cc forms of core review 1, finding 2.
-    ("HOST_CC", NameClass::Reserved(ReservedClass::HelperProgram)),
-    (
-        "TARGET_CC",
-        NameClass::Reserved(ReservedClass::HelperProgram),
-    ),
-    (
-        "CC_x86_64-unknown-linux-gnu",
-        NameClass::Reserved(ReservedClass::HelperProgram),
-    ),
-    (
-        "CC_x86_64_unknown_linux_gnu",
-        NameClass::Reserved(ReservedClass::HelperProgram),
-    ),
+/// Names that a reserved rule covers: the cc forms of core review 1, a credential word inside
+/// a reserved name, and the file locations and endpoints of core review 2.
+const RESERVED: &[(&str, ReservedClass)] = &[
+    ("HOST_CC", ReservedClass::HelperProgram),
+    ("TARGET_CC", ReservedClass::HelperProgram),
+    ("CC_x86_64-unknown-linux-gnu", ReservedClass::HelperProgram),
+    ("CC_x86_64_unknown_linux_gnu", ReservedClass::HelperProgram),
     (
         "TARGET_CXXFLAGS_aarch64-apple-darwin",
-        NameClass::Reserved(ReservedClass::HelperProgram),
+        ReservedClass::HelperProgram,
     ),
-    // Reserved first: a credential word does not take a reserved name out of its class.
+    ("CC_API_KEY", ReservedClass::HelperProgram),
+    ("GIT_SSL_KEY", ReservedClass::TrafficRedirect),
+    ("SSH_KEY_PATH", ReservedClass::ProcessControl),
+    ("PRIVATE_KEY_DIR", ReservedClass::UserLocation),
+    ("AKM_TOKEN", ReservedClass::AkmInternal),
+    ("CARGO_REGISTRY_TOKEN_FILE", ReservedClass::HelperProgram),
+    ("GIT_ASKPASS", ReservedClass::HelperProgram),
+    // CORE-R2-02: a credential word does not free a file location or an endpoint.
     (
-        "CC_API_KEY",
-        NameClass::Reserved(ReservedClass::HelperProgram),
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        ReservedClass::SettingsFile,
     ),
+    ("KUBECONFIG", ReservedClass::SettingsFile),
+    ("AWS_SHARED_CREDENTIALS_FILE", ReservedClass::SettingsFile),
+    ("AWS_WEB_IDENTITY_TOKEN_FILE", ReservedClass::SettingsFile),
+    ("AZURE_FEDERATED_TOKEN_FILE", ReservedClass::SettingsFile),
+    ("DB_PASSWORD_FILE", ReservedClass::SettingsFile),
+    ("APP_CONFIG", ReservedClass::SettingsFile),
     (
-        "GIT_SSL_KEY",
-        NameClass::Reserved(ReservedClass::TrafficRedirect),
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        ReservedClass::TrafficRedirect,
     ),
-    (
-        "SSH_KEY_PATH",
-        NameClass::Reserved(ReservedClass::ProcessControl),
-    ),
-    (
-        "PRIVATE_KEY_DIR",
-        NameClass::Reserved(ReservedClass::UserLocation),
-    ),
-    ("AKM_TOKEN", NameClass::Reserved(ReservedClass::AkmInternal)),
-    (
-        "CARGO_REGISTRY_TOKEN_FILE",
-        NameClass::Reserved(ReservedClass::HelperProgram),
-    ),
-    (
-        "GIT_ASKPASS",
-        NameClass::Reserved(ReservedClass::HelperProgram),
-    ),
-    // Credential: a whole token is a credential word.
-    ("OPENAI_API_KEY", NameClass::Credential),
-    ("STRIPE_SECRET_KEY", NameClass::Credential),
-    ("GITHUB_TOKEN", NameClass::Credential),
-    ("NPM_TOKEN", NameClass::Credential),
-    ("AWS_ACCESS_KEY_ID", NameClass::Credential),
-    ("AWS_SECRET_ACCESS_KEY", NameClass::Credential),
-    ("DB_PASSWORD", NameClass::Credential),
-    ("SMTP_PASSWD", NameClass::Credential),
-    ("SSH_PASSPHRASE", NameClass::Credential),
-    ("REDIS_PASS", NameClass::Credential),
-    ("GOOGLE_APPLICATION_CREDENTIALS", NameClass::Credential),
-    ("SERVICE_CREDENTIAL", NameClass::Credential),
-    ("AZURE_CLIENT_SECRET", NameClass::Credential),
-    ("API_SECRETS", NameClass::Credential),
-    ("DENO_AUTH_TOKENS", NameClass::Credential),
-    ("SIGNING_KEYS", NameClass::Credential),
-    ("OPENAI_APIKEY", NameClass::Credential),
-    ("TOKEN", NameClass::Credential),
-    ("openai_api_key", NameClass::Credential),
-    // Credential: the documented registry tokens inside a reserved family.
-    ("CARGO_REGISTRY_TOKEN", NameClass::Credential),
-    ("CARGO_REGISTRIES_MINE_TOKEN", NameClass::Credential),
-    ("YARN_NPM_AUTH_TOKEN", NameClass::Credential),
-    // Credential: a reserved word that is not the last token, or only part of a word.
-    ("PATH_TOKEN", NameClass::Credential),
-    ("HOME_ASSISTANT_TOKEN", NameClass::Credential),
-    ("CCACHE_TOKEN", NameClass::Credential),
-    ("HOST_TOKEN", NameClass::Credential),
-    ("TARGET_API_KEY", NameClass::Credential),
-    ("EDITOR_KEY", NameClass::Credential),
-    ("LESSON_KEY", NameClass::Credential),
-    ("GIT_TOKEN", NameClass::Credential),
-    // Other: no credential token, no reserved rule.
-    ("PORT", NameClass::Other),
-    ("NODE_ENV", NameClass::Other),
-    ("DATABASE_URL", NameClass::Other),
-    ("LOG_LEVEL", NameClass::Other),
-    ("APP_NAME", NameClass::Other),
-    ("DEBUG", NameClass::Other),
-    ("TZ", NameClass::Other),
-    ("RUST_LOG", NameClass::Other),
-    ("AWS_REGION", NameClass::Other),
-    ("DOTNET_ENVIRONMENT", NameClass::Other),
-    ("YARN_NPM_AUTH_IDENT", NameClass::Other),
-    ("FEATURE_FLAGS", NameClass::Other),
-    ("SLACK_WEBHOOK", NameClass::Other),
-    // Other: a credential word only inside a longer token is not a credential word.
-    ("MONKEY_ID", NameClass::Other),
-    ("KEYBOARD_LAYOUT", NameClass::Other),
-    ("TOKENIZER_MODEL", NameClass::Other),
-    ("SECRETARY_NAME", NameClass::Other),
-    ("PASSPORT_NUMBER", NameClass::Other),
-    ("PASSWORDLESS_LOGIN", NameClass::Other),
-    ("BYPASS_CACHE", NameClass::Other),
-    ("MY_ASKPASS_HELPER", NameClass::Other),
-    ("GITHUB_ASKPASS_NOT", NameClass::Other),
+    ("AZURE_AUTHORITY_HOST", ReservedClass::TrafficRedirect),
 ];
 
-#[test]
-fn every_name_in_the_table_has_its_class_in_any_case() {
-    for (name, class) in TABLE {
-        for spelled in [
-            (*name).to_string(),
-            name.to_ascii_lowercase(),
-            name.to_ascii_uppercase(),
-        ] {
-            assert_eq!(name_class(&spelled), *class, "{spelled}");
-        }
-    }
-}
+/// Free names: credential words, plain settings, near misses of a reserved shape, and words
+/// that only hold a reserved word or a credential word.
+const FREE: &[&str] = &[
+    "OPENAI_API_KEY",
+    "STRIPE_SECRET_KEY",
+    "GITHUB_TOKEN",
+    "NPM_TOKEN",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "DB_PASSWORD",
+    "SMTP_PASSWD",
+    "SSH_PASSPHRASE",
+    "REDIS_PASS",
+    "SERVICE_CREDENTIAL",
+    "AZURE_CLIENT_SECRET",
+    "API_SECRETS",
+    "DENO_AUTH_TOKENS",
+    "SIGNING_KEYS",
+    "OPENAI_APIKEY",
+    "TOKEN",
+    "CARGO_REGISTRY_TOKEN",
+    "CARGO_REGISTRIES_MINE_TOKEN",
+    "YARN_NPM_AUTH_TOKEN",
+    "PATH_TOKEN",
+    "HOME_ASSISTANT_TOKEN",
+    "CCACHE_TOKEN",
+    "HOST_TOKEN",
+    "TARGET_API_KEY",
+    "EDITOR_KEY",
+    "LESSON_KEY",
+    "GIT_TOKEN",
+    "FILE_TOKEN",
+    "CONFIG_KEY",
+    "PORT",
+    "NODE_ENV",
+    "DATABASE_URL",
+    "LOG_LEVEL",
+    "APP_NAME",
+    "DEBUG",
+    "TZ",
+    "RUST_LOG",
+    "AWS_REGION",
+    "AWS_PROFILE",
+    "DOTNET_ENVIRONMENT",
+    "YARN_NPM_AUTH_IDENT",
+    "FEATURE_FLAGS",
+    "SLACK_WEBHOOK",
+    "MONKEY_ID",
+    "KEYBOARD_LAYOUT",
+    "TOKENIZER_MODEL",
+    "SECRETARY_NAME",
+    "PASSPORT_NUMBER",
+    "PASSWORDLESS_LOGIN",
+    "BYPASS_CACHE",
+    "MY_ASKPASS_HELPER",
+    "GITHUB_ASKPASS_NOT",
+    "USER_PROFILE",
+    "LOG_FILES",
+    "APP_CONFIGS",
+    "PROFILE",
+];
 
-/// `reserved_class`, which the desktop calls, is the reserved part of `name_class`.
-#[test]
-fn reserved_class_is_the_reserved_part_of_name_class() {
-    for (name, class) in TABLE {
-        let expected = match class {
-            NameClass::Reserved(reserved) => Some(*reserved),
-            NameClass::Credential | NameClass::Other => None,
-        };
-        assert_eq!(reserved_class(name), expected, "{name}");
-    }
-}
-
-/// The credential words are whole tokens. A name with none of them is never a credential,
-/// whatever else it holds.
-#[test]
-fn the_credential_shape_is_a_whole_token_and_nothing_else() {
-    for word in [
-        "KEY",
-        "KEYS",
-        "APIKEY",
-        "TOKEN",
-        "TOKENS",
-        "SECRET",
-        "SECRETS",
-        "PASSWORD",
-        "PASSWD",
-        "PASSPHRASE",
-        "PASS",
-        "CREDENTIAL",
-        "CREDENTIALS",
-    ] {
-        for name in [
-            word.to_string(),
-            format!("MY_{word}"),
-            format!("{word}_ONE"),
-            format!("MY_{word}_ONE"),
-        ] {
-            assert_eq!(name_class(&name), NameClass::Credential, "{name}");
-        }
-        for name in [
-            format!("MY{word}"),
-            format!("{word}X"),
-            format!("MY_X{word}_ONE"),
-        ] {
-            assert_ne!(name_class(&name), NameClass::Credential, "{name}");
-        }
-    }
-}
-
-/// The desktop import confirmation marks the names that are not credential names. Each
-/// change of a preview gives its class, and a reserved name never reaches a preview.
-#[test]
-fn each_change_of_an_import_preview_gives_the_class_of_its_name() {
-    let directory = tempfile::tempdir().unwrap();
-    let vault = Vault::create(directory.path().join("vault.kdbx"), PASSWORD, None).unwrap();
-    let entries: Vec<(String, String)> = [
-        ("OPENAI_API_KEY", "fake-openai"),
-        ("PORT", "8080"),
-        ("DATABASE_URL", "postgres://fake"),
-        ("GITHUB_TOKEN", "fake-github"),
-    ]
-    .iter()
-    .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
-    .collect();
-    let preview = vault
-        .preview_import_env(&entries, Some("demo"), Some("dev"))
-        .unwrap();
-    let classes: Vec<(&str, NameClass)> = preview
-        .changes
-        .iter()
-        .map(|change| (change.name.as_str(), change.name_class()))
+fn spellings(name: &str) -> [String; 3] {
+    let mixed = name
+        .chars()
+        .enumerate()
+        .map(|(index, letter)| {
+            if index % 2 == 0 {
+                letter.to_ascii_lowercase()
+            } else {
+                letter.to_ascii_uppercase()
+            }
+        })
         .collect();
-    assert_eq!(
-        classes,
-        [
-            ("OPENAI_API_KEY", NameClass::Credential),
-            ("PORT", NameClass::Other),
-            ("DATABASE_URL", NameClass::Other),
-            ("GITHUB_TOKEN", NameClass::Credential),
-        ]
+    [name.to_string(), name.to_ascii_lowercase(), mixed]
+}
+
+#[test]
+fn every_reserved_row_has_its_class_and_every_free_name_has_none_in_any_case() {
+    for (name, class) in RESERVED {
+        for spelled in spellings(name) {
+            assert_eq!(reserved_class(&spelled), Some(*class), "{spelled}");
+        }
+    }
+    for name in FREE {
+        for spelled in spellings(name) {
+            assert_eq!(reserved_class(&spelled), None, "{spelled}");
+        }
+    }
+}
+
+/// CORE-R2-02: a name with a credential word gets no other treatment than any free name.
+/// Add, edit, the import preview, the import, the plan of `run` and of `export`, and the
+/// hand-over of the values treat each of these names in the same way.
+#[test]
+fn a_credential_word_gives_a_name_the_same_treatment_as_any_free_name() {
+    let names = ["OPENAI_API_KEY", "DB_PASSWORD", "PORT", "DATABASE_URL"];
+    let directory = tempfile::tempdir().unwrap();
+    let mut vault = Vault::create(directory.path().join("vault.kdbx"), PASSWORD, None).unwrap();
+
+    let mut previews = Vec::new();
+    for (index, name) in names.into_iter().enumerate() {
+        let mut input = ApiKeyInput::new(format!("Added {name}"), format!("fake-added-{name}"));
+        input.env_var = Some(name.into());
+        input.project = Some("added".into());
+        input.environment = Some("dev".into());
+        assert_eq!(vault.add(input).unwrap().resolved_env_var(), name);
+
+        let mut input = ApiKeyInput::new("Edited key", format!("fake-edited-{name}"));
+        input.project = Some(format!("edited-{index}"));
+        input.environment = Some("dev".into());
+        let edited = vault.add(input).unwrap();
+        assert_eq!(edited.resolved_env_var(), "EDITED_KEY");
+        let mut edit = vault.edit_input(&edited.id).unwrap();
+        edit.env_var = Some(name.into());
+        assert_eq!(
+            vault.update(&edited.id, edit).unwrap().resolved_env_var(),
+            name
+        );
+
+        let entries = vec![(name.to_string(), format!("fake-imported-{name}"))];
+        let preview = vault
+            .preview_import_env(&entries, Some("imported"), Some("dev"))
+            .unwrap();
+        assert_eq!(preview.changes.len(), 1, "{name}");
+        assert_eq!(preview.changes[0].name, name);
+        previews.push((
+            preview.added,
+            preview.updated,
+            preview.unchanged,
+            preview.changes[0].action.clone(),
+        ));
+        assert_eq!(
+            vault
+                .import_env(&entries, Some("imported"), Some("dev"))
+                .unwrap(),
+            (1, 0),
+            "{name}"
+        );
+    }
+    assert!(
+        previews.windows(2).all(|pair| pair[0] == pair[1]),
+        "{previews:?}"
     );
 
-    let mut hostile = entries.clone();
-    hostile.push(("HOST_CC".to_string(), "fake-compiler".to_string()));
-    let text = vault
-        .preview_import_env(&hostile, Some("demo"), Some("dev"))
-        .unwrap_err()
-        .to_string();
-    assert!(
-        text.contains("HOST_CC") && text.contains("reserved"),
-        "{text}"
-    );
+    for (project, value) in [("added", "fake-added-"), ("imported", "fake-imported-")] {
+        for action in [EnvDisclosure::Run, EnvDisclosure::Export] {
+            let plan = vault.plan_env(Some(project), Some("dev"), false).unwrap();
+            let proof = vault.disclose_env(action, &plan, Some("test")).unwrap();
+            let mut handed = vault.env_vars(&plan, &proof).unwrap();
+            handed.sort();
+            let mut expected: Vec<(String, String)> = names
+                .iter()
+                .map(|name| (name.to_string(), format!("{value}{name}")))
+                .collect();
+            expected.sort();
+            assert_eq!(handed, expected, "{project} {action:?}");
+        }
+    }
 }

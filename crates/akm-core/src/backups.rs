@@ -91,7 +91,11 @@ impl Backup {
     fn holds_its_bytes(&self, vault: &Path) -> bool {
         let path = self.path(vault);
         std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file())
-            && std::fs::read(&path).is_ok_and(|bytes| sha256(&bytes) == self.sha256)
+            && std::fs::File::open(&path)
+                .and_then(|mut file| {
+                    crate::private_fs::read_bounded(&mut file, crate::vault::MAX_VAULT_BYTES)
+                })
+                .is_ok_and(|bytes| sha256(&bytes) == self.sha256)
     }
 }
 

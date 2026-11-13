@@ -117,6 +117,10 @@ impl AuditSnapshot {
 /// The action of the first record of a journal that replaced a damaged one.
 pub const RECOVERED: &str = "journal-recovered";
 
+/// The longest line of a journal, with its line end, that the reader takes (CORE-R2-06).
+/// AKM writes records of a few hundred bytes.
+pub const MAX_RECORD_BYTES: usize = 64 * 1024;
+
 /// What a recovery kept and what it started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recovery {
@@ -386,8 +390,15 @@ impl ChainFile {
                 prev: std::mem::replace(&mut prev, hash.clone()),
                 hash,
             };
+            let start = bytes.len();
             serde_json::to_writer(&mut bytes, &entry)?;
             bytes.push(b'\n');
+            if bytes.len() - start > MAX_RECORD_BYTES {
+                return Err(Error::Journal(format!(
+                    "a record would be longer than the {} KiB that the journal reader takes, so it was not written",
+                    MAX_RECORD_BYTES / 1024
+                )));
+            }
         }
         Ok(bytes)
     }
@@ -419,10 +430,20 @@ impl ChainFile {
         let mut expected_seq = 1u64;
         loop {
             buffer.clear();
-            if reader.read_until(b'\n', &mut buffer)? == 0 {
+            // At most one byte past the bound, so a line of any length costs the reader no
+            // more than the bound (CORE-R2-06).
+            let bound = MAX_RECORD_BYTES as u64 + 1;
+            if std::io::Read::take(&mut reader, bound).read_until(b'\n', &mut buffer)? == 0 {
                 break;
             }
             physical_line += 1;
+            if buffer.len() > MAX_RECORD_BYTES {
+                // Longer than any record that AKM writes: not a valid record.
+                snapshot.state = AuditState::Corrupt;
+                snapshot.problem_line = Some(physical_line);
+                snapshot.damage = Some(Damage::MalformedJson);
+                break;
+            }
             let terminated = buffer.last() == Some(&b'\n');
             // A blank record has a line terminator and only JSON whitespace.
             // Broader ASCII whitespace includes controls JSON does not permit.
@@ -683,23 +704,27 @@ impl AuditLog {
     }
 
     /// Appends one record. Creates the private folder, the binding and the journal when
-    /// they do not exist. Refuses when the identity of the vault cannot be confirmed.
+    /// they do not exist. Refuses when the identity of the vault cannot be confirmed. It
+    /// reports no lineage warning, so it leaves an unseen version unsettled for the next
+    /// record through the vault, which warns (FR-12, CORE-R2-04).
     pub fn append(&self, action: &str, key_id: Option<&str>, detail: Option<&str>) -> Result<()> {
-        self.append_reporting(action, key_id, detail).map(|_| ())
+        self.append_reporting(action, key_id, detail, false)
+            .map(|_| ())
     }
 
     /// Like [`AuditLog::append`]. The answer is `true` when the record went into a journal
     /// that continues, but whose link to this vault file is not confirmed: the file holds a
-    /// version that the journal never saw (FR-12).
+    /// version that the journal never saw (FR-12). `carries_lineage`: the caller passes the
+    /// answer on to the person, so this record settles the version (only `Vault::log`).
     pub(crate) fn append_reporting(
         &self,
         action: &str,
         key_id: Option<&str>,
         detail: Option<&str>,
+        carries_lineage: bool,
     ) -> Result<bool> {
         let folder = self.root.open_or_create()?;
-        // The answer reaches the person through `Vault::log`, so this record carries it.
-        journal::record(&folder, &self.evidence, true, |placement| {
+        journal::record(&folder, &self.evidence, carries_lineage, |placement| {
             let chain = ChainFile::private(folder.journal_file(&placement.id), &placement.id);
             let mut records = Vec::new();
             if placement.owes_rollback {

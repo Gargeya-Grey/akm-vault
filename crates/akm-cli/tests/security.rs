@@ -613,6 +613,83 @@ fn a_stored_key_named_like_a_cargo_execution_control_is_refused_for_use_and_stil
     }
 }
 
+/// CORE-R2-02: a key never chooses the file that a program reads its credentials or its
+/// settings from. The consumer is the test probe: it reads the file that each settings-file
+/// name names, as the Google, Kubernetes and AWS libraries do. A key under such a name stops
+/// `run` and `export` before any child starts. With the key's scope left out,
+/// the same consumer reads the file of the parent environment. Offline, fake files only.
+#[test]
+fn a_key_never_chooses_the_settings_file_that_a_child_reads() {
+    // The command line hands over only upper-case names (`is_valid_env_var`); the core test
+    // `name_classes` holds every spelling of each name to the same class.
+    for name in [
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "KUBECONFIG",
+        "AWS_SHARED_CREDENTIALS_FILE",
+    ] {
+        let files = temporary_directory();
+        let key_file = files.path().join("key-settings.json");
+        let parent_file = files.path().join("parent-settings.json");
+        fs::write(&key_file, "fake key settings").unwrap();
+        fs::write(&parent_file, "fake parent settings").unwrap();
+        let key_path = key_file.to_string_lossy().into_owned();
+        let fixture = Fixture::with_keys(&[
+            ("Settings key", name, &key_path, "demo", "dev"),
+            (
+                "Fine key",
+                "FINE_TOKEN",
+                "fake-fine-secret",
+                "demo",
+                "other",
+            ),
+        ]);
+        let report_path = files.path().join("report.json");
+        let probe = |command: &mut Command| {
+            command
+                .arg("--")
+                .arg(std::env::current_exe().unwrap())
+                .args(["--exact", "child_probe", "--ignored", "--nocapture"]);
+        };
+        for verb in ["run", "export"] {
+            let mut command = fixture.cli();
+            command
+                .env("CLI_TEST_REPORT", &report_path)
+                .env(name, &parent_file)
+                .args([verb, "--project", "demo", "--env", "dev"]);
+            if verb == "run" {
+                probe(&mut command);
+            }
+            let output = command.output().unwrap();
+            let text = stderr(&output);
+            assert!(
+                !output.status.success(),
+                "{name} {verb}: the key was handed over; the child read {:?}",
+                report_path
+                    .exists()
+                    .then(|| report(&report_path)["settings_files"].clone())
+            );
+            assert!(text.contains("reserved"), "{name} {verb}: {text}");
+            assert!(text.contains("Settings key"), "{name} {verb}: {text}");
+            assert!(!text.contains(&key_path), "{name} {verb}: {text}");
+            assert!(output.stdout.is_empty(), "{name} {verb}");
+            assert!(!report_path.exists(), "{name} {verb}: a child started");
+        }
+        let mut command = fixture.cli();
+        command
+            .env("CLI_TEST_REPORT", &report_path)
+            .env(name, &parent_file)
+            .args(["run", "--project", "demo", "--env", "other"]);
+        probe(&mut command);
+        let output = command.output().unwrap();
+        assert_success(&output);
+        assert_eq!(
+            report(&report_path)["settings_files"][name],
+            "fake parent settings",
+            "{name}"
+        );
+    }
+}
+
 #[test]
 fn every_reserved_class_is_refused_by_run_and_export_with_the_key_title_and_never_the_value() {
     for name in [
@@ -2294,6 +2371,22 @@ fn child_probe() {
         .map(|(name, _)| name.to_string_lossy().into_owned())
         .filter(|name| name.to_ascii_uppercase().starts_with("AKM_"))
         .collect();
+    // The consumer of the settings-file names (CORE-R2-02): it reads the file that each one
+    // names, as the Google, Kubernetes and AWS libraries do. It reads only inside the folder
+    // of its report, so a real file of the person who runs the tests is never read.
+    let folder = fs::canonicalize(Path::new(&output).parent().unwrap()).unwrap();
+    let settings_files: std::collections::BTreeMap<&str, String> = [
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "KUBECONFIG",
+        "AWS_SHARED_CREDENTIALS_FILE",
+    ]
+    .into_iter()
+    .filter_map(|name| {
+        let path = fs::canonicalize(std::env::var_os(name)?).ok()?;
+        path.starts_with(&folder).then_some(())?;
+        Some((name, fs::read_to_string(&path).ok()?))
+    })
+    .collect();
     let mut last_action = None;
     if let Some(path) = std::env::var_os("CLI_TEST_AUDIT") {
         let text = fs::read_to_string(&path).unwrap();
@@ -2321,6 +2414,7 @@ fn child_probe() {
             "path": std::env::var("PATH").ok(),
             "arguments": forwarded,
             "last_audit_action": last_action,
+            "settings_files": settings_files,
         }))
         .unwrap(),
     )

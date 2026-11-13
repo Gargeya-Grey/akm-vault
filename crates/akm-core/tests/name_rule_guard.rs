@@ -1,13 +1,15 @@
-//! CORE-R1-02, class sweep: `model::name_class` is the only rule that decides from a
-//! variable name whether it is reserved or a credential. This guard fails when a second
-//! rule appears in the Rust sources of the CLI, the core or the desktop.
+//! CORE-R1-02 and CORE-R2-02, class sweep: `model::reserved_class` is the only rule that
+//! decides from a variable name how AKM treats it. AKM has no credential class, so a rule
+//! that treats a name with a credential word apart is a second rule too. This guard fails
+//! when a second rule appears in the Rust sources of the CLI, the core or the desktop.
 //!
 //! How it finds one: it reads every `.rs` file under `crates/akm-core/src`,
 //! `crates/akm-cli/src` and `desktop/src-tauri/src`, except `model.rs`, without the blocks
 //! of its `#[cfg(test)]` modules and without comments. It takes each string literal that
 //! holds only ASCII upper-case letters, digits and underscores (the shape of a variable
-//! name or of a part of one, such as `"AKM_"` or `"_TOKEN"`) and asks `name_class` for its
-//! class. A literal of the reserved or the credential class is a rule, unless it is the
+//! name or of a part of one, such as `"AKM_"` or `"_TOKEN"`). A literal that
+//! `reserved_class` reserves, or that holds a credential word as a whole token, is a rule,
+//! unless it is the
 //! argument of a read of the process environment (`var(`, `var_os(`, `env!(`, a clap
 //! `env = `), or the allow list below names its file and literal with the reason why it is
 //! no rule. It also fails on a function with the word "reserved" or "credential" in its
@@ -16,7 +18,36 @@
 
 use std::path::{Path, PathBuf};
 
-use akm_core::model::{name_class, NameClass};
+use akm_core::model::reserved_class;
+
+/// Words that a second rule could use to treat a name as a credential. The core uses none of
+/// them (CORE-R2-02); this list exists only so that the guard can find such a rule.
+const CREDENTIAL_WORDS: &[&str] = &[
+    "KEY",
+    "KEYS",
+    "APIKEY",
+    "TOKEN",
+    "TOKENS",
+    "SECRET",
+    "SECRETS",
+    "PASSWORD",
+    "PASSWD",
+    "PASSPHRASE",
+    "PASS",
+    "CREDENTIAL",
+    "CREDENTIALS",
+];
+
+/// Why a literal is a name rule, or `None` when it is not one.
+fn rule_of(literal: &str) -> Option<String> {
+    if let Some(class) = reserved_class(literal) {
+        return Some(format!("{literal:?} is reserved ({class:?})"));
+    }
+    literal
+        .split('_')
+        .any(|token| CREDENTIAL_WORDS.contains(&token))
+        .then(|| format!("{literal:?} holds a credential word"))
+}
 
 /// (file under the workspace root, literal, why it is no second rule).
 const ALLOWED: &[(&str, &str, &str)] = &[
@@ -45,14 +76,15 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "AKM_",
         "is_akm_name, which removes inherited AKM_ variables from a child: the desktop test \
          the_akm_name_rule_mirrors_the_one_of_the_command_line pins its text, and the child.rs \
-         test the_akm_name_rule_is_the_akm_internal_class_of_name_class holds it to name_class",
+         test the_akm_name_rule_is_the_akm_internal_class_of_reserved_class holds it to \
+         reserved_class",
     ),
     (
         "desktop/src-tauri/src/launch.rs",
         "AKM_",
         "is_akm_name, which removes inherited AKM_ variables from the terminal: the launch.rs \
          test the_akm_name_rule_mirrors_the_one_of_the_command_line pins its text to the one \
-         of child.rs and holds it to name_class",
+         of child.rs and holds it to reserved_class",
     ),
 ];
 
@@ -320,11 +352,12 @@ fn scan() -> Vec<(String, String, String)> {
         let production = production_pieces(&std::fs::read_to_string(&file).unwrap());
         for (literal, before) in literals_in_context(&production) {
             let read = ENVIRONMENT_READS.iter().any(|read| before.ends_with(read));
-            if read || !shaped_like_a_name(&literal) || name_class(&literal) == NameClass::Other {
+            if read || !shaped_like_a_name(&literal) {
                 continue;
             }
-            let finding = format!("{literal:?} is {:?}", name_class(&literal));
-            out.push((relative.clone(), literal, finding));
+            if let Some(finding) = rule_of(&literal) {
+                out.push((relative.clone(), literal, finding));
+            }
         }
         for function in function_names(&code_text(&production)) {
             if names_a_rule(&function) {
@@ -348,7 +381,7 @@ fn no_variable_name_rule_exists_outside_model_rs() {
         .collect();
     assert!(
         found.is_empty(),
-        "a second reserved-name or credential-name rule; use model::name_class:\n{}",
+        "a second variable-name rule; use model::reserved_class:\n{}",
         found.join("\n")
     );
 }
@@ -405,12 +438,10 @@ fn the_guard_reads_literals_and_skips_comments_char_literals_reads_and_test_modu
     assert!(!ENVIRONMENT_READS
         .iter()
         .any(|read| literals[3].1.ends_with(read)));
-    let classes: Vec<NameClass> = texts.iter().map(|text| name_class(text)).collect();
-    assert!(matches!(classes[1], NameClass::Reserved(_)));
-    assert_eq!(classes[2], NameClass::Credential);
-    assert!(matches!(classes[3], NameClass::Reserved(_)));
-    assert_eq!(classes[4], NameClass::Other);
-    assert!(matches!(classes[5], NameClass::Reserved(_)));
+    let rules: Vec<bool> = texts.iter().map(|text| rule_of(text).is_some()).collect();
+    assert_eq!(rules, [true, true, true, true, false, true]);
+    assert!(rule_of("_TOKEN").unwrap().contains("credential word"));
+    assert!(rule_of("HOST_CC").unwrap().contains("reserved"));
     let functions = function_names("pub fn is_reserved_name() {} fn preserved() {}");
     assert_eq!(functions, ["is_reserved_name", "preserved"]);
     assert!(names_a_rule(&functions[0]));

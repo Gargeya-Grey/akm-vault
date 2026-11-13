@@ -1517,6 +1517,11 @@ mod tests {
                 "NODE_V8_COVERAGE",
                 "PYTHON_HISTORY",
             ],
+            SettingsFile => &[
+                "GOOGLE_APPLICATION_CREDENTIALS",
+                "KUBECONFIG",
+                "aws_shared_credentials_file",
+            ],
         }
     }
 
@@ -1535,7 +1540,8 @@ mod tests {
             Some(ShellStartup) => Some(TrafficRedirect),
             Some(TrafficRedirect) => Some(UserLocation),
             Some(UserLocation) => Some(OutputCapture),
-            Some(OutputCapture) => None,
+            Some(OutputCapture) => Some(SettingsFile),
+            Some(SettingsFile) => None,
         }
     }
 
@@ -1547,7 +1553,7 @@ mod tests {
     fn t_r3_02_every_reserved_class_and_every_shell_name_is_refused_at_the_launch_boundary() {
         let classes: Vec<_> =
             std::iter::successors(next_class(None), |class| next_class(Some(*class))).collect();
-        assert_eq!(classes.len(), 8);
+        assert_eq!(classes.len(), 9);
         for class in classes {
             assert!(!reserved_names(class).is_empty(), "{class:?}");
             for name in reserved_names(class) {

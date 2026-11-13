@@ -27,6 +27,10 @@ const MAPPING_TMP: &str = "mapping.json.tmp";
 const MAPPING_VERSION: u32 = 1;
 const SEEN_LIMIT: usize = 32;
 
+/// The largest `mapping.json` that AKM reads or writes (CORE-R2-06). The mapping holds one
+/// binding per vault, and each binding keeps at most `SEEN_LIMIT` fingerprints.
+pub const MAX_MAPPING_BYTES: usize = 16 << 20;
+
 fn journal_error(message: impl std::fmt::Display) -> Error {
     Error::Journal(message.to_string())
 }
@@ -182,9 +186,7 @@ impl VaultEvidence {
     pub fn from_file(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
-            sha: fs::read(path)
-                .ok()
-                .map(|bytes| hex::encode(Sha256::digest(bytes))),
+            sha: fingerprint_file(path),
             root: None,
             lineage: Vec::new(),
         }
@@ -235,11 +237,29 @@ impl VaultEvidence {
         let (Some(sha), Some(_)) = (&self.sha, &self.root) else {
             return false;
         };
-        match fs::read(canonical) {
-            Ok(bytes) => hex::encode(Sha256::digest(bytes)) != *sha,
-            Err(_) => true,
-        }
+        fingerprint_file(canonical).is_none_or(|actual| actual != *sha)
     }
+}
+
+/// The SHA-256 of a vault file, hashed as a stream, or `None` when the file cannot be read or
+/// is longer than the vault reader takes (CORE-R2-06).
+fn fingerprint_file(path: &Path) -> Option<String> {
+    let bound = crate::vault::MAX_VAULT_BYTES;
+    let file = File::open(path).ok()?;
+    if file.metadata().ok()?.len() > bound {
+        return None;
+    }
+    hash_limited(file, bound)
+}
+
+/// The SHA-256 of a stream, or `None` when it cannot be read or gives more than `limit`
+/// bytes. It reads at most one byte past the limit, so a file that grows after its length was
+/// checked costs no more.
+fn hash_limited(reader: impl Read, limit: u64) -> Option<String> {
+    let mut hasher = Sha256::new();
+    let hashed = std::io::copy(&mut reader.take(limit.saturating_add(1)), &mut hasher).ok()?;
+    private_fs::count_read(hashed);
+    (hashed <= limit).then(|| hex::encode(hasher.finalize()))
 }
 
 fn canonical(path: &Path) -> PathBuf {
@@ -342,10 +362,11 @@ pub(crate) enum Resolution {
         rolled_back: bool,
         adopt_root: bool,
     },
-    /// An unseen version at the path of a binding, with no record that links it to this
-    /// binding (no evidence of a save made from a recorded version), and vault IDs that do
-    /// not contradict each other. A clone of the vault has the same vault ID, so the ID
-    /// cannot say that the file is the same vault (FR-12, P2R2-04). The journal continues
+    /// An unseen version at the path of a binding, or in the file of a binding that moved
+    /// (its file ID), with no record that links it to this binding (no evidence of a save
+    /// made from a recorded version), and vault IDs that do not contradict each other. A
+    /// clone of the vault has the same vault ID, so the ID cannot say that the file is the
+    /// same vault (FR-12, P2R2-04, CORE-R2-03). The journal continues
     /// in this binding, and the caller must warn that the continuity is not confirmed.
     Continued {
         index: usize,
@@ -435,6 +456,40 @@ fn owners(
     among(&observation.lineage.iter().collect::<Vec<_>>())
 }
 
+/// The journal of one observation of a vault file. The only evidence that links a vault file
+/// to a journal is a version that a journal recorded: the version of the evidence, or a version
+/// that the evidence's session held before it (its lineage, with the session's own saves). A
+/// vault ID or a file ID is no such evidence: a clone shares the vault ID, and a file can be
+/// rewritten in place (CORE-R2-03). Both can only rule a journal out. "Recorded" means
+/// recorded by an active binding. The rows, for current evidence at a path with an active
+/// binding:
+///
+/// 1. Recorded by that binding: `Same`, confirmed.
+/// 2. Recorded only by other bindings: `Claimed` by the one, confirmed; `Ambiguous` when
+///    several did, refused.
+/// 3. Not recorded, and the binding's vault ID is equal or unknown: `Continued`, unconfirmed.
+///    The record warns, and only a record that passes the warning on settles the version.
+/// 4. Not recorded, and the vault IDs differ: `Replaced`, a new journal.
+/// 5. Not recorded, and the evidence has no vault ID (a locked read): `Unconfirmed`; a write
+///    is refused.
+///
+/// For current evidence at a path without an active binding:
+///
+/// 6. The file ID of one binding that recorded the version, or that recorded its lineage
+///    with an equal vault ID: `Moved`, confirmed.
+/// 7. The file ID of one binding with an equal vault ID, and no binding recorded the version
+///    or its lineage: `Continued` in that binding, as in row 3. The next record, after the
+///    version is settled, moves the binding (row 6).
+/// 8. Anything else: `New`, a new journal.
+///
+/// For stale evidence (the file at the path changed since the session read it):
+///
+/// 9. Recorded by the binding at the path, with equal vault IDs: `Observed`, confirmed.
+/// 10. Recorded only by one other binding, with equal vault IDs: `Observed` there; by
+///     several: `Ambiguous`, refused.
+/// 11. Anything else: `Superseded`, refused. Reopening the vault reads the file as it is now.
+///
+/// `the_identity_table_holds_row_by_row` holds each row.
 pub(crate) fn resolve(bindings: &[Binding], observation: &Observation) -> Resolution {
     let same_path = bindings
         .iter()
@@ -505,8 +560,8 @@ pub(crate) fn resolve(bindings: &[Binding], observation: &Observation) -> Resolu
 
 /// Evidence that no longer matches the file at its path never changes the mapping (D10).
 /// A path without a binding gives it nothing to stand on: a copy cannot be told from a file
-/// that moved. At a bound path, the binding that recorded its version vouches for it. Only
-/// when no binding did, the binding at the path vouches if the vault IDs are known and equal.
+/// that moved. At a bound path, only a binding that recorded its version or its lineage
+/// vouches for it. The vault ID alone never does (CORE-R2-03).
 fn resolve_stale(
     bindings: &[Binding],
     observation: &Observation,
@@ -520,18 +575,11 @@ fn resolve_stale(
         return Resolution::Observed { index: at_path };
     }
     match vouching.as_slice() {
-        [] => {}
-        [only] => return Resolution::Observed { index: *only },
-        _ => {
-            return Resolution::Ambiguous {
-                candidates: vouching,
-            }
-        }
-    }
-    if roots_agree(&bindings[at_path], observation, true) {
-        Resolution::Observed { index: at_path }
-    } else {
-        Resolution::Superseded
+        [] => Resolution::Superseded,
+        [only] => Resolution::Observed { index: *only },
+        _ => Resolution::Ambiguous {
+            candidates: vouching,
+        },
     }
 }
 
@@ -576,6 +624,19 @@ fn resolve_elsewhere(bindings: &[Binding], observation: &Observation) -> Resolut
         })
         .collect();
     match by_vault.as_slice() {
+        // Only the file ID and the vault ID say that the file moved. Without a recorded
+        // lineage, the version is unseen (CORE-R2-03).
+        [only]
+            if !observation
+                .lineage
+                .iter()
+                .any(|v| knows(&bindings[*only], v)) =>
+        {
+            Resolution::Continued {
+                index: *only,
+                adopt_root: false,
+            }
+        }
         [only] => Resolution::Moved { index: *only },
         _ => Resolution::New,
     }
@@ -695,9 +756,22 @@ fn load(folder: &Folder) -> Result<Mapping> {
     let Some(mut file) = private_fs::open_file(&path, OpenMode::Read)? else {
         return Ok(Mapping::empty());
     };
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|error| journal_error(format!("cannot read {}: {error}", path.display())))?;
+    let bytes = match private_fs::read_bounded(&mut file, MAX_MAPPING_BYTES as u64) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+            return Err(journal_error(format!(
+                "the mapping file {} is longer than the {} MiB that AKM reads. Its bytes were kept. No record is written until you move or repair it",
+                path.display(),
+                MAX_MAPPING_BYTES >> 20
+            )))
+        }
+        Err(error) => {
+            return Err(journal_error(format!(
+                "cannot read {}: {error}",
+                path.display()
+            )))
+        }
+    };
     let mapping: Mapping = serde_json::from_slice(&bytes).map_err(|_| damaged_mapping(&path))?;
     if mapping.version != MAPPING_VERSION {
         return Err(journal_error(format!(
@@ -710,6 +784,13 @@ fn load(folder: &Folder) -> Result<Mapping> {
 }
 
 fn store(folder: &Folder, mapping: &Mapping) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(mapping)?;
+    if bytes.len() > MAX_MAPPING_BYTES {
+        return Err(journal_error(format!(
+            "the mapping would be longer than the {} MiB that AKM reads, so it was not written",
+            MAX_MAPPING_BYTES >> 20
+        )));
+    }
     let temporary = folder.file(MAPPING_TMP);
     match fs::remove_file(&temporary) {
         Ok(()) => {}
@@ -723,7 +804,6 @@ fn store(folder: &Folder, mapping: &Mapping) -> Result<()> {
     }
     let mut file = private_fs::open_file(&temporary, OpenMode::CreateNew)?
         .ok_or_else(|| journal_error("cannot create the mapping file"))?;
-    let bytes = serde_json::to_vec_pretty(mapping)?;
     file.write_all(&bytes)
         .and_then(|()| file.sync_all())
         .map_err(|error| journal_error(format!("cannot write the mapping: {error}")))?;
@@ -1171,9 +1251,12 @@ mod tests {
                 Resolution::Moved { index: 0 },
             ),
             (
-                "R5 renamed and changed, same vault",
+                "R5 renamed and changed, same vault: unseen (CORE-R2-03)",
                 seen(r"C:\V\b.kdbx", Some("f1"), Some("x"), Some("r1")),
-                Resolution::Moved { index: 0 },
+                Resolution::Continued {
+                    index: 0,
+                    adopt_root: false,
+                },
             ),
             (
                 "R6 renamed and changed, vault ID unknown",
@@ -1239,9 +1322,9 @@ mod tests {
                 Resolution::Observed { index: 0 },
             ),
             (
-                "same vault, a version the mapping never saw",
+                "same vault ID, a version the mapping never saw (CORE-R2-03)",
                 stale(r"C:\V\a.kdbx", "x", Some("r1")),
-                Resolution::Observed { index: 0 },
+                Resolution::Superseded,
             ),
             (
                 "another vault, the replaced one",
@@ -1277,6 +1360,174 @@ mod tests {
             Resolution::Superseded,
             "a detached binding never vouches"
         );
+    }
+
+    /// CORE-R2-03: each row of the table on `resolve`, with what `decide` makes of it: the
+    /// warning that the record must carry, and whether the mapping changes. `None` is a
+    /// refusal. A vault ID never confirms a version that no journal recorded.
+    #[test]
+    fn the_identity_table_holds_row_by_row() {
+        let bound = [
+            binding(r"C:\V\a.kdbx", Some("f1"), Some("r1"), &["v2", "v1"]),
+            binding(r"C:\V\b.kdbx", Some("fB"), Some("r1"), &["b1", "s1"]),
+            binding(r"C:\V\c.kdbx", Some("fC"), None, &["c1"]),
+            binding(r"C:\V\d.kdbx", Some("fD"), Some("r1"), &["s1"]),
+            binding(r"C:\V\e.kdbx", Some("fE"), Some("r1"), &["o1"]),
+        ];
+        let at = |path: &str, file_id: &str, sha: &str, root: Option<&str>, lineage: &[&str]| {
+            with_lineage(seen(path, Some(file_id), Some(sha), root), lineage)
+        };
+        let same = Resolution::Same {
+            index: 0,
+            rolled_back: false,
+            adopt_root: false,
+        };
+        let continued =
+            |index: usize, adopt_root: bool| Resolution::Continued { index, adopt_root };
+        let several = Resolution::Ambiguous {
+            candidates: vec![1, 3],
+        };
+        let (a, c, n, r1, r9) = (
+            r"C:\V\a.kdbx",
+            r"C:\V\c.kdbx",
+            r"C:\V\n.kdbx",
+            Some("r1"),
+            Some("r9"),
+        );
+        type Row<'a> = (&'a str, Observation, Resolution, Option<(bool, bool)>);
+        let rows: Vec<Row> = vec![
+            (
+                "1 recorded at the path",
+                at(a, "f1", "v2", r1, &[]),
+                same.clone(),
+                Some((false, false)),
+            ),
+            (
+                "1 its lineage recorded at the path",
+                at(a, "f1", "n1", r1, &["v2"]),
+                same,
+                Some((false, true)),
+            ),
+            (
+                "2 recorded only by one other binding",
+                at(a, "f1", "o1", r1, &[]),
+                Resolution::Claimed { index: 4 },
+                Some((false, false)),
+            ),
+            (
+                "2 recorded only by several other bindings",
+                at(a, "f1", "s1", r1, &[]),
+                several.clone(),
+                None,
+            ),
+            (
+                "3 not recorded, vault IDs equal",
+                at(a, "f1", "x", r1, &[]),
+                continued(0, false),
+                Some((true, true)),
+            ),
+            (
+                "3 not recorded, the binding's vault ID unknown",
+                at(c, "fC", "x", r1, &[]),
+                continued(2, true),
+                Some((true, true)),
+            ),
+            (
+                "4 not recorded, vault IDs differ",
+                at(a, "f1", "x", r9, &[]),
+                Resolution::Replaced { index: 0 },
+                Some((false, true)),
+            ),
+            (
+                "5 not recorded, a locked read",
+                at(a, "f1", "x", None, &[]),
+                Resolution::Unconfirmed { index: 0 },
+                None,
+            ),
+            (
+                "6 moved, the version recorded",
+                at(n, "f1", "v2", r1, &[]),
+                Resolution::Moved { index: 0 },
+                Some((false, true)),
+            ),
+            (
+                "6 moved, its lineage recorded",
+                at(n, "f1", "x", r1, &["v2"]),
+                Resolution::Moved { index: 0 },
+                Some((false, true)),
+            ),
+            (
+                "7 moved, no binding recorded the version",
+                at(n, "f1", "x", r1, &[]),
+                continued(0, false),
+                Some((true, true)),
+            ),
+            (
+                "8 a new path and a new file",
+                at(n, "fN", "v2", r1, &[]),
+                Resolution::New,
+                Some((false, true)),
+            ),
+            (
+                "9 stale, recorded at the path",
+                stale_of(at(a, "f1", "v1", r1, &[])),
+                Resolution::Observed { index: 0 },
+                Some((false, false)),
+            ),
+            (
+                "9 stale, its lineage recorded at the path",
+                stale_of(at(a, "f1", "n1", r1, &["v1"])),
+                Resolution::Observed { index: 0 },
+                Some((false, false)),
+            ),
+            (
+                "10 stale, recorded only by one other binding",
+                stale_of(at(a, "f1", "o1", r1, &[])),
+                Resolution::Observed { index: 4 },
+                Some((false, false)),
+            ),
+            (
+                "10 stale, recorded only by several other bindings",
+                stale_of(at(a, "f1", "s1", r1, &[])),
+                several,
+                None,
+            ),
+            (
+                "11 stale, not recorded, vault IDs equal",
+                stale_of(at(a, "f1", "x", r1, &[])),
+                Resolution::Superseded,
+                None,
+            ),
+            (
+                "11 stale, not recorded, vault IDs differ",
+                stale_of(at(a, "f1", "x", r9, &[])),
+                Resolution::Superseded,
+                None,
+            ),
+            (
+                "11 stale, recorded, the evidence has no vault ID",
+                stale_of(at(a, "f1", "v1", None, &[])),
+                Resolution::Superseded,
+                None,
+            ),
+            (
+                "11 stale, no active binding at the path",
+                stale_of(at(n, "f1", "v1", r1, &[])),
+                Resolution::Superseded,
+                None,
+            ),
+        ];
+        for (name, observation, resolution, decision) in rows {
+            assert_eq!(resolve(&bound, &observation), resolution, "{name}");
+            let mapping = Mapping {
+                version: MAPPING_VERSION,
+                journals: bound.to_vec(),
+            };
+            let decided = decide(mapping, &observation)
+                .ok()
+                .map(|made| (made.placement.lineage_unconfirmed, made.changed));
+            assert_eq!(decided, decision, "{name}");
+        }
     }
 
     /// Four clones of one vault family (root `r1`) and one other vault. `a` and `c` both
@@ -1446,9 +1697,12 @@ mod tests {
                 Resolution::New,
             ),
             (
-                "the file moved and was saved: the file ID and the vault ID say so",
+                "the file moved and changed: the file ID and the vault ID follow it, unseen",
                 seen(r"C:\V\n.kdbx", Some("fA"), Some("z"), Some("r1")),
-                Resolution::Moved { index: 0 },
+                Resolution::Continued {
+                    index: 0,
+                    adopt_root: false,
+                },
             ),
             (
                 "the file moved, same bytes",
@@ -1524,9 +1778,9 @@ mod tests {
                 Resolution::Observed { index: 2 },
             ),
             (
-                "nobody recorded it: the vault ID and the path vouch",
+                "nobody recorded it: the vault ID is no evidence (CORE-R2-03)",
                 stale(r"C:\V\a.kdbx", "z", Some("r1"), &[]),
-                Resolution::Observed { index: 0 },
+                Resolution::Superseded,
             ),
             (
                 "no binding at the path: a copy cannot be told from a file that moved",
@@ -1556,8 +1810,8 @@ mod tests {
         detached[1].state = BindingState::Detached;
         assert_eq!(
             resolve(&detached, &stale(r"C:\V\a.kdbx", "b1", Some("r1"), &[])),
-            Resolution::Observed { index: 0 },
-            "a detached binding never vouches; the path's vault ID does"
+            Resolution::Superseded,
+            "a detached binding never vouches, and the vault ID at the path is no evidence"
         );
     }
 
@@ -1614,5 +1868,81 @@ mod tests {
             assert!(error.contains(reason), "{error}");
             assert!(root.open().is_err());
         }
+    }
+
+    /// CORE-R2-06: `mapping.json` sits in a folder that other programs of the same user can
+    /// write. Its size is checked before it is read whole and parsed, and AKM never writes a
+    /// mapping that its own reader would refuse. A refused mapping keeps its bytes.
+    #[test]
+    fn a_mapping_past_its_bound_is_refused_on_read_and_never_written() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = JournalRoot::at(directory.path().join("journal"));
+        let folder = root.open_or_create().unwrap();
+        let mut padded = serde_json::to_vec(&Mapping::empty()).unwrap();
+        padded.resize(MAX_MAPPING_BYTES + 1, b' ');
+        fs::write(folder.file(MAPPING), &padded).unwrap();
+        let message = load(&folder).unwrap_err().to_string();
+        assert!(message.contains("longer than"), "{message}");
+        assert_eq!(
+            fs::read(folder.file(MAPPING)).unwrap(),
+            padded,
+            "its bytes are kept"
+        );
+
+        padded.truncate(MAX_MAPPING_BYTES);
+        fs::write(folder.file(MAPPING), &padded).unwrap();
+        assert!(
+            load(&folder).unwrap().journals.is_empty(),
+            "a mapping at the bound is read"
+        );
+
+        let mut large = Mapping::empty();
+        let one = binding(&"p".repeat(4096), None, None, &[]);
+        large.journals = vec![one; MAX_MAPPING_BYTES / 4096 + 1];
+        let message = store(&folder, &large).unwrap_err().to_string();
+        assert!(message.contains("longer than"), "{message}");
+        assert_eq!(
+            fs::read(folder.file(MAPPING)).unwrap(),
+            padded,
+            "the old mapping stays"
+        );
+        assert!(!folder.file(MAPPING_TMP).exists());
+    }
+
+    /// CORE-R2-06: the fingerprint of a vault file is the hash of a stream with the bound of
+    /// the vault reader. A file past the bound has no fingerprint, as a file that cannot be
+    /// read has none.
+    #[test]
+    fn the_fingerprint_of_a_file_past_the_vault_bound_is_unknown() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large.kdbx");
+        fs::write(&path, b"fake vault bytes").unwrap();
+        let sha = hex::encode(Sha256::digest(b"fake vault bytes"));
+        assert_eq!(VaultEvidence::from_file(&path).sha, Some(sha.clone()));
+        let unlocked = VaultEvidence::unlocked(&path, Some(sha), "fake-root".into());
+        assert!(!unlocked.is_stale(&canonical(&path)));
+
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(crate::vault::MAX_VAULT_BYTES + 1)
+            .unwrap();
+        private_fs::take_read_count();
+        assert_eq!(VaultEvidence::from_file(&path).sha, None);
+        assert!(unlocked.is_stale(&canonical(&path)));
+        assert_eq!(private_fs::take_read_count(), 0, "the file was never read");
+
+        // The stream bound holds by itself, for a file that grows after its length was read.
+        assert_eq!(
+            hash_limited(&b"fake vault bytes"[..], 16),
+            Some(hex::encode(Sha256::digest(b"fake vault bytes")))
+        );
+        assert_eq!(hash_limited(&[7u8; 4096][..], 16), None);
+        assert_eq!(
+            private_fs::take_read_count(),
+            33,
+            "16, then 16 and one byte more"
+        );
     }
 }

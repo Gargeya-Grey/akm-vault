@@ -25,12 +25,60 @@ use crate::error::{Error, Result};
 use crate::journal::{JournalRoot, VaultEvidence};
 use crate::lifecycle::{Clock, HistoryVersion, RecycledKey, Rotation, SecretChange, SystemClock};
 use crate::model::*;
+use crate::private_fs;
 
 /// Entries live under this top-level group so a vault can also hold unrelated
 /// KeePass entries without them showing up as API keys.
 const GROUP_NAME: &str = "API Keys";
 /// How many earlier fingerprints a session keeps for the journal. The first one is always kept.
 const LINEAGE_LIMIT: usize = 16;
+
+/// The largest vault file that AKM reads (CORE-R2-06). The bytes of a vault file are not
+/// authenticated until its key is checked, so the size is checked before they are read.
+pub const MAX_VAULT_BYTES: u64 = 1 << 30;
+
+fn too_large(what: &str) -> String {
+    format!(
+        "{what} is larger than the {} GiB that AKM reads",
+        MAX_VAULT_BYTES >> 30
+    )
+}
+
+/// The bytes of the vault file at `path`, with the bound of [`MAX_VAULT_BYTES`].
+fn read_vault_file(path: &Path) -> Result<Vec<u8>> {
+    match private_fs::read_bounded(&mut File::open(path)?, MAX_VAULT_BYTES) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+            Err(Error::Open(too_large("the vault file")))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// A save refuses a vault file with more than one name (hard link): the lock is named from one
+/// path, and the replacement changes one name only, so the other names would keep the old
+/// vault (CORE-R2-05). Reading stays possible.
+fn refuse_names(names: u32) -> Result<()> {
+    if names > 1 {
+        return Err(Error::Save(format!(
+            "the vault file has {names} names (hard links), and a save through one name would leave the old vault under the others. Nothing was changed. Copy the vault to a new file, open the copy, and save there"
+        )));
+    }
+    Ok(())
+}
+
+fn refuse_second_name(file: &File) -> Result<()> {
+    refuse_names(private_fs::link_count(file)?)
+}
+
+/// The file at `path` holds exactly `expected`. It reads at most one byte past its length.
+fn holds_exactly(path: &Path, expected: &[u8]) -> std::io::Result<bool> {
+    match private_fs::read_bounded(&mut File::open(path)?, expected.len() as u64) {
+        Ok(actual) => Ok(actual == expected),
+        Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => Ok(false),
+        Err(error) => Err(error),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VaultWarningKind {
@@ -158,7 +206,7 @@ impl Vault {
         }
 
         let key = DatabaseKey::new().with_password(password);
-        let bytes = fs::read(&path)?;
+        let bytes = read_vault_file(&path)?;
         let fingerprint = Some(bytes_fingerprint(&bytes));
         // FR-28: the header names the cost of the key derivation. Read it first.
         crate::kdf_guard::check(&bytes)?;
@@ -219,7 +267,7 @@ impl Vault {
     }
 
     pub fn reload(&mut self) -> Result<()> {
-        let bytes = fs::read(&self.path)?;
+        let bytes = read_vault_file(&self.path)?;
         let fingerprint = bytes_fingerprint(&bytes);
         crate::kdf_guard::check(&bytes)?;
         let db = Database::parse(&bytes, self.key.clone())
@@ -831,9 +879,7 @@ impl Vault {
             validate_process_var(&name, &self.stored_secret(id)).map_err(|error| {
                 // A key stored before its name became reserved stays viewable and can be
                 // renamed. Say how, when the name is the problem (FR-02).
-                let hint = if matches!(name_class(&name), NameClass::Reserved(_))
-                    || !is_valid_env_var(&name)
-                {
+                let hint = if reserved_class(&name).is_some() || !is_valid_env_var(&name) {
                     ". The key is not lost: edit it and set a different env var name to use it"
                 } else {
                     ""
@@ -866,7 +912,7 @@ impl Vault {
         Ok(Disclosure::key(self.stamp(), action, key.id.clone()))
     }
 
-    /// Journals a request to disclose a planned scope, before any value is read.
+    /// Journals a request to disclose a planned scope, before any value leaves the vault.
     pub fn disclose_env(
         &self,
         action: EnvDisclosure,
@@ -969,7 +1015,7 @@ impl Vault {
     pub fn log(&self, action: &str, key: Option<&ApiKey>, detail: Option<&str>) -> Result<()> {
         let unconfirmed =
             self.audit_log()
-                .append_reporting(action, key.map(|k| k.id.as_str()), detail)?;
+                .append_reporting(action, key.map(|k| k.id.as_str()), detail, true)?;
         if unconfirmed {
             self.lineage_unconfirmed.store(true, Ordering::Relaxed);
         }
@@ -1013,7 +1059,14 @@ impl Vault {
         tmp.sync_and_close()?;
         #[cfg(test)]
         tests::run_save_hook(tests::SaveStage::Serialized, &tmp.path, &self.path);
-        let encrypted = fs::read(&tmp.path)?;
+        let encrypted = match private_fs::read_bounded(&mut File::open(&tmp.path)?, MAX_VAULT_BYTES)
+        {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+                return Err(Error::Save(too_large("the encrypted temporary vault")));
+            }
+            Err(error) => return Err(error.into()),
+        };
         // The temporary file is read back from disk, so it gets the same header guard as an
         // opened vault (FR-28): a file swapped in under its name cannot choose the cost.
         crate::kdf_guard::check(&encrypted).map_err(|error| {
@@ -1039,7 +1092,7 @@ impl Vault {
             not_private = not_private.or(backup.not_private.take());
             backup.file_mut().write_all(bytes)?;
             backup.sync_and_close()?;
-            if fs::read(&backup.path)? != *bytes {
+            if !holds_exactly(&backup.path, bytes)? {
                 return Err(Error::Save("encrypted backup verification failed".into()));
             }
             Some(backup)
@@ -1063,6 +1116,8 @@ impl Vault {
                     }
                 })
             } else {
+                // Again under the lock: a second name made after the last check (CORE-R2-05).
+                refuse_second_name(&File::open(&self.path)?)?;
                 fs::rename(&tmp.path, &self.path).map_err(Error::Io)
             }
         };
@@ -1094,7 +1149,7 @@ impl Vault {
             let retained = backup.as_ref().is_some_and(|backup| {
                 // A pre-commit copy is not proof of post-maintenance retention.
                 // Do not prune other recovery candidates if this identity is already lost.
-                if !fs::read(&backup.path).is_ok_and(|actual| actual == bytes) {
+                if !holds_exactly(&backup.path, &bytes).unwrap_or(false) {
                     return false;
                 }
                 if let Err(error) = crate::backups::prune(&self.db, &self.path) {
@@ -1105,7 +1160,7 @@ impl Vault {
                         ),
                     });
                 }
-                fs::read(&backup.path).is_ok_and(|actual| actual == bytes)
+                holds_exactly(&backup.path, &bytes).unwrap_or(false)
             });
             if !retained {
                 self.warnings.push(VaultWarning {
@@ -1126,14 +1181,25 @@ impl Vault {
     }
 
     fn checked_source(&self) -> Result<Option<Vec<u8>>> {
-        let bytes = match fs::read(&self.path) {
-            Ok(bytes) => bytes,
+        let read = File::open(&self.path).and_then(|mut file| {
+            let names = private_fs::link_count(&file)?;
+            Ok((names, private_fs::read_bounded(&mut file, MAX_VAULT_BYTES)?))
+        });
+        let bytes = match read {
+            Ok((names, bytes)) => {
+                refuse_names(names)?;
+                bytes
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return if self.fingerprint.is_none() {
                     Ok(None)
                 } else {
                     Err(Error::VaultChangedOnDisk)
                 };
+            }
+            // A fingerprint is only ever taken of a file within the bound.
+            Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+                return Err(Error::VaultChangedOnDisk)
             }
             Err(error) => return Err(error.into()),
         };
@@ -2400,5 +2466,132 @@ mod tests {
             .disclose_key(KeyDisclosure::Reveal, &found, None)
             .unwrap();
         assert_eq!(*vault.secret(&key.id, &proof).unwrap(), "fake-sync-secret");
+    }
+
+    /// CORE-R2-06: the bytes of a vault file are unauthenticated until the key is checked.
+    /// Every read of a vault file takes its size from the open handle first, and reads at most
+    /// one byte past the bound. Open, reload, the check before a save and the read-back of the
+    /// encrypted temporary file each refuse a file past the bound.
+    #[test]
+    fn every_read_of_a_vault_file_refuses_a_file_past_the_bound() {
+        fn grow(path: &Path) {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_len(MAX_VAULT_BYTES + 1)
+                .unwrap();
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let large = dir.path().join("large.kdbx");
+        fs::write(&large, b"").unwrap();
+        grow(&large);
+        private_fs::take_read_count();
+        let Err(error) = Vault::open(&large, PASSWORD) else {
+            panic!("a file past the bound was opened");
+        };
+        assert!(error.to_string().contains("larger than"), "{error}");
+        assert_eq!(private_fs::take_read_count(), 0, "the file was never read");
+        drop(dir);
+
+        let (_dir, path, mut vault) = fixture_vault();
+        let saved = fs::read(&path).unwrap();
+        grow(&path);
+        private_fs::take_read_count();
+        let error = vault.reload().unwrap_err();
+        assert!(error.to_string().contains("larger than"), "{error}");
+        assert_eq!(private_fs::take_read_count(), 0, "the file was never read");
+        let error = vault
+            .add(ApiKeyInput::new("Fake", "fake-value"))
+            .unwrap_err();
+        assert!(matches!(error, Error::VaultChangedOnDisk), "{error}");
+
+        fs::write(&path, &saved).unwrap();
+        on_save(SaveStage::Serialized, |temp, _| grow(temp));
+        let error = vault
+            .add(ApiKeyInput::new("Fake", "fake-value"))
+            .unwrap_err();
+        assert!(error.to_string().contains("larger than"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), saved, "the vault is unchanged");
+    }
+
+    /// CORE-R2-05, the reviewer's closing test: two names (hard links) of one vault file. The
+    /// lock is named from one path, so it cannot cover the other name, and a save replaces one
+    /// name only. A save through either name is refused before it writes anything, whichever
+    /// name holds the lock, and also when two saves start at once: the two names never fork.
+    /// Reading works through both names, and a save works again once the second name is gone.
+    #[test]
+    fn a_vault_file_with_two_names_is_read_but_never_written() {
+        let (dir, path, vault) = fixture_vault();
+        drop(vault);
+        let alias = dir.path().join("alias.kdbx");
+        fs::hard_link(&path, &alias).unwrap();
+        let before = fs::read(&path).unwrap();
+        let names = [path.clone(), alias.clone()];
+        let serialized = std::rc::Rc::new(std::cell::Cell::new(false));
+        for held in &names {
+            let lock = acquire_lock(held).unwrap();
+            for name in &names {
+                let mut vault = Vault::open(name, PASSWORD).unwrap();
+                vault.list();
+                let flag = serialized.clone();
+                on_save(SaveStage::Serialized, move |_, _| flag.set(true));
+                let error = vault
+                    .add(ApiKeyInput::new("Fake key", "fake-value"))
+                    .unwrap_err();
+                assert!(
+                    matches!(error, Error::Locked) || error.to_string().contains("hard links"),
+                    "{error}"
+                );
+            }
+            drop(lock);
+        }
+        assert!(!serialized.get(), "a refused save wrote no new version");
+        let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let saves: Vec<_> = names
+            .iter()
+            .cloned()
+            .map(|name| {
+                let start = start.clone();
+                std::thread::spawn(move || {
+                    let mut vault = Vault::open(&name, PASSWORD).unwrap();
+                    start.wait();
+                    vault
+                        .add(ApiKeyInput::new("Fake key", "fake-value"))
+                        .is_err()
+                })
+            })
+            .collect();
+        for save in saves {
+            assert!(save.join().unwrap(), "a save through two names was refused");
+        }
+        assert_eq!(fs::read(&path).unwrap(), before, "the vault is unchanged");
+        assert_eq!(fs::read(&alias).unwrap(), before, "the names never fork");
+
+        fs::remove_file(&alias).unwrap();
+        let mut vault = Vault::open(&path, PASSWORD).unwrap();
+        vault
+            .add(ApiKeyInput::new("Fake key", "fake-value"))
+            .unwrap();
+    }
+
+    /// CORE-R2-05: the check again under the lock, just before the replacement. A second name
+    /// made after the first check stops the save, and both names keep the old vault.
+    #[test]
+    fn a_second_name_made_during_a_save_stops_the_replacement() {
+        let (dir, path, mut vault) = fixture_vault();
+        let alias = dir.path().join("alias.kdbx");
+        let before = fs::read(&path).unwrap();
+        let made = alias.clone();
+        on_save(SaveStage::BeforeReplace, move |_, vault_path| {
+            fs::hard_link(vault_path, &made).unwrap();
+        });
+        let error = vault
+            .add(ApiKeyInput::new("Fake key", "fake-value"))
+            .unwrap_err();
+        assert!(error.to_string().contains("hard links"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), before, "the vault is unchanged");
+        assert_eq!(fs::read(&alias).unwrap(), before, "the names never fork");
     }
 }
