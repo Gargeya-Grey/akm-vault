@@ -185,8 +185,9 @@ export function Unlock({ status, onUnlocked }: Props) {
                   onChange={(event) => setName(event.target.value)}
                   placeholder="API Keys"
                   autoComplete="off"
+                  aria-describedby="vault-name-note"
                 />
-                <p className="field-note">Written into the file’s metadata. Optional.</p>
+                <p className="field-note" id="vault-name-note">Written into the file’s metadata. Optional.</p>
               </div>
             )}
 
@@ -199,9 +200,10 @@ export function Unlock({ status, onUnlocked }: Props) {
                 onChange={(event) => setPassword(event.target.value)}
                 autoComplete={mode === "create" ? "new-password" : "current-password"}
                 autoFocus
+                aria-describedby={mode === "create" ? "master-password-note" : undefined}
               />
               {mode === "create" && (
-                <p className="field-note">At least 12 characters. There is no reset and no recovery.</p>
+                <p className="field-note" id="master-password-note">At least 12 characters. There is no reset and no recovery.</p>
               )}
               {mode === "create" && password.length > 0 && (
                 <p className={`pins-state${pinsSet === SHORTEST_PASSWORD ? " done" : ""}`} aria-hidden="true">

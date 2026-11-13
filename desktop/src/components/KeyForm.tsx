@@ -244,8 +244,9 @@ export function KeyForm({ item, onSaved, onFailed, onClose }: Props) {
                     placeholder={editing ? "Leave blank to keep it" : "sk-…"}
                     autoComplete="off"
                     spellCheck={false}
+                    aria-describedby="key-secret-note"
                   />
-                  <p className="field-note">
+                  <p className="field-note" id="key-secret-note">
                     {editing
                       ? "Leave it blank to keep the stored value. A new value counts as a rotation, and the old value stays in the vault history. To rotate a key, use Rotate secret in its detail view."
                       : "Encrypted inside the KDBX entry."}
@@ -289,8 +290,9 @@ export function KeyForm({ item, onSaved, onFailed, onClose }: Props) {
                     placeholder="Derived from the title"
                     autoComplete="off"
                     spellCheck={false}
+                    aria-describedby="key-env-var-note"
                   />
-                  <p className="field-note">The name this key gets in a .env file.</p>
+                  <p className="field-note" id="key-env-var-note">The name this key gets in a .env file.</p>
                 </div>
               </div>
             </section>
@@ -305,8 +307,9 @@ export function KeyForm({ item, onSaved, onFailed, onClose }: Props) {
                     type="date"
                     value={expires}
                     onChange={(event) => setExpires(event.target.value)}
+                    aria-describedby="key-expires-note"
                   />
-                  <p className="field-note">Optional.</p>
+                  <p className="field-note" id="key-expires-note">Optional.</p>
                 </div>
 
                 <div className="field">
@@ -321,8 +324,9 @@ export function KeyForm({ item, onSaved, onFailed, onClose }: Props) {
                     value={rotation}
                     onChange={(event) => setRotation(event.target.value)}
                     placeholder="90"
+                    aria-describedby="key-rotation-note"
                   />
-                  <p className="field-note">Days. Leave blank for no reminder.</p>
+                  <p className="field-note" id="key-rotation-note">Days. Leave blank for no reminder.</p>
                 </div>
               </div>
             </section>
@@ -352,8 +356,9 @@ export function KeyForm({ item, onSaved, onFailed, onClose }: Props) {
                     placeholder={"chat\nmodels"}
                     autoComplete="off"
                     spellCheck={false}
+                    aria-describedby="key-scopes-note"
                   />
-                  <p className="field-note">One scope on each line. A comma is part of the scope.</p>
+                  <p className="field-note" id="key-scopes-note">One scope on each line. A comma is part of the scope.</p>
                 </div>
 
                 <div className="field">
@@ -364,8 +369,9 @@ export function KeyForm({ item, onSaved, onFailed, onClose }: Props) {
                     onChange={(event) => setTags(event.target.value)}
                     placeholder="production, billing"
                     autoComplete="off"
+                    aria-describedby="key-tags-note"
                   />
-                  <p className="field-note">Comma separated.</p>
+                  <p className="field-note" id="key-tags-note">Comma separated.</p>
                 </div>
 
                 <div className="field full">

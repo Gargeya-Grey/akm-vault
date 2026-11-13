@@ -436,6 +436,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
               onClick={() => void openTerminal()}
               disabled={working !== null || !scoped}
               aria-busy={working === "launch" || undefined}
+              aria-describedby="terminal-note"
             >
               Open terminal with keys…
             </button>
@@ -448,7 +449,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
               ? "Export needs the project list. Read it again first."
               : scoped ? `${plural(matchCount, "key")} selected in ${drawnText(project)} / ${drawnText(environment)}.` : "Choose a project and environment to enable export."}
           </p>
-          <p className="field-note">
+          <p className="field-note" id="terminal-note">
             Open terminal starts a command prompt in a folder that you choose. Every program you run there can read these keys until you close it.
           </p>
 
@@ -499,11 +500,12 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
               className="btn-secondary"
               onClick={openImport}
               disabled={readOnly || importBusy}
+              aria-describedby={readOnly ? "import-read-only-note" : undefined}
             >
               <Icon name="upload" />
               Import .env…
             </button>
-            {readOnly && <p className="field-note">Upgrade the vault format before importing.</p>}
+            {readOnly && <p className="field-note" id="import-read-only-note">Upgrade the vault format before importing.</p>}
             {importBusy && !importing && (
               <Notice tone="info">An import is waiting for your answer in the AKM confirmation window. Nothing is saved until you confirm there.</Notice>
             )}
@@ -557,8 +559,9 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
                     placeholder={"OPENAI_API_KEY=sk-…\nGITHUB_TOKEN=ghp_…"}
                     spellCheck={false}
                     autoFocus
+                    aria-describedby="import-text-note"
                   />
-                  <p className="field-note">
+                  <p className="field-note" id="import-text-note">
                     Comments and blank lines are ignored. Duplicate names are an
                     error rather than a silent override.
                   </p>
