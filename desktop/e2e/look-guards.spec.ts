@@ -152,6 +152,78 @@ for (const theme of ["light", "dark"]) {
   }
 }
 
+// FX-04, FX-05 and their class: enlarged text outside the dialogs, at the smallest window and at a
+// taller one. Every control of the rail takes a click at its centre once it is scrolled into view.
+// No text of a view leaves the box that cuts it, and no view needs a sideways scroll.
+function railControlsOutOfReach(page: Page) {
+  return page.evaluate(() => {
+    const problems: string[] = [];
+    const rail = document.querySelector<HTMLElement>(".rail")!;
+    if (rail.scrollWidth > rail.clientWidth + 1) problems.push("the rail scrolls sideways");
+    for (const control of document.querySelectorAll<HTMLElement>(".rail button")) {
+      control.scrollIntoView({ block: "nearest" });
+      const box = control.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      if (!hit || !control.contains(hit)) problems.push(control.textContent?.trim() || control.getAttribute("aria-label") || "a control");
+    }
+    return problems;
+  });
+}
+
+function cutText(page: Page) {
+  return page.evaluate(() => {
+    const stage = document.querySelector<HTMLElement>(".stage")!;
+    const problems = new Set<string>();
+    if (stage.scrollWidth > stage.clientWidth + 1) problems.add("the view scrolls sideways");
+    const walker = document.createTreeWalker(stage, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = node.textContent?.trim();
+      if (!text) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const box = range.getBoundingClientRect();
+      if (box.width === 0) continue;
+      for (let outer = node.parentElement; outer && outer !== stage.parentElement; outer = outer.parentElement) {
+        const style = getComputedStyle(outer);
+        const edge = outer.getBoundingClientRect();
+        // A text with an ellipsis is shortened on purpose, and a 1 px box holds text for a screen reader only.
+        if (style.textOverflow === "ellipsis" || edge.width <= 1) break;
+        if (style.overflowX !== "hidden" && style.overflowX !== "clip") continue;
+        if (box.right > edge.right + 1 || box.left < edge.left - 1) problems.add(text.slice(0, 40));
+      }
+    }
+    return [...problems];
+  });
+}
+
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: the rail and every view keep their controls and their text with enlarged text`, async ({ page }) => {
+    // One key for each of the longest status texts: rotation unknown, rotation overdue, expired.
+    const keys = [
+      { historyCount: 2, rotationDays: 90 },
+      { title: "Late", rotationDays: 90, secretChangedAt: "2020-01-01T00:00:00Z", secretChange: "known" as const, rotationDueAt: "2020-03-31T00:00:00Z" },
+      { title: "Past", expiresAt: "2020-01-01T00:00:00Z" },
+    ];
+    await open(page, theme, { keys, recycled: [{ key: { title: "Twin" }, deletedAt: null }] });
+    await expect(page.locator(".key-row .state")).toHaveCount(3);
+    expect((await page.locator(".key-row .state").allTextContents()).sort()).toEqual(["Expired", "Rotation overdue", "Rotation unknown"]);
+    const found: [string, string[]][] = [];
+    for (const height of [620, 800]) {
+      await page.setViewportSize({ width: 900, height });
+      for (const font of [24, 32]) {
+        for (const view of ["Keys", "Use keys", "Activity", "Recycle Bin", "Settings"]) {
+          await page.evaluate(() => { document.documentElement.style.fontSize = ""; });
+          await page.locator(".rail").getByRole("button", { name: view, exact: true }).click();
+          await page.evaluate((size) => { document.documentElement.style.fontSize = `${size}px`; }, font);
+          found.push([`${view}, 900 x ${height}, root font ${font} px: text`, await cutText(page)]);
+        }
+        found.push([`the rail, 900 x ${height}, root font ${font} px: controls`, await railControlsOutOfReach(page)]);
+      }
+    }
+    expect(found.filter(([, problems]) => problems.length > 0)).toEqual([]);
+  });
+}
+
 test.describe("forced colours", () => {
   const boxed = async (page: Page, selector: string) => page.locator(selector).first().evaluate((node) => {
     const style = getComputedStyle(node);

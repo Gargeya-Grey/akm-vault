@@ -304,7 +304,7 @@ button:disabled { cursor: default; opacity: 0.4; }
   height: 100vh;
   padding: 24px 14px 16px;
   overflow-y: auto;
-  scrollbar-width: none;
+  scrollbar-width: thin;
   background: var(--rail);
   box-shadow: inset -1px 0 0 var(--line);
   color: var(--muted);
@@ -312,7 +312,8 @@ button:disabled { cursor: default; opacity: 0.4; }
 .rail-brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 0 10px; color: var(--logo-stem); }
 .bar-name { margin: 0; color: var(--text); font-size: 1.1875rem; line-height: 1.25; font-weight: 600; letter-spacing: -0.02em; }
 .bar-name::after { content: "."; color: var(--logo-stem); }
-.rail nav { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; }
+/* The sections keep their height: with large text the rail scrolls, and no button lies under another. */
+.rail nav { position: relative; display: flex; flex: 1 0 auto; flex-direction: column; }
 .rail nav ul { display: flex; flex-direction: column; gap: 2px; }
 .rail-lower { margin-top: auto; padding-top: 10px; }
 
@@ -496,7 +497,7 @@ button:disabled { cursor: default; opacity: 0.4; }
 .life-warn .life-on { fill: var(--warn); }
 
 /* Status is a shape as well as a colour: a dot means fine, a hollow ring means look at this. */
-.state { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 0.78125rem; white-space: nowrap; }
+.state { display: inline-flex; align-items: center; gap: 8px; min-width: 0; margin: 0; font-size: 0.78125rem; overflow-wrap: anywhere; }
 .state-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--glow); }
 .state-warn { color: var(--warn); font-weight: 500; }
 .state-warn .state-dot { width: 8px; height: 8px; background: transparent; box-shadow: inset 0 0 0 1.5px var(--warn); }
