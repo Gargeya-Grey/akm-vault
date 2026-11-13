@@ -412,15 +412,23 @@ def frontend_test_runs(text, title):
 
 # Workflows (both modes).
 
+def turned_off(item):
+    """A job or a step whose `if` is the literal false (FV-15). Any other condition counts as on:
+    the check reads command text, and does not prove that a step runs."""
+    condition = item.get("if")
+    return condition is False or (isinstance(condition, str) and condition.strip().lower() in ("false", "${{ false }}", "${{false}}"))
+
+
 def workflow_jobs(text):
     """{job id: commands} of a workflow, read with PyYAML: the keys of its `jobs` mapping, and for each
-    job the `run` values of its steps, without their whole-line shell comments."""
+    job the `run` values of its steps, without their whole-line shell comments. A job or a step that
+    `if: false` turns off gives no command."""
     document = yaml.safe_load(text)
     jobs = document.get("jobs") if isinstance(document, dict) else None
     found = {}
     for job, body in (jobs.items() if isinstance(jobs, dict) else ()):
-        steps = body.get("steps") if isinstance(body, dict) else None
-        runs = [step["run"] for step in (steps if isinstance(steps, list) else ()) if isinstance(step, dict) and isinstance(step.get("run"), str)]
+        steps = body.get("steps") if isinstance(body, dict) and not turned_off(body) else None
+        runs = [step["run"] for step in (steps if isinstance(steps, list) else ()) if isinstance(step, dict) and isinstance(step.get("run"), str) and not turned_off(step)]
         found[str(job)] = "\n".join(line for run in runs for line in run.split("\n") if not line.strip().startswith("#"))
     return found
 

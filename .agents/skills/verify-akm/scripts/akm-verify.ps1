@@ -127,7 +127,8 @@ switch ($Action) {
   'clean' {
     $full = Assert-OwnedSession $Session
     $s = Read-Session $full
-    Remove-Item -LiteralPath $full -Recurse -Force
+    # The long-path form: a backup name can make a path in the session longer than 260 characters (FV-16).
+    Remove-Item -LiteralPath ('\\?\' + $full) -Recurse -Force
     Remove-Item -LiteralPath (Get-StateFile (Split-Path -Leaf $full)) -Force
     Write-Output "Removed $full. Evidence kept at $($s.evidence)"
   }

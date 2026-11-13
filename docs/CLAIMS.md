@@ -10,7 +10,7 @@ This page lists each promise that AKM makes to a user about security, privacy or
 
 ## Named proofs
 
-A proof name stands for a script or a workflow job. The check resolves each name (`PROOFS` in `tools/check_docs.py`): each of its files is tracked and present, a workflow proof's job is a key of the workflow's `jobs` mapping as PyYAML reads it and the `run` value of one of the job's steps holds the proof's command, a frontend proof's title is a test that its runner lists to run (in fast mode, a `test(` or `it(` call outside comments, strings and skipped groups), and a Rust test that a job runs is a test, or an ignored test when the job runs it with `--ignored`. This table must list exactly those names, name each proof's file or job, and say "CI, each push" exactly for the proofs that the build workflow runs.
+A proof name stands for a script or a workflow job. The check resolves each name (`PROOFS` in `tools/check_docs.py`): each of its files is tracked and present, a workflow proof's job is a key of the workflow's `jobs` mapping as PyYAML reads it and the `run` value of one of the job's steps holds the proof's command (a job or a step that a literal `if: false` turns off gives no command; the check reads command text, and does not prove that a step runs), a frontend proof's title is a test that its runner lists to run (in fast mode, a `test(` or `it(` call outside comments, strings and skipped groups), and a Rust test that a job runs is a test, or an ignored test when the job runs it with `--ignored`. This table must list exactly those names, name each proof's file or job, and say "CI, each push" exactly for the proofs that the build workflow runs.
 
 | Proof name | What runs | Where it runs |
 |---|---|---|

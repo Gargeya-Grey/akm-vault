@@ -93,6 +93,21 @@ try {
     Expect (@(Get-ChildItem -LiteralPath $state -File).Count -eq 0) 'the state record stayed after the removal'
   }
 
+  Case 'a session with a path longer than 260 characters is removed, and a sentinel beside it stays (FV-16)' {
+    $sentinel = New-Sentinel 'akm-verify-sentinel-eeee5555'
+    $dir = New-Session 'long'
+    $deep = Join-Path $dir ('d' * 120)
+    $null = [IO.Directory]::CreateDirectory('\\?\' + $deep)
+    $file = Join-Path $deep (('b' * 150) + '.kdbx')
+    [IO.File]::WriteAllText('\\?\' + $file, 'fake backup')
+    Expect ($file.Length -gt 260) 'the fixture path is not long enough'
+    $run = Invoke-AkmVerify @('clean', '-Session', $dir)
+    Expect ($run.ExitCode -eq 0) "clean failed on a long path: $($run.Text)"
+    Expect (!(Test-Path -LiteralPath $dir)) 'the session folder was not removed'
+    Expect (@(Get-ChildItem -LiteralPath $state -File).Count -eq 0) 'the state record stayed after the removal'
+    Expect (Test-Path -LiteralPath (Join-Path $sentinel 'precious.txt')) 'the sentinel was removed'
+  }
+
   Case 'a sentinel folder beside a real session survives a clean of the real one' {
     $sentinel = New-Sentinel 'akm-verify-sentinel-dddd4444'
     $dir = New-Session 'beside'

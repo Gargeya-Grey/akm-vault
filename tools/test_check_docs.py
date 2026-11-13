@@ -130,6 +130,9 @@ harness = false
 
 # Finding U4-R2-05: text that is not a test, which both modes must refuse.
 ENV_WORKFLOW = "jobs:\n  install-upgrade-uninstall:\n    runs-on: x\n    steps:\n      - env:\n          run: powershell -File tools/test_install.ps1\n        run: echo nothing\n"
+# Finding FV-15: a step or a job that `if: false` turns off is not evidence.
+OFF_STEP_WORKFLOW = "jobs:\n  install-upgrade-uninstall:\n    runs-on: x\n    steps:\n      - if: false\n        run: powershell -File tools/test_install.ps1\n      - run: echo nothing\n"
+OFF_JOB_WORKFLOW = "jobs:\n  install-upgrade-uninstall:\n    if: ${{ false }}\n    runs-on: x\n    steps:\n      - run: powershell -File tools/test_install.ps1\n"
 STRING_TIMER = f'const text = \'test("{TITLE}", () => {{}})\';\ntest("another test", () => {{}});\n'
 SKIPPED_GROUP_TIMER = f'describe.skip("a group", () => {{\n  test("{TITLE}", () => {{}});\n}});\ntest("another test", () => {{}});\n'
 NEVER_CALLED_TIMER = f'function never() {{\n  test("{TITLE}", () => {{}});\n}}\ntest("another test", () => {{}});\n'
@@ -342,6 +345,18 @@ SYNTHETIC = [
         "",
         "proof `native-proof-install` needs a run step of job `install-upgrade-uninstall` that holds 'tools/test_install.ps1'",
         {**claims("| A claim. | README.md | `native-proof-install` | Never ran. |"), **INSTALL, WORKFLOW: ENV_WORKFLOW},
+    ),
+    (
+        "a workflow step that `if: false` turns off is not a run step",
+        "",
+        "proof `native-proof-install` needs a run step of job `install-upgrade-uninstall` that holds 'tools/test_install.ps1'",
+        {**claims("| A claim. | README.md | `native-proof-install` | Never ran. |"), **INSTALL, WORKFLOW: OFF_STEP_WORKFLOW},
+    ),
+    (
+        "a workflow job that `if: ${{ false }}` turns off has no run step",
+        "",
+        "proof `native-proof-install` needs a run step of job `install-upgrade-uninstall` that holds 'tools/test_install.ps1'",
+        {**claims("| A claim. | README.md | `native-proof-install` | Never ran. |"), **INSTALL, WORKFLOW: OFF_JOB_WORKFLOW},
     ),
     (
         "a frontend title only inside a string is not a test",
