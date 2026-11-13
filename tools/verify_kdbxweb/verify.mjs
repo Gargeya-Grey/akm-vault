@@ -286,9 +286,9 @@ async function partA(akmExe, work) {
       isTrue(typeof entry.fields.get(name) === 'string', `${name} is stored protected; expected plain text`);
     }
   });
-  await check('A11 minimal entry: default username, empty scopes, no optional AKM fields', () => {
+  await check('A11 minimal entry: no username, empty scopes, no optional AKM fields', () => {
     const entry = findEntry(needDb(), 'Plain minimal');
-    equal(fieldText(entry, 'UserName'), 'api-key', 'UserName');
+    equal(fieldText(entry, 'UserName'), '', 'UserName');
     equal(fieldText(entry, 'Password'), 'fake-minimal-secret', 'Password');
     equal(JSON.parse(fieldText(entry, 'AKM_SCOPES')), [], 'AKM_SCOPES');
     equal(entry.times.expires, false, 'expires flag');

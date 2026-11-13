@@ -1227,3 +1227,40 @@ fn an_update_with_the_stored_values_of_a_key_from_another_program_saves_nothing(
         "the vault file was written"
     );
 }
+
+/// FX-02: a key of another program has no creation time. An edit of its notes changes the
+/// notes, and the key still has no creation time in the file.
+#[test]
+fn an_update_gives_no_creation_time_to_a_key_that_has_none() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_edit(&key.id, |entry| entry.times.creation = None);
+    assert_eq!(f.entry(&key.id).times.creation, None, "the fixture");
+
+    f.clock.advance(Duration::days(1));
+    let edit = with_notes(f.vault.edit_input(&key.id).unwrap(), "a note");
+    let answer = f.vault.update(&key.id, edit).unwrap();
+
+    assert_eq!(answer.notes.as_deref(), Some("a note"));
+    assert_eq!(answer.created_at, None);
+    assert_eq!(f.entry(&key.id).times.creation, None);
+}
+
+/// FX-03: `api-key` is a username like any other, and a key with no username has none.
+#[test]
+fn a_username_reads_back_exactly_and_a_key_without_one_has_none() {
+    let mut f = Fixture::new();
+    let mut named = input_named("Alpha", "secret-one", "ALPHA_KEY");
+    named.username = Some("api-key".into());
+    let named = f.vault.add(named).unwrap();
+    let plain = f
+        .vault
+        .add(input_named("Beta", "secret-two", "BETA_KEY"))
+        .unwrap();
+
+    let reopened = Vault::open(&f.path, PASSWORD).unwrap();
+    let username = |id: &str| reopened.get_by_id(id).unwrap().username;
+    assert_eq!(username(&named.id).as_deref(), Some("api-key"));
+    assert_eq!(username(&plain.id), None);
+    assert_eq!(f.entry(&plain.id).get(fields::USERNAME), Some(""));
+}

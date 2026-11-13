@@ -430,7 +430,6 @@ impl Vault {
         // A tracked edit of the `keepass` crate adds history even when nothing changed.
         // Apply the input to a copy first: if the copy equals the entry, there is nothing
         // to save, to record or to stamp (design D4).
-        let created = before.times.creation.unwrap_or_else(|| whole_second(now));
         let mut probe = before.clone();
         write_fields(&mut probe, &input, Some(&stored));
         if probe == before {
@@ -449,7 +448,7 @@ impl Vault {
                 .ok_or_else(|| Error::EntryNotFound(id.to_string()))?;
             keep_version(&mut entry, before);
             write_fields(&mut entry, &input, Some(&stored));
-            stamp_entry(&mut entry, id, created, stamp);
+            stamp_entry(&mut entry, id, stamp);
             if secret_changed {
                 entry.set_unprotected(META_SECRET_CHANGED, format_secret_change(stamp));
             }
@@ -1746,12 +1745,13 @@ fn write_entry(
     updated: NaiveDateTime,
 ) {
     write_fields(entry, input, None);
-    stamp_entry(entry, id, created, updated);
+    entry.times.creation = Some(created);
+    stamp_entry(entry, id, updated);
 }
 
-/// The identity and the times that AKM gives an entry that it writes.
-fn stamp_entry(entry: &mut Entry, id: &str, created: NaiveDateTime, updated: NaiveDateTime) {
-    entry.times.creation = Some(created);
+/// The identity and the time of the change that AKM gives an entry that it writes. The
+/// creation time belongs to the entry: only a new entry gets one.
+fn stamp_entry(entry: &mut Entry, id: &str, updated: NaiveDateTime) {
     entry.times.last_modification = Some(updated);
     entry.set_unprotected(META_ID, id);
 }
@@ -1769,7 +1769,7 @@ fn write_fields(entry: &mut Entry, input: &ApiKeyInput, stored: Option<&ApiKeyIn
     if changed(|new, old| new.username == old.username) {
         entry.set_unprotected(
             fields::USERNAME,
-            input.username.as_deref().unwrap_or("api-key"),
+            input.username.as_deref().unwrap_or_default(),
         );
     }
     if changed(|new, old| new.secret.as_str() == old.secret.as_str()) {
@@ -1837,7 +1837,7 @@ fn read_entry(entry: &Entry) -> ApiKey {
     ApiKey {
         id: entry.id().to_string(),
         title: entry.get(fields::TITLE).unwrap_or_default().to_string(),
-        username: owned(entry.get(fields::USERNAME)).filter(|v| v != "api-key"),
+        username: owned(entry.get(fields::USERNAME)),
         issuer: owned(entry.get(META_ISSUER)),
         project: owned(entry.get(META_PROJECT)),
         environment: owned(entry.get(META_ENVIRONMENT)),
