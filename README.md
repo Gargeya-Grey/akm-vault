@@ -214,8 +214,9 @@ reported by kind (`truncatedTail`, `malformedJson`, `brokenLink`, `hashMismatch`
 no claim about the cause, and gets no new records. A damaged journal stops the reveals,
 copies, exports and launches of its vault. A damaged mapping file stops them for every
 vault on this device. Nothing recovers by itself. In the desktop app, Activity can start
-again after you approve in a native window that names the damaged file. AKM keeps that
-file unchanged beside it, under a dated name, and puts a new file in its place. After a
+again after you approve in a native window that names the damaged file. AKM keeps a copy
+of that file beside it, byte for byte, under a dated name, and then puts a new file in its
+place. After a
 damaged journal, the new journal starts with a record of the gap. After a damaged mapping
 file, the earlier journals stay in the folder, unchanged and linked to no vault. The next
 record of each vault then starts a new journal with a record of the gap, and AKM warns
