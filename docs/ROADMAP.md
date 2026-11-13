@@ -2,7 +2,7 @@
 
 Phase two fixes the remaining privacy, history and compatibility problems without weakening the [project contracts](PROJECT.md#contracts-every-change-keeps). Finishing this list does not guarantee a score. Only a new full review measures one.
 
-**Phase two status (2026-11-07).** The owner authorized units 1c, 1h, 1b, 2, 3 and 4 and security proposals A1 to A3 on 2026-11-07. All are built, in [PR #7](https://github.com/Gargeya-Grey/akm-vault/pull/7). Both phase two reviews failed; the owner chose one redesign round after review 2, with no third review. No unit is accepted: each fix is "fixed, not accepted" in [FINDINGS.md](FINDINGS.md). What remains for each unit is its owner-present proof ([FIRST_USE.md](FIRST_USE.md)) and, for the release gate, unit 5's full rescore.
+**Phase two status (2026-11-07).** The owner authorized units 1c, 1h, 1b, 2, 3 and 4 and security proposals A1 to A3 on 2026-11-07. All are built, in PR #7. Both phase two reviews failed; the owner chose one redesign round after review 2, with no third review. No unit is accepted: each fix is "fixed, not accepted" in [FINDINGS.md](FINDINGS.md). What remains for each unit is its owner-present proof ([FIRST_USE.md](FIRST_USE.md)) and, for the release gate, unit 5's full rescore.
 
 **Authorization.** Each unit not named above needs the owner's explicit authorization in chat before implementation starts. Work units run in this order. Units that share `model.rs`, `vault.rs`, the IPC types or the CLI command definitions run one after another, never in parallel. Do not redo the closed findings in [FINDINGS.md](FINDINGS.md).
 

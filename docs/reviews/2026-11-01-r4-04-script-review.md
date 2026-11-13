@@ -1,5 +1,7 @@
 # R4-04 proof script review, round 1 (raw)
 
+> Note of 13 November 2026: the owner's archive folder is written as `<archive>`. No other text changed.
+
 - Date: 2026-11-01
 - Model: GPT-6.1 Terra (`gpt-6.1-terra`), Codex provider, requested `reasoningEffort: max`
 - Reviewed: PR #3, branch `test/r4-04-proof-checks` at `e4b4b7a`, against `chore/clean-project-structure`
@@ -57,7 +59,7 @@ Reviewed `e4b4b7a` against `chore/clean-project-structure`. The findings below c
 
 8. **P3: The rehearsal evidence path in FINDINGS is malformed.** `docs/FINDINGS.md:52`
 
-   The recorded path contains `U+0082` after `proofs` instead of `\202`. The supplied evidence file exists at `W:\AKM-archive\proofs\20261101T114352Z-outcome-rehearsal\output.txt`.
+   The recorded path contains `U+0082` after `proofs` instead of `\202`. The supplied evidence file exists at `<archive>\proofs\20261101T114352Z-outcome-rehearsal\output.txt`.
 
    **Fix:** Replace the malformed path with the exact path to the retained output.
 

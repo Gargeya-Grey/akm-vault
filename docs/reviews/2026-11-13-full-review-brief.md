@@ -1,5 +1,7 @@
 # Brief of the full review, 13 November 2026
 
+> Note of 13 November 2026: `<build>` stands for the collector's build folder on the review computer. The reviewers received its real path.
+
 Each reviewer got this text and its row of the table, and nothing from the implementer's chat. Model and effort: Codex GPT-6.1 Sol, max ([REVIEWING.md](../REVIEWING.md)). Two reviewers got the Security row, so that the spread between two reviewers is measured once.
 
 ---
@@ -56,7 +58,7 @@ The builds are of commit `d3b6fb1`. The later commits of your checkout change do
 - Two focused real-window proofs pass on the desktop build: `-JournalOnly` 27 checks, `-JournalExportOnly` 8 checks. They drive the unlock screen, the key list, Activity and Save .env. No other desktop flow has run on a real window.
 - `check_docs.py` passes in the fast and the full mode; the tool tests, the no-network check and `check_dependencies.ps1` exit 0.
 
-Builds (unsigned, SHA-256), in `C:\akm-build\release`:
+Builds (unsigned, SHA-256), in `<build>\release`:
 
 - `akm.exe` `094b76fbdfc8129aa54e5d45e49234a8b111056254de2d9036b666c53c9c71f5`
 - `akm-desktop.exe` `926ac145c18b001a704f635cfc13f3fac23d436a6339b627337cd260dce614b9`
@@ -68,7 +70,7 @@ A check result is evidence only for the inputs that it ran.
 
 - Read-only on the checkout. Do not edit, commit or push.
 - Probes with fake data only, in one new folder under `%TEMP%`. Never use a real vault or a real secret.
-- You may run the CLI build `C:\akm-build\release\akm.exe` on fake vaults in your probe folder. Every run of it, also from a probe program of your own, must set `AKM_JOURNAL_ROOT` to a folder inside your probe folder (`.agents/skills/verify-akm/SKILL.md` explains this rule and has a helper). Never write `%LOCALAPPDATA%\akm\journal\`, and never read or change `%APPDATA%\com.akm.desktop\settings.json`.
+- You may run the CLI build `<build>\release\akm.exe` on fake vaults in your probe folder. Every run of it, also from a probe program of your own, must set `AKM_JOURNAL_ROOT` to a folder inside your probe folder (`.agents/skills/verify-akm/SKILL.md` explains this rule and has a helper). Never write `%LOCALAPPDATA%\akm\journal\`, and never read or change `%APPDATA%\com.akm.desktop\settings.json`.
 - Do not start the desktop app or any window. Do not touch the clipboard. Do not lock, suspend or sign out of Windows. Do not install anything. Do not use the network. Do not start a workflow.
 - Do not run the full builds or the full test suites. A single test or a small probe program in your own build folder under `%TEMP%` is allowed.
 - Desktop quality reviewer only: you may load the built page in a headless browser on the loopback address, with your own mock of the native boundary. The built page is in `desktop\dist` of the main checkout, whose path your task message gives; read it and its `node_modules`, and write nothing there.

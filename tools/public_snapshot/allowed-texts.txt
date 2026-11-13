@@ -39,3 +39,12 @@ email snapshot@example.invalid
 email x/y:z@w+v.u-t_s
 email C=x/y:z@w+v.u-t_s
 email words\nC=x/y:z@w+v.u-t_s\n".encode
+#
+# Made-up test inputs that two reviewers quote in docs/reviews/2026-11-13-unit4-review1.md and
+# docs/reviews/2026-11-13-unit4-review2.md. The domains are reserved names (.invalid, .test), the
+# example domain of the Devanagari script, and one invented name with a combining mark.
+email review.owner@private.invalid.txt
+email email<CR>private.review@private.invalid
+email synthetic@example.test
+email owner@q̇a.de
+email owner@उदाहरण.भारत

@@ -30,7 +30,7 @@ These need the owner's yes in chat each time:
 - merging a pull request;
 - the visible-window and OS tests in Safety.
 
-You can do these without asking: branches, commits, pushes and pull requests on the private `Gargeya-Grey/akm-vault` repository.
+You can do these without asking: branches, commits, pushes and pull requests on the private repository of this project (the `origin` remote).
 
 ## How work runs
 

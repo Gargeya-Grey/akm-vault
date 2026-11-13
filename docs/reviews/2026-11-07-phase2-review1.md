@@ -1,5 +1,7 @@
 # Phase two review 1 of 2 (units 1c, 1h, 1b, 2, 3, 4, tools)
 
+> Note of 13 November 2026: each link to the reviewer's local checkout is written as a repository path. No other text changed.
+
 - Model: Codex GPT-6.1 Terra, requested effort max (owner instruction, 2026-11-07: two reviews at most).
 - Reviewed commit: `e9e5fb91b6c05a5034489cff8c6f48378aca822d` on `phase2/units-1c-to-4`, against `81f2689`.
 - Build hashes in the brief: `akm.exe` `b43bf17b05b6526b8836d29d9cc6b8e8152a6a137b5e7e90c53179747e83fdf1`, `akm-desktop.exe` `bd67364cbe6deb4dadb75926a8e3198888dd65f07564a7ddf82925a9955ee855` (collect build of `f7e0da9`). The reviewer did not check them.
@@ -18,7 +20,7 @@ Reviewed source: `e9e5fb91b6c05a5034489cff8c6f48378aca822d` on `phase2/units-1c-
 
 ### 1. P2 — A hidden import form can leave native approval live
 
-[Settings.tsx](/W:/API%20Keys%20Manager/desktop/src/components/Settings.tsx:84) closes and clears the form on `document.hidden`, but sends no native invalidation. Native presentation invalidation in [visibility.rs](/W:/API%20Keys%20Manager/desktop/src-tauri/src/visibility.rs:52) is driven by a resize observed as minimized. If the webview becomes hidden without that native transition, the confirmation remains open and its snapshot remains valid. Approving it can commit after the page has discarded the review, contrary to contract 7.
+Settings.tsx (`desktop/src/components/Settings.tsx:84`) closes and clears the form on `document.hidden`, but sends no native invalidation. Native presentation invalidation in visibility.rs (`desktop/src-tauri/src/visibility.rs:52`) is driven by a resize observed as minimized. If the webview becomes hidden without that native transition, the confirmation remains open and its snapshot remains valid. Approving it can commit after the page has discarded the review, contrary to contract 7.
 
 **Evidence:** By inspection. The native “hide” test calls `session.expire_presentation()` directly, so it does not establish that a frontend visibility change reaches that boundary. A real Windows route to this condition was not tested.
 
@@ -26,7 +28,7 @@ Reviewed source: `e9e5fb91b6c05a5034489cff8c6f48378aca822d` on `phase2/units-1c-
 
 ### 2. P2 — The saved-path ownership check has a write-after-retirement race
 
-[settings.rs](/W:/API%20Keys%20Manager/desktop/src-tauri/src/settings.rs:89) holds the preferences mutex while calling `owns()`, but that mutex does not prevent `Session::start_open` from retiring the ticket. Opening A can pass `owns()`, pause before the file write, then opening B can start and retire A. A can subsequently write its path even though it no longer owns the session. If B fails or is cancelled before saving, A’s stale preference remains.
+settings.rs (`desktop/src-tauri/src/settings.rs:89`) holds the preferences mutex while calling `owns()`, but that mutex does not prevent `Session::start_open` from retiring the ticket. Opening A can pass `owns()`, pause before the file write, then opening B can start and retire A. A can subsequently write its path even though it no longer owns the session. If B fails or is cancelled before saving, A’s stale preference remains.
 
 **Evidence:** By inspection. The existing production-command test pauses A before entering the inner preference store and lets B finish its save. It does not pause A between the ownership check and its write.
 
@@ -34,7 +36,7 @@ Reviewed source: `e9e5fb91b6c05a5034489cff8c6f48378aca822d` on `phase2/units-1c-
 
 ### 3. P2 — A disclosure proof is usable against a different vault
 
-[disclosure.rs](/W:/API%20Keys%20Manager/crates/akm-core/src/disclosure.rs:74) binds a proof to an action and key IDs, but not to the vault or journal that recorded it. [Vault::disclose_key](/W:/API%20Keys%20Manager/crates/akm-core/src/vault.rs:814) accepts metadata from another vault without checking that the key belongs to the recording vault. A library caller can record a request in vault A using vault B’s key metadata, then use that proof with `vault_b.secret(...)`. B’s journal can be damaged or unavailable and its secret still returns. Proofs are also reusable after the original disclosure.
+disclosure.rs (`crates/akm-core/src/disclosure.rs:74`) binds a proof to an action and key IDs, but not to the vault or journal that recorded it. Vault::disclose_key (`crates/akm-core/src/vault.rs:814`) accepts metadata from another vault without checking that the key belongs to the recording vault. A library caller can record a request in vault A using vault B’s key metadata, then use that proof with `vault_b.secret(...)`. B’s journal can be damaged or unavailable and its secret still returns. Proofs are also reusable after the original disclosure.
 
 **Evidence:** By inspection. I did not find a current CLI or desktop caller that deliberately crosses vaults this way; this is a failure of the new public capability boundary itself.
 
@@ -42,7 +44,7 @@ Reviewed source: `e9e5fb91b6c05a5034489cff8c6f48378aca822d` on `phase2/units-1c-
 
 ### 4. P2 — A stale reader can detach and split another vault’s journal
 
-[Vault::audit_log](/W:/API%20Keys%20Manager/crates/akm-core/src/vault.rs:917) supplies the fingerprint and root of its open snapshot, while journal resolution uses the current path. Suppose reader A remains open on vault A; the file at that path is replaced by vault B; B opens and records an event; then A reveals a key from its independent snapshot. [journal::bind](/W:/API%20Keys%20Manager/crates/akm-core/src/journal.rs:564) interprets A’s stale root as another replacement, detaches B’s active binding and creates a new one. B’s next append can detach that binding in turn. The journals are retained, but the current Activity view no longer has a continuous history for either vault.
+Vault::audit_log (`crates/akm-core/src/vault.rs:917`) supplies the fingerprint and root of its open snapshot, while journal resolution uses the current path. Suppose reader A remains open on vault A; the file at that path is replaced by vault B; B opens and records an event; then A reveals a key from its independent snapshot. journal::bind (`crates/akm-core/src/journal.rs:564`) interprets A’s stale root as another replacement, detaches B’s active binding and creates a new one. B’s next append can detach that binding in turn. The journals are retained, but the current Activity view no longer has a continuous history for either vault.
 
 **Evidence:** By inspection. The replacement test stops after B’s first append. The concurrency tests use distinct stable paths, so neither covers an old reader operating after replacement.
 
@@ -50,7 +52,7 @@ Reviewed source: `e9e5fb91b6c05a5034489cff8c6f48378aca822d` on `phase2/units-1c-
 
 ### 5. P2 — A failed append can permanently consume a rollback indication
 
-[journal::bind](/W:/API%20Keys%20Manager/crates/akm-core/src/journal.rs:571) moves the observed fingerprint to the front of `seen` and stores the mapping before [AuditLog::append](/W:/API%20Keys%20Manager/crates/akm-core/src/audit.rs:430) writes the `vault-rolled-back` record. If that append fails, for example because the chain is damaged or its file cannot be opened, a later retry sees the rolled-back fingerprint as newest and omits the rollback record. The mapping has advanced despite the promised record never being written.
+journal::bind (`crates/akm-core/src/journal.rs:571`) moves the observed fingerprint to the front of `seen` and stores the mapping before AuditLog::append (`crates/akm-core/src/audit.rs:430`) writes the `vault-rolled-back` record. If that append fails, for example because the chain is damaged or its file cannot be opened, a later retry sees the rolled-back fingerprint as newest and omits the rollback record. The mapping has advanced despite the promised record never being written.
 
 **Evidence:** By inspection. The rollback test covers only a successful append.
 
@@ -58,9 +60,9 @@ Reviewed source: `e9e5fb91b6c05a5034489cff8c6f48378aca822d` on `phase2/units-1c-
 
 ### 6. P2 — Rotation timestamps ignore newer foreign history
 
-The clock floor for update, rotate and import replacement considers only the current entry’s last modification and recorded secret-change time. See [vault.rs](/W:/API%20Keys%20Manager/crates/akm-core/src/vault.rs:365). It does not consider all history versions or location times, although [unit 2’s design](/W:/API%20Keys%20Manager/docs/design/unit2.md:61) promises that ordering.
+The clock floor for update, rotate and import replacement considers only the current entry’s last modification and recorded secret-change time. See vault.rs (`crates/akm-core/src/vault.rs:365`). It does not consider all history versions or location times, although unit 2’s design (`docs/design/unit2.md:61`) promises that ordering.
 
-For example, a foreign editor can leave a history version with a future last-modification timestamp after a clock rollback. AKM can rotate at an earlier time. The preserved old version then satisfies `modified >= recorded` in [secret_change_of](/W:/API%20Keys%20Manager/crates/akm-core/src/vault.rs:1179), so the rotation AKM just committed is reported as “changed outside” and its due time becomes unknown.
+For example, a foreign editor can leave a history version with a future last-modification timestamp after a clock rollback. AKM can rotate at an earlier time. The preserved old version then satisfies `modified >= recorded` in secret_change_of (`crates/akm-core/src/vault.rs:1179`), so the rotation AKM just committed is reported as “changed outside” and its due time becomes unknown.
 
 **Evidence:** By inspection. The clock rollback test uses AKM’s own sequential timestamps, not a future foreign history version.
 
@@ -68,7 +70,7 @@ For example, a foreign editor can leave a history version with a future last-mod
 
 ### 7. P2 — A notification can be handed to Windows after lock
 
-[reminders.rs](/W:/API%20Keys%20Manager/desktop/src-tauri/src/reminders.rs:213) checks `session.snapshot()` once, then separately acquires the reminders mutex and calls the notifier. A lock can occur while the command waits or before `show`; the count-only toast is still submitted after lock. It can also describe a prior session if another vault has since opened. This is acknowledged as a limit in the design, but it conflicts with the unit’s stated “never while locked” acceptance condition.
+reminders.rs (`desktop/src-tauri/src/reminders.rs:213`) checks `session.snapshot()` once, then separately acquires the reminders mutex and calls the notifier. A lock can occur while the command waits or before `show`; the count-only toast is still submitted after lock. It can also describe a prior session if another vault has since opened. This is acknowledged as a limit in the design, but it conflicts with the unit’s stated “never while locked” acceptance condition.
 
 **Evidence:** By inspection. The existing locked-session test checks a session already locked before the command starts; it does not interleave a lock after the snapshot.
 
@@ -76,7 +78,7 @@ For example, a foreign editor can leave a history version with a future last-mod
 
 ### 8. P2 — The KeePassXC fetch tool can recursively delete unrelated data
 
-[fetch_keepassxc.ps1](/W:/API%20Keys%20Manager/tools/fetch_keepassxc.ps1:60) accepts any destination outside the repository and recursively removes the whole nonempty destination with `-Force`. A destination that is an archive parent or other shared folder can therefore lose unrelated evidence. The removal occurs before the download and digest verification, so a network or verification failure can leave the old contents gone without a replacement.
+fetch_keepassxc.ps1 (`tools/fetch_keepassxc.ps1:60`) accepts any destination outside the repository and recursively removes the whole nonempty destination with `-Force`. A destination that is an archive parent or other shared folder can therefore lose unrelated evidence. The removal occurs before the download and digest verification, so a network or verification failure can leave the old contents gone without a replacement.
 
 **Evidence:** By inspection. I did not execute the destructive path.
 
@@ -84,7 +86,7 @@ For example, a foreign editor can leave a history version with a future last-mod
 
 ### 9. P3 — The threat model describes superseded behavior and tests
 
-[THREAT_MODEL.md](/W:/API%20Keys%20Manager/docs/THREAT_MODEL.md:105) still cites removed import-token tests, says the parser has no size limit, and lists several names as unblocked that the new reserved-name table blocks. Its rollback section also says AKM does not detect rollback without distinguishing the new journal’s known-version indication.
+THREAT_MODEL.md (`docs/THREAT_MODEL.md:105`) still cites removed import-token tests, says the parser has no size limit, and lists several names as unblocked that the new reserved-name table blocks. Its rollback section also says AKM does not detect rollback without distinguishing the new journal’s known-version indication.
 
 **Evidence:** By inspection against the current parser, reserved-name implementation and journal design.
 
