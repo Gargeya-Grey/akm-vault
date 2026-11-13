@@ -188,8 +188,10 @@ test("a lineage notice says that the vault changed outside AKM and does not clai
   await screen.findByText("Unlocked region");
   await act(() => reads.warnings());
   const text = savedNotices().textContent!;
-  expect(text).toContain("A vault file changed outside AKM, so AKM cannot confirm that it is the same vault");
-  expect(text).toContain("continues in the existing journal");
+  expect(text).toContain("A vault file changed outside AKM, or the journal mapping of this device was started again, so AKM cannot confirm that it is the same vault");
+  // FV-01: after a mapping recovery the vault starts a new journal, so "the existing journal" would be false.
+  expect(text).toContain("continues in the journal that AKM keeps for this path");
+  expect(text).not.toContain("existing journal");
   expect(text).not.toContain("was saved");
   expect(text).not.toContain("activity entry could not be confirmed");
 });

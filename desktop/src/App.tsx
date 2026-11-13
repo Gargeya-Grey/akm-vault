@@ -30,7 +30,7 @@ const OPERATION_MESSAGES: Record<OperationNotice["kind"], string> = {
   backupPrune: "A vault change was saved, but old backups could not be pruned. Do not repeat the saved operation. Check its retained backups.",
   preference: "A vault was opened, but its path preference was not saved. Check the vault path the next time you open AKM.",
   filePermissions: "A vault was saved, but AKM could not make its files private to your account. Anyone who can read its folder can copy the encrypted vault and its backups. Do not repeat the saved operation. Check who can read that folder.",
-  journalLineageUnconfirmed: "A vault file changed outside AKM, so AKM cannot confirm that it is the same vault as before. Its activity continues in the existing journal. Check that you opened the vault you meant to before you rely on its journal.",
+  journalLineageUnconfirmed: "A vault file changed outside AKM, or the journal mapping of this device was started again, so AKM cannot confirm that it is the same vault as before. Its activity continues in the journal that AKM keeps for this path. Check that you opened the vault you meant to before you rely on its journal.",
   terminalStarted: "A terminal opened with keys, but this window did not receive its result. That terminal keeps the keys until you close it, even after AKM locks. Close it when you are done, and open another one only if you need it.",
   terminalSessionEnded: "A terminal opened with keys, but its session ended before the result arrived. That terminal keeps the keys until you close it, even after AKM locks. Close it when you are done, and open another one only if you need it.",
   terminalFailed: "A terminal launch failed. No terminal from that request runs.",
