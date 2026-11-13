@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use zeroize::Zeroizing;
+
 use crate::error::{Error, Result};
 use crate::model::is_valid_env_var;
 
@@ -84,6 +86,11 @@ pub fn line(name: &str, value: &str) -> String {
 /// unquoted (a ` #` starts a comment). Nothing is executed or interpolated. A repeated name,
 /// a malformed line or a document beyond the limits is an error, never a silent skip. An
 /// error names the line and never repeats file content.
+///
+/// Each value is read into a buffer of its exact length, which never grows, and stays in a
+/// buffer that is cleared when it is dropped until `parse` returns it: the entries read so
+/// far, and the value being read, are cleared on every way out, also an error (FW-09). The
+/// caller clears the text that it passes and the entries that it gets.
 pub fn parse(input: &str) -> Result<Vec<(String, String)>> {
     if input.len() > MAX_BYTES {
         return Err(Error::Invalid(format!(
@@ -100,7 +107,7 @@ pub fn parse(input: &str) -> Result<Vec<(String, String)>> {
         ));
     }
 
-    let mut out: Vec<(String, String)> = Vec::new();
+    let mut out: Zeroizing<Vec<(String, String)>> = Zeroizing::new(Vec::new());
     let mut names: HashSet<&str> = HashSet::new();
     let mut position = 0;
     // The number of the line that starts at `position`. It is counted as the parse goes, so
@@ -145,7 +152,7 @@ pub fn parse(input: &str) -> Result<Vec<(String, String)>> {
             .chars()
             .next()
             .filter(|ch| matches!(ch, '"' | '\''));
-        let (value, resume, next_line) = match quote {
+        let (mut value, resume, next_line) = match quote {
             Some(quote) => {
                 let value_start = offset_in(input, value_text) + 1;
                 let (value, close) = quoted(input, value_start, quote, first)?;
@@ -175,21 +182,23 @@ pub fn parse(input: &str) -> Result<Vec<(String, String)>> {
                     })
                     .map_or(after_equals.len(), |(index, _)| index);
                 (
-                    after_equals[..comment]
-                        .trim_matches([' ', '\t'])
-                        .to_string(),
+                    Zeroizing::new(
+                        after_equals[..comment]
+                            .trim_matches([' ', '\t'])
+                            .to_string(),
+                    ),
                     next,
                     first + 1,
                 )
             }
         };
 
-        out.push((name.to_string(), value));
+        out.push((name.to_string(), std::mem::take(&mut *value)));
         position = resume;
         line_number = next_line;
     }
 
-    Ok(out)
+    Ok(std::mem::take(&mut *out))
 }
 
 fn at_line(line: usize, message: String) -> Error {
@@ -269,19 +278,35 @@ fn invalid_name(name: &str) -> String {
 }
 
 /// The text between the quotes that open just before `start`, and the index after the
-/// closing quote.
-fn quoted(input: &str, start: usize, quote: char, first: usize) -> Result<(String, usize)> {
+/// closing quote. A double-quoted value is measured first, then decoded into one buffer of
+/// that length.
+fn quoted(
+    input: &str,
+    start: usize,
+    quote: char,
+    first: usize,
+) -> Result<(Zeroizing<String>, usize)> {
     let unterminated = || at_line(first, "unterminated quote".into());
     if quote == '\'' {
         let end = input[start..].find('\'').ok_or_else(unterminated)?;
-        return Ok((input[start..start + end].to_string(), start + end + 1));
+        let value = Zeroizing::new(input[start..start + end].to_string());
+        return Ok((value, start + end + 1));
     }
 
-    let mut out = String::new();
-    let mut chars = input[start..].char_indices().peekable();
+    let mut length = 0;
+    let close = decode(&input[start..], |ch| length += ch.len_utf8()).ok_or_else(unterminated)?;
+    let mut value = Zeroizing::new(String::with_capacity(length));
+    decode(&input[start..], |ch| value.push(ch));
+    Ok((value, start + close + 1))
+}
+
+/// Decodes a double-quoted value from the start of `text`, one character at a time into
+/// `push`. The index of the closing quote, or `None` when there is none.
+fn decode(text: &str, mut push: impl FnMut(char)) -> Option<usize> {
+    let mut chars = text.char_indices().peekable();
     while let Some((index, ch)) = chars.next() {
         match ch {
-            '"' => return Ok((out, start + index + 1)),
+            '"' => return Some(index),
             '\\' => {
                 let decoded = match chars.peek() {
                     Some((_, 'n')) => Some('\n'),
@@ -293,16 +318,16 @@ fn quoted(input: &str, start: usize, quote: char, first: usize) -> Result<(Strin
                 };
                 match decoded {
                     Some(decoded) => {
-                        out.push(decoded);
+                        push(decoded);
                         chars.next();
                     }
-                    None => out.push('\\'),
+                    None => push('\\'),
                 }
             }
-            other => out.push(other),
+            other => push(other),
         }
     }
-    Err(unterminated())
+    None
 }
 
 #[cfg(test)]

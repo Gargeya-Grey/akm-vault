@@ -765,9 +765,40 @@ enum Loaded {
     Damaged(Error),
 }
 
+/// The folder holds a journal: a file whose name starts with `j-`.
+fn holds_journal(folder: &Folder) -> Result<bool> {
+    let entries = fs::read_dir(folder.path()).map_err(|error| {
+        journal_error(format!("cannot list {}: {error}", folder.path().display()))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            journal_error(format!("cannot list {}: {error}", folder.path().display()))
+        })?;
+        if entry.file_name().to_string_lossy().starts_with("j-") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn read_mapping(folder: &Folder) -> Result<Loaded> {
     let path = folder.file(MAPPING);
-    let Some(mut file) = private_fs::open_file(&path, OpenMode::Read)? else {
+    let mut opened = private_fs::open_file(&path, OpenMode::Read)?;
+    // A mapping is stored before the first journal and is never removed. So no mapping beside
+    // a journal means that a recovery stopped between its two moves (AKM before FW-02), or
+    // that the mapping was deleted: history exists that nothing links. It counts as damaged,
+    // never as an empty mapping. The second open covers a writer that stored the first
+    // mapping and journal between the first open and the listing.
+    if opened.is_none() && holds_journal(folder)? {
+        opened = private_fs::open_file(&path, OpenMode::Read)?;
+        if opened.is_none() {
+            return Ok(Loaded::Damaged(journal_error(format!(
+                "the mapping file {} is missing, and the folder holds journals from before. No record is written until it is recovered",
+                path.display()
+            ))));
+        }
+    }
+    let Some(mut file) = opened else {
         return Ok(Loaded::Usable(Mapping::empty()));
     };
     let bytes = match private_fs::read_bounded(&mut file, MAX_MAPPING_BYTES as u64) {
@@ -813,12 +844,12 @@ pub(crate) fn damaged_mapping_file(folder: &Folder) -> Result<Option<PathBuf>> {
 }
 
 /// A deliberate recovery of a damaged mapping (FV-01). `None`: the mapping is not damaged.
-/// Under the mapping lock, the damaged mapping is kept beside it under a dated name, byte for
-/// byte, and an empty mapping takes its place (`audit::set_aside`). No journal file is
-/// touched. Each vault then binds a new journal, which starts with a record that states the
-/// gap, and its first record warns that the lineage is unconfirmed (`load_for_write`).
-/// `approved`: the file that the person approved; when another file is damaged now, or none,
-/// the recovery refuses and nothing moves.
+/// Under the mapping lock, a copy of the damaged mapping is kept beside it under a dated name,
+/// byte for byte, and an empty mapping takes its place (`audit::set_aside`). A missing
+/// mapping gets an empty copy. No journal file is touched. Each vault then binds a new
+/// journal, which starts with a record that states the gap, and its first record warns that
+/// the lineage is unconfirmed (`load_for_write`). `approved`: the file that the person
+/// approved; when another file is damaged now, or none, the recovery refuses and nothing moves.
 pub(crate) fn recover_mapping(
     folder: &Folder,
     now: DateTime<Utc>,
@@ -837,16 +868,23 @@ pub(crate) fn recover_mapping(
     if approved.is_some_and(|approved| approved != path) {
         return Err(crate::audit::not_approved(&path));
     }
-    let damaged = private_fs::open_file(&path, OpenMode::Read)?
-        .ok_or_else(|| journal_error("the mapping file disappeared"))?;
+    let read = || private_fs::open_file(&path, OpenMode::Read);
+    let missing = read()?.is_none();
     let create_new = |pending: &Path| {
         private_fs::open_file(pending, OpenMode::CreateNew)?
             .ok_or_else(|| journal_error("cannot create the new mapping file"))
     };
-    crate::audit::set_aside(&path, damaged, now, create_new, |recovery, kept_name| {
+    crate::audit::set_aside(&path, now, read, create_new, |recovery, kept_name| {
+        let mapping = if missing {
+            format!("journal mapping was missing (an empty file is kept as {kept_name})")
+        } else {
+            format!(
+                "damaged journal mapping ({} bytes, SHA-256 {}) is kept as {kept_name}",
+                recovery.bytes, recovery.sha256
+            )
+        };
         let recovered = format!(
-            "history before this record cannot be proved complete; the damaged journal mapping ({} bytes, SHA-256 {}) is kept as {kept_name}, and the journals from before it are kept, linked to no vault",
-            recovery.bytes, recovery.sha256
+            "history before this record cannot be proved complete; the {mapping}, and the journals from before it are kept, linked to no vault"
         );
         Ok(serde_json::to_vec_pretty(&Mapping {
             recovered: Some(recovered),
@@ -1158,11 +1196,7 @@ pub(crate) fn locate(root: &JournalRoot, evidence: &VaultEvidence) -> Result<Loc
         });
     };
     let lock = lock_mapping(&folder, false)?;
-    let mapping = if lock.is_some() {
-        load(&folder)?
-    } else {
-        Mapping::empty()
-    };
+    let mapping = load(&folder)?;
     drop(lock);
     let observation = evidence.observe();
     let resolution = resolve(&mapping.journals, &observation);
