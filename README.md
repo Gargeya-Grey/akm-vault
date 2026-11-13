@@ -129,6 +129,7 @@ akm list
 akm get "OpenAI dev"                # masked
 akm get "OpenAI dev" --reveal       # full value; private screen only
 akm get <entry-uuid> --field secret
+akm edit "OpenAI dev" --env staging --clear notes   # metadata only; the secret stays
 
 akm run --project my-app --env dev -- npm test
 akm export --project my-app --env dev --output .env.local
@@ -140,7 +141,7 @@ A key is selected by its entry id or its exact title, in any letter case. One ru
 compares letters: each letter becomes the lowercase of its uppercase, so `Σ`, `σ` and
 `ς` match, but `ß` does not match `ss`, and an accent typed as a separate mark does not
 match the same accented letter typed as one character. A partial word,
-or a word found in a note or URL, selects nothing: `get`, `rm`, `rotate`, `history`,
+or a word found in a note or URL, selects nothing: `get`, `edit`, `rm`, `rotate`, `history`,
 `restore` and `purge` refuse it and list candidates by id, title, project and
 environment, never a secret, note or URL. Two keys with the same title are refused
 until you pass the id.

@@ -1444,6 +1444,19 @@ fn committed_changes_exit_zero_with_closed_output_pipes() {
         assert_eq!(add.code(), Some(0), "add: {case}");
         assert_eq!(stored_secret(&fixture.vault, "Added"), "fake-added-secret");
 
+        let mut edit = fixture.cli();
+        edit.args(["edit", "Added", "--notes", "fake-note"]);
+        assert_eq!(
+            status_with(edit, stdout_closed, stderr_closed, None).code(),
+            Some(0),
+            "edit: {case}"
+        );
+        let edited = Vault::open(&fixture.vault, PASSWORD)
+            .unwrap()
+            .find("Added")
+            .unwrap();
+        assert_eq!(edited.notes.as_deref(), Some("fake-note"), "edit: {case}");
+
         let mut rm = fixture.cli();
         rm.args(["rm", "Added", "--yes"]);
         assert_eq!(
@@ -2889,12 +2902,13 @@ fn the_readme_names_the_recorded_audit_actions_in_their_order() {
             word.ends_with("-requested") || word.ends_with("-completed") || word.ends_with("-start")
         })
         .collect();
-    // The lifecycle actions are recorded by other commands; lifecycle.rs asserts that each is written.
+    // Other commands record these; lifecycle.rs and edit.rs assert that each is written.
     let lifecycle = [
         "rotate-completed",
         "remove-completed",
         "restore-completed",
         "purge-completed",
+        "update-completed",
     ];
     let expected: std::collections::BTreeSet<&str> =
         recorded.iter().copied().chain(lifecycle).collect();

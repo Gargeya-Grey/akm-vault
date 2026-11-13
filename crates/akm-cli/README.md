@@ -14,6 +14,31 @@ akm add "OpenAI dev" --project demo --env dev    # prompts for the secret
 echo fake-value | akm add "CI key" --project demo --env ci --secret-stdin
 ```
 
+## Edit a key's metadata
+
+```text
+akm edit "OpenAI dev" --project other --env-var OPENAI_KEY
+akm edit "OpenAI dev" --scope read --scope write    # replaces the stored scopes
+akm edit "OpenAI dev" --clear notes --clear expires
+```
+
+- `edit` changes metadata only. Each option replaces one field: `--title`, `--project`,
+  `--env`, `--env-var`, `--issuer`, `--username`, `--url`, `--notes`, `--expires` and
+  `--rotation-days`. `--scope` and `--tag` can repeat, and the values given replace the stored
+  list. `--clear <field>` empties an optional field and can repeat. `--clear env-var` gives the
+  key the variable name that AKM derives from its title. A title cannot be cleared.
+- A field that the command does not name stays as stored. The id, the secret, the time of the
+  last secret change and the earlier versions stay too. `rotate` changes the secret.
+- `edit` selects the key by id or exact title, as `get` does. It checks each value as `add`
+  does: the variable name, the expiry and the rotation interval. A refused edit saves nothing.
+- An edit that changes nothing saves nothing, writes no journal record and says `No change`.
+  Any other edit keeps the earlier version in the key's history, records `update-completed`
+  with the key id in the journal, as a desktop edit does, and prints the key masked, as `get`
+  does.
+- A KDBX tag holds no `;`, `,` or tab, and no space at either end, because KeePass splits and
+  trims tags when it reads them. `add` and `edit` refuse such a tag before they unlock the
+  vault.
+
 ## Select keys explicitly
 
 Both `run` and `export` require a non-empty project and environment, or `--all`

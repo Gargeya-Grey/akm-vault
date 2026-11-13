@@ -114,6 +114,139 @@ struct AddArgs {
     secret_stdin: bool,
 }
 
+/// FV-04: each option replaces one field. A field that the command does not name is written
+/// back as `Vault::edit_input` read it, the same input that a desktop update starts from.
+#[derive(Args)]
+#[command(group(clap::ArgGroup::new("change").required(true).multiple(true)))]
+struct EditArgs {
+    /// Id or exact title of a key (any letter case). A partial word is refused
+    /// and the refusal lists candidates.
+    query: String,
+
+    #[arg(long, group = "change")]
+    title: Option<String>,
+
+    #[arg(long, group = "change")]
+    project: Option<String>,
+
+    #[arg(long = "env", group = "change")]
+    environment: Option<String>,
+
+    #[arg(long = "env-var", group = "change")]
+    env_var: Option<String>,
+
+    #[arg(long, group = "change")]
+    issuer: Option<String>,
+
+    #[arg(long, group = "change")]
+    username: Option<String>,
+
+    #[arg(long, group = "change")]
+    url: Option<String>,
+
+    #[arg(long, group = "change")]
+    notes: Option<String>,
+
+    /// Expiry: a date YYYY-MM-DD (it ends at 23:59:59 UTC that day) or a full RFC 3339 time
+    #[arg(long, group = "change")]
+    expires: Option<String>,
+
+    /// Rotation interval in days
+    #[arg(long, group = "change")]
+    rotation_days: Option<u32>,
+
+    /// One scope; repeat it for more. The scopes given replace the stored list
+    #[arg(long = "scope", group = "change")]
+    scopes: Vec<String>,
+
+    /// One tag; repeat it for more. The tags given replace the stored list
+    #[arg(long = "tag", group = "change")]
+    tags: Vec<String>,
+
+    /// Empty an optional field; repeat it for more
+    #[arg(long, value_enum, group = "change")]
+    clear: Vec<Field>,
+}
+
+/// The optional fields that `edit --clear` empties.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Field {
+    Project,
+    Env,
+    EnvVar,
+    Issuer,
+    Username,
+    Url,
+    Notes,
+    Expires,
+    RotationDays,
+    #[value(alias = "scope")]
+    Scopes,
+    #[value(alias = "tag")]
+    Tags,
+}
+
+impl EditArgs {
+    /// Whether an option gives this field a value.
+    fn sets(&self, field: Field) -> bool {
+        match field {
+            Field::Project => self.project.is_some(),
+            Field::Env => self.environment.is_some(),
+            Field::EnvVar => self.env_var.is_some(),
+            Field::Issuer => self.issuer.is_some(),
+            Field::Username => self.username.is_some(),
+            Field::Url => self.url.is_some(),
+            Field::Notes => self.notes.is_some(),
+            Field::Expires => self.expires.is_some(),
+            Field::RotationDays => self.rotation_days.is_some(),
+            Field::Scopes => !self.scopes.is_empty(),
+            Field::Tags => !self.tags.is_empty(),
+        }
+    }
+
+    /// Replaces each named field of `input`; every other field stays as stored.
+    fn apply(self, input: &mut ApiKeyInput, expires: Option<DateTime<Utc>>) {
+        fn replace<T>(field: &mut Option<T>, given: Option<T>) {
+            if given.is_some() {
+                *field = given;
+            }
+        }
+        if let Some(title) = self.title {
+            input.title = title;
+        }
+        replace(&mut input.project, self.project);
+        replace(&mut input.environment, self.environment);
+        replace(&mut input.env_var, self.env_var);
+        replace(&mut input.issuer, self.issuer);
+        replace(&mut input.username, self.username);
+        replace(&mut input.url, self.url);
+        replace(&mut input.notes, self.notes);
+        replace(&mut input.expires_at, expires);
+        replace(&mut input.rotation_days, self.rotation_days);
+        if !self.scopes.is_empty() {
+            input.scopes = self.scopes;
+        }
+        if !self.tags.is_empty() {
+            input.tags = self.tags;
+        }
+        for field in self.clear {
+            match field {
+                Field::Project => input.project = None,
+                Field::Env => input.environment = None,
+                Field::EnvVar => input.env_var = None,
+                Field::Issuer => input.issuer = None,
+                Field::Username => input.username = None,
+                Field::Url => input.url = None,
+                Field::Notes => input.notes = None,
+                Field::Expires => input.expires_at = None,
+                Field::RotationDays => input.rotation_days = None,
+                Field::Scopes => input.scopes.clear(),
+                Field::Tags => input.tags.clear(),
+            }
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Create a new vault
@@ -156,6 +289,11 @@ enum Commands {
         #[arg(long)]
         reveal: bool,
     },
+
+    /// Change the metadata of a key (the secret stays; `rotate` changes it)
+    ///
+    /// Each option replaces one field. A field that you do not name stays as stored.
+    Edit(Box<EditArgs>),
 
     /// Replace the secret of a key and record the time (the new secret comes from the
     /// prompt or from stdin, never from an argument)
@@ -340,6 +478,7 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                 username,
                 secret_stdin,
             } = *args;
+            storable_tags(&tags)?;
             let password = master_password(false)?;
             let mut vault = open_vault(&path, &password)?;
             drop(password);
@@ -485,6 +624,43 @@ fn run(cli: Cli, io: &mut Io) -> Result<i32> {
                 key.title,
                 id = key.id
             );
+        }
+
+        Commands::Edit(args) => {
+            let expires = args.expires.as_deref().map(parse_expiry).transpose()?;
+            storable_tags(&args.tags)?;
+            if let Some(field) = args.clear.iter().find(|field| args.sets(**field)) {
+                return Err(Error::Invalid(format!(
+                    "the command both sets and clears {:?}; name it once",
+                    clap::ValueEnum::to_possible_value(field)
+                        .map_or_else(String::new, |value| value.get_name().to_string())
+                )));
+            }
+            let password = master_password(false)?;
+            let mut vault = open_vault(&path, &password)?;
+            drop(password);
+            let key = select(&vault, &args.query)?;
+            let mut input = vault.edit_input(&key.id)?;
+            args.apply(&mut input, expires);
+            let saved = vault.update(&key.id, input)?;
+            print_warnings(io, &mut vault);
+            // A save adds a version to the history, so an equal key means that nothing was saved.
+            if saved == key {
+                status!(
+                    io,
+                    "No change: {:?} ({}) already has these values, so nothing was saved.",
+                    key.title,
+                    key.id
+                );
+                return Ok(0);
+            }
+            status!(
+                io,
+                "Updated {:?} ({}). The secret is unchanged.",
+                saved.title,
+                saved.id
+            );
+            let _ = print_key(&mut *io.out, &KeyMetadata::new(&saved, vault.now()), None);
         }
 
         Commands::Rotate {
@@ -907,6 +1083,21 @@ fn with_test_clock(vault: Vault) -> Result<Vault> {
 #[cfg(not(debug_assertions))]
 fn with_test_clock(vault: Vault) -> Result<Vault> {
     Ok(vault)
+}
+
+/// KDBX keeps an entry's tags in one text that a reader splits at `;`, `,` and tab and trims,
+/// so such a tag would come back changed. The save check would refuse it after the unlock,
+/// with a message that does not say why.
+fn storable_tags(tags: &[String]) -> Result<()> {
+    match tags
+        .iter()
+        .find(|tag| tag.contains([';', ',', '\t']) || tag.trim() != tag.as_str())
+    {
+        Some(tag) => Err(Error::Invalid(format!(
+            "the tag {tag:?} cannot be stored: a KDBX tag holds no ';', ',' or tab, and no space at either end"
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// A time as the CLI prints it.

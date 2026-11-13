@@ -24,7 +24,7 @@ This folder is the maintained source for proving AKM's user-facing behaviour. Re
 
 ## Features
 
-- [Vault and keys](./vault-and-keys.md): create a vault, add, list, show masked, reveal.
+- [Vault and keys](./vault-and-keys.md): create a vault, add, edit, list, show masked, reveal.
 - [Journal and Activity](./journal-and-activity.md): the private journal, `audit`, `audit --verify`, the Activity view.
 - [Export and run](./export-and-run.md): scoped dotenv export to stdout or a file, and `run` with injected variables.
 - [Rotation and Recycle Bin](./rotation-and-recycle-bin.md): `rotate`, `history`, `rm`, `bin`, `restore`, `purge`.
