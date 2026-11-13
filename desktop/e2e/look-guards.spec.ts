@@ -152,38 +152,45 @@ for (const theme of ["light", "dark"]) {
   }
 }
 
-// FX-04, FX-05 and their class: enlarged text outside the dialogs, at the smallest window and at a
-// taller one. Every control of the rail takes a click at its centre once it is scrolled into view.
-// No text of a view leaves the box that cuts it, and no view needs a sideways scroll.
-function railControlsOutOfReach(page: Page) {
+// FX-04, FX-05, D4-02, D4-03 and their class: enlarged text outside the dialogs, at the smallest
+// window and at a taller one, on every screen. Every control takes a click at its centre when it
+// is scrolled to the top and when it is scrolled to the bottom of its view. No text leaves the
+// box that cuts it, and no screen needs a sideways scroll.
+function coveredControls(page: Page) {
   return page.evaluate(() => {
-    const problems: string[] = [];
-    const rail = document.querySelector<HTMLElement>(".rail")!;
-    if (rail.scrollWidth > rail.clientWidth + 1) problems.push("the rail scrolls sideways");
-    for (const control of document.querySelectorAll<HTMLElement>(".rail button")) {
-      control.scrollIntoView({ block: "nearest" });
-      const box = control.getBoundingClientRect();
-      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-      if (!hit || !control.contains(hit)) problems.push(control.textContent?.trim() || control.getAttribute("aria-label") || "a control");
+    const problems = new Set<string>();
+    for (const control of document.querySelectorAll<HTMLElement>("button, a[href], input, select, textarea")) {
+      const size = control.getBoundingClientRect();
+      if (size.width <= 1 || size.height <= 1 || !control.checkVisibility({ visibilityProperty: true })) continue;
+      const name = control.getAttribute("aria-label") || control.textContent?.trim() || control.getAttribute("placeholder") || control.id || control.tagName;
+      for (const block of ["start", "end"] as const) {
+        control.scrollIntoView({ block });
+        const box = control.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        if (!hit || !(control.contains(hit) || hit.closest("label")?.contains(control))) problems.add(`${name.slice(0, 40)}, scrolled to the ${block}`);
+      }
     }
-    return problems;
+    return [...problems];
   });
 }
 
 function cutText(page: Page) {
   return page.evaluate(() => {
-    const stage = document.querySelector<HTMLElement>(".stage")!;
     const problems = new Set<string>();
-    if (stage.scrollWidth > stage.clientWidth + 1) problems.add("the view scrolls sideways");
-    const walker = document.createTreeWalker(stage, NodeFilter.SHOW_TEXT);
+    // The page itself never scrolls: its views do. A page that is taller than the window moves under a focused control.
+    if (document.documentElement.scrollHeight > innerHeight + 1) problems.add("the page is taller than the window");
+    for (const scroller of document.querySelectorAll<HTMLElement>("html, .stage, .rail, .unlock-pane, .lock-stage")) {
+      if (scroller.scrollWidth > scroller.clientWidth + 1) problems.add(`${scroller.className || "the page"} scrolls sideways`);
+    }
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       const text = node.textContent?.trim();
-      if (!text) continue;
+      if (!text || !node.parentElement?.checkVisibility({ visibilityProperty: true })) continue;
       const range = document.createRange();
       range.selectNodeContents(node);
       const box = range.getBoundingClientRect();
       if (box.width === 0) continue;
-      for (let outer = node.parentElement; outer && outer !== stage.parentElement; outer = outer.parentElement) {
+      for (let outer: HTMLElement | null = node.parentElement; outer; outer = outer.parentElement) {
         const style = getComputedStyle(outer);
         const edge = outer.getBoundingClientRect();
         // A text with an ellipsis is shortened on purpose, and a 1 px box holds text for a screen reader only.
@@ -196,33 +203,54 @@ function cutText(page: Page) {
   });
 }
 
+const enlarged = [620, 800].flatMap((height) => [24, 32].map((font) => ({ height, font })));
+const setRootFont = (page: Page, font: number | null) => page.evaluate((size) => { document.documentElement.style.fontSize = size === null ? "" : `${size}px`; }, font);
+const emitLock = (page: Page) => page.evaluate(() => (window as unknown as { __akmTest: { emitLock: () => void } }).__akmTest.emitLock());
+
 for (const theme of ["light", "dark"]) {
-  test(`${theme}: the rail and every view keep their controls and their text with enlarged text`, async ({ page }) => {
-    // One key for each of the longest status texts: rotation unknown, rotation overdue, expired.
+  test(`${theme}: every view keeps its controls and its text with enlarged text`, async ({ page }) => {
+    // One key for each of the longest status texts, and one title of one long word.
     const keys = [
       { historyCount: 2, rotationDays: 90 },
       { title: "Late", rotationDays: 90, secretChangedAt: "2020-01-01T00:00:00Z", secretChange: "known" as const, rotationDueAt: "2020-03-31T00:00:00Z" },
-      { title: "Past", expiresAt: "2020-01-01T00:00:00Z" },
+      { title: `FAKE_${"A".repeat(40)}`, expiresAt: "2020-01-01T00:00:00Z" },
     ];
     await open(page, theme, { keys, recycled: [{ key: { title: "Twin" }, deletedAt: null }] });
     await expect(page.locator(".key-row .state")).toHaveCount(3);
     expect((await page.locator(".key-row .state").allTextContents()).sort()).toEqual(["Expired", "Rotation overdue", "Rotation unknown"]);
     const found: [string, string[]][] = [];
-    for (const height of [620, 800]) {
+    for (const { height, font } of enlarged) {
       await page.setViewportSize({ width: 900, height });
-      for (const font of [24, 32]) {
-        for (const view of ["Keys", "Use keys", "Activity", "Recycle Bin", "Settings"]) {
-          await page.evaluate(() => { document.documentElement.style.fontSize = ""; });
-          await page.locator(".rail").getByRole("button", { name: view, exact: true }).click();
-          await page.evaluate((size) => { document.documentElement.style.fontSize = `${size}px`; }, font);
-          found.push([`${view}, 900 x ${height}, root font ${font} px: text`, await cutText(page)]);
-        }
-        found.push([`the rail, 900 x ${height}, root font ${font} px: controls`, await railControlsOutOfReach(page)]);
+      for (const view of ["Keys", "Use keys", "Activity", "Recycle Bin", "Settings"]) {
+        await setRootFont(page, null);
+        await page.locator(".rail").getByRole("button", { name: view, exact: true }).click();
+        await setRootFont(page, font);
+        const where = `${view}, 900 x ${height}, root font ${font} px`;
+        found.push([`${where}: text`, await cutText(page)], [`${where}: controls`, await coveredControls(page)]);
       }
     }
     expect(found.filter(([, problems]) => problems.length > 0)).toEqual([]);
   });
+
+  test(`${theme}: the lock screen keeps its controls and its text with enlarged text`, async ({ page }) => {
+    await open(page, theme);
+    await emitLock(page);
+    await expect(page.getByRole("button", { name: "Unlock vault", exact: true })).toBeVisible();
+    const found: [string, string[]][] = [];
+    for (const mode of ["unlock", "create"]) {
+      if (mode === "create") await page.getByRole("button", { name: "Create a new vault instead" }).click();
+      for (const { height, font } of enlarged) {
+        await page.setViewportSize({ width: 900, height });
+        await setRootFont(page, font);
+        const where = `${mode}, 900 x ${height}, root font ${font} px`;
+        found.push([`${where}: text`, await cutText(page)], [`${where}: controls`, await coveredControls(page)]);
+      }
+      await setRootFont(page, null);
+    }
+    expect(found.filter(([, problems]) => problems.length > 0)).toEqual([]);
+  });
 }
+
 
 test.describe("forced colours", () => {
   const boxed = async (page: Page, selector: string) => page.locator(selector).first().evaluate((node) => {

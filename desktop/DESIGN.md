@@ -55,6 +55,7 @@ Status is a shape as well as a colour, and words always go with it. A filled dot
 - One filled button per view.
 - A dialog covers every control outside it, and its surface is opaque.
 - At 150 and 200 percent text, at 900 and 1180 px, every action of a dialog or drawer can be scrolled into view, uncovered and inside the window. A row of actions wraps, a drawer keeps a scrolled control above its sticky footer, and nothing scrolls sideways.
+- Outside the dialogs, at 150 and 200 percent text, at 900 x 620 and 900 x 800 px, on the lock screen in both modes and in each of the five views: every control takes a click at its centre when it is scrolled to the top or to the bottom of its view, no text is cut sideways, and nothing scrolls sideways. The page itself never scrolls; its views do. The test sets the root font of the page, not the Windows text setting, and it does not look for text that is cut at the top or the bottom of a box.
 - In forced colours, each control, panel, mark and state keeps a boundary or a system colour. The block at the end of `styles.css` holds them.
 - A long user name wraps, and the action beside it stays in view. Many projects scroll inside the strip.
 - The current-section marker stays on its item at both rail widths.

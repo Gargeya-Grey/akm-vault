@@ -273,7 +273,8 @@ button:disabled { cursor: default; opacity: 0.4; }
   content: "";
   position: absolute;
   inset: 0 0 auto 0;
-  height: 760px;
+  /* Never taller than the app: a taller layer makes the page scroll under a focused control. */
+  height: min(760px, 100%);
   z-index: 0;
   pointer-events: none;
   background:
@@ -380,6 +381,8 @@ button:disabled { cursor: default; opacity: 0.4; }
 }
 .rail .theme { box-shadow: none; }
 .lock-corner { position: fixed; top: 16px; right: 20px; z-index: 5; }
+/* A control that the keyboard scrolls into view on the lock screen stops below the theme button of the corner. */
+.app-closed .stage { scroll-padding-top: 72px; }
 
 .session-notices { display: grid; gap: 8px; padding: 14px var(--pane) 0; }
 .session-notices .text-button { justify-self: start; min-height: 32px; }
@@ -514,7 +517,7 @@ button:disabled { cursor: default; opacity: 0.4; }
 .attention-head { display: contents; }
 .attention-summary h2 { font-size: 0.9375rem; font-weight: 500; letter-spacing: 0; }
 .attention-summary .text-button { grid-column: 3; grid-row: 1 / span 2; min-height: 32px; font-size: 0.8125rem; }
-.attention-summary ul { grid-column: 2; color: var(--muted); font-size: 0.8125rem; line-height: 1.55; }
+.attention-summary ul { grid-column: 2; color: var(--muted); font-size: 0.8125rem; line-height: 1.55; overflow-wrap: anywhere; }
 
 /* Notices */
 .notice { display: flex; align-items: flex-start; gap: 9px; margin: 0; padding: 12px 14px; border-radius: var(--r-control); background: var(--well); box-shadow: var(--well-in); font-size: 0.8125rem; line-height: 1.4; overflow-wrap: anywhere; }
@@ -632,7 +635,8 @@ button:disabled { cursor: default; opacity: 0.4; }
   .rail-brand { flex-direction: column; gap: 4px; padding: 0; }
   .bar-name { font-size: 0.875rem; }
   .nav-pill::before { left: 2px; }
-  .nav-link, .rail-tool, .rail .theme, .rail-lock { flex-direction: column; justify-content: center; gap: 4px; min-height: 56px; padding: 7px 2px; font-size: 0.75rem; line-height: 1.15; font-weight: 500; text-align: center; }
+  .nav-link, .rail-tool, .rail .theme, .rail-lock { flex-direction: column; justify-content: center; gap: 4px; min-height: 56px; padding: 7px 2px; font-size: 0.75rem; line-height: 1.15; font-weight: 500; text-align: center; overflow-wrap: anywhere; }
+  .nav-link span, .rail-tool span, .rail-lock span { max-width: 100%; }
   .ledger-pane, .view { padding-top: 28px; }
   .key-head, .key-row { grid-template-columns: 30px minmax(0, 1.2fr) minmax(0, 1.2fr) 150px 124px 16px; column-gap: 10px; }
   .unlock { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1fr); }
