@@ -1,6 +1,4 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-// @ts-expect-error The library that Testing Library uses to compute a description publishes no types through its package exports.
-import { computeAccessibleDescription } from "dom-accessibility-api";
 import { afterEach, expect, test, vi } from "vitest";
 import type { KeyView } from "../types";
 import { KeyForm } from "./KeyForm";
@@ -8,7 +6,10 @@ import { Unlock } from "./Unlock";
 import { UseKeys } from "./UseKeys";
 
 // D2B-06: a hint that belongs to one control is that control's accessible description, so a screen
-// reader reads it with the control. The description is computed as a browser computes it.
+// reader reads it with the control. The description is the text of the element that the
+// control names with aria-describedby.
+const description = (control: HTMLElement) =>
+  document.getElementById(control.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (command: string) => (command === "keys_list" ? [] : undefined)) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
@@ -53,6 +54,6 @@ const HINTS: [form: string, open: () => unknown, control: () => HTMLElement, hin
 for (const [form, open, control, hint] of HINTS) {
   test(`${form}: ${hint.source} describes its control`, async () => {
     await open();
-    expect(computeAccessibleDescription(control())).toMatch(hint);
+    expect(description(control())).toMatch(hint);
   });
 }

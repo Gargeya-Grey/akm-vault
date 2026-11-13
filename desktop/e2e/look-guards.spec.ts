@@ -435,3 +435,25 @@ test("the journal detail of an import and an export is visible at 900 px", async
   await expect(page.getByText("fake import detail: 2 added", { exact: true })).toBeVisible();
   await expect(page.getByText("fake export detail: 3 keys", { exact: true })).toBeVisible();
 });
+
+// A declaration that names a token that no rule defines is dropped without an error, and the
+// line or the colour that it draws is missing. The history list of the key drawer had two.
+test("every token that a style names is defined", async ({ page }) => {
+  await open(page);
+  const missing = await page.evaluate(() => {
+    const defined = new Set<string>();
+    const named = new Set<string>();
+    const walk = (rules: CSSRuleList) => {
+      for (const rule of Array.from(rules)) {
+        const { style, cssRules } = rule as CSSStyleRule;
+        if (cssRules) walk(cssRules);
+        if (!style) continue;
+        for (const name of Array.from(style)) if (name.startsWith("--")) defined.add(name);
+        for (const match of style.cssText.matchAll(/var\(\s*(--[\w-]+)\s*\)/g)) named.add(match[1]);
+      }
+    };
+    for (const sheet of Array.from(document.styleSheets)) walk(sheet.cssRules);
+    return [...named].filter((name) => !defined.has(name)).sort();
+  });
+  expect(missing).toEqual([]);
+});

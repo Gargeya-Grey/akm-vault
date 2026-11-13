@@ -425,7 +425,6 @@ Each decision takes the option that removes state or removes a promise.
 9. The environment filter offers "No environment" when a key has none. It finds the rows that
    draw that text.
 10. The key glyph is not a fact. Two keys can share a glyph, so the identity never relies on it.
-    The test pairs use IDs that draw the same glyph, and their rows still differ.
 11. A terminal launch that the user declined leaves a cancellation receipt, as an import and a
     file export do. Before, it left no receipt. The brief folds a declined record like an import,
     so the reply and the record give the same outcome.
