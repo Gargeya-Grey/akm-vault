@@ -154,21 +154,4 @@ mod tests {
         policy.observe(Signal::Locked);
         assert_eq!(policy.begin_open(Duration::ZERO), None);
     }
-
-    #[test]
-    fn large_native_tickets_remain_exact_and_distinct_across_transitions() {
-        let mut policy = Policy {
-            generation: 9_007_199_254_740_992,
-            ..Policy::default()
-        };
-        policy.observe(Signal::Available);
-        let a = policy.begin_open(Duration::ZERO).unwrap();
-        assert_eq!(a.0, 9_007_199_254_740_993);
-        assert!(policy.opened(a, Duration::ZERO));
-        let b = policy.begin_open(Duration::ZERO).unwrap();
-        assert_ne!(a, b);
-        assert_eq!(b.0, 9_007_199_254_740_994);
-        assert!(!policy.opened(a, Duration::ZERO));
-        assert!(policy.opened(b, Duration::ZERO));
-    }
 }

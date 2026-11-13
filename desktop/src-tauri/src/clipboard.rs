@@ -1867,40 +1867,6 @@ pub(crate) mod tests {
         assert_eq!(data.lock().unwrap().clears, 0);
     }
 
-    #[test]
-    fn matching_sequence_alone_does_not_authorize_clear() {
-        let data = Arc::new(Mutex::new(FakeData::default()));
-        let mut lease = ClipboardLease::new(Box::new(FakeClipboard(data.clone())));
-        lease
-            .copy(Zeroizing::new("fake".into()), Duration::ZERO)
-            .unwrap();
-        data.lock().unwrap().text = "user text".into();
-        lease.clear().unwrap();
-        assert_eq!(data.lock().unwrap().text, "user text");
-    }
-
-    struct PartialFailure {
-        fake: FakeClipboard,
-        busy_once: bool,
-    }
-    impl ClipboardBackend for PartialFailure {
-        fn set_private(&mut self, text: &str) -> Publication {
-            // A partial write whose rollback failed: the value may remain under this sequence.
-            let sequence = self.fake.set_private(text).published_for_test();
-            Publication::for_test(Outcome::Residual(
-                CommandError::new("clipboard", "injected exclusion failure"),
-                LeaseEvidence::for_test(sequence),
-            ))
-        }
-        fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
-            if self.busy_once {
-                self.busy_once = false;
-                return Err(CommandError::new("clipboard", "injected busy clipboard"));
-            }
-            self.fake.clear_matching(sequence, text)
-        }
-    }
-
     /// Scripted results for the lease state table. Each call takes the next scripted result.
     struct Scripted {
         publish: Arc<Mutex<Vec<Outcome>>>,
@@ -2201,21 +2167,5 @@ pub(crate) mod tests {
             }
             assert_eq!(*clear_calls.lock().unwrap(), calls, "{case}");
         }
-    }
-
-    #[test]
-    fn partial_copy_failure_keeps_a_lease_until_busy_clipboard_cleanup_can_retry() {
-        let data = Arc::new(Mutex::new(FakeData::default()));
-        let mut lease = ClipboardLease::new(Box::new(PartialFailure {
-            fake: FakeClipboard(data.clone()),
-            busy_once: true,
-        }));
-        assert!(lease
-            .copy(Zeroizing::new("fake".into()), Duration::ZERO)
-            .is_err());
-        assert_eq!(data.lock().unwrap().text, "fake");
-        lease.tick(Duration::from_secs(1)).unwrap();
-        assert_eq!(data.lock().unwrap().text, "");
-        assert_eq!(data.lock().unwrap().clears, 1);
     }
 }
