@@ -1,6 +1,11 @@
 """The doc check fails on real past mistakes and on synthetic ones, and passes on the working tree.
 
-Usage: python tools/test_check_docs.py (from the repository root)
+Usage: python tools/test_check_docs.py [--require-tools] (from the repository root)
+
+The full-mode cases (findings U4-R1-07, U4-R2-05) make their listings with the real test runners on
+small fixtures in temporary folders: cargo on a crate without dependencies (offline), and the Vitest
+and Playwright of desktop/node_modules. A runner that is not there is skipped with its reason, and
+--require-tools (CI) makes that a failure.
 
 The past mistakes are copies of the exact lines in tools/fixtures/check_docs_past_mistakes.json, so the
 test needs no Git history and runs in a one-commit public snapshot too (finding U4-R1-05). When the
@@ -9,6 +14,8 @@ commit that a fixture came from is in the history, the test also checks that the
 
 import importlib.util
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,7 +24,10 @@ from pathlib import Path
 CHECK_PATH = Path(__file__).resolve().parent / "check_docs.py"
 sys.path.insert(0, str(CHECK_PATH.parent))
 import git_child  # noqa: E402
-CHECK = [sys.executable, "tools/check_docs.py"]
+CHECK = [sys.executable, str(CHECK_PATH)]
+REQUIRE_TOOLS = "--require-tools" in sys.argv[1:]
+VITEST = Path("desktop/node_modules/vitest/vitest.mjs").resolve()
+PLAYWRIGHT = Path("desktop/node_modules/@playwright/test/cli.js").resolve()
 PAST = json.loads((CHECK_PATH.parent / "fixtures" / "check_docs_past_mistakes.json").read_text(encoding="utf-8"))
 
 RUST = """\
@@ -69,6 +79,20 @@ fn borrow_with_a_lifetime<'a>(text: &'a str) -> &'a str { text }
 
 #[test]
 fn a_test_after_a_lifetime_function() {}
+
+#[cfg(any())]
+#[test]
+fn a_test_that_cfg_any_turns_off() {}
+
+#[cfg(any())]
+mod switched_off {
+    #[test]
+    fn a_test_in_a_module_that_cfg_any_turns_off() {}
+}
+
+#[cfg(windows)]
+#[test]
+fn a_windows_test_runs_in_a_windows_build() {}
 """
 
 # A workflow that runs every workflow proof, and the files that they name.
@@ -103,6 +127,13 @@ name = "custom"
 path = "tests/custom.rs"
 harness = false
 """
+
+# Finding U4-R2-05: text that is not a test, which both modes must refuse.
+ENV_WORKFLOW = "jobs:\n  install-upgrade-uninstall:\n    runs-on: x\n    steps:\n      - env:\n          run: powershell -File tools/test_install.ps1\n        run: echo nothing\n"
+STRING_TIMER = f'const text = \'test("{TITLE}", () => {{}})\';\ntest("another test", () => {{}});\n'
+SKIPPED_GROUP_TIMER = f'describe.skip("a group", () => {{\n  test("{TITLE}", () => {{}});\n}});\ntest("another test", () => {{}});\n'
+NEVER_CALLED_TIMER = f'function never() {{\n  test("{TITLE}", () => {{}});\n}}\ntest("another test", () => {{}});\n'
+GOOD_TIMER = f'test("{TITLE}", () => {{}});\n'
 
 CLAIMS_HEAD = "# Claims\n\n| Claim | Where stated | Evidence | Limit |\n|---|---|---|---|\n"
 WORKFLOW = ".github/workflows/native-proof.yml"
@@ -266,7 +297,7 @@ SYNTHETIC = [
     (
         "a proof's Rust test fails when it is not a test",
         "",
-        "proof `native-proof-real-clipboard` runs `actual_windows_private_formats_are_present`, which is not a test fn in the Rust sources",
+        "proof `native-proof-real-clipboard` runs `actual_windows_private_formats_are_present`, which is not an ignored test fn in the Rust sources",
         {**claims("| A claim. | README.md | `native-proof-real-clipboard` | Never ran. |"), WORKFLOW: GOOD_WORKFLOW, "clip.rs": "// " + CLIPBOARD_TEST.replace("\n", "\n// ")},
     ),
     (
@@ -301,6 +332,53 @@ SYNTHETIC = [
         "",
         None,
         {"docs/CLAIMS.md": "| Example | What runs |\n|---|---|\n| `made-up-proof` | x |\n\n" + CLAIMS_HEAD.split("\n", 2)[2] + "| A claim. | README.md | `a_real_test_with_four_words` | None. |\n"},
+    ),
+    # The generated THIRD_PARTY_NOTICES.md holds third-party READMEs and change logs: their names are not AKM's tests.
+    ("a test-like name in THIRD_PARTY_NOTICES.md passes", "", None, {"THIRD_PARTY_NOTICES.md": "See the test `with_additional_browser_args_of_a_crate`.\n"}),
+    ("a control character in THIRD_PARTY_NOTICES.md still fails", "", "THIRD_PARTY_NOTICES.md:2: control character 0x0b", {"THIRD_PARTY_NOTICES.md": "one\n\x0btwo\n"}),
+    # Finding U4-R2-05 in fast mode: each fixture of review 2 is refused.
+    (
+        "a workflow command only in an env value of a step is not a run step",
+        "",
+        "proof `native-proof-install` needs a run step of job `install-upgrade-uninstall` that holds 'tools/test_install.ps1'",
+        {**claims("| A claim. | README.md | `native-proof-install` | Never ran. |"), **INSTALL, WORKFLOW: ENV_WORKFLOW},
+    ),
+    (
+        "a frontend title only inside a string is not a test",
+        "",
+        "proof `frontend-reveal-timer` needs a test( or it( call titled",
+        {**claims("| A claim. | README.md | `frontend-reveal-timer` | None. |"), ".github/workflows/build.yml": BUILD_WORKFLOW, TIMER: STRING_TIMER},
+    ),
+    (
+        "a frontend test in a skipped describe group is not a test",
+        "",
+        "proof `frontend-reveal-timer` needs a test( or it( call titled",
+        {**claims("| A claim. | README.md | `frontend-reveal-timer` | None. |"), ".github/workflows/build.yml": BUILD_WORKFLOW, TIMER: SKIPPED_GROUP_TIMER},
+    ),
+    (
+        "a frontend test in a file with a .only call is not a test",
+        "",
+        "proof `frontend-reveal-timer` needs a test( or it( call titled",
+        {**claims("| A claim. | README.md | `frontend-reveal-timer` | None. |"), ".github/workflows/build.yml": BUILD_WORKFLOW, TIMER: 'test.only("another test", () => {});\n' + GOOD_TIMER},
+    ),
+    (
+        "a Rust test that cfg(any()) turns off is not evidence",
+        "",
+        "docs/CLAIMS.md:5: evidence `a_test_that_cfg_any_turns_off` is a test, but `#[cfg(any())]` turns it off in a Windows test build",
+        claims("| A claim. | README.md | `a_test_that_cfg_any_turns_off` | None. |"),
+    ),
+    (
+        "a Rust test in a module that cfg(any()) turns off is not evidence",
+        "",
+        "docs/CLAIMS.md:5: evidence `a_test_in_a_module_that_cfg_any_turns_off` is a test, but `#[cfg(any())]` turns it off",
+        claims("| A claim. | README.md | `a_test_in_a_module_that_cfg_any_turns_off` | None. |"),
+    ),
+    ("a Rust test under cfg(windows) is evidence", "", None, claims("| A claim. | README.md | `a_windows_test_runs_in_a_windows_build` | None. |")),
+    (
+        "an ignored Rust test is not evidence by itself",
+        "",
+        "docs/CLAIMS.md:5: evidence `an_ignored_test_with_other_attributes` is an ignored test, which `cargo test` does not run",
+        claims("| A claim. | README.md | `an_ignored_test_with_other_attributes` | None. |"),
     ),
 ]
 
@@ -348,13 +426,13 @@ SYNTHETIC += [
 ]
 
 
-def run_synthetic(markdown, extra=None, deleted=(), untracked=None):
+def run_synthetic(markdown, extra=None, deleted=(), untracked=None, rust=RUST, arguments=()):
     """Run the real script in a throwaway Git repository that holds one Rust file and one Markdown file.
     The `deleted` files are tracked, then removed from the working tree. The `untracked` files are
     written to the working tree and never added."""
     with tempfile.TemporaryDirectory(prefix="akm-check-docs-test-") as folder:
         root = Path(folder)
-        (root / "lib.rs").write_text(RUST, encoding="utf-8", newline="")
+        (root / "lib.rs").write_text(rust, encoding="utf-8", newline="")
         (root / "notes.md").write_bytes(markdown.encode("utf-8"))
         files = ["lib.rs", "notes.md"]
         for name, text in (extra or {}).items():
@@ -368,7 +446,7 @@ def run_synthetic(markdown, extra=None, deleted=(), untracked=None):
         for name, text in (untracked or {}).items():
             (root / name).parent.mkdir(parents=True, exist_ok=True)
             (root / name).write_text(text, encoding="utf-8", newline="")
-        return subprocess.run([sys.executable, str(CHECK_PATH)], cwd=root, capture_output=True, text=True)
+        return subprocess.run([sys.executable, str(CHECK_PATH), *arguments], cwd=root, capture_output=True, text=True)
 
 
 def run_past(fixture):
@@ -385,20 +463,21 @@ def run_past(fixture):
 
 
 failures = 0
-here = git_child.existing(Path.cwd())
-for fixture in PAST:
-    run = run_past(fixture)
-    ok = run.returncode == 1 and fixture["expected"] in run.stdout
-    print(f"{'ok  ' if ok else 'FAIL'} the check fails on {fixture['origin']} ({fixture['name']}) with: {fixture['expected']}")
-    failures += not ok
-    commit, path, number = fixture["origin"].split(":")
-    if here.completed("cat-file", "-e", f"{commit}^{{commit}}").returncode != 0:
-        print(f"skip the copy of {fixture['origin']} is not compared: commit {commit} is not in this history (for example a public snapshot)")
-        continue
-    past_line = here.run("show", f"{commit}:{path}").decode("utf-8").split("\n")[int(number) - 1].removesuffix("\r")
-    ok = past_line == fixture["line"]
-    print(f"{'ok  ' if ok else 'FAIL'} the fixture is an exact copy of {fixture['origin']}")
-    failures += not ok
+# The past commits are read from a copy of this repository's Git data (git_child.source_copy, class F).
+with git_child.source_copy(Path.cwd()) as here:
+    for fixture in PAST:
+        run = run_past(fixture)
+        ok = run.returncode == 1 and fixture["expected"] in run.stdout
+        print(f"{'ok  ' if ok else 'FAIL'} the check fails on {fixture['origin']} ({fixture['name']}) with: {fixture['expected']}")
+        failures += not ok
+        commit, path, number = fixture["origin"].split(":")
+        if here.completed("cat-file", "-e", f"{commit}:{path}").returncode != 0:
+            print(f"skip the copy of {fixture['origin']} is not compared: commit {commit} is not in this history (for example a public snapshot)")
+            continue
+        past_line = here.run("cat-file", "blob", f"{commit}:{path}").decode("utf-8").split("\n")[int(number) - 1].removesuffix("\r")
+        ok = past_line == fixture["line"]
+        print(f"{'ok  ' if ok else 'FAIL'} the fixture is an exact copy of {fixture['origin']}")
+        failures += not ok
 
 for name, markdown, expected, *rest in SYNTHETIC:
     run = run_synthetic(markdown, *rest)
@@ -411,26 +490,156 @@ for name, markdown, expected, *rest in SYNTHETIC:
         print(f"     expected: {expected or 'a pass'}\n     got exit {run.returncode}: {run.stdout.strip()}")
     failures += not ok
 
-# The workflow reader against an independent YAML parser, when one is installed.
-try:
-    import yaml
-except ImportError:
-    yaml = None
-workflows = [extra[key] for _n, _m, _e, *rest in SYNTHETIC if rest for extra in rest[:1] for key in extra if key.startswith(".github/workflows/")]
-workflows += [Path(path).read_text(encoding="utf-8") for path in (check_docs.BUILD, check_docs.NATIVE_PROOF) if Path(path).is_file()]
-if yaml is None:
-    print("skip the workflow reader is not compared with PyYAML: PyYAML is not installed")
-else:
-    differ = [text[:60] for text in workflows if sorted(check_docs.workflow_jobs(text)) != sorted((yaml.safe_load(text) or {}).get("jobs") or {})]
-    ok = not differ and len(workflows) >= 10
-    print(f"{'ok  ' if ok else 'FAIL'} the workflow reader finds the jobs that PyYAML finds, in {len(workflows)} workflows")
+# Full mode (findings U4-R1-07, U4-R2-05): the listings come from the real runners on small fixtures.
+RUST_FULL = """\
+#[test]
+fn a_listed_test_that_runs() {}
+
+#[test]
+#[ignore]
+fn a_listed_test_that_is_ignored() {}
+
+#[test]
+#[ignore]
+fn actual_windows_private_formats_are_present() {}
+
+#[cfg(any())]
+#[test]
+fn a_test_that_cfg_any_turns_off() {}
+
+#[cfg(not(windows))]
+mod elsewhere;
+"""
+ELSEWHERE = "#[test]\nfn a_test_in_a_module_file_that_windows_leaves_out() {}\n"
+FIXTURE_CRATE = '[package]\nname = "check-docs-fixture"\nversion = "0.0.0"\nedition = "2021"\n\n[lib]\npath = "lib.rs"\n\n[workspace]\n'
+PLAYWRIGHT_SPEC = """\
+const { test } = require("@playwright/test");
+test("a runnable test", async () => {});
+test.skip("a skipped test", async () => {});
+test.fixme("a fixme test", async () => {});
+test.describe.skip("a skipped group", () => { test("a test in a skipped group", async () => {}); });
+const text = 'test("a title in a string", async () => {})';
+function never() { test("a test in a function that never runs", async () => {}); }
+"""
+
+
+def missing(tool, reason):
+    """Print why a group of cases cannot run; with --require-tools that is a failure."""
+    global failures
+    print(f"{'FAIL' if REQUIRE_TOOLS else 'skip'} the {tool} cases need {reason}")
+    failures += REQUIRE_TOOLS
+
+
+def command(kind, script=None):
+    """The checker's own listing command for `kind`, with the runner's script made absolute, so a change
+    to LISTINGS changes the fixtures' listings too."""
+    words = check_docs.LISTINGS[kind][0]
+    return [str(script) if script and word.startswith("node_modules/") else word for word in words]
+
+
+def listing(command, folder, env=None):
+    done = subprocess.run(command, cwd=folder, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+    return done.stdout if done.returncode == 0 else None
+
+
+def full_case(name, expected, files, arguments):
+    global failures
+    run = run_synthetic("", {**files, "elsewhere.rs": ELSEWHERE}, rust=RUST_FULL, arguments=("--full", *arguments))
+    ok = run.returncode == 0 if expected is None else run.returncode == 1 and expected in run.stdout
+    print(f"{'ok  ' if ok else 'FAIL'} {name}")
+    if not ok:
+        print(f"     expected: {expected or 'a pass'}\n     got exit {run.returncode}: {run.stdout.strip()[-600:]} {run.stderr.strip()[-300:]}")
     failures += not ok
-    if differ:
-        print(f"     they differ for: {differ}")
+
+
+with tempfile.TemporaryDirectory(prefix="akm-check-docs-lists-") as lists:
+    lists = Path(lists)
+    crate = lists / "crate"
+    crate.mkdir()
+    for name, content in {"Cargo.toml": FIXTURE_CRATE, "lib.rs": RUST_FULL, "elsewhere.rs": ELSEWHERE}.items():
+        (crate / name).write_text(content, encoding="utf-8", newline="")
+    env = dict(os.environ, CARGO_TARGET_DIR=str(lists / "target"))
+    rust = ignored = None
+    if shutil.which("cargo") and listing(["cargo", "generate-lockfile", "--offline"], crate, env) is not None:
+        rust, ignored = listing(command("rust"), crate, env), listing(command("rust-ignored"), crate, env)
+    if rust is None or ignored is None:
+        missing("Rust full-mode", "cargo, which lists the tests of a fixture crate offline")
+    else:
+        (lists / "rust.txt").write_text(rust, encoding="utf-8")
+        (lists / "rust-ignored.txt").write_text(ignored, encoding="utf-8")
+        (lists / "empty.txt").write_text("", encoding="utf-8")
+        listed, only_ignored = check_docs.rust_listing(rust), check_docs.rust_listing(ignored)
+        ok = {"a_listed_test_that_runs", "a_listed_test_that_is_ignored"} <= listed and only_ignored == {"a_listed_test_that_is_ignored", "actual_windows_private_formats_are_present"}
+        ok = ok and not {"a_test_that_cfg_any_turns_off", "a_test_in_a_module_file_that_windows_leaves_out"} & listed
+        print(f"{'ok  ' if ok else 'FAIL'} cargo --list names every test with the ignored ones, --list --ignored only the ignored ones, and neither a test that a cfg leaves out")
+        failures += not ok
+        if not ok:
+            print(f"     --list: {sorted(listed)}; --list --ignored: {sorted(only_ignored)}")
+        rust_lists = ("--rust-list", str(lists / "rust.txt"), "--rust-ignored-list", str(lists / "rust-ignored.txt"))
+        for name, expected, files in [
+            ("full mode: a claim whose test cargo lists passes", None, claims("| A claim. | README.md | `a_listed_test_that_runs` | None. |")),
+            ("full mode: a Rust test that cfg(any()) turns off is not evidence", "docs/CLAIMS.md:5: evidence `a_test_that_cfg_any_turns_off` is neither a test fn nor a proof name", claims("| A claim. | README.md | `a_test_that_cfg_any_turns_off` | None. |")),
+            ("full mode: a test in a module file that a cfg leaves out is not evidence", "evidence `a_test_in_a_module_file_that_windows_leaves_out` is neither a test fn nor a proof name", claims("| A claim. | README.md | `a_test_in_a_module_file_that_windows_leaves_out` | None. |")),
+            ("full mode: an ignored test is not evidence by itself", "evidence `a_listed_test_that_is_ignored` is an ignored test", claims("| A claim. | README.md | `a_listed_test_that_is_ignored` | None. |")),
+            ("full mode: the real-clipboard proof passes when its test is in the ignored listing", None, {**claims("| A claim. | README.md | `native-proof-real-clipboard` | Never ran. |"), WORKFLOW: GOOD_WORKFLOW}),
+            ("full mode: a workflow command only in an env value is not a run step", "proof `native-proof-install` needs a run step of job `install-upgrade-uninstall` that holds 'tools/test_install.ps1'", {**claims("| A claim. | README.md | `native-proof-install` | Never ran. |"), **INSTALL, WORKFLOW: ENV_WORKFLOW}),
+        ]:
+            full_case(name, expected, files, rust_lists)
+        full_case(
+            "full mode: the real-clipboard proof fails when its test is not in the ignored listing",
+            "proof `native-proof-real-clipboard` runs `actual_windows_private_formats_are_present`, which is not an ignored test fn in the cargo listing",
+            {**claims("| A claim. | README.md | `native-proof-real-clipboard` | Never ran. |"), WORKFLOW: GOOD_WORKFLOW},
+            ("--rust-list", str(lists / "rust.txt"), "--rust-ignored-list", str(lists / "empty.txt")),
+        )
+        full_case("full mode: a Rust listing that names no test fails", "the Rust listing names no test", claims("| A claim. | README.md | `a_listed_test_that_runs` | None. |"), ("--rust-list", str(lists / "empty.txt"), "--rust-ignored-list", str(lists / "empty.txt")))
+
+        if not (VITEST.is_file() and shutil.which("node")):
+            missing("Vitest full-mode", "node and desktop/node_modules (npm ci in desktop)")
+        else:
+            frontend = {**claims("| A claim. | README.md | `frontend-reveal-timer` | None. |"), ".github/workflows/build.yml": BUILD_WORKFLOW}
+            for number, (name, content, expected) in enumerate([
+                ("full mode: a frontend proof passes when Vitest lists its test", GOOD_TIMER, None),
+                ("full mode: a frontend title only inside a string is not in the Vitest listing", STRING_TIMER, "in the vitest listing"),
+                ("full mode: a frontend test in a skipped describe group is not in the Vitest listing", SKIPPED_GROUP_TIMER, "in the vitest listing"),
+                ("full mode: a test call in a function that never runs is not in the Vitest listing", NEVER_CALLED_TIMER, "in the vitest listing"),
+            ]):
+                desktop = lists / f"vitest-{number}" / "desktop"
+                (desktop / TIMER).parent.mkdir(parents=True)
+                (desktop / TIMER).write_text(content, encoding="utf-8")
+                output = listing(command("vitest", VITEST) + ["--globals"], desktop)
+                if output is None:
+                    print(f"FAIL {name}\n     vitest list failed on the fixture")
+                    failures += 1
+                    continue
+                (lists / f"vitest-{number}.json").write_text(output, encoding="utf-8")
+                full_case(name, expected, {**frontend, TIMER: content}, (*rust_lists, "--vitest-list", str(lists / f"vitest-{number}.json")))
+
+    if not (PLAYWRIGHT.is_file() and shutil.which("node")):
+        missing("Playwright", "node and desktop/node_modules (npm ci in desktop)")
+    else:
+        desktop = lists / "playwright" / "desktop"
+        (desktop / "e2e").mkdir(parents=True)
+        (desktop / "e2e" / "probe.spec.js").write_text(PLAYWRIGHT_SPEC, encoding="utf-8")
+        (desktop / "playwright.config.js").write_text('module.exports = { testDir: "./e2e" };\n', encoding="utf-8")
+        output = listing(command("playwright", PLAYWRIGHT), desktop, dict(os.environ, NODE_PATH=str(PLAYWRIGHT.parents[2])))
+        entries = check_docs.playwright_listing(output) if output else []
+        spec = "desktop/e2e/probe.spec.js"
+        for name, path, title, expected in [
+            ("the Playwright listing holds a runnable test", spec, "a runnable test", True),
+            ("a skipped Playwright test does not run", spec, "a skipped test", False),
+            ("a fixme Playwright test does not run", spec, "a fixme test", False),
+            ("a Playwright test in a skipped group does not run", spec, "a test in a skipped group", False),
+            ("a Playwright title only inside a string is not a test", spec, "a title in a string", False),
+            ("a Playwright test call in a function that never runs is not a test", spec, "a test in a function that never runs", False),
+            ("a Playwright test of another file does not count", "desktop/e2e/other.spec.js", "a runnable test", False),
+        ]:
+            ok = bool(entries) and check_docs.listed_test(entries, "playwright", path, title) is expected
+            print(f"{'ok  ' if ok else 'FAIL'} {name}")
+            failures += not ok
 
 run = subprocess.run(CHECK, capture_output=True, text=True)
-ok = run.returncode == 0
-print(f"{'ok  ' if ok else 'FAIL'} the working tree passes")
+ok = run.returncode == 0 and check_docs.FAST_NOTE in run.stdout
+print(f"{'ok  ' if ok else 'FAIL'} the working tree passes, and fast mode says that it does not prove a test runs")
 failures += not ok
 if not ok:
     print(run.stdout)

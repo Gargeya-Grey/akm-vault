@@ -33,6 +33,8 @@ npm run build
 npm run test:ui
 ```
 
+Then, from the repository root, `python tools/check_docs.py --full`. It asks cargo, Vitest and Playwright which tests run, so it needs the test build and `npm ci`. The docs check reads the workflows with PyYAML 6.0.3 (`python -m pip install --only-binary :all: PyYAML==6.0.3`).
+
 A change to a tool runs that tool's own test (`tools/test_*.py` and `tools/test_*.ps1`). A defect fix comes with a test that fails before the fix and passes after it. Never weaken a test to make it pass.
 
 ## Documents

@@ -1,5 +1,6 @@
 """The public-snapshot tool refuses private data without printing it, never changes the source
-repository, and writes only one new folder with one commit (FR-26, class F, findings U4-R1-01 to 04, 09).
+repository, and writes only one new folder with one commit (FR-26, class F, findings U4-R1-01 to 04, 09,
+U4-R2-02, U4-R2-03).
 
 Each case builds a throwaway source repository in a temporary folder, with sentinel files, and runs
 the real tool on it. Usage: python tools/test_make_public_snapshot.py (from the repository root)
@@ -143,11 +144,13 @@ def hostile_git(root, repo, out):
 
 
 MACHINE_FOLDER = existing_c_folder()
-PUBLIC_LIST = f"# Exact strings that the e-mail rule accepts.\n{address('someone', 'example.com')}\n{address('128x128', '2x.png')}\n"
+ALLOWED = f"{LISTS}/allowed-texts.txt"
+NOTICES = f"{LISTS}/notice-addresses.txt"
+ALLOWED_LIST = f"# Exact texts that the e-mail rule accepts.\nemail {address('someone', 'example.com')}\nemail icons/{address('128x128', '2x.png')}\n"
 CLEAN = {
     "README.md": f"# Fake project\n\nA synthetic path C:\\fake\\vault.kdbx and Z:\\no\\such\\folder are not private.\nIcon: icons/{address('128x128', '2x.png')}. Contact: {address('someone', 'example.com')}.\n",
     "src/main.rs": "fn main() {}\n",
-    f"{LISTS}/public-addresses.txt": PUBLIC_LIST,
+    ALLOWED: ALLOWED_LIST,
 }
 OTHER_USER = dict(os.environ, USERNAME="zz-not-this-user")
 PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + bytes(range(256))
@@ -157,7 +160,8 @@ def opaque_line(data, path):
     return f"{hashlib.sha256(data).hexdigest()}  {path}\n"
 
 
-# (case name, files, patterns, text that must not be printed, expected output, environment)
+# (case name, files, patterns, text that must not be printed, expected output, environment). The expected
+# output is one text or a tuple of texts that must all be printed.
 REFUSALS = [
     ("a user-profile path of this computer", {"notes.md": f"evidence in C:\\Users\\{USER}\\proofs\n"}, None, USER, "notes.md:1: a user-profile path of this computer", None),
     ("a drive path of this computer", {"notes.md": f"build in C:\\{MACHINE_FOLDER}\\akm-build\n"}, None, MACHINE_FOLDER, "notes.md:1: a drive path of this computer", None),
@@ -173,9 +177,10 @@ REFUSALS = [
     ("Latin-1 text", {"notes.txt": f"café, write to {PRIVATE}\n".encode("latin-1")}, None, "private.person", "notes.txt: cannot be scanned", None),
     ("a text file larger than the 8 MiB limit", {"big.txt": b"a" * (8 * 1024 * 1024 + 1)}, None, None, "big.txt: cannot be scanned: larger than the 8 MiB scan limit", None),
     # U4-R1-03: paths are scanned with every rule, and a private path is never printed.
-    ("an address in a file name", {f"docs/review.owner@{'private.invalid'}.txt": "harmless\n"}, None, "review.owner", "the path holds an e-mail address", None),
+    ("an address in a file name", {address("docs/review.owner", "private.invalid.txt"): "harmless\n"}, None, "review.owner", "the path holds an e-mail address", None),
     ("an extra pattern in a folder name", {"notes/review-owner-zz/a.txt": "harmless\n"}, "review-owner-zz\n", "review-owner-zz", "the path holds extra pattern 1 of the patterns file", None),
     ("the Windows user name in a path", {f"notes/{USER}-diary.md": "harmless\n"}, None, USER, "the path holds the Windows user name", None),
+    ("a path that is not plain text", {"notes/a\u202eb.md": "harmless\n"}, None, None, ("a path that is not plain text: column 8: U+202E, a format character", "file #"), None),
     ("a content hit in a file with a private path", {"notes/review-owner-zz/b.md": f"write to {PRIVATE}\n"}, "review-owner-zz\n", "review-owner-zz", ", line 1: an e-mail address", None),
     # U4-R1-04: no suffix or domain is exempt, and no file is exempt by its name.
     ("an address that ends in .rs", {"notes.md": f"mail {address('john.doe', 'company.rs')}\n"}, None, "john.doe", "notes.md:1: an e-mail address", None),
@@ -185,16 +190,56 @@ REFUSALS = [
     ("an address in capitals with a plus tag", {"notes.md": f"mail {address('PRIVATE.PERSON+TAG', 'MAIL.PRIVATE-MAIL.TEST')}\n"}, None, "PRIVATE.PERSON", "notes.md:1: an e-mail address", None),
     ("an address at example.com that no list names", {"notes.md": f"mail {address('real.name', 'example.com')}\n"}, None, "real.name", "notes.md:1: an e-mail address", None),
     ("a fabricated THIRD_PARTY_NOTICES.md", {"THIRD_PARTY_NOTICES.md": f"# Third-party notices\n\nCopyright (c) {PRIVATE}\n"}, None, "private.person", "THIRD_PARTY_NOTICES.md:3: an e-mail address", None),
-    # The allow marker silences only the rules it names, and never identity or extra.
-    ("an e-mail address under a marker that names no rule", {"notes.md": f"{PRIVATE}  # public-snapshot: allow\n"}, None, "private.person", "notes.md:1: an e-mail address", None),
-    ("an e-mail address under a marker for another rule", {"notes.md": f"{PRIVATE}  # public-snapshot: allow drive-path\n"}, None, "private.person", "notes.md:1: an e-mail address", None),
-    ("an extra pattern under an e-mail marker", {"notes.md": f"{SECRET_WORD} {PRIVATE}  # public-snapshot: allow email\n"}, f"{SECRET_WORD}\n", SECRET_WORD, "notes.md:1: extra pattern 1 of the patterns file", None),
-    ("the git user's address under an e-mail marker", {"notes.md": f"{address('tester', 'example.com')}  # public-snapshot: allow email\n"}, None, None, "notes.md:1: the git user's e-mail address", None),
-    ("a profile path without its marker", {"notes.md": f"C:\\Users\\{USER}\\x\n"}, None, USER, "notes.md:1: a user-profile path of this computer", OTHER_USER),
+    # U4-R2-02: no line marker exists any more, so a marker silences nothing, on any line end.
+    ("an e-mail address under the old line marker", {"notes.md": f"{PRIVATE}  # public-snapshot: allow email\n"}, None, "private.person", "notes.md:1: an e-mail address", None),
+    ("a profile path under the old line marker", {"notes.md": f"C:\\Users\\{USER}\\x  # public-snapshot: allow profile-path\n"}, None, USER, "notes.md:1: a user-profile path of this computer", OTHER_USER),
+    ("the reviewer's marker, a lone CR and a private address", {"notes.txt": f"{address('synthetic', 'example.test')} # public-snapshot: allow email\r{address('private.review', 'private.invalid')}\n"}, None, "private.review", ("notes.txt:1: an e-mail address", "notes.txt: not plain text: line 1, column 54: U+000D, a carriage return that no line feed follows"), None),
+    ("the reviewer's marker, U+2028 and a private address", {"notes.txt": f"{address('synthetic', 'example.test')} # public-snapshot: allow email\u2028{address('private.review', 'private.invalid')}\n"}, None, "private.review", ("notes.txt:1: an e-mail address", "U+2028, a line separator"), None),
+    # The plain-text rule: printable characters, TAB, LF and CR LF, in NFC. A refusal names the rule and the place.
+    ("a lone CR", {"notes.txt": "one\rtwo\n"}, None, None, "notes.txt: not plain text: line 1, column 4: U+000D, a carriage return that no line feed follows", None),
+    ("a line separator U+2028", {"notes.txt": "one\u2028two\n"}, None, None, "notes.txt: not plain text: line 1, column 4: U+2028, a line separator", None),
+    ("a paragraph separator U+2029", {"notes.txt": "one\u2029two\n"}, None, None, "notes.txt: not plain text: line 1, column 4: U+2029, a paragraph separator", None),
+    ("a next-line control U+0085", {"notes.txt": "one\u0085two\n"}, None, None, "notes.txt: not plain text: line 1, column 4: U+0085, a control character", None),
+    ("a backspace control", {"notes.txt": "one\btwo\n"}, None, None, "notes.txt: not plain text: line 1, column 4: U+0008, a control character", None),
+    ("a byte order mark", {"notes.txt": "\ufeffplain text\n"}, None, None, "notes.txt: not plain text: line 1, column 1: U+FEFF, a format character", None),
+    ("a no-break space", {"notes.txt": "one\u00a0two\n"}, None, None, "notes.txt: not plain text: line 1, column 4: U+00A0, a space other than U+0020", None),
+    ("text that is not in NFC", {"notes.txt": "cafe\u0301\n"}, None, None, "notes.txt: not plain text: line 1: text that is not in Unicode normalization form NFC", None),
+    ("a private-use character", {"notes.txt": "one\ue000two\n"}, None, None, "notes.txt: not plain text: line 1, column 4: U+E000, a private-use character", None),
+    # U4-R2-03 and the broad e-mail rule: a run with an at sign that has a character before it and a dot after it.
+    ("an address at a Devanagari domain", {"notes.md": f"mail {address('owner', 'उदाहरण.भारत')}\n"}, None, "उदाहरण", "notes.md:1: an e-mail address", None),
+    ("an address at a domain with a combining mark", {"notes.md": f"mail {address('owner', 'q̇a.de')}\n"}, None, "q̇a", "notes.md:1: an e-mail address", None),
+    ("an address hidden by a zero-width space", {"notes.md": f"mail own\u200b{address('er', 'private-mail.test')}\n"}, None, "private-mail", ("notes.md:1: an e-mail address", "notes.md: not plain text: line 1, column 9: U+200B, a format character"), None),
+    ("an address hidden by a directional mark", {"notes.md": f"mail owner\u200e{address('', 'private-mail.test')}\n"}, None, "private-mail", ("notes.md:1: an e-mail address", "U+200E, a format character"), None),
+    ("an address with a full-width at sign", {"notes.md": "mail owner\uff20private-mail.test\n"}, None, "private-mail", "notes.md:1: an e-mail address", None),
+    ("an address with a small-form at sign", {"notes.md": "mail owner\ufe6bprivate-mail.test\n"}, None, "private-mail", "notes.md:1: an e-mail address", None),
+    ("an address with a full-width dot", {"notes.md": f"mail {address('owner', 'private-mail')}\uff0etest\n"}, None, "private-mail", "notes.md:1: an e-mail address", None),
+    ("an address in brackets and quotes", {"notes.md": f"mail <\"{address('owner', 'private-mail.test')}\">,\n"}, None, "private-mail", "notes.md:1: an e-mail address", None),
+    ("an address in a URL", {"notes.md": f"see https://x.test/{address('owner', 'private-mail.test')}/page\n"}, None, "private-mail", "notes.md:1: an e-mail address", None),
+    ("an address whose domain a slash follows", {"notes.md": f"see {address('owner', 'private-mail.test/')}\n"}, None, "private-mail", "notes.md:1: an e-mail address", None),
+    ("an address after a scoped package name", {"notes.md": f"see /@scope/{address('owner', 'private-mail.test')}\n"}, None, "private-mail", "notes.md:1: an e-mail address", None),
+    ("an address on a list file's comment line", {ALLOWED: ALLOWED_LIST + f"# asked by {PRIVATE}\n"}, None, "private.person", f"{ALLOWED}:4: an e-mail address", None),
+    ("a listed file that is not plain text is still scanned", {"notes.txt": f"one\b{PRIVATE}\n".encode(), f"{LISTS}/opaque-files.txt": opaque_line(f"one\b{PRIVATE}\n".encode(), "notes.txt")}, None, "private.person", "notes.txt:1: an e-mail address", None),
+    # The exception list: exact entries only, each used, each one e-mail hit, for the e-mail rule only.
+    ("an address that differs in case from its entry", {"notes.md": f"mail {address('SOMEONE', 'EXAMPLE.COM')}\n"}, None, "SOMEONE", "notes.md:1: an e-mail address", None),
+    ("a stale entry", {ALLOWED: ALLOWED_LIST + f"email {address('nobody', 'example.org')}\n"}, None, None, f"{ALLOWED}:4: a stale entry: no e-mail hit outside the lists has this text", None),
+    ("an entry broader than its hit", {"notes.md": f"mail {address('team', 'example.org.private-mail.test')}\n", ALLOWED: ALLOWED_LIST + f"email {address('team', 'example.org')}\n"}, None, "private-mail", ("notes.md:1: an e-mail address", f"{ALLOWED}:4: a stale entry"), None),
+    ("an entry that is not one e-mail hit", {ALLOWED: ALLOWED_LIST + "email *@example.org\n"}, None, None, f"{ALLOWED}:4: a malformed entry", None),
+    ("an entry for a rule other than email", {ALLOWED: ALLOWED_LIST + f"profile-path C:\\Users\\{USER}\n"}, None, USER, f"{ALLOWED}:4: a malformed entry", OTHER_USER),
+    ("an entry with another rule ID and an address", {"notes.md": f"mail {address('other', 'example.com')}\n", ALLOWED: ALLOWED_LIST + f"identity {address('other', 'example.com')}\n"}, None, None, (f"{ALLOWED}:4: a malformed entry", "notes.md:1: an e-mail address"), None),
+    ("a repeated entry", {ALLOWED: ALLOWED_LIST + f"email {address('someone', 'example.com')}\n"}, None, None, f"{ALLOWED}:4: a malformed entry: it repeats an earlier entry", None),
+    ("a notices entry in the old format", {"notes.md": f"Copyright {address('author', 'third-party.test')}\n", NOTICES: f"# generated\n{address('author', 'third-party.test')}\n"}, None, None, (f"{NOTICES}:2: a malformed entry", "notes.md:1: an e-mail address"), None),
+    ("an entry that holds the git user's address", {ALLOWED: ALLOWED_LIST + f"email {address('tester', 'example.com')}\n"}, None, None, f"{ALLOWED}:4: the git user's e-mail address", None),
+    # The broad path rules: every prefix that ends before a character that is not a letter, a mark or a digit.
+    ("a profile path followed by a quote", {"notes.md": f"\"C:\\Users\\{USER}\"\n"}, None, USER, "notes.md:1: a user-profile path of this computer", OTHER_USER),
+    ("a profile path followed by a dot and a word", {"notes.md": f"C:\\Users\\{USER}.old\\x\n"}, None, USER, "notes.md:1: a user-profile path of this computer", OTHER_USER),
+    ("a drive folder followed by a dot and a word", {"notes.md": f"build in C:\\{MACHINE_FOLDER}.old\\x\n"}, None, MACHINE_FOLDER, "notes.md:1: a drive path of this computer", None),
+    ("a full-width profile path", {"notes.md": f"\uff23\uff1a\uff3cUsers\uff3c{USER}\uff3cx\n"}, None, USER, "notes.md:1: a user-profile path of this computer", OTHER_USER),
+    ("the Windows user name inside a word", {"notes.md": f"see x{USER}x\n"}, None, USER, "notes.md:1: the Windows user name", None),
+    ("an extra pattern in full-width letters", {"notes.md": "".join(chr(ord(c) + 0xFEE0) if "!" <= c <= "~" else c for c in "review-owner-zz") + "\n"}, "review-owner-zz\n", None, "notes.md:1: extra pattern 1 of the patterns file", None),
     # The opaque list: a stale hash, a missing entry, a text file, a file that is not there, a bad line.
     ("an opaque file with a stale hash", {"logo.png": PNG, f"{LISTS}/opaque-files.txt": opaque_line(PNG + b"old", "logo.png")}, None, None, "logo.png: its entry on line 1 of tools/public_snapshot/opaque-files.txt has another SHA-256 (stale)", None),
     ("an opaque file without an entry", {"logo.png": PNG}, None, None, "logo.png: cannot be scanned: a NUL byte", None),
-    ("a text file listed as opaque", {"notes.md": "text\n", f"{LISTS}/opaque-files.txt": opaque_line(b"text\n", "notes.md")}, None, None, "notes.md: is text, but line 1 of tools/public_snapshot/opaque-files.txt lists it as opaque", None),
+    ("a plain-text file listed as opaque", {"notes.md": "text\n", f"{LISTS}/opaque-files.txt": opaque_line(b"text\n", "notes.md")}, None, None, "notes.md: is plain text, but line 1 of tools/public_snapshot/opaque-files.txt lists it; remove the entry", None),
     ("an opaque entry for a file the commit does not hold", {f"{LISTS}/opaque-files.txt": opaque_line(PNG, "gone.png")}, None, None, "tools/public_snapshot/opaque-files.txt:1: names a file that this commit does not hold", None),
     ("a malformed opaque line", {f"{LISTS}/opaque-files.txt": "not a hash  logo.png\n"}, None, None, "tools/public_snapshot/opaque-files.txt:1: a malformed or repeated line", None),
 ]
@@ -210,21 +255,27 @@ with tempfile.TemporaryDirectory(prefix="akm-snapshot-test-") as folder:
         out = root / "public"
         result = run(repo, "--out", str(out), "--author", PUBLIC_AUTHOR, env=environment)
         printed = result.stdout + result.stderr
-        found = [(f"refuses {rule}", result.returncode == 1 and expected in printed and "REFUSED" in printed, printed.strip()[-500:])]
+        wanted = expected if isinstance(expected, tuple) else (expected,)
+        found = [(f"refuses {rule}", result.returncode == 1 and all(text in printed for text in wanted) and "REFUSED" in printed, printed.strip()[-700:])]
         if hidden:
             found.append((f"does not print the matched text ({rule})", hidden.lower() not in printed.lower(), "the output holds the private text"))
+        found.append((f"never prints a fixture address ({rule})", "private-mail" not in printed and "private.invalid" not in printed, "the output holds a fixture address"))
         found.append((f"writes nothing and leaves the source unchanged ({rule})", not out.exists() and not list(root.glob(".public.incomplete-*")) and fingerprint(repo) == before, ""))
         return found
 
     # Lines and files that must pass.
     CLEAN_CASES = [
-        ("an address that public-addresses.txt names, in any case", {"notes.md": f"mail {address('SOMEONE', 'EXAMPLE.COM')}\n"}, None),
-        ("an address that notice-addresses.txt names", {"notes.md": f"Copyright {address('author', 'third-party.test')}\n", f"{LISTS}/notice-addresses.txt": f"# generated\n{address('author', 'third-party.test')}\n"}, None),
-        ("an e-mail address under its marker", {"notes.md": f"{PRIVATE}  # public-snapshot: allow email (a synthetic address)\n"}, None),
-        ("a profile path under its marker", {"notes.md": f"C:\\Users\\{USER}\\x  <!-- public-snapshot: allow profile-path -->\n"}, OTHER_USER),
-        ("a drive path under its marker", {"notes.md": f"C:\\{MACHINE_FOLDER}\\x  # public-snapshot: allow drive-path, email\n"}, None),
+        ("an address that allowed-texts.txt names exactly", {"notes.md": f"mail <{address('someone', 'example.com')}>.\n"}, None),
+        ("an address that notice-addresses.txt names", {"notes.md": f"Copyright {address('author', 'third-party.test')}\n", NOTICES: f"# generated\nemail {address('author', 'third-party.test')}\n"}, None),
+        ("an allowed address in a path", {f"icons/{address('128x128', '2x.png')}": PNG, f"{LISTS}/opaque-files.txt": opaque_line(PNG, f"icons/{address('128x128', '2x.png')}")}, None),
         ("an opaque file whose path and SHA-256 are listed", {"logo.png": PNG, f"{LISTS}/opaque-files.txt": f"# checked by hand\n{opaque_line(PNG, 'logo.png')}"}, None),
-        ("a UTF-8 file with a byte order mark", {"notes.md": "\ufeffplain text\n"}, None),
+        ("a listed UTF-8 file that is not plain text and holds no hit", {"notes.txt": b"one\x08two\n", f"{LISTS}/opaque-files.txt": opaque_line(b"one\x08two\n", "notes.txt")}, None),
+        ("CR LF line ends", {"notes.txt": "one\r\ntwo\r\n"}, None),
+        ("tabs, non-ASCII letters and combining marks in NFC", {"notes.txt": "a\tcafé q̇ उदाहरण λόγος\n"}, None),
+        ("a scoped npm package address in a lock file", {"package-lock.json": '      "resolved": "https://registry.npmjs.org/' + "@" + 'scope/name/-/name-1.2.3.tgz",\n'}, None),
+        ("a dot only before the at sign", {"notes.md": "pin x.y@latest, then a.b@c\n"}, None),
+        ("a profile folder named by dots", {"notes.md": "cd /home/../etc and C:\\Users\\..\\x\n"}, None),
+        ("an at sign with nothing before it or no dot after it", {"notes.md": "@decorator, @scope/name, user@localhost and (@) are not addresses\n"}, None),
     ]
 
     def clean(index, name, files, environment):
@@ -265,10 +316,10 @@ with tempfile.TemporaryDirectory(prefix="akm-snapshot-test-") as folder:
     root = base / "long-line"
     root.mkdir()
     MiB = 1024 * 1024
-    line = " ".join(("\\" * MiB, "/" * MiB, "a@a." * (MiB // 4), "a@" + "a1." * (MiB // 3) + "1", "/users" * (MiB // 6), "c:\\" * (MiB // 3)))
+    line = " ".join(("\\" * MiB, "/" * MiB, "a." * (MiB // 4) + "a@" * (MiB // 4) + "a", "@a" * (MiB // 4), "a/@" * (MiB // 3), "/users" * (MiB // 6), "c:\\:" * (MiB // 4)))
     repo = make_source(root, {**CLEAN, "long.txt": line + "\n"})
     result = run(repo, "--scan-only", timeout=120)
-    case("scans a 6 MiB line of slashes, dots and at signs within 120 seconds", result.returncode == 0 and "CLEAN" in result.stdout, (result.stdout + result.stderr).strip()[-300:])
+    case("scans a 6.5 MiB line of slashes, dots and at signs within 120 seconds", result.returncode == 0 and "CLEAN" in result.stdout, (result.stdout + result.stderr).strip()[-300:])
 
     root = base / "tracked-patterns"
     root.mkdir()
@@ -288,7 +339,17 @@ with tempfile.TemporaryDirectory(prefix="akm-snapshot-test-") as folder:
     case("refuses an output folder inside the source repository", result.returncode != 0 and not (repo / "inside").exists(), result.stdout + result.stderr)
 
     result = subprocess.run([sys.executable, "-I", str(TOOL), "--help"], capture_output=True, text=True, encoding="utf-8")
-    case("the help states what the allow marker silences", "It never silences" in result.stdout and "identity or extra" in result.stdout and "cannot be scanned" in result.stdout, result.stdout[-300:])
+    case("the help states the plain-text rule and the one exception list", "PLAIN TEXT" in result.stdout and "allowed-texts.txt" in result.stdout and "no line marker" in result.stdout, result.stdout[-300:])
+
+    # The at-sign decision: the at signs are the characters whose compatibility form holds U+0040.
+    spec = importlib.util.spec_from_file_location("snapshot_rules", TOOL)
+    rules = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = rules
+    spec.loader.exec_module(rules)
+    at_signs = [code for code in range(sys.maxunicode + 1) if not 0xD800 <= code <= 0xDFFF and rules.is_at_sign(chr(code))]
+    case("the e-mail rule's at signs are U+0040, U+FE6B and U+FF20", at_signs == [0x40, 0xFE6B, 0xFF20], str([hex(code) for code in at_signs]))
+    dots = {code for code in range(sys.maxunicode + 1) if not 0xD800 <= code <= 0xDFFF and rules.is_dot(chr(code))}
+    case("the e-mail rule's dots include the full stop and the label separators of UTS 46", {0x2E, 0x3002, 0xFF0E, 0xFF61} <= dots and 0x40 not in dots, str(sorted(dots))[:200])
 
     root = base / "snapshot"
     root.mkdir()
@@ -330,10 +391,6 @@ with tempfile.TemporaryDirectory(prefix="akm-snapshot-test-") as folder:
     root.mkdir()
     repo = make_source(root, CLEAN)
     (root / "sentinel.txt").write_text("sentinel\n", encoding="utf-8")
-    source = git_child.existing(repo)
-    commit = source.run("rev-parse", "HEAD").decode().strip()
-    tree = source.run("rev-parse", "HEAD^{tree}").decode().strip()
-    entries, hits, _unscannable = tool.scan(source, commit, None)
     original = git_child.Repository.run
 
     def failing(self, *arguments, **options):
@@ -341,14 +398,18 @@ with tempfile.TemporaryDirectory(prefix="akm-snapshot-test-") as folder:
             raise git_child.GitError("injected failure in write-tree")
         return original(self, *arguments, **options)
 
-    git_child.Repository.run = failing
-    try:
-        tool.export(source, commit, tree, entries, root / "public", PUBLIC_AUTHOR)
-        raised = False
-    except git_child.GitError:
-        raised = True
-    finally:
-        git_child.Repository.run = original
+    with git_child.source_copy(repo) as source:
+        commit = source.run("rev-parse", "HEAD").decode().strip()
+        tree = source.run("rev-parse", "HEAD^{tree}").decode().strip()
+        entries, hits, _unscannable = tool.scan(source, commit, None, repo)
+        git_child.Repository.run = failing
+        try:
+            tool.export(source, commit, tree, entries, root / "public", PUBLIC_AUTHOR)
+            raised = False
+        except git_child.GitError:
+            raised = True
+        finally:
+            git_child.Repository.run = original
     case("a failed export raises, creates no output folder and removes its own unfinished folder", raised and not hits and not (root / "public").exists() and not list(root.glob(".public.incomplete-*")))
     case("a failed export keeps the sentinel beside it", (root / "sentinel.txt").read_text(encoding="utf-8") == "sentinel\n")
 

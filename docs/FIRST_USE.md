@@ -9,7 +9,7 @@ This page is for the owner, who decided on 2026-11-07 to use AKM for their own k
 3. **Choose the vault folder.** The CLI default is `%APPDATA%\akm\vault.kdbx`. That is the Roaming profile, and a domain profile can sync it to a server (SEC-02 in [FINDINGS.md](FINDINGS.md)). A folder under `%LOCALAPPDATA%` or a folder that you choose avoids that. In the desktop app, choose it with Browse on the first screen. On the command line, use `--vault` or `AKM_VAULT`. Each save writes the vault and its backups as files that only your Windows account can use. On a drive that cannot keep Windows permissions (FAT, exFAT, some network shares), AKM saves and warns that the files are not private. An administrator can still read them.
 4. **Use a long, unique passphrase.** AKM has no reset or recovery.
 5. **Prove the escape route.** Create the vault and add one low-value key. Then open the same file in KeePassXC 2.8 or later and find the key. If AKM fails later, KeePassXC still reads your vault.
-6. **Keep a copy outside AKM.** AKM keeps five dated backups next to the vault. Also copy the vault file to a second place by hand after you add keys.
+6. **Keep a copy outside AKM.** AKM keeps dated backups next to the vault: the newest five that it wrote, and every backup that it cannot prove it wrote. Also copy the vault file to a second place by hand after you add keys.
 
 ## Daily use
 

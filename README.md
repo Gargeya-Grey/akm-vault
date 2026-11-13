@@ -57,15 +57,21 @@ Open a new terminal afterwards. The same options choose a fully downloaded OneDr
 Dropbox or Syncthing folder.
 
 - Readers open independent snapshots. The GUI and CLI can be open together.
-- A sidecar lock serializes cooperating AKM writers only during a write.
+- A sidecar lock serializes cooperating AKM writers only during a write. Its
+  file, `<vault file name>.lock`, is empty and stays beside the vault.
 - A mutation is committed in memory only after the encrypted write succeeds.
 - A candidate file is decrypted and compared with the intended database before
   replacing the original. This catches integration/writer failures; using the
   same library for that check is not independent cryptographic validation.
 - Fingerprints are checked before writing and again just before replacement.
   A stale snapshot must be reloaded, not silently merged.
-- The original is retained in encrypted backups. Five dated backups and a
-  `.bak` convenience copy are kept beside the vault.
+- Each save keeps the previous version beside the vault, as a dated encrypted
+  backup and as a `.bak` convenience copy. A list inside the vault names the
+  dated backups that AKM wrote. AKM keeps the newest five of them, and deletes an
+  older one only while the file still holds the bytes that the list records. It
+  never deletes a backup that the list does not name: one from an AKM version
+  before the list, one that a crash left during a save, or one from before the
+  vault was renamed. Those stay until you remove them.
 
 **This is not a distributed lock or an atomic compare-and-swap with your sync
 provider.** KeePassXC and cloud clients do not honor AKM's lock. An external writer
@@ -125,7 +131,10 @@ akm upgrade --yes                   # explicit older-vault format upgrade
 akm audit --verify
 ```
 
-A key is selected by its entry id or its exact title (any letter case). A partial word,
+A key is selected by its entry id or its exact title, in any letter case. One rule
+compares letters: each letter becomes the lowercase of its uppercase, so `Σ`, `σ` and
+`ς` match, but `ß` does not match `ss`, and an accent typed as a separate mark does not
+match the same accented letter typed as one character. A partial word,
 or a word found in a note or URL, selects nothing: `get`, `rm`, `rotate`, `history`,
 `restore` and `purge` refuse it and list candidates by id, title, project and
 environment, never a secret, note or URL. Two keys with the same title are refused

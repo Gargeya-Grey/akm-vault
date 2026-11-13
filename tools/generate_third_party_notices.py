@@ -8,27 +8,46 @@ A crate is shipped when the workspace members reach it through normal dependenci
 dependencies and dev dependencies are left out, and so are the workspace crates themselves.
 npm: desktop/package-lock.json, every package that is not marked `dev`.
 
-Licence texts: each shipped package's own licence files at any depth of its folder (finding
-U4-R1-06): a file whose name starts LICENSE, LICENCE, COPYING, NOTICE, UNLICENSE, COPYRIGHT, OFL,
-PATENTS or THIRD-PARTY / THIRD_PARTY / THIRDPARTY, every file in a folder named LICENSES, LICENCES or
-THIRD-PARTY (and their spellings), and the manifest's `license-file`. Source code files are not
-texts (NOT_A_TEXT). The folder is the unpacked crate in the Cargo registry, or the package in
-desktop/node_modules without the packages nested in its own node_modules, which are listed by
-themselves. So the crates must be fetched (any cargo build does it) and `npm ci` must have run in
-desktop. The tool cannot tell which files a build compiles, so it takes every one: a text can cover
-code that AKM does not ship (for example a Linux-only backend or test images). Identical texts are
-printed once, with the list of packages and paths that carry them. A package that ships no licence
-file gets the standard text of each licence in its expression, from tools/licence_texts/<SPDX id>.txt
-(SPDX licence list, version in that folder's README), and the file says so for that package.
+Files (findings U4-R1-06, U4-R2-04): every file of a shipped package is one of three kinds.
 
-The text is the file's text with line endings made LF, trailing spaces on each line removed, and
-control characters other than the tab removed (tools/check_docs.py refuses them in Markdown). The
-file says this once.
+- a file of another package: a file below a nested node_modules, which the lock file lists by itself;
+- notice material: a file whose name starts LICENSE, LICENCE, COPYING, NOTICE, UNLICENSE, COPYRIGHT,
+  OFL, PATENT, THIRD-PARTY (and its spellings), AUTHORS, CONTRIBUTORS, CREDITS or README, a file
+  named REUSE.toml, a file whose name holds `.spdx` (an SPDX document, also in JSON), and every file
+  in a folder named LICENSES, LICENCES or THIRD-PARTY (and its spellings), at any depth and whatever
+  its extension. And every file that CODE_OR_DATA does not name: a README, a change log or any other
+  document is notice material too;
+- code or data: a file that CODE_OR_DATA names by its extension, its name or a folder above it,
+  each with the reason it holds no notice (source code, a build or tool setting, data that a program
+  or a test reads, an image or a font).
 
-Address list: tools/public_snapshot/notice-addresses.txt holds every string of the generated file
-that the e-mail rule of tools/make_public_snapshot.py matches, one per line, without repeats in any
-case. The snapshot scan accepts exactly these (finding U4-R1-04). --check fails when the list is not
-the list of the file that the lock files and the packages produce, so a hand-added address fails.
+Notice material is included, once for each distinct text, with the list of the packages and paths
+that carry it. It must be UTF-8 text without a NUL byte. A file that is neither code or data nor such
+text stops the tool with its name, so a person reads it and decides its kind. The folder is the
+unpacked crate in the Cargo registry, or the package in desktop/node_modules. So the crates must be
+fetched (any cargo build does it) and `npm ci` must have run in desktop. The tool cannot tell which
+files a build compiles, so it takes every one: a text can cover code that AKM does not ship (for
+example a Linux-only backend or test images). A package that ships no licence text (a file whose
+name starts LICENSE, LICENCE, COPYING, NOTICE, UNLICENSE, COPYRIGHT, OFL, PATENT or THIRD-PARTY,
+other than an SPDX document, or a file in a licence folder) also gets the standard text of each
+licence in its expression, from tools/licence_texts/<SPDX id>.txt (SPDX licence list, version in that
+folder's README), and the file says so for that package.
+
+Metadata: the file also lists the authors that each manifest declares (Cargo `authors`; package.json
+`author`, `contributors` and `maintainers`) and the PackageCopyrightText, FileCopyrightText,
+PackageOriginator and PackageSupplier fields of each SPDX tag-value document, one line each.
+
+The text is the file's text as plain text (PLAIN TEXT in tools/make_public_snapshot.py): line ends
+made LF (a lone CR too), a leading byte order mark and every other control, format, private-use or
+unassigned character removed except the tab, every other space made U+0020, a line or paragraph
+separator made LF, the text put in Unicode normalization form NFC, and trailing spaces on each line
+removed. The file says this once.
+
+Address list: tools/public_snapshot/notice-addresses.txt holds one entry `email <text>` for each
+e-mail hit of the generated file, once, sorted: the hits of the e-mail rule of
+tools/make_public_snapshot.py, read the way the scan reads them. The snapshot scan accepts exactly
+these texts (THE EXCEPTIONS in that tool; findings U4-R1-04, U4-R2-02). --check fails when the list
+is not the list of the file that the lock files and the packages produce, so a hand-added entry fails.
 """
 
 import argparse
@@ -38,10 +57,11 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from make_public_snapshot import EMAIL  # noqa: E402  (one e-mail rule for the scan and this list)
+from make_public_snapshot import email_hits, views  # noqa: E402  (one e-mail rule for the scan and this list)
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "THIRD_PARTY_NOTICES.md"
@@ -50,10 +70,38 @@ STANDARD = Path(__file__).resolve().parent / "licence_texts"
 NODE_MODULES = ROOT / "desktop" / "node_modules"
 TARGET = "x86_64-pc-windows-msvc"
 MPL = re.compile(r"\bMPL-2\.0\b")
-LICENCE_FILE = re.compile(r"^(licen[cs]e|copying|notice|unlicense|copyright|ofl|patents?|third[-_]?party)", re.IGNORECASE)
+NOTICE_NAME = re.compile(r"^(licen[cs]e|copying|notice|unlicense|copyright|ofl|patent|third[-_]?party|authors|contributors|credits|readme|reuse\.toml$)", re.IGNORECASE)
+LICENCE_TEXT = re.compile(r"^(licen[cs]e|copying|notice|unlicense|copyright|ofl|patent|third[-_]?party)", re.IGNORECASE)
 LICENCE_FOLDER = re.compile(r"^(licen[cs]es|third[-_]?party(?:[-_]?(?:notices|licen[cs]es))?)$", re.IGNORECASE)
-NOT_A_TEXT = (".spdx", ".json", ".rs", ".js", ".mjs", ".cjs", ".ts", ".map", ".toml", ".html", ".css", ".py", ".c", ".h")
-CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+# Code or data: the kinds of file that hold no notice, each with its reason. A copyright line in source
+# code, a setting or data is a file header, which this file leaves out (its Limits say so). Every file
+# that this table does not name is notice material.
+SOURCE = "source code or a script"
+SETTING = "a build, package, version-control or tool setting"
+OLD_COPY = "an old copy of a source file or a manifest"
+DATA = "data that a program or a test reads, or program output that a test compares"
+MEDIA = "an image or a font, whose licence is in the package's licence files"
+CODE_OR_DATA = {
+    "extension": {
+        **dict.fromkeys(("rs", "js", "mjs", "cjs", "ts", "mts", "cts", "jsx", "tsx", "c", "h", "py", "sh", "bat", "ps1", "kt", "kts", "swift", "java", "gradle", "pro", "natvis", "html", "css", "scss", "in", "nix"), SOURCE),
+        **dict.fromkeys(("toml", "json", "lock", "yml", "yaml", "orig", "std", "xml", "entitlements"), SETTING),
+        "old": OLD_COPY,
+        **dict.fromkeys(("stderr", "beta", "x86-64", "mca", "blb", "bin", "data", "dat", "fst", "gz", "zz", "brotli", "raw", "ndjson", "snap", "map", "proptest-regressions", "wasm", "lib", "dll"), DATA),
+        **dict.fromkeys(("png", "jpeg", "jpg", "gif", "ico", "icns", "bmp", "svg", "tiff", "woff", "woff2", "ttf", "otf", "eot"), MEDIA),
+    },
+    "name": {
+        **dict.fromkeys((".cargo-ok", ".gitignore", ".gitattributes", ".editorconfig", ".editorconifg", ".envrc", ".ignore", ".nojekyll", ".npmignore", "codeowners", ".license_template"), SETTING),
+        **dict.fromkeys(("pre-commit", "pre-push", "pre-rebase", "makefile"), SOURCE),
+    },
+    "folder": {
+        **dict.fromkeys(("tests", "test", "testdata", "test-data", "benches", "bench", "fuzz", "data"), DATA),
+        ".github": SETTING,
+    },
+}
+# Plain text keeps the tab and the printable characters. These characters become a space or a line end;
+# every other character that is not printable is removed.
+SPACE_LIKE = {"Zs": " ", "Zl": "\n", "Zp": "\n"}
+SPDX_FIELDS = ("PackageCopyrightText", "FileCopyrightText", "PackageOriginator", "PackageSupplier")
 SPDX_ID = re.compile(r"[A-Za-z0-9.+-]+")
 EXPRESSION_WORDS = {"AND", "OR", "WITH"}
 
@@ -83,11 +131,14 @@ def shipped_crates():
     for identifier in seen - members:
         package = packages[identifier]
         folder = Path(package["manifest_path"]).parent
-        files = licence_files(folder)
+        files = notice_files(folder)
+        declared = set()
         if package.get("license_file"):
             extra = folder / package["license_file"]
-            if extra.is_file() and extra.resolve() not in {path.resolve() for path in files}:
-                files.append(extra)
+            if extra.is_file():
+                declared.add(extra.resolve())
+                if extra.resolve() not in {path.resolve() for path in files}:
+                    files.append(extra)
         crates.append(
             {
                 "name": package["name"],
@@ -96,6 +147,7 @@ def shipped_crates():
                 "repository": package["repository"] or "",
                 "authors": package.get("authors") or [],
                 "files": files,
+                "declared": declared,
                 "base": folder,
             }
         )
@@ -113,40 +165,111 @@ def shipped_npm():
         installed = folder / "package.json"
         if not installed.is_file():
             raise SystemExit(f"{installed} is missing. Run `npm ci` in desktop first, then run this tool again.")
-        version = json.loads(installed.read_text(encoding="utf-8")).get("version")
-        if version != entry["version"]:
-            raise SystemExit(f"desktop/{key} is {version}, the lock file says {entry['version']}. Run `npm ci` in desktop.")
-        author = json.loads(installed.read_text(encoding="utf-8")).get("author")
+        manifest = json.loads(installed.read_text(encoding="utf-8"))
+        if manifest.get("version") != entry["version"]:
+            raise SystemExit(f"desktop/{key} is {manifest.get('version')}, the lock file says {entry['version']}. Run `npm ci` in desktop.")
         packages.append(
             {
                 "name": name,
                 "version": entry["version"],
                 "license": entry.get("license") or "(none in the lock file)",
-                "authors": [author if isinstance(author, str) else (author or {}).get("name", "")] if author else [],
-                "files": licence_files(folder),
+                "authors": people(manifest),
+                "files": notice_files(folder),
+                "declared": set(),
                 "base": folder,
             }
         )
     return sorted(packages, key=lambda package: (package["name"], package["version"]))
 
 
-def licence_files(folder):
-    """Every licence text of the package in `folder`, at any depth, sorted by path. A nested node_modules
-    holds other packages, which the lock file lists by themselves."""
+def people(manifest):
+    """The author, contributors and maintainers of a package.json, each as npm writes a person."""
     found = []
-    for path in folder.rglob("*"):
-        relative = path.relative_to(folder)
-        if "node_modules" in relative.parts or not path.is_file() or path.name.lower().endswith(NOT_A_TEXT):
-            continue
-        if LICENCE_FILE.match(path.name) or any(LICENCE_FOLDER.match(part) for part in relative.parts[:-1]):
-            found.append(path)
+    for field in ("author", "contributors", "maintainers"):
+        value = manifest.get(field)
+        for person in value if isinstance(value, list) else [value] if value else []:
+            if isinstance(person, str):
+                found.append(person)
+            elif isinstance(person, dict) and person.get("name"):
+                found.append(person["name"] + "".join(f" {marks[0]}{person[key]}{marks[1]}" for key, marks in (("email", "<>"), ("url", "()")) if person.get(key)))
+    return found
+
+
+def kind(relative):
+    """The kind of the file at `relative` inside its package, with the reason: "another package",
+    "notice" or "code or data" (the module text says how)."""
+    parts = [part.lower() for part in relative.parts]
+    name, folders = parts[-1], parts[:-1]
+    if "node_modules" in folders:
+        return "another package", "a nested node_modules holds packages that the lock file lists by themselves"
+    if NOTICE_NAME.match(name) or ".spdx" in name or any(LICENCE_FOLDER.match(folder) for folder in folders):
+        return "notice", "its name or a folder above it says notice"
+    extension = name.rsplit(".", 1)[1] if "." in name.lstrip(".") else None
+    if extension in CODE_OR_DATA["extension"]:
+        return "code or data", CODE_OR_DATA["extension"][extension]
+    if name in CODE_OR_DATA["name"]:
+        return "code or data", CODE_OR_DATA["name"][name]
+    for folder in folders:
+        if folder in CODE_OR_DATA["folder"]:
+            return "code or data", CODE_OR_DATA["folder"][folder]
+    return "notice", "CODE_OR_DATA does not name it"
+
+
+def notice_files(folder):
+    """Every notice file of the package in `folder`, at any depth, sorted by path."""
+    found = [path for path in folder.rglob("*") if path.is_file() and kind(path.relative_to(folder))[0] == "notice"]
     return sorted(found, key=lambda path: path.relative_to(folder).as_posix().lower())
 
 
-def clean(raw):
-    text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
-    text = CONTROL.sub("", text)
+def is_licence_text(package, path):
+    """A licence text is the manifest's license-file, or a notice file whose name or folder says licence,
+    other than an SPDX document."""
+    if path.resolve() in package["declared"]:
+        return True
+    parts = [part.lower() for part in Path(os.path.relpath(path, package["base"])).parts]
+    return (LICENCE_TEXT.match(parts[-1]) is not None and ".spdx" not in parts[-1]) or any(LICENCE_FOLDER.match(part) for part in parts[:-1])
+
+
+def plain_text(raw, path):
+    """The text of a notice file as plain text (the module text says how), or stop with the file's name."""
+    if b"\0" in raw:
+        raise SystemExit(f"{path} is notice material, because CODE_OR_DATA does not name it, but it holds a NUL byte. Read it, then add its kind to CODE_OR_DATA with the reason.")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise SystemExit(f"{path} is notice material, because CODE_OR_DATA does not name it, but it is not UTF-8 text. Read it, then add its kind to CODE_OR_DATA with the reason.") from None
+    lines = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if not line.replace("\t", " ").isprintable():
+            line = "".join(c if c == "\t" or c.isprintable() else SPACE_LIKE.get(unicodedata.category(c), "") for c in line)
+        lines.append(line)
+    text = unicodedata.normalize("NFC", "\n".join(lines))
     return "\n".join(line.rstrip() for line in text.split("\n")).strip("\n") + "\n"
+
+
+def one_line(value):
+    return " ".join(plain_text(value.encode("utf-8"), "a manifest value").split())
+
+
+def spdx_fields(text):
+    """(tag, value) of the copyright, originator and supplier fields of an SPDX tag-value document."""
+    found = []
+    lines = text.split("\n")
+    index = 0
+    while index < len(lines):
+        tag, colon, value = lines[index].partition(":")
+        index += 1
+        if not colon or tag.strip() not in SPDX_FIELDS:
+            continue
+        value = value.strip()
+        if value.startswith("<text>"):
+            block = [value[len("<text>"):]]
+            while "</text>" not in block[-1] and index < len(lines):
+                block.append(lines[index])
+                index += 1
+            value = "\n".join(block).split("</text>", 1)[0]
+        found.append((tag.strip(), " ".join(value.split())))
+    return found
 
 
 def licence_ids(expression):
@@ -157,7 +280,7 @@ def standard_text(identifier):
     path = STANDARD / f"{identifier}.txt"
     if not path.is_file():
         raise SystemExit(f"{path} is missing: a shipped package without a licence file uses {identifier}. Add the SPDX text.")
-    return clean(path.read_bytes())
+    return plain_text(path.read_bytes(), path)
 
 
 def collect_texts(packages):
@@ -165,20 +288,14 @@ def collect_texts(packages):
     texts = {}
     for kind, package in packages:
         label = f"{package['name']} {package['version']} ({kind})"
-        if package["files"]:
-            for path in package["files"]:
-                raw = path.read_bytes()
-                if b"\0" in raw:
-                    raise SystemExit(f"{path} looks like a licence file but holds a NUL byte. Read it, then extend NOT_A_TEXT or this rule.")
-                text = clean(raw)
-                shown = Path(os.path.relpath(path, package["base"])).as_posix()
-                texts.setdefault(text, []).append(f"{label}: `{shown}`")
-        else:
-            authors = ", ".join(author for author in package["authors"] if author) or "none declared"
+        for path in package["files"]:
+            shown = Path(os.path.relpath(path, package["base"])).as_posix()
+            texts.setdefault(plain_text(path.read_bytes(), path), []).append(f"{label}: `{shown}`")
+        if not any(is_licence_text(package, path) for path in package["files"]):
+            authors = ", ".join(one_line(author) for author in package["authors"] if author) or "none declared"
             for identifier in licence_ids(package["license"]):
-                text = standard_text(identifier)
-                texts.setdefault(text, []).append(
-                    f"{label}: ships no licence file; the standard {identifier} text applies. Authors in its manifest: {authors}"
+                texts.setdefault(standard_text(identifier), []).append(
+                    f"{label}: ships no licence text; the standard {identifier} text applies. Authors in its manifest: {authors}"
                 )
     return texts
 
@@ -203,19 +320,24 @@ def render(crates, npm):
         "Do not edit it by hand. `python tools/generate_third_party_notices.py --check` fails when it is out of date.\n"
     )
     out.append(
-        "**What this file holds.** Each shipped dependency with its version and its licence expression, "
-        "and at the end the text of every licence file that those packages ship, at any depth of the "
-        "package and with its path there, with the copyright lines that the files hold. A file below a "
-        "package's root can cover code that AKM does not compile (a backend for another system, test "
-        "data); the tool cannot tell, so it includes every one. A text that several packages ship is "
-        "printed once, with the list of those packages. A package that ships no licence file is listed "
-        "with the standard text of its licence and the authors that its manifest names.\n"
+        "**What this file holds.** Each shipped dependency with its version and its licence expression; "
+        "the authors that the manifests declare and the copyright fields of the SPDX documents that the "
+        "packages ship; and at the end the text of every file of those packages that is not code or data "
+        "(`CODE_OR_DATA` in the tool names those kinds, each with its reason): licence, notice, copying, "
+        "copyright, patent, SPDX, authors and credits files, READMEs, change logs and every other document, "
+        "at any depth of the package and with its path there. A file below a package's root can cover code "
+        "that AKM does not compile (a backend for another system, test data); the tool cannot tell, so it "
+        "includes every one. A text that several packages ship is printed once, with the list of those "
+        "packages. A package that ships no licence text is listed with the standard text of its licence and "
+        "the authors that its manifest names.\n"
     )
     out.append(
-        "**Limits.** The texts come from the packages as published. Line endings are LF, trailing spaces "
-        "are removed, and control characters other than the tab are removed (for example a form feed "
-        "between licence sections). A copyright line that a package keeps only in its source files, and "
-        "not in a licence file, is not here. No lawyer has reviewed this file, and it is not legal advice.\n"
+        "**Limits.** The texts come from the packages as published, as plain text: line endings are LF, "
+        "trailing spaces are removed, control, format, private-use and unassigned characters other than the "
+        "tab are removed (for example a form feed between licence sections or a zero-width joiner), every "
+        "other space is U+0020, and the text is in Unicode normalization form NFC. A copyright line that a "
+        "package keeps only in its source code, its settings or its data files is not here. No lawyer has "
+        "reviewed this file, and it is not legal advice.\n"
     )
     out.append(f"## Rust crates ({len(crates)})\n")
     out.append(
@@ -252,6 +374,24 @@ def render(crates, npm):
     for package in npm:
         out.append(f"| {cell(package['name'])} | {package['version']} | {cell(package['license'])} |")
     out.append("")
+    out.append("## Copyright and author metadata\n")
+    out.append(
+        "The authors that each package's manifest declares (Cargo `authors`; package.json `author`, "
+        "`contributors` and `maintainers`), and the PackageCopyrightText, FileCopyrightText, "
+        "PackageOriginator and PackageSupplier fields of each SPDX tag-value document that a package ships, "
+        "one line each. A package that declares none is not listed.\n"
+    )
+    for kind_name, package in [("crate", crate) for crate in crates] + [("npm", package) for package in npm]:
+        label = f"{package['name']} {package['version']} ({kind_name})"
+        for author in package["authors"]:
+            if author:
+                out.append(f"- {label}: author in the manifest: {one_line(author)}")
+        for path in package["files"]:
+            if ".spdx" in path.name.lower():
+                shown = Path(os.path.relpath(path, package["base"])).as_posix()
+                for tag, value in spdx_fields(plain_text(path.read_bytes(), path)):
+                    out.append(f"- {label}: `{shown}` {tag}: {value}")
+    out.append("")
     texts = collect_texts([("crate", crate) for crate in crates] + [("npm", package) for package in npm])
     ordered = sorted(texts.items(), key=lambda item: (sorted(item[1])[0], hashlib.sha256(item[0].encode()).hexdigest()))
     out.append(f"## Licence texts ({len(ordered)} distinct texts)\n")
@@ -267,15 +407,13 @@ def render(crates, npm):
 
 
 def address_list(text):
-    """The address list of a generated notices text: each e-mail-shaped string once, in any case."""
-    found = {}
-    for match in EMAIL.finditer(text):
-        found.setdefault(match.group().casefold(), match.group())
+    """The entry list of a generated notices text: `email <text>` for each e-mail hit, once."""
+    found = sorted({hit for line in text.split("\n") for hit in email_hits(views(line)[0])})
     lines = [
         "# Generated by tools/generate_third_party_notices.py from THIRD_PARTY_NOTICES.md. Do not edit it.",
-        "# The e-mail-shaped strings of the third-party licence texts and manifests, which the public",
+        "# One entry for each e-mail hit of the third-party licence texts and manifests, which the public",
         "# snapshot scan (tools/make_public_snapshot.py) accepts. --check fails when this list is not current.",
-        *(found[key] for key in sorted(found)),
+        *(f"email {hit}" for hit in found),
     ]
     return "\n".join(lines) + "\n"
 

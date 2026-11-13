@@ -32,6 +32,6 @@ Preconditions:
 
 ## Gotchas
 
-- `--expires 2027-03-15` means 23:59:59 UTC on that day. Compare with that instant, not midnight.
+- `--expires 2027-03-15` means 23:59:59 UTC on that day. Compare with that instant, not midnight. A full time keeps whole seconds: `2027-03-15T12:00:00.5Z` is refused, and `.000` is accepted.
 - `init` refuses a password shorter than 12 characters; the helper's fake password is long enough.
 - A run without `AKM_JOURNAL_ROOT` would write the real profile folder. Use the helper, never the bare binary.
