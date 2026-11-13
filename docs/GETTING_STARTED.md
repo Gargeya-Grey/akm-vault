@@ -33,7 +33,7 @@ The first time you open AKM, it shows **Start a vault**.
 1. Select **Add key**.
 2. Type a **Title**, and paste the secret value into the secret field. A title such as "Test key" is enough.
 3. To use the key in a project later, fill in **Project**, **Environment** and **Environment variable**. For example: `my-app`, `dev` and `OPENAI_API_KEY`.
-4. To get reminders, fill in **Expires** or **Rotate every**.
+4. To get reminders, fill in **Expires** or **Rotate every**. An expiry date means 23:59:59 UTC on that day.
 5. Select **Add key** at the bottom of the form.
 
 Do you already have a `.env` file? Open **Use keys** and select **Import .env…**. AKM shows the names for you to confirm, and saves nothing until you confirm.
@@ -54,7 +54,7 @@ Do you already have a `.env` file? Open **Use keys** and select **Import .env…
 
 ## Keep your keys safe
 
-- Copy your vault file to a second place from time to time, for example a USB drive. AKM keeps five backups next to the vault, but a disk failure can take them all.
+- Copy your vault file to a second place from time to time, for example a USB drive. AKM keeps backups next to the vault (the newest five that it wrote, and any that it cannot prove it wrote), but a disk failure can take them all.
 - Your vault is a standard KeePass file. KeePassXC can open it, so your keys do not depend on AKM.
 - If you keep the vault in OneDrive, Dropbox or Syncthing, keep the file downloaded, and do not edit it on two computers at once.
 
