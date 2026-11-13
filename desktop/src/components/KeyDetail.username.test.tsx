@@ -38,6 +38,6 @@ test("a key without a username shows no username row", () => {
 });
 
 test("a username draws by the rule of the row facts, so a hidden character shows", () => {
-  open({ username: "AKIA​FAKE " });
+  open({ username: "AKIA\u200BFAKE " });
   expect(within(factRow("Username")!).getByText("AKIA⟨U+200B⟩FAKE⟨U+0020⟩")).toBeTruthy();
 });

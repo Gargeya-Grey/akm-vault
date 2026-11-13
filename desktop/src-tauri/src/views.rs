@@ -212,6 +212,13 @@ impl KeyDraft {
     }
 }
 
+/// A name that the page chose from the stored values, as a project or an environment of a
+/// scope: passed on exactly as it is stored, because the core matches it exactly (FW-03).
+/// Only an empty text is no choice. `clean` is for a text that the user typed.
+pub fn chosen(value: Option<String>) -> Option<String> {
+    value.filter(|inner| !inner.is_empty())
+}
+
 pub fn clean(value: Option<String>) -> Option<String> {
     value
         .map(|inner| inner.trim().to_string())

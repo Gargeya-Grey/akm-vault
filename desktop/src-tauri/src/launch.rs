@@ -19,7 +19,7 @@ use crate::{
         NativeReviewDialog, ReviewAnswer, ReviewDialog,
     },
     session::{Access, Act, Binding, Effect, Held, Session, Snapshot},
-    views::clean,
+    views::chosen,
 };
 
 /// The variable values of one terminal launch. They are zeroed when the launch ends.
@@ -405,7 +405,7 @@ pub fn run_launch(
         operation_id,
         session_id,
         |outcome, expected| {
-            let (Some(project), Some(environment)) = (clean(project), clean(environment)) else {
+            let (Some(project), Some(environment)) = (chosen(project), chosen(environment)) else {
                 return Err(CommandError::new(
                     "invalid",
                     "Choose both a project and an environment before opening a terminal.",

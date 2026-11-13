@@ -671,14 +671,14 @@ pub async fn audit_recover(
     blocking(move || run_recovery(&session, confirm.as_ref(), &session_id)).await
 }
 
-/// The recovery, in the order that keeps the old journal usable as evidence after every
-/// failure: nothing damaged is refused before any window; the user approves in a native window
-/// that names the damaged file and holds no gate; the recovery runs bound to the session, the
+/// The recovery, in the order that keeps the damaged file in place after every failure:
+/// nothing damaged is refused before any window; the user approves in a native window that
+/// names the damaged file and holds no gate; the recovery runs bound to the session, the
 /// revision and the presentation of the request, so a lock, a change or a hide during the
 /// window refuses it with nothing moved. The damaged file is the journal of this vault, or the
 /// mapping of the device, which no snapshot can read (FV-01). The recovery moves only the file
-/// that the window named (`AuditLog::recover_damaged_file`). The core call writes the new file
-/// first, keeps the old bytes under a dated name and puts the old file back if a step fails.
+/// that the window named (`AuditLog::recover_damaged_file`). The core call keeps a copy of the
+/// old bytes under a dated name first, and then replaces the damaged file in one move (FW-02).
 fn run_recovery(
     session: &Session,
     host: &dyn ImportConfirm,
@@ -791,8 +791,8 @@ impl ExportScope {
         environment: Option<String>,
         all: bool,
     ) -> Result<Self, CommandError> {
-        let project = clean(project);
-        let environment = clean(environment);
+        let project = chosen(project);
+        let environment = chosen(environment);
         if (all && (project.is_some() || environment.is_some()))
             || (!all && (project.is_none() || environment.is_none()))
         {
@@ -1748,6 +1748,38 @@ mod tests {
     /// FW-03. An update that names no field, or keeps the secret, writes nothing and answers
     /// `None`, as `akm edit` says "No change". The title cannot be cleared. The vault file keeps
     /// its bytes.
+    /// FW-03, the class: the page chooses a project and an environment from the stored values,
+    /// and the core matches them exactly. So native code passes them on as they are: a
+    /// trimmed name selects the keys of another scope, or none.
+    #[test]
+    fn an_export_takes_the_keys_of_the_exact_project_and_environment_that_the_page_chose() {
+        let (session, _directory) = test_session();
+        session
+            .access(Access::Write, None, |vault| {
+                vault.add(padded_key())?;
+                let mut plain = akm_core::ApiKeyInput::new("Fake plain key", "fake-plain-secret");
+                plain.project = Some("demo".into());
+                plain.environment = Some("dev".into());
+                plain.env_var = Some("PLAIN_TOKEN".into());
+                vault.add(plain)?;
+                Ok(())
+            })
+            .unwrap();
+        let export = |project: &str, environment: &str| {
+            let scope =
+                ExportScope::new(Some(project.into()), Some(environment.into()), false).unwrap();
+            extract_export(&session, &scope, "test").unwrap().value
+        };
+        assert_eq!(
+            export(" demo ", " dev ").as_str(),
+            "PADDED_TOKEN=fake-padded-secret\n"
+        );
+        assert_eq!(
+            export("demo", "dev").as_str(),
+            "PLAIN_TOKEN=fake-plain-secret\n"
+        );
+    }
+
     #[test]
     fn an_update_that_changes_nothing_writes_nothing_and_says_so() {
         use serde_json::json;
