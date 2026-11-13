@@ -86,29 +86,123 @@ test fails.
 
 ## Row identity (fault classes M and H)
 
-One module, `desktop/src/rowFacts.ts`, builds the facts that a row draws, as the text on screen.
-An unset value draws its fallback: "No project", "No environment" or "No issuer".
+One module, `desktop/src/rowFacts.ts`, builds the facts that a page draws about a key, as the text
+on screen. An unset value draws its fallback: "No project", "No environment" or "No issuer".
 
-- A key row draws its title, issuer, scope count, variable, environment, renewal, expiry and
-  state from `keyRowFacts`. Its group heading draws the project from the same facts.
-- The look-alike check compares the drawn text of every fact. Two rows that match in every
-  drawn fact both show their short unique ID. A row that differs in any drawn fact shows none.
-  An unset value and a literal value that reads like its fallback draw the same text, so the two
-  rows count as look-alikes (LOOK-R4-01). The scope count, the renewal and the expiry count too
-  (LOOK-R4-03).
-- The short ID is the shortest prefix of at least 8 characters that no other ID in the list
-  starts with. Two different IDs never draw the same text.
+Fault class M: two different keys drawn the same. Review 1 of this unit found two pairs that the
+look-alike check missed: issuers that differ by a repeated space, and an issuer that spells a
+scope count beside a real scope (U2-R1-01). The check compared each value alone, not the text
+that the row draws from the values together. So the check is gone. Every key carries its short
+ID wherever the page draws it, and a value draws so that it cannot hide a character or imitate
+the row. This also covers LOOK-R4-01 (an unset value beside a literal value that reads like its
+fallback) and LOOK-R4-03 (rows that differ only by the scope count, the renewal or the expiry):
+such rows now differ by their IDs as well.
+
+### How a stored value draws
+
+`drawnText` draws a stored value. The stored value does not change: a form edits it, a search
+matches it, and native code gets it as it is.
+
+- A character that draws nothing, moves the text around it or breaks the line draws as its code
+  point, for example ⟨U+200B⟩. These are the controls (a newline, a tab), the format marks (a
+  zero-width space or joiner, a directional mark, override or isolate, a byte order mark, a soft
+  hyphen), the line and paragraph separators, every space other than U+0020, and every other
+  character that Unicode marks as ignorable (a Hangul filler, a variation selector).
+- ⟨ and ⟩ draw as their code points, so a value cannot imitate a mark. The middle dot draws as
+  its code point, so a value cannot imitate the separator between two facts on a row.
+- A U+0020 space draws as a space only between two other characters. A leading, a trailing or a
+  repeated space draws as ⟨U+0020⟩. So a screen reader that folds spaces still hears two values
+  apart.
+- Two different values never draw the same text. `rowFacts.test.ts` tests 23 cases, this rule
+  over the cases, and a drawing of every character below U+3000, which keeps no character of the
+  kinds above.
+- Notes keep their line ends as lines (`drawnLines`), and each line draws by the same rule.
+- A drawn value sits in a `<bdi>` element, so a right-to-left value cannot reorder the text
+  around it.
+- Letters that look alike in two scripts draw as they are. The short ID tells such keys apart.
+
+### The short ID
+
+- Every key row shows its short ID. The short ID is the shortest prefix of at least 8 characters
+  that no other ID that the page knows starts with. An ID that is the start of another ID draws in
+  full. Two different IDs never draw the same text.
+- The page knows every ID that a view listed in this session: the live keys, the Recycle Bin and
+  the journal. So a recycled key can make the short ID of a live key longer, and every open view
+  draws the longer ID at once. A new session starts with no known IDs. `useShortIds` is the one
+  source of short IDs.
+- The ID is quiet: muted, monospace and small (`.key-id`). At 900 px it shows in full inside its
+  row, in both themes and with forced colours on and off (`row-identity.spec.ts`). It is text, so
+  forced colours keep it (class J).
+- The Recycle Bin draws the full ID (decision 6). The key glyph is not a fact (decision 10).
+
+### Who draws the facts
+
+- A key row draws its title, issuer, scope count, short ID, variable, environment, renewal, expiry
+  and state from `keyRowFacts`. Its group heading draws the project from the same facts.
 - The accessible description of a row is built from the same facts: project, environment,
-  variable, issuer, scope count, and the ID when the row shows one. Then the expiry and the
-  rotation status follow, in words. The name stays "Open <title>" (FR-19).
-- The shelf, the group headings, the environment filter and the search use the drawn text. An
-  unset project and a literal project "No project" share one shelf and one heading.
-- Every dialog that names a key lists its identity facts, and its ID when the row shows one: the
-  move to the Recycle Bin, the rotation, and the key drawer. The confirmation dialog describes
-  itself with its body, so a screen reader reads those facts (UI-R2-01, LOOK-R3-01, LOOK-R4-04).
-- A Recycle Bin row draws its facts from `binRowFacts`, with its ID on every row. Its buttons and
-  the permanent-delete confirmation are described by the same facts.
+  variable, issuer, scope count and ID. Then the expiry and the rotation status follow, in words.
+  The name stays "Open <title>" (FR-19).
+- The shelf, the group headings and the environment filter use the drawn text. An unset project
+  and a literal project "No project" share one shelf and one heading. A filter option draws its
+  stored value, and keeps the stored value as its value.
+- The search matches the stored values and the drawn values, the short ID included.
+- A project page title and a group heading say "Project" before the name, and a project shelf
+  button reads as "Project <name>". So a project named "All keys" or "Needs attention" differs
+  from that shelf on screen and by its accessible name (decision 19).
+- A Recycle Bin row draws its facts from `binRowFacts`: the identity facts, the renewal, the
+  expiry, the full ID, the removal time and the history count. Its buttons are described by the
+  same facts.
+- An Activity row draws the title, the short ID, and the project and the environment of its key
+  from `journalKeyFacts`. A record of the vault draws "Vault" and no ID.
+- A notice and the attention summary name a key as its title in quotes, then its ID in brackets,
+  through `namedKey` (decision 20).
+- The key drawer draws its title, issuer, scope names, tags, URL and notes by the rule
+  (decision 21).
 - Every `.label` wraps. A 1,000-character issuer made the key drawer 9,879 px wide before.
+
+### Every dialog that acts on a key (U2-R1-02)
+
+Fault class M in a dialog: the move to the Recycle Bin and the rotation listed the identity facts
+only, so two keys that differ only by the expiry or the renewal gave the same dialog. The rotation
+dialog also had no accessible description. `KeyTarget` in `desktop/src/components/FactList.tsx`
+now lists every fact of a key row from `keyFactList`: project, environment, variable, issuer,
+scope count, renewal, expiry, status and short ID. The dialog names the list with
+`aria-describedby`, so a screen reader reads it. A confirmation dialog describes itself with its
+body, which holds the list (UI-R2-01, LOOK-R3-01, LOOK-R4-04).
+
+| Dialog | Lists | Described by |
+|---|---|---|
+| Move to the Recycle Bin | the title and `KeyTarget` | its body |
+| Rotation | the title and `KeyTarget` | `KeyTarget` |
+| Edit form | "This key": the title and `KeyTarget` (decision 22) | "This key" |
+| Key drawer | `KeyTarget`, then the details | `KeyTarget` |
+| Permanent delete | the title and `binFactList`: the bin facts with the full ID | its body |
+| Restore | no dialog | the button, by `binRowDescription` |
+
+`KeyTarget.test.tsx` gives each of the four key dialogs, the permanent delete and the restore two
+keys that differ only by the expiry, only by the renewal or only by the ID. The visible text and
+the accessible description differ, and the action sends the ID of the selected key.
+`row-identity.spec.ts` tests the move confirmation at 900 px in both themes.
+
+### The guard
+
+`desktop/src/rowFactsGuard.test.ts` reads the page files with the TypeScript type checker.
+
+- A read of a drawn field outside `rowFacts.ts` fails: `title`, `issuer`, `project`,
+  `environment`, `envVar`, `resolvedEnvVar`, `url`, `notes`, `scopes` and `tags` of a `KeyView`,
+  and `keyTitle`, `project` and `environment` of an `AuditEntry`. A read by property, by a string
+  index and by destructuring all count.
+- A table allows four files their reads, with a reason and a count for each field: the edit form
+  starts from the stored values, Use keys selects by the stored project and environment, and the
+  key list and the attention groups sort by the stored title. A new read in one of those files
+  changes the count, so it fails too.
+- A function that reads the title of row facts (`KeyRowFacts.title`, `BinRowFacts.title`,
+  `JournalKeyFacts.name`), or draws a `<KeyCut>` glyph, must also read the `id` of the row facts,
+  or call `namedKey`, `keyFactList`, `binFactList`, `keyRowDescription`, `binRowDescription` or
+  `KeyTarget`.
+- Planted files prove each rule: a list that reads raw values by property, by string index and by
+  destructuring; a row that draws a title or a glyph with no ID; and one more raw read in the edit
+  form. On the tree before this change the guard failed on 20 fields in 6 files.
 
 ## The terminal outcome and the two new notices (contract with unit 1)
 
@@ -268,7 +362,23 @@ from the vault, so it is not under the mechanism. Each form clears it when it cl
 - Class I: the stacking guard in `look-guards.spec.ts` lists every dialog in the app. The
   rotation dialog and the format upgrade confirmation were missing.
 - Class J: the marks added in this unit are text or layout. None is drawn with a fill or a shadow
-  alone, so none needs a forced-colours rule.
+  alone, so none needs a forced-colours rule. The line between the row facts and the details of
+  the key drawer is a border, and the forced-colours group of `look-guards.spec.ts` checks it.
+- Class M, two keys drawn the same (U2-R1-01): every place that lists or names a key now draws it
+  from the row facts, with its ID. In Keys: the rows, the shelf, the page title, the shelf
+  buttons, the group headings, the filter options, the notices and the attention summary. In the
+  key drawer: the header, the facts, the details and the notes. The rotation dialog, the edit form
+  and the move to the Recycle Bin. In the Recycle Bin: the rows, the buttons, the confirmation and
+  the notices. The rows of Activity. The options and the texts of Use keys. Judged safe: Use keys
+  lists no key, only scopes, and its preview comes from native code. The vault name in Settings is
+  not a key. The attention notification gives a count only. The native windows are class K and
+  native code. The format-upgrade and journal-recovery dialogs name no key. The reminder sort
+  draws nothing. The fields of the edit form keep the stored values. `rowFactsGuard.test.ts`
+  keeps the class closed.
+- Class M in dialogs (U2-R1-02): the move to the Recycle Bin, the permanent delete, the rotation,
+  the edit form and the key drawer list every row fact. The restore has no dialog, and its button
+  is described by the bin facts. The format-upgrade, journal-recovery and import dialogs name no
+  key.
 - Class D on the screen: `promiseWords.test.ts` scans the text of the page for always, never,
   verify, verified, complete, secure, safe, guarantee and "is cleared". Each use names its
   evidence. Two uses had none and changed (decisions 14 and 15).
@@ -301,15 +411,18 @@ Each decision takes the option that removes state or removes a promise.
 5. The unmount check inside the reply path stays, although no test can see it: React drops an
    update to an unmounted view. The checks in `reload` and `apply` are tested.
 6. The Recycle Bin keeps the full ID on every row, as the owner chose after look review 3. The
-   rule "an ID only for look-alikes" applies to the key list. The bin row stays as it was, so no
-   fact leaves a screen that showed it (class H).
-7. A key row reads its ID to a screen reader only when it draws one. Before, every row read its
-   full ID. The description now says what the screen says.
+   key list draws a short ID on every row (U2-R1-01). A bin row also draws its renewal and its
+   expiry now, so the permanent-delete confirmation lists them (U2-R1-02). No fact leaves a screen
+   that showed it (class H).
+7. Every key row reads its short ID to a screen reader, as it draws it. Before this unit every row
+   read its full ID. After review 1 of this unit only a look-alike row read an ID. The description
+   says what the screen says.
 8. A key row without an environment draws "No environment". Before, it drew a dash. The dash
    was not a word, and a literal dash looked the same.
 9. The environment filter offers "No environment" when a key has none. It finds the rows that
    draw that text.
-10. The key glyph is not a fact. Two keys can share a glyph, so the check never relies on it.
+10. The key glyph is not a fact. Two keys can share a glyph, so the identity never relies on it.
+    The test pairs use IDs that draw the same glyph, and their rows still differ.
 11. A terminal launch that the user declined leaves a cancellation receipt, as an import and a
     file export do. Before, it left no receipt. The brief folds a declined record like an import,
     so the reply and the record give the same outcome.
@@ -332,6 +445,24 @@ Each decision takes the option that removes state or removes a promise.
     a removal, a restore, a purge, an import, an upgrade or a reload, by any view (U2-R1-04).
     Before, only a scope change, a hide, the timer and an unmount hid them. A preview that arrives
     after such a change does not show, and Use keys says that the keys changed before it arrived.
+18. A stored value draws by the rule of `drawnText` (U2-R1-01). A character that draws nothing,
+    moves text or breaks a line draws as its code point. So do a leading, a trailing or a repeated
+    space, ⟨, ⟩ and the middle dot. Before, the page drew a value as it was, so two different
+    values could draw the same text, and a newline or a directional mark could move the text of
+    the row. The stored value does not change.
+19. A project page title says "Project" above the name, small and muted. A group heading says
+    "Project" to a screen reader only, and a project shelf button reads as "Project <name>".
+    Before, a project named "All keys" or "Needs attention" gave its shelf the same page title as
+    that shelf. "No project" gets no label.
+20. A notice and the attention summary name a key as its title in quotes, then its ID in brackets.
+    Before, they named the title only, so two keys with one title gave the same notice.
+21. The key drawer calls the variable "Variable", as every other fact list does, and the scope
+    chips "Scope names", because its fact list already has "Scopes" for the count. Its fact list
+    draws an unset value as its fallback, such as "No issuer". Before, the drawer said
+    "Environment variable" and "Scopes".
+22. The edit form has a section "This key" with the title and every row fact, and the form is
+    described by it. Before, the form showed only its fields, so two keys with the same values gave
+    the same form. The fields keep the stored values.
 
 ## Limits
 
@@ -349,8 +480,18 @@ Each decision takes the option that removes state or removes a promise.
   mocked boundary and the IPC design, not from a run.
 - The state of a key row is not varied alone in the fact table. It comes from the expiry and
   the renewal, which are varied.
-- A project named "All keys" or "Needs attention" gives its shelf the same page title as that
-  shelf. The shelf buttons stay apart by their place under "Projects". This is not fixed here.
+- A short ID is unique among the IDs that the page knows in this session. An ID that no view
+  has listed yet does not make a short ID longer, so a short ID can be the start of a key that the
+  page has not seen. A short ID can grow while a view is open, when another view lists an ID with
+  the same start.
+- Inside a sentence, such as a notice, a title can imitate the text of the sentence around it.
+  The real ID in brackets follows each name. A notice is plain text, so a right-to-left title is
+  not isolated there as it is in a `<bdi>`. It holds no directional control, because those draw as
+  their code points.
+- Letters that look alike in two scripts draw as they are. Only the short ID tells such keys
+  apart.
+- The row-facts guard does not see a value that leaves a key through a spread, `Object.values` or
+  `JSON.stringify`. No page file does that today.
 - The plaintext mechanism decides what the page shows. It cannot take back a value that native
   code already put on the screen, and it does not wipe memory: a dropped string stays in memory
   until the JavaScript engine frees it, as before.

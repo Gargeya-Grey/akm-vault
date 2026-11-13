@@ -115,7 +115,7 @@ test("a key that is no longer in the vault shows its short id, and a vault event
     { seq: "2", ts: "2026-10-31T00:00:00Z", action: "upgrade-completed", keyTitle: null, keyId: null, detail: null },
   ] }));
   render(<Activity />);
-  expect(await screen.findByText("Key 01234567")).toBeTruthy();
+  expect((await screen.findByText("ID 01234567")).closest(".audit-key")?.textContent).toBe("KeyID 01234567—");
   expect(screen.queryByText(/89abcdef/)).toBeNull();
   expect(screen.getByText("Vault")).toBeTruthy();
 });

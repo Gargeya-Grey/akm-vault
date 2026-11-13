@@ -1,14 +1,13 @@
 import { useEffect, useId, useState } from "react";
 import { api, errorText } from "../api";
+import { useKeyRowFacts } from "../rowFacts";
 import type { KeyView, RotationReceipt } from "../types";
-import { FactList, keyIdentityFacts } from "./FactList";
+import { KeyTarget } from "./FactList";
 import { Notice } from "./Notice";
 import { useDialogFocus } from "./useDialogFocus";
 
 interface Props {
   item: KeyView;
-  /** The ID that the key's row shows, when another row looks the same. */
-  shownId?: string;
   onRotated: (receipt: RotationReceipt) => void;
   onClose: () => void;
 }
@@ -18,10 +17,12 @@ interface Props {
  * cancel never hides a request that may still commit. The typed value is cleared as soon as
  * the request ends, whatever the outcome.
  */
-export function RotateDialog({ item, shownId, onRotated, onClose }: Props) {
+export function RotateDialog({ item, onRotated, onClose }: Props) {
   const dialogRef = useDialogFocus<HTMLDivElement>();
   const titleId = useId();
   const fieldId = useId();
+  const targetId = useId();
+  const facts = useKeyRowFacts(item);
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,16 +71,17 @@ export function RotateDialog({ item, shownId, onRotated, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        aria-describedby={targetId}
       >
         <h2 id={titleId}>Rotate secret</h2>
         <form onSubmit={submit}>
           <div className="confirm-body">
             <p>
-              Store the new secret for <strong>{item.title}</strong>. The old secret stays in the
+              Store the new secret for <strong><bdi>{facts.title}</bdi></strong>. The old secret stays in the
               vault history. This does not change the secret at the provider: create the new
               secret there first.
             </p>
-            <FactList facts={keyIdentityFacts(item, shownId)} />
+            <KeyTarget facts={facts} id={targetId} />
           </div>
           <div className="field">
             <label htmlFor={fieldId}>New secret</label>

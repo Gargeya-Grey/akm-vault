@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { drawnText } from "../rowFacts";
 import { Icon } from "./Icon";
 
 interface Option {
@@ -221,12 +222,17 @@ export function FilterSelect({
   );
 }
 
-export function uniqueOptions(values: (string | null)[]): Option[] {
+/**
+ * One option per distinct stored value, sorted. `label` draws the value: by default as its row
+ * draws it (`drawnText`), so two values that differ only by an invisible mark or a space have
+ * different labels. Pass `(text) => text` for values that are drawn already.
+ */
+export function uniqueOptions(values: (string | null)[], label: (value: string) => string = drawnText): Option[] {
   const seen = new Set<string>();
   for (const value of values) {
     if (value) seen.add(value);
   }
   return [...seen]
     .sort((a, b) => a.localeCompare(b))
-    .map((value) => ({ value, label: value }));
+    .map((value) => ({ value, label: label(value) }));
 }

@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { api, errorText } from "../api";
 import { clipboardCopyText } from "../clipboardText";
-import { formatDate, formatDateTime, isExpired, keyState, plural, rotationLabel, secretChangeLabel } from "../format";
+import { formatDate, formatDateTime, isExpired, plural, rotationLabel, secretChangeLabel } from "../format";
 import { nativeReads, useNativeRead } from "../nativeRead";
 import { Plaintext, plaintextScope, useSealed } from "../plaintext";
+import { keyDetails, useKeyRowFacts } from "../rowFacts";
 import type { HistoryVersion, KeyView } from "../types";
+import { KeyTarget } from "./FactList";
 import { KeyCut } from "./glyphs";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
@@ -14,8 +16,6 @@ import { useNow } from "../useNow";
 
 interface Props {
   item: KeyView;
-  /** The ID that the key's row shows, when another row looks the same. */
-  shownId?: string;
   /**
    * True while the list read that gave `item` holds. A read that fails or starts again makes it
    * false, and a revealed secret then goes (U2-R1-04).
@@ -72,8 +72,9 @@ function EarlierVersions({ id }: { id: string }) {
   );
 }
 
-export function KeyDetail({ item, shownId, current, onClose, onEdit, onDelete, onRotate, readOnly = false }: Props) {
+export function KeyDetail({ item, current, onClose, onEdit, onDelete, onRotate, readOnly = false }: Props) {
   const dialogRef = useDialogFocus<HTMLDivElement>();
+  const targetId = useId();
   // The secret is plaintext: it shows only for this key, while the read and the vault data hold.
   const secretScope = current ? plaintextScope.reveal(item.id) : null;
   const secret = useSealed(secretScope);
@@ -174,23 +175,18 @@ export function KeyDetail({ item, shownId, current, onClose, onEdit, onDelete, o
   }
 
   const now = useNow([item]);
-  const state = keyState(item, now);
+  // The row's facts, ID included, come first and describe the drawer (U2-R1-02). The details
+  // below them are values that only the drawer shows.
+  const rowFacts = useKeyRowFacts(item);
+  const details = keyDetails(item);
   const facts: { key: string; value: React.ReactNode; below?: React.ReactNode }[] = [];
 
-  if (item.issuer) facts.push({ key: "Issuer", value: item.issuer });
-  if (item.project) facts.push({ key: "Project", value: item.project });
-  if (item.environment)
-    facts.push({ key: "Environment", value: item.environment });
-  facts.push({
-    key: "Environment variable",
-    value: <span className="mono">{item.resolvedEnvVar}</span>,
-  });
-  if (item.scopes.length > 0) {
+  if (details.scopes.length > 0) {
     facts.push({
-      key: "Scopes",
+      key: "Scope names",
       value: (
         <span className="chips">
-          {item.scopes.map((scope) => (
+          {details.scopes.map((scope) => (
             <span className="chip mono" key={scope}>
               {scope}
             </span>
@@ -199,12 +195,12 @@ export function KeyDetail({ item, shownId, current, onClose, onEdit, onDelete, o
       ),
     });
   }
-  if (item.tags.length > 0) {
+  if (details.tags.length > 0) {
     facts.push({
       key: "Tags",
       value: (
         <span className="chips">
-          {item.tags.map((tag) => (
+          {details.tags.map((tag) => (
             <span className="chip" key={tag}>
               {tag}
             </span>
@@ -213,7 +209,7 @@ export function KeyDetail({ item, shownId, current, onClose, onEdit, onDelete, o
       ),
     });
   }
-  if (item.url) facts.push({ key: "URL", value: item.url });
+  if (details.url) facts.push({ key: "URL", value: details.url });
   facts.push({
     key: "Expires",
     value: item.expiresAt ? (
@@ -266,7 +262,6 @@ export function KeyDetail({ item, shownId, current, onClose, onEdit, onDelete, o
       </div>
     ),
   });
-  if (shownId !== undefined) facts.push({ key: "ID", value: <span className="mono">{shownId}</span> });
   if (item.createdAt)
     facts.push({
       key: "Added",
@@ -293,16 +288,17 @@ export function KeyDetail({ item, shownId, current, onClose, onEdit, onDelete, o
         role="dialog"
         aria-modal="true"
         aria-labelledby="detail-title"
+        aria-describedby={targetId}
       >
         <header className="modal-head">
           <div className="drawer-ident">
             <span className="key-tile"><KeyCut id={item.id} /></span>
             <div>
-              <p className="label">{item.issuer ?? "API key"}</p>
-              <h2 id="detail-title">{item.title}</h2>
-              <p className={`state state-${state.tone}`}>
+              <p className="label"><bdi>{rowFacts.issuer.set ? rowFacts.issuer.text : "API key"}</bdi></p>
+              <h2 id="detail-title"><bdi>{rowFacts.title}</bdi></h2>
+              <p className={`state state-${rowFacts.tone}`}>
                 <span className="state-dot" aria-hidden="true" />
-                {state.label}
+                {rowFacts.state}
               </p>
             </div>
           </div>
@@ -359,6 +355,7 @@ export function KeyDetail({ item, shownId, current, onClose, onEdit, onDelete, o
           </div>
         )}
 
+        <KeyTarget facts={rowFacts} id={targetId} />
         <div className="fact-list">
           {facts.map((fact) => (
             <div className="fact-row" key={fact.key}>
@@ -369,10 +366,17 @@ export function KeyDetail({ item, shownId, current, onClose, onEdit, onDelete, o
           ))}
         </div>
 
-        {item.notes && (
+        {details.notes && (
           <section className="detail-notes">
             <h3>Notes</h3>
-            <p className="reading">{item.notes}</p>
+            <p className="reading">
+              {details.notes.map((line, index) => (
+                <Fragment key={index}>
+                  {index > 0 && <br />}
+                  {line}
+                </Fragment>
+              ))}
+            </p>
           </section>
         )}
 

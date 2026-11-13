@@ -6,6 +6,7 @@ import { PROTECTED_VIEW_EXPIRY_EVENT } from "../nativeSession";
 import { Plaintext, plaintextScope, useSealed } from "../plaintext";
 import { receiptState, useReceipts, waitingReceipt, type Outcome } from "../sessionBoundary";
 import { plural } from "../format";
+import { drawnText } from "../rowFacts";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
@@ -440,7 +441,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
               ? "Reading the projects in this vault…"
               : read.state.status === "failed"
               ? "Export needs the project list. Read it again first."
-              : scoped ? `${plural(matchCount, "key")} selected in ${project} / ${environment}.` : "Choose a project and environment to enable export."}
+              : scoped ? `${plural(matchCount, "key")} selected in ${drawnText(project)} / ${drawnText(environment)}.` : "Choose a project and environment to enable export."}
           </p>
           <p className="field-note">
             Open terminal starts a command prompt in a folder that you choose. Every program you run there can read these keys until you close it.
@@ -470,7 +471,7 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
             ) : (
               <>
                 <div className="preview-head">
-                  <p className="label">Preview: {project} / {environment}</p>
+                  <p className="label">Preview: <bdi>{drawnText(project)}</bdi> / <bdi>{drawnText(environment)}</bdi></p>
                   <p className="label">{plural(previewLines, "line")}</p>
                 </div>
                 <pre className="mono env-lines">

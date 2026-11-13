@@ -106,6 +106,7 @@ test.describe("forced colours", () => {
     for (const selector of [".btn", ".key-rows", "input[type=search]"]) expect(await boxed(page, selector), selector).toBe(true);
     await page.locator(".key-row").first().click();
     expect(await boxed(page, ".drawer.raised")).toBe(true);
+    expect(await boxed(page, ".drawer .fact-list + .fact-list"), "the line between the row facts and the details").toBe(true);
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Use keys", exact: true }).click();
     expect(await boxed(page, ".btn-secondary")).toBe(true);

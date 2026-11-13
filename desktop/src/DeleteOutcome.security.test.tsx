@@ -29,7 +29,7 @@ test(`a committed delete with ${warningKind} does not promise recovery`, async (
   expect(document.body.textContent).not.toContain("stays in its .bak copy");
   expect(document.body.textContent).not.toContain("AKM retains a dated encrypted");
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Move to Recycle Bin" }));
-  await screen.findByText(/Moved “Delete proof” to the Recycle Bin/);
+  await screen.findByText(/Moved “Delete proof” \(ID [^)]+\) to the Recycle Bin/);
   expect(document.body.textContent).not.toContain("A backup remains in the .bak file");
   expect(document.body.textContent).not.toContain("The previous vault was retained");
   expect(document.body.textContent).toContain("backup notices");

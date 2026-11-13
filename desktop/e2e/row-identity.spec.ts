@@ -1,7 +1,8 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { installNativeBoundaryMock, type BoundaryOptions } from "./native-boundary";
+import type { KeyView } from "../src/types";
 
-// Fault classes M and H at the minimum window width (900 px). Look-alike rows show their IDs,
+// Fault classes M and H at the minimum window width (900 px). Every row shows its short ID,
 // every fact of a row stays on screen, and a value of 1,000 unbroken characters stays in its box.
 
 async function open(page: Page, theme: string, options: BoundaryOptions, forced = false) {
@@ -27,28 +28,78 @@ async function inside(inner: Locator, outer: Locator) {
 
 const noSideScroll = (page: Page) => page.locator(".stage").evaluate((node) => node.scrollWidth - node.clientWidth);
 
-const TWINS: BoundaryOptions = {
-  keys: [
-    { id: "twin-entry-aaaa-0001", title: "Twin", scopes: [] },
-    { id: "twin-entry-bbbb-0002", title: "Twin", scopes: [] },
-    { id: "other-entry-0003", title: "Twin", scopes: [], issuer: "Other issuer" },
-  ],
-};
+// U2-R1-01: pairs of keys whose IDs draw the same key glyph. Each pair differs in one way that
+// the eye or a screen reader can miss, or not at all. Every row draws its short ID.
+const PAIRS: { name: string; keys: [Partial<KeyView>, Partial<KeyView>]; ids: [string, string] }[] = [
+  { name: "issuers that differ by a repeated space", keys: [{ id: "7b3e9f20-0000-4000-8000-000000000085", title: "Pair A", issuer: "Acme  Cloud" }, { id: "7b3e9f21-0000-4000-8000-000000000066", title: "Pair A", issuer: "Acme Cloud" }], ids: ["7b3e9f20", "7b3e9f21"] },
+  { name: "an issuer that spells a scope count, and a real scope", keys: [{ id: "9e8d7c6b-0000-4000-8000-000000000005", title: "Pair B", issuer: "Acme · 1 scope" }, { id: "5a6b7c8d-0000-4000-8000-000000000027", title: "Pair B", issuer: "Acme", scopes: ["read"] }], ids: ["9e8d7c6b", "5a6b7c8d"] },
+  { name: "titles that differ by a look-alike letter", keys: [{ id: "2c3d4e5f-0000-4000-8000-000000000001", title: "Acme key" }, { id: "1a2b3c4d-0000-4000-8000-000000000085", title: "\u0410cme key" }], ids: ["2c3d4e5f", "1a2b3c4d"] },
+  { name: "titles that differ by a zero-width space", keys: [{ id: "3f4e5d6c-0000-4000-8000-000000000001", title: "Twin" }, { id: "6d5c4b3a-0000-4000-8000-000000000027", title: "Twin\u200B" }], ids: ["3f4e5d6c", "6d5c4b3a"] },
+  { name: "identical facts", keys: [{ id: "0fa1c0de-0000-4000-8000-000000000001", title: "Pair E" }, { id: "0fa1c0de-0001-4000-8000-000000000019", title: "Pair E" }], ids: ["0fa1c0de-0000", "0fa1c0de-0001"] },
+  { name: "IDs that share their first 8 characters", keys: [{ id: "c4d2e8a1-0000-4000-8000-000000000087", title: "Pair F" }, { id: "c4d2e8a1-1000-4000-8000-000000000002", title: "Pair F" }], ids: ["c4d2e8a1-0", "c4d2e8a1-1"] },
+];
+const PAIR_KEYS: BoundaryOptions = { keys: PAIRS.flatMap((pair) => pair.keys.map((each) => ({ issuer: null, scopes: [], ...each }))) };
 
-for (const [theme, forced] of [["light", false], ["dark", false], ["dark", true]] as const) {
-  test(`${theme}${forced ? ", forced colours" : ""}: two look-alike rows show their short IDs at 900 px, and a row that differs shows none`, async ({ page }) => {
-    await open(page, theme, TWINS, forced);
-    const rows = page.getByRole("button", { name: "Open Twin", exact: true });
-    await expect(rows).toHaveCount(3);
-    for (const id of ["twin-entry-a", "twin-entry-b"]) {
-      const row = page.locator(".key-row", { hasText: `ID ${id}` });
-      await expect(row).toHaveCount(1);
-      expect(await readable(row.locator(".key-id")), id).toBe(true);
-      expect(await inside(row.locator(".key-id"), row), id).toBe(true);
-      await expect(row).toHaveAccessibleDescription(new RegExp(`, ID ${id}\\. `));
+/** What a screen reader hears about a row: its name and its description. */
+const heard = (row: Locator) => row.evaluate((node) => `${node.getAttribute("aria-label")} | ${(node.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent ?? "").join(" ")}`);
+
+for (const [theme, forced] of [["light", false], ["dark", false], ["light", true], ["dark", true]] as const) {
+  test(`${theme}${forced ? ", forced colours" : ""}: at 900 px every row of a look-alike pair draws its own short ID in full, with the same key glyph, and reads it`, async ({ page }) => {
+    await open(page, theme, PAIR_KEYS, forced);
+    await expect(page.locator(".key-row")).toHaveCount(PAIRS.length * 2);
+    for (const pair of PAIRS) {
+      const rows = pair.ids.map((id) => page.locator(".key-row").filter({ has: page.locator(".key-id", { hasText: new RegExp(`^ID ${id}$`) }) }));
+      const glyphs: string[] = [];
+      const spoken: string[] = [];
+      for (const [index, row] of rows.entries()) {
+        const id = row.locator(".key-id");
+        await expect(row, `${pair.name} ${pair.ids[index]}`).toHaveCount(1);
+        await row.scrollIntoViewIfNeeded();
+        expect(await readable(id), pair.ids[index]).toBe(true);
+        expect(await inside(id, row), pair.ids[index]).toBe(true);
+        await expect(id).toBeInViewport({ ratio: 1 });
+        expect(await id.evaluate((node) => getComputedStyle(node).fontFamily)).toMatch(/Plex Mono/i);
+        // Visible: its colour is not the colour of the surface under it, in either theme and in forced colours.
+        expect(await id.evaluate((node) => getComputedStyle(node).color !== getComputedStyle(node.closest(".key-rows")!).backgroundColor && getComputedStyle(node).visibility === "visible")).toBe(true);
+        await expect(row).toHaveAccessibleDescription(new RegExp(`, ID ${pair.ids[index]}\\. `));
+        glyphs.push(await row.locator(".keycut").innerHTML());
+        spoken.push(await heard(row));
+      }
+      expect(glyphs[0], `${pair.name}: one glyph`).toBe(glyphs[1]);
+      expect(spoken[0], pair.name).not.toBe(spoken[1]);
+      expect(await rows[0].textContent(), pair.name).not.toBe(await rows[1].textContent());
     }
-    await expect(page.locator(".key-row", { hasText: "Other issuer" }).locator(".key-id")).toHaveCount(0);
     expect(await noSideScroll(page)).toBeLessThanOrEqual(0);
+  });
+
+  test(`${theme}${forced ? ", forced colours" : ""}: at 900 px a project named "All keys" has its own page title, with a quiet "Project" label in view`, async ({ page }) => {
+    await open(page, theme, { keys: [{ id: "shelf-entry-0001", title: "Filed", project: "All keys" }, { id: "shelf-entry-0002", title: "Other", project: "demo" }] }, forced);
+    const nav = page.getByRole("navigation", { name: "Projects" });
+    await expect(nav.getByRole("button", { name: "All keys", exact: true })).toHaveCount(1);
+    await nav.getByRole("button", { name: "Project All keys", exact: true }).click();
+    const title = page.getByRole("heading", { level: 1 });
+    await expect(title).toHaveText("Project All keys 1");
+    await expect(title).toHaveAccessibleName("Project All keys 1");
+    const label = title.locator(".title-kind");
+    await expect(label).toBeInViewport({ ratio: 1 });
+    expect(await label.evaluate((node) => getComputedStyle(node).color !== getComputedStyle(document.body).backgroundColor)).toBe(true);
+    expect(await noSideScroll(page)).toBeLessThanOrEqual(0);
+  });
+}
+
+for (const theme of ["light", "dark"]) {
+  test(`${theme}: at 900 px the move confirmation lists the renewal, the expiry and the ID of its key in view`, async ({ page }) => {
+    await open(page, theme, { keys: [FULL_KEY] });
+    await page.getByRole("button", { name: "Open Inventory key", exact: true }).click();
+    await page.locator(".drawer.raised").getByRole("button", { name: "Move to Recycle Bin" }).click();
+    const confirm = page.getByRole("dialog", { name: "Move this key to the Recycle Bin?" });
+    for (const [label, text] of [["Renewal", /^rotate in \d+ days$/], ["Expiry", /2031/], ["ID", /^inventor$/], ["Status", /./]] as const) {
+      const value = confirm.locator(".fact-row", { has: page.locator(".fact-key", { hasText: new RegExp(`^${label}$`) }) }).locator(".fact-value");
+      await expect(value, label).toHaveText(text);
+      expect(await readable(value), label).toBe(true);
+      await expect(value, label).toBeInViewport();
+    }
+    await expect(confirm).toHaveAccessibleDescription(/rotate in \d+ days.*2031.*inventor/s);
   });
 }
 

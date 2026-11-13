@@ -185,7 +185,7 @@ test("the Recycle Bin confirmation from Key Detail contains focus; Escape and En
   await user.keyboard("{Enter}");
   await tabTo(user, "Move to Recycle Bin");
   await user.keyboard("{Enter}");
-  await screen.findByText(/Moved “Keyboard proof” to the Recycle Bin/);
+  await screen.findByText(/Moved “Keyboard proof” \(ID [^)]+\) to the Recycle Bin/);
   expect(dialogs()).toHaveLength(0);
   expect(row.isConnected).toBe(false);
   expect(focused()).toBe(screen.getByRole("searchbox", { name: "Search keys" }));
@@ -234,7 +234,7 @@ test("Delete for good contains focus, Escape returns to its button, and success 
   await user.keyboard("{Enter}");
   await tabTo(user, "Delete for good");
   await user.keyboard("{Enter}");
-  await screen.findByText(/Deleted “Keyboard proof” for good/);
+  await screen.findByText(/Deleted “Keyboard proof” \(ID [^)]+\) for good/);
   expect(dialogs()).toHaveLength(0);
   expect(focused()).toBe(screen.getByRole("heading", { level: 1 }));
 }, 30_000);

@@ -37,7 +37,7 @@ for (const theme of ["light", "dark"]) {
     for (const [title, description] of expectations) {
       const row = page.getByRole("button", { name: `Open ${title}`, exact: true });
       await expect(row).toHaveAccessibleName(`Open ${title}`);
-      await expect(row).toHaveAccessibleDescription(new RegExp(`^Project demo, environment dev, variable OPENAI_API_KEY, issuer [^,]+, 1 scope\\. ${description.replace(/[.]/g, "\\.")}$`));
+      await expect(row).toHaveAccessibleDescription(new RegExp(`^Project demo, environment dev, variable OPENAI_API_KEY, issuer [^,]+, 1 scope, ID test-entry-uuid-\\d\\. ${description.replace(/[.]/g, "\\.")}$`));
     }
     expect(errors).toEqual([]);
   });
@@ -47,10 +47,10 @@ for (const theme of ["light", "dark"]) {
     const summary = page.getByRole("region", { name: "Keys needing attention" });
     await expect(summary.getByRole("heading")).toHaveText("4 keys need attention");
     await expect(summary.getByRole("listitem")).toHaveText([
-      "Expired (1): Old key",
-      "Rotation overdue (1): Late rotation",
-      "Due soon (1): Soon key",
-      "Rotation unknown (1): Unknown key",
+      "Expired (1): “Old key” (ID test-entry-uuid-0)",
+      "Rotation overdue (1): “Late rotation” (ID test-entry-uuid-1)",
+      "Due soon (1): “Soon key” (ID test-entry-uuid-2)",
+      "Rotation unknown (1): “Unknown key” (ID test-entry-uuid-3)",
     ]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await page.getByRole("button", { name: "Dismiss summary" }).focus();
