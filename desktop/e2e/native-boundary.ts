@@ -1,12 +1,11 @@
 import type { Page } from "@playwright/test";
-import type { ApplicationNotice, KeyView, OperationNotice, ReminderStatus } from "../src/types";
+import type { ApplicationNotice, KeyView, OperationNotice } from "../src/types";
 
 export interface BoundaryOptions {
   /** Replaces the single default key. */
   keys?: Partial<KeyView>[];
   recycled?: { key: Partial<KeyView>; deletedAt: string | null }[];
   auditEntries?: { seq: string; ts: string; action: string; keyTitle: string | null; project: string | null; environment: string | null; keyId: string | null; detail: string | null }[];
-  reminders?: ReminderStatus;
   /** The journal starts damaged, as after a bad line. `audit_recover` starts a new one. */
   damagedJournal?: boolean;
   /** What the user answers in the native window of `audit_recover`. Default: approve. */
@@ -62,7 +61,6 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
       updatedAt: null, rotationDueAt: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0,
     };
     const keys = (options.keys ?? [{}]).map((overrides, index) => ({ ...key, id: `${key.id}-${index}`, ...overrides }));
-    let reminders = options.reminders ?? { enabled: false, permission: "granted", delivery: "none", blocked: false };
     let damaged = options.damagedJournal ?? false;
     let recovered = false;
     const journalPath = "C:/fake-test/journal/j-00000000000000000000000000000000.jsonl";
@@ -136,9 +134,6 @@ export async function installNativeBoundaryMock(page: Page, theme = "light", ret
             }
             case "keys_list": return keys;
             case "recycled_list": return (options.recycled ?? []).map((item, index) => ({ deletedAt: item.deletedAt, key: { ...key, id: `${key.id}-bin-${index}`, ...item.key } }));
-            case "reminders_status": return reminders;
-            case "reminders_set": reminders = { ...reminders, enabled: args.enabled as boolean, delivery: "none", blocked: false }; return reminders;
-            case "reminders_notify": reminders = { ...reminders, delivery: "sent" }; return reminders;
             case "audit_recover": {
               if (!damaged) throw { kind: "journal", message: "The journal is not damaged, so nothing was changed." };
               if (options.recovery === "decline") return null;

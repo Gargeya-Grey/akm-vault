@@ -12,11 +12,11 @@ import { importersOf, pageSources, reachesOf, tauriGlobalsIn, type Sources } fro
 // the binding is called. A view reads native state only through `useNativeRead`.
 
 /** The members of `reads`: they read native state for the screen. */
-const READS = ["audit", "backup", "history", "keys", "recycled", "remindersStatus", "status", "warnings"];
+const READS = ["audit", "backup", "history", "keys", "recycled", "status", "warnings"];
 /** The members of `api`: each changes state, asks native for an effect, or ends a session. */
 const ACTIONS = [
   "activity", "add", "copy", "copyEnv", "create", "discardView", "dismissWarnings", "exportEnv", "importEnv",
-  "launchTerminal", "lock", "lockCurrent", "purge", "recoverJournal", "reload", "remindersNotify", "remindersSet",
+  "launchTerminal", "lock", "lockCurrent", "purge", "recoverJournal", "reload",
   "remove", "restore", "reveal", "rotate", "saveEnv", "unlock", "update", "upgrade",
 ];
 
@@ -29,7 +29,6 @@ const RESTRICTED: Record<string, Record<string, string>> = {
     "./api.ts": "the actions: every request goes through the one boundary function in native.ts",
     "./nativeRead.ts": "the read mechanism: it owns the request identity, the loading state, the failure and the unmount",
     "./App.tsx": "the session poll keeps its own request, epoch and transition identity; the warning poll folds native records",
-    "./components/AttentionNotifier.tsx": "it shows nothing: it reads the reminder setting and the keys, sends a count and stops when it unmounts",
   },
   "@tauri-apps/api/core": { "./native.ts": "the one boundary function with native code" },
   "@tauri-apps/api": {},

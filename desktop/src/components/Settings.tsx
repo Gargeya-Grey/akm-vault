@@ -1,11 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { api, errorText } from "../api";
 import { CLIPBOARD_LOCK_TEXT } from "../clipboardText";
 import { formatBytes, formatDateTime } from "../format";
 import { nativeReads, useNativeRead } from "../nativeRead";
-import { REMINDER_NOTE, reminderText } from "../reminders";
 import type { Status } from "../types";
-import { Notice } from "./Notice";
 
 interface Props {
   status: Status;
@@ -18,33 +14,6 @@ export function Settings({ status, onLocked }: Props) {
   // One source for the count: the key list. A newer polled count only starts a new read; the
   // view shows a number only from a read that ended, and says that it is counting until then.
   const countRead = useNativeRead(nativeReads.keys, [status.keyCount]);
-  const mounted = useRef(true);
-
-  const reminderRead = useNativeRead(nativeReads.reminders);
-  const reminder = reminderRead.state.status === "ready" ? reminderRead.state.data : null;
-  const [reminderSaving, setReminderSaving] = useState(false);
-  const [reminderError, setReminderError] = useState<string | null>(null);
-
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-
-  async function changeReminder(enabled: boolean) {
-    if (reminderSaving) return;
-    setReminderSaving(true);
-    setReminderError(null);
-    try {
-      const next = await api.remindersSet(enabled);
-      if (mounted.current) reminderRead.apply(() => next);
-    } catch (cause) {
-      if (mounted.current) setReminderError(errorText(cause));
-    } finally {
-      if (mounted.current) setReminderSaving(false);
-    }
-  }
 
   return (
     <main className="view">
@@ -128,32 +97,6 @@ export function Settings({ status, onLocked }: Props) {
           lock, and on suspend. {CLIPBOARD_LOCK_TEXT} You will need the master
           password again.
         </p>
-      </section>
-
-      <section className="settings-section" aria-labelledby="reminders-title">
-        <h2 id="reminders-title">Reminders</h2>
-        <div className="reminder-toggle">
-          <input
-            id="reminders-toggle"
-            type="checkbox"
-            checked={reminder?.enabled ?? false}
-            disabled={reminder === null || reminderRead.busy || reminderSaving}
-            aria-describedby="reminders-note"
-            onChange={(event) => void changeReminder(event.target.checked)}
-          />
-          <label htmlFor="reminders-toggle">Show a Windows notification when keys need attention</label>
-        </div>
-        <p className="field-note" id="reminders-note">{REMINDER_NOTE}</p>
-        {reminderRead.state.status === "failed" && (
-          <div className="read-inline">
-            <Notice tone="error">AKM could not read the reminder setting.</Notice>
-            <button type="button" className="text-button" onClick={reminderRead.reload} disabled={reminderRead.busy} aria-busy={reminderRead.busy || undefined}>
-              {reminderRead.busy ? "Trying again…" : "Try again"}
-            </button>
-          </div>
-        )}
-        {reminder && <p className="reminder-state prose" role="status">{reminderText(reminder)}</p>}
-        {reminderError && <Notice tone="error">{reminderError}</Notice>}
       </section>
 
       <section className="settings-section">

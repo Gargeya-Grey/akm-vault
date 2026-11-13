@@ -16,7 +16,7 @@ import type { KeyView } from "./types";
 // every view that reads native state. The reads are held, so each test orders the replies.
 
 const api = vi.hoisted(() => ({
-  keys: vi.fn(), recycled: vi.fn(), audit: vi.fn(), backup: vi.fn(), remindersStatus: vi.fn(),
+  keys: vi.fn(), recycled: vi.fn(), audit: vi.fn(), backup: vi.fn(),
   importEnv: vi.fn(), history: vi.fn(),
 }));
 // The views read through native.ts; the import goes through api.ts. One mock serves both.
@@ -51,7 +51,6 @@ beforeEach(() => {
   api.recycled.mockResolvedValue([]);
   api.audit.mockResolvedValue(journal);
   api.backup.mockResolvedValue({ exists: false });
-  api.remindersStatus.mockResolvedValue({ enabled: false, permission: "granted", delivery: "none", blocked: false });
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 

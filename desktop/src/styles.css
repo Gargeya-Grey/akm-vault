@@ -622,13 +622,6 @@ button:disabled { cursor: default; opacity: 0.4; }
 .settings-section > h2::before { content: ""; flex: none; width: 2px; height: 11px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 6px var(--glow); }
 .settings-section .fact-list { margin-top: 0; }
 
-.reminder-toggle { display: flex; align-items: center; gap: 12px; }
-.reminder-toggle input { position: relative; appearance: none; -webkit-appearance: none; flex: none; width: 40px; height: 24px; min-height: 24px; padding: 0; border: 0; border-radius: 999px; cursor: pointer; }
-.reminder-toggle input::before { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--muted); transition: transform var(--t-med) var(--ease); }
-.reminder-toggle input:checked { background-color: var(--action); background-image: linear-gradient(180deg, var(--action-hi), var(--action)); }
-.reminder-toggle input:checked::before { background: var(--on-action); transform: translateX(16px); }
-.reminder-state { color: var(--muted); font-size: 0.8125rem; }
-@media (prefers-reduced-motion: reduce) { .reminder-toggle input::before { transition: none; } }
 
 @media (max-width: 1040px) {
   :root { --pane: 26px; --rail-w: 92px; }
@@ -665,7 +658,4 @@ button:disabled { cursor: default; opacity: 0.4; }
   .state-warn .state-dot, .attention-summary::before, .audit-action[data-kind="disclosure"]::before { forced-color-adjust: none; background: transparent; box-shadow: none; border: 1.5px solid CanvasText; }
   .life-off, .lock-pin { fill: GrayText; opacity: 1; }
   .life-on, .lock-pin-set { fill: Highlight; }
-  .reminder-toggle input { appearance: auto; -webkit-appearance: auto; width: 20px; height: 20px; min-height: 20px; }
-  .reminder-toggle input::before { display: none; }
-  .reminder-toggle input:checked { background-image: none; }
 }

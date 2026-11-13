@@ -121,15 +121,6 @@ test.describe("forced colours", () => {
     expect(await active.evaluate((node) => getComputedStyle(node).forcedColorAdjust)).toBe("none");
   });
 
-  test("the reminder switch is the system's checkbox", async ({ page }) => {
-    await open(page);
-    await page.emulateMedia({ forcedColors: "active" });
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
-    const box = page.locator(".reminder-toggle input");
-    expect(await box.evaluate((node) => getComputedStyle(node).appearance)).toBe("auto");
-    expect(await box.evaluate((node) => getComputedStyle(node, "::before").display)).toBe("none");
-  });
-
   for (const selector of ["input[type=search]", "#filter-environment"]) {
     test(`keyboard focus on ${selector} shows an outline`, async ({ page }) => {
       await open(page);
