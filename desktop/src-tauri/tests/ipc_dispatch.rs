@@ -48,6 +48,9 @@ mod views;
 #[path = "../src/visibility.rs"]
 #[allow(unused_imports)]
 mod visibility;
+#[cfg(windows)]
+#[path = "../src/windows_session.rs"]
+mod windows_session;
 
 use commands::*;
 use session::{Access, Held, MonotonicClock, Session, VaultState};

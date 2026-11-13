@@ -211,7 +211,8 @@ struct LeaseCell {
 }
 
 /// A gate guard. A lock transition that the call saw is settled when the guard is dropped,
-/// after the gate was released, so a cleanup never runs under the gate.
+/// after the gate was released, so a cleanup never runs under the gate. The attempt never
+/// waits for the lease (`Session::settle`).
 struct GateGuard<'a> {
     session: &'a Session,
     guard: Option<MutexGuard<'a, Gate>>,
@@ -233,13 +234,13 @@ impl DerefMut for GateGuard<'_> {
 
 impl Drop for GateGuard<'_> {
     fn drop(&mut self) {
-        let Some(mut guard) = self.guard.take() else {
+        let Some(guard) = self.guard.take() else {
             return;
         };
-        let owed = self.flush && std::mem::take(&mut guard.cleanup_owed);
+        let owed = self.flush && guard.cleanup_owed;
         drop(guard);
         if owed {
-            self.session.settle(false);
+            self.session.settle();
         }
     }
 }
@@ -539,11 +540,25 @@ impl Session {
         self.cell()
     }
 
-    /// The cleanup attempt of one public call (at most one, never a loop). `tick` also
-    /// expires a due lease of the current session.
-    fn settle(&self, tick: bool) {
-        let mut cell = self.cell();
-        self.settle_held(&mut cell, tick, false);
+    /// The cleanup attempt that a lock transition owes (at most one, never a loop). It never
+    /// waits for the lease, so no thread that delivers a lock waits for clipboard work (FW-01).
+    /// When a copy or a tick holds the lease, the attempt stays owed, and the holder makes it
+    /// when it lets the lease go (`release`).
+    fn settle(&self) {
+        let mut cell = match self.lease.try_lock() {
+            Ok(cell) => cell,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return,
+        };
+        self.settle_held(&mut cell, false, false);
+    }
+
+    /// Lets the lease go, then makes the attempt that a lock owed while the lease was held.
+    fn release(&self, cell: MutexGuard<'_, LeaseCell>) {
+        drop(cell);
+        if self.raw_gate().cleanup_owed {
+            self.settle();
+        }
     }
 
     fn settle_held(&self, cell: &mut LeaseCell, tick: bool, only_if_owed: bool) {
@@ -618,8 +633,10 @@ impl Session {
         }
     }
 
+    /// A signal from Windows. The Windows message thread calls it, so it ends the session under
+    /// the gate and makes no cleanup attempt: the cleanup worker's next tick makes it (FW-01).
     pub fn observe(&self, signal: Signal) {
-        if let Ok(mut gate) = self.gate() {
+        if let Ok(mut gate) = self.gate_deferred() {
             gate.policy.observe(signal);
             if signal != Signal::Available {
                 self.locked_gate(&mut gate);
@@ -665,7 +682,7 @@ impl Session {
             Err(TryLockError::WouldBlock) => return,
         };
         let valid = self
-            .gate()
+            .gate_deferred()
             .ok()
             .and_then(|mut gate| self.current(&mut gate).ok())
             .map(|s| s.ticket);
@@ -674,21 +691,33 @@ impl Session {
         }
     }
 
+    /// The cleanup worker's step: it expires a due lease, and makes an attempt that a lock owes.
+    /// It may wait for a copy in progress, so the Windows message thread never calls it.
     pub fn tick(&self) {
         // Expiry seen here is settled by the one attempt below.
         drop(self.gate_deferred());
-        self.settle(true);
+        let mut cell = self.cell();
+        self.settle_held(&mut cell, true, false);
+        self.release(cell);
         self.discard_locked_vault();
     }
 
     /// Window close and application exit: lock, with one cleanup attempt, once. Later calls
-    /// do nothing until the next open. The lease's own drop does not attempt again.
+    /// do nothing until the next open. The lease's own drop does not attempt again. The lock
+    /// comes first; the attempt then waits for a copy in progress, because nothing cleans
+    /// after the exit.
     pub fn shutdown(&self) {
         if self.exiting.swap(true, Ordering::SeqCst) {
             return;
         }
-        let _ = self.lock();
-        self.cell().clipboard.exit_attempted();
+        if let Ok(mut gate) = self.gate_deferred() {
+            gate.policy.lock();
+            self.locked_gate(&mut gate);
+        }
+        self.discard_locked_vault();
+        let mut cell = self.cell();
+        self.settle_held(&mut cell, false, false);
+        cell.clipboard.exit_attempted();
     }
 
     /// Renews the idle deadline of the session that the request names. The page makes the request
@@ -874,7 +903,7 @@ impl Session {
             Ok((ticket, id))
         })();
         // The older owner was retired above; the one attempt for its lease is here.
-        self.settle(false);
+        self.settle();
         self.discard_locked_vault();
         reservation
     }
@@ -1212,6 +1241,7 @@ impl Session {
         let mut cell = self.cell();
         let result = self.copy_held(&mut cell, ticket, read, text);
         self.settle_held(&mut cell, false, true);
+        self.release(cell);
         result
     }
 
@@ -3472,6 +3502,10 @@ mod tests {
         assert_eq!(f.native_notices.lock().unwrap()[0].session_id, owner);
     }
 
+    /// The bound of a wait that proves that an event is prompt. It keeps its own short bound
+    /// (class Q).
+    const PROMPT: Duration = Duration::from_secs(5);
+
     struct BlockingClipboard {
         data: Arc<Mutex<FakeData>>,
         started: mpsc::Sender<()>,
@@ -3621,6 +3655,8 @@ mod tests {
 
         // Columns: entry, the session expires before the call, a lock notice is expected,
         // the call. Each entry is a public call of `Session` that can see a lock transition.
+        // A Windows signal is the message thread's `observe` and then the cleanup worker's
+        // `tick`, as `windows_session::Delivery` runs them (FW-01).
         fn entries() -> Vec<Entry> {
             vec![
                 ("lock", false, true, |f, _, _| {
@@ -3630,13 +3666,16 @@ mod tests {
                     let _ = f.session.lock_owned(Some(owner));
                 }),
                 ("observe locked", false, true, |f, _, _| {
-                    f.session.observe(Signal::Locked)
+                    f.session.observe(Signal::Locked);
+                    f.session.tick();
                 }),
                 ("observe suspend", false, true, |f, _, _| {
-                    f.session.observe(Signal::Suspend)
+                    f.session.observe(Signal::Suspend);
+                    f.session.tick();
                 }),
                 ("observe unobservable", false, true, |f, _, _| {
-                    f.session.observe(Signal::Unobservable)
+                    f.session.observe(Signal::Unobservable);
+                    f.session.tick();
                 }),
                 ("shutdown", false, true, |f, _, _| f.session.shutdown()),
                 ("prepare_open", false, true, |f, _, _| {
@@ -3834,8 +3873,13 @@ mod tests {
                 .recv_timeout(crate::test_support::PATIENCE)
                 .expect("a stalled cleanup must not hold the gate");
 
+            let (locked_tx, locked_rx) = mpsc::channel();
             let session = f.session.clone();
-            let lock = std::thread::spawn(move || session.lock());
+            let lock = std::thread::spawn(move || {
+                let locked = session.lock();
+                locked_tx.send(()).unwrap();
+                locked
+            });
             let deadline = Instant::now() + crate::test_support::PATIENCE;
             while f.events.load(Ordering::SeqCst) == 0 {
                 assert!(
@@ -3844,17 +3888,79 @@ mod tests {
                 );
                 std::thread::sleep(Duration::from_millis(5));
             }
-            assert!(
-                !lock.is_finished(),
-                "the lock's own attempt waits for the cleanup in progress (recorded limit)"
-            );
+            let prompt = locked_rx.recv_timeout(PROMPT).is_ok();
             assert_eq!(f.clipboard.lock().unwrap().text, "fake-stalled");
             release_tx.send(()).unwrap();
             tick.join().unwrap();
             lock.join().unwrap().unwrap();
+            assert!(prompt, "a lock waited for the cleanup in progress (FW-01)");
             assert_eq!(f.clipboard.lock().unwrap().text, "");
             assert_eq!(f.clipboard.lock().unwrap().clears, 1);
             assert_eq!(f.events.load(Ordering::SeqCst), 1);
+        }
+
+        /// The first cleanup attempt waits until the test releases it, then finds the clipboard
+        /// busy. Later attempts clear.
+        struct StalledThenBusy {
+            inner: FakeClipboard,
+            started: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+            attempts: Arc<AtomicUsize>,
+        }
+        impl ClipboardBackend for StalledThenBusy {
+            fn set_private(&mut self, text: &str) -> Publication {
+                self.inner.set_private(text)
+            }
+            fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
+                if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    self.started.send(()).unwrap();
+                    self.release.recv().unwrap();
+                    return Err(CommandError::new(
+                        "clipboard",
+                        "The clipboard is busy. Try copying again.",
+                    ));
+                }
+                self.inner.clear_matching(sequence, text)
+            }
+        }
+
+        // FW-01: a lock that finds the lease held does not wait for it. Its one attempt is made
+        // by the holder, when it lets the lease go.
+        #[test]
+        fn a_lock_that_finds_the_lease_held_gets_its_attempt_when_the_holder_lets_it_go() {
+            let f = fixture();
+            let (started_tx, started_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let attempts = Arc::new(AtomicUsize::new(0));
+            f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(StalledThenBusy {
+                inner: FakeClipboard(f.clipboard.clone()),
+                started: started_tx,
+                release: release_rx,
+                attempts: attempts.clone(),
+            }));
+            let ticket = f.session.snapshot().unwrap().ticket;
+            f.session
+                .copy(ticket, Zeroizing::new("fake-kept".into()))
+                .unwrap();
+            f.clock.set(30);
+            let session = f.session.clone();
+            let tick = std::thread::spawn(move || session.tick());
+            started_rx
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
+            let (locked_tx, locked_rx) = mpsc::channel();
+            let session = f.session.clone();
+            let lock = std::thread::spawn(move || {
+                session.lock().unwrap();
+                locked_tx.send(()).unwrap();
+            });
+            let prompt = locked_rx.recv_timeout(PROMPT).is_ok();
+            release_tx.send(()).unwrap();
+            tick.join().unwrap();
+            lock.join().unwrap();
+            assert!(prompt, "a lock waited for the lease");
+            assert_eq!(attempts.load(Ordering::SeqCst), 2);
+            assert_eq!(f.clipboard.lock().unwrap().text, "");
         }
 
         // The fence of design D2: a settle that follows a newer session's copy leaves it.
@@ -3876,7 +3982,7 @@ mod tests {
                 .copy(ticket, Zeroizing::new("fake-newer-copy".into()))
                 .unwrap();
             let before = c.attempts.lock().unwrap().len();
-            c.f.session.settle(false);
+            c.f.session.settle();
             c.f.session.tick();
             assert_eq!(c.attempts.lock().unwrap().len(), before);
             assert_eq!(c.f.clipboard.lock().unwrap().text, "fake-newer-copy");
@@ -3921,6 +4027,92 @@ mod tests {
             tick.join().unwrap();
             copy.join().unwrap().unwrap();
             assert_eq!(f.clipboard.lock().unwrap().text, "fake-second");
+        }
+    }
+
+    /// FW-01: the Windows message thread delivers every lock signal while a copy stalls in the
+    /// clipboard. The test runs the code that `window_proc` runs (`Delivery`), with a fake
+    /// clipboard and no window.
+    #[cfg(windows)]
+    mod message_thread {
+        use super::*;
+        use crate::windows_session::Delivery;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            WM_POWERBROADCAST, WM_TIMER, WM_WTSSESSION_CHANGE,
+        };
+
+        #[test]
+        fn fw01_a_lock_signal_after_a_timer_tick_is_delivered_while_a_copy_stalls_and_the_copy_is_then_taken_back(
+        ) {
+            for (name, message, wparam) in [
+                ("Windows lock", WM_WTSSESSION_CHANGE, 7),
+                ("sign-out", WM_WTSSESSION_CHANGE, 6),
+                ("console disconnect", WM_WTSSESSION_CHANGE, 2),
+                ("remote disconnect", WM_WTSSESSION_CHANGE, 4),
+                ("suspend", WM_POWERBROADCAST, 4),
+                ("resume", WM_POWERBROADCAST, 18),
+            ] {
+                let f = fixture();
+                let stamp = f.session.snapshot().unwrap();
+                let (started_tx, started_rx) = mpsc::channel();
+                let (release_tx, release_rx) = mpsc::channel();
+                f.session.cell_for_test().clipboard =
+                    ClipboardLease::new(Box::new(BlockingClipboard {
+                        data: f.clipboard.clone(),
+                        started: started_tx,
+                        release: release_rx,
+                        calls: 0,
+                        block_on: 1,
+                    }));
+                let session = f.session.clone();
+                let copy = std::thread::spawn(move || {
+                    session.copy(stamp.ticket, Zeroizing::new("fake-stalled-copy".into()))
+                });
+                started_rx
+                    .recv_timeout(crate::test_support::PATIENCE)
+                    .unwrap();
+
+                let delivery = Delivery::new(f.session.clone()).unwrap();
+                let (delivered_tx, delivered_rx) = mpsc::channel();
+                let thread = std::thread::spawn(move || {
+                    delivery.message(WM_TIMER, 1, || Signal::Available);
+                    delivery.message(message, wparam, || Signal::Available);
+                    delivered_tx.send(()).unwrap();
+                    delivery
+                });
+                let prompt = delivered_rx.recv_timeout(PROMPT).is_ok();
+                let reveal = f.session.reveal(Stamped {
+                    snapshot: stamp,
+                    value: Zeroizing::new("fake-secret".into()),
+                });
+                release_tx.send(()).unwrap();
+                let copied = copy.join().unwrap();
+                drop(thread.join().unwrap());
+
+                assert!(
+                    prompt,
+                    "{name}: the message thread waited for the stalled copy"
+                );
+                assert_eq!(
+                    reveal.err().map(|error| error.kind),
+                    Some("locked".to_string()),
+                    "{name}: a reveal after the signal"
+                );
+                assert_eq!(copied.unwrap_err().kind, "locked", "{name}: the copy");
+                assert_eq!(
+                    f.clipboard.lock().unwrap().text,
+                    "",
+                    "{name}: the copy outlived the lock"
+                );
+                assert!(
+                    f.session
+                        .cell_for_test()
+                        .clipboard
+                        .owned_generation()
+                        .is_none(),
+                    "{name}: the lease ended"
+                );
+            }
         }
     }
 

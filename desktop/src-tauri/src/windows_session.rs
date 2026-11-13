@@ -32,8 +32,76 @@ mod windows {
     };
 
     struct Context {
-        session: Arc<Session>,
+        delivery: Delivery,
         window: Arc<Mutex<Option<isize>>>,
+    }
+
+    /// What the message thread does with a session message. `window_proc` runs it, and so does
+    /// the test of the dispatch path, so both run the same code. The thread only delivers
+    /// signals: it never waits for the clipboard lease and never uses the clipboard (FW-01).
+    /// The clipboard cleanup runs on a worker of its own, which may wait for a copy.
+    pub struct Delivery {
+        session: Arc<Session>,
+        wake: mpsc::SyncSender<()>,
+    }
+
+    impl Delivery {
+        /// Starts the cleanup worker. It ends when the delivery is dropped.
+        pub fn new(session: Arc<Session>) -> std::io::Result<Self> {
+            let (wake, woken) = mpsc::sync_channel(1);
+            let worker = session.clone();
+            std::thread::Builder::new()
+                .name("akm-clipboard-cleanup".into())
+                .spawn(move || {
+                    while woken.recv().is_ok() {
+                        worker.tick();
+                    }
+                })?;
+            Ok(Self { session, wake })
+        }
+
+        /// A full channel means that a wake is already waiting, so this never blocks.
+        fn wake(&self) {
+            let _ = self.wake.try_send(());
+        }
+
+        /// The reply to a session message, or `None` for any other message. `query` reads the
+        /// state of the Windows session.
+        pub fn message(
+            &self,
+            message: u32,
+            wparam: WPARAM,
+            query: impl Fn() -> Signal,
+        ) -> Option<LRESULT> {
+            let session = &self.session;
+            let result = match message {
+                WM_WTSSESSION_CHANGE => {
+                    // Lock/disconnect/logoff must invalidate pending unlocks even before WTS catches up.
+                    match wparam {
+                        2 | 4 | 6 | 7 => session.observe(Signal::Locked),
+                        _ => session.observe(query()),
+                    }
+                    0
+                }
+                WM_POWERBROADCAST => {
+                    // PBT_APMSUSPEND and every resume invalidate the old session.
+                    if matches!(wparam, 4 | 6 | 7 | 18) {
+                        session.observe(Signal::Suspend);
+                        if wparam != 4 {
+                            session.observe(query());
+                        }
+                    }
+                    1
+                }
+                WM_TIMER => {
+                    session.observe(query());
+                    0
+                }
+                _ => return None,
+            };
+            self.wake();
+            Some(result)
+        }
     }
 
     pub struct Monitor {
@@ -105,33 +173,13 @@ mod windows {
         }
         let context = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Context;
         if !context.is_null() {
-            let session = &(*context).session;
+            let delivery = &(*context).delivery;
+            if let Some(result) = delivery.message(message, wparam, query_signal) {
+                return result;
+            }
             match message {
-                WM_WTSSESSION_CHANGE => {
-                    // Lock/disconnect/logoff must invalidate pending unlocks even before WTS catches up.
-                    match wparam {
-                        2 | 4 | 6 | 7 => session.observe(Signal::Locked),
-                        _ => session.observe(query_signal()),
-                    }
-                    return 0;
-                }
-                WM_POWERBROADCAST => {
-                    // PBT_APMSUSPEND and every resume invalidate the old session.
-                    if matches!(wparam, 4 | 6 | 7 | 18) {
-                        session.observe(Signal::Suspend);
-                        if wparam != 4 {
-                            session.observe(query_signal());
-                        }
-                    }
-                    return 1;
-                }
-                WM_TIMER => {
-                    session.observe(query_signal());
-                    session.tick();
-                    return 0;
-                }
                 WM_CLOSE => {
-                    session.observe(Signal::Unobservable);
+                    delivery.session.observe(Signal::Unobservable);
                     PostQuitMessage(0);
                     return 0;
                 }
@@ -155,11 +203,14 @@ mod windows {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let window = Arc::new(Mutex::new(None));
         let thread_window = window.clone();
+        let delivery = Delivery::new(session.clone()).map_err(CommandError::internal)?;
         std::thread::Builder::new()
             .name("akm-windows-session".into())
             .spawn(move || {
+                // The cleanup worker settles what the last signal owes.
+                let last_wake = delivery.wake.clone();
                 let mut context = Box::new(Context {
-                    session: session.clone(),
+                    delivery,
                     window: thread_window.clone(),
                 });
                 let name: Vec<u16> = format!("AKMSession-{}", uuid::Uuid::new_v4())
@@ -222,6 +273,7 @@ mod windows {
                         }
                     }
                     session.observe(Signal::Unobservable);
+                    let _ = last_wake.try_send(());
                     KillTimer(hwnd, 1);
                     if power != 0 {
                         UnregisterSuspendResumeNotification(power);
@@ -244,6 +296,9 @@ mod windows {
 
 #[cfg(windows)]
 pub use windows::{start, Monitor};
+
+#[cfg(all(windows, test))]
+pub(crate) use windows::Delivery;
 
 #[cfg(not(windows))]
 pub struct Monitor;
