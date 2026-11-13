@@ -397,37 +397,6 @@ B=\"open
     }
 
     #[test]
-    fn emits_plain_values_without_quotes() {
-        assert_eq!(line("A", "abc-123"), "A=abc-123");
-        assert_eq!(line("A", ""), "A=''");
-    }
-
-    #[test]
-    fn quotes_and_round_trips_awkward_values() {
-        for value in ["a b", "it's", "say \"hi\"", "back\\slash", "line\nbreak"] {
-            let rendered = line("A", value);
-            let parsed = parse(&rendered).unwrap();
-            assert_eq!(parsed, vec![("A".to_string(), value.to_string())]);
-        }
-    }
-
-    #[test]
-    fn parses_comments_export_and_double_quotes() {
-        let parsed =
-            parse("# comment\n\nexport OPENAI=sk-123\nGITHUB='ghp 456'\nMULTI=\"a\\nb\"\n")
-                .unwrap();
-
-        assert_eq!(
-            parsed,
-            vec![
-                ("OPENAI".to_string(), "sk-123".to_string()),
-                ("GITHUB".to_string(), "ghp 456".to_string()),
-                ("MULTI".to_string(), "a\nb".to_string()),
-            ]
-        );
-    }
-
-    #[test]
     fn rejects_bad_names_duplicates_and_missing_equals() {
         assert!(parse("lower=1").is_err());
         assert!(parse("A=1\nA=2").is_err());

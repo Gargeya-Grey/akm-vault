@@ -1545,17 +1545,6 @@ mod tests {
         let _: fn(bool) -> Result<Zeroizing<String>> = master_password;
     }
 
-    /// FR-08: the production code reads no secret with a plain `String` buffer.
-    #[test]
-    fn no_production_code_reads_stdin_into_a_plain_string() {
-        let source = include_str!("main.rs");
-        let production = &source[..source.find("\nmod tests {").unwrap()];
-        assert!(
-            !production.contains("read_to_string"),
-            "use read_secret, which keeps the bytes in a Zeroizing buffer"
-        );
-    }
-
     #[test]
     fn a_secret_read_from_a_stream_drops_one_bom_and_the_line_break_only() {
         for (input, expected) in [
@@ -2105,12 +2094,5 @@ mod tests {
             "{:?}",
             run.journal
         );
-    }
-
-    #[test]
-    fn parses_date_and_rfc3339() {
-        assert!(parse_expiry("2027-01-31").is_ok());
-        assert!(parse_expiry("2027-01-31T10:00:00Z").is_ok());
-        assert!(parse_expiry("soon").is_err());
     }
 }

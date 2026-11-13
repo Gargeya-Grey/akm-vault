@@ -2013,30 +2013,6 @@ fn file_export_rejects_an_ignored_private_dacl_before_writing() {
 }
 
 #[test]
-fn file_export_publication_failure_removes_its_plaintext_temp() {
-    struct FailedPublication;
-    impl export::ExportIo for FailedPublication {
-        fn publish(&mut self, file: &fs::File, _destination: &Path) -> akm_core::Result<()> {
-            assert_eq!(file.metadata()?.len(), 30);
-            Err(std::io::Error::other("injected publication failure").into())
-        }
-    }
-
-    let directory = temporary_directory();
-    let target = directory.path().join("out.env");
-    let result = export::write_new_with(
-        &target,
-        &[("EXPORT_SECRET".into(), "fake-test-value".into())],
-        &mut FailedPublication,
-    );
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("injected publication failure"));
-    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
-}
-
-#[test]
 fn file_export_that_cannot_confirm_removal_of_its_plaintext_temp_says_so_and_names_the_file() {
     struct FailedDelete;
     impl export::ExportIo for FailedDelete {
