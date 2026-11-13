@@ -393,7 +393,7 @@ mod tests {
         assert_eq!(vault.list()[0].expires_at, Some(whole));
         // The core holds the same rule for a typed instant from any other caller.
         let mut typed = vault.edit_input(&key.id).unwrap();
-        typed.expires_at = Some(whole + chrono::Duration::nanoseconds(1));
+        typed.expires_at = Some("2030-01-02T03:04:05.000000001Z".parse().unwrap());
         assert!(vault.update(&key.id, typed).is_err());
         assert_eq!(vault.list()[0].expires_at, Some(whole));
     }
