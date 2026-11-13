@@ -78,7 +78,13 @@ The owner asked for the cause of the stall and for a plan to pass the bar, and g
 - [Unit 4 review 1](reviews/2026-11-13-unit4-review1.md) failed: 6 P2, 4 P3 (rows U4-R1-01 to U4-R1-10 in FINDINGS.md). Five of the P2 findings are in the public-snapshot tool, and one is in the notices generator. The review supports the workflow's exit codes, permissions and triggers, and the fixes for FR-23, FR-24 and FR-27. Fix round 1 of 4 started from `ac9c408` with a fresh worker: the snapshot tool publishes only a file that it can prove it scanned.
 - [Core review 1](reviews/2026-11-13-core-review1.md) of unit 3 failed: 2 P1, 7 P2, 2 P3 (rows CORE-R1-01 to CORE-R1-11 in FINDINGS.md). The fixes for FR-01, FR-02, FR-12, FR-28 and P2R2-07 do not hold. The unit 3 fix worker started from `5a449de` in its own worktree, on `crates/**` only, with one design direction for each fault class. It started before unit 1 landed, to save time: it must keep the core items that the desktop uses compatible, and the collector resolves any overlap at the merge.
 
-**Unit 2 after two failed reviews (2026-11-13).** [Review 2](reviews/2026-11-13-unit2-review2.md) failed: 1 P2, 5 P3. The stop rule note of unit 4 below applies here too: the planner continues under the plan's rule, for the owner's veto, and records each design question with its answer. Each answer is a decision that the owner can reverse.
+**Root cause of the loop, and the changed rules (2026-11-13).** The owner asked for the cause of the problem and told the planner to own the process and the solutions. The analysis and the rules are in [design/gate-campaign.md](design/gate-campaign.md), "Root cause of the loop". In short: old fixes hold, and new findings are in new code, because each fix round wrote a new subsystem (2,100 to 4,700 lines) and new guards. From now on a fix is the smallest change that passes its regression test, a promise that the product does not need is narrowed, a guard is a tripwire, and the next measurement is a full review, not a fifth round of unit reviews. AGENTS.md, "How work runs", carries the same rules since this commit; the Safety and Owner gates sections are unchanged. Decisions for the owner's veto: the Windows notification goes away; the backup promise is narrowed and no file identity record is built; the tools get no further review round before the full review.
+
+- The unit 2 worker of round 2 was stopped. The planner made the six fixes of review 2 and two fixes of the collect (U2-C-01, U2-C-02) as small changes in `3f0b7dc`: 151 lines added in 15 files, of them about 45 outside tests. Each new test failed before its fix. Checks on that commit: `npm run build` exit 0, `npm test` 796 passed in 46 files, `npm run test:ui` 156 passed, `check_docs.py` PASS. No Rust file changed, so the Rust run of `5bfaa6d` stands. No review has read these fixes.
+- The workers of unit 1 (round 1) and unit 3 (round 2) got a directive with the new rules while they ran: no second notification library, no rebuild of the commit-point guard, no file identity record for backups.
+- The unit 4 worker of round 2 had finished its five changes before the analysis. Its result is collected as it is.
+
+**Unit 2 after two failed reviews (2026-11-13; its two designs are withdrawn, see the block above).** [Review 2](reviews/2026-11-13-unit2-review2.md) failed: 1 P2, 5 P3. The stop rule note of unit 4 below applies here too: the planner continues under the plan's rule, for the owner's veto, and records each design question with its answer. Each answer is a decision that the owner can reverse.
 
 | Class that failed again | Design question | Planner's answer |
 |---|---|---|
@@ -128,10 +134,11 @@ One class is new in review 2: work without a bound on bytes that are not authent
 
 ## Next action
 
-1. Unit 1: collect fix round 1 (seven findings of review 1), run the full checks and the two real-app proofs, then review 2 on Sol. Unit 2: collect fix round 2 (six findings of review 2, two new designs), run its checks and the two real-app proofs, then review 3 on Sol. Collect unit 4 fix round 2 when it finishes: check it against its brief, merge, run its checks, then its third review.
-2. Unit 3: collect fix round 2 (six findings of review 2, four new designs), run the full checks and both interchange suites, then review 3 on Sol.
-3. One review for each of units 1, 2 and 4, with fix rounds by class.
-4. Area probes, then the owner's gates above, then the full review.
+1. Collect the three rounds in flight when each worker reports: unit 1 round 1, unit 3 round 2, unit 4 round 2. Check each against its brief and the directive, merge, and run the full checks, both interchange suites and the two real-app proofs once on the merged tree. Unit 2 round 2 is done by the planner (six small fixes; `npm run build`, `npm test`, `npm run test:ui` and `check_docs.py` ran on them).
+2. Remove the Windows notification (native code, page, settings switch, documents, claims).
+3. Narrow the promises in PROJECT.md, THREAT_MODEL.md and CLAIMS.md: backups, reserved names, locks, the journal.
+4. Run one full review with the official brief on the integrated tree. It gives the next measured score. Then fix by the size of each deduction, with the smallest fix.
+5. The owner's gates: CI billing, one sitting for the owner-present proofs, the signing decision.
 
 ## Local state outside the repository
 

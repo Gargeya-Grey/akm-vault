@@ -16,10 +16,10 @@ Tier 2: 6 units, risk: auth, token, delete, schema, workflow, privacy, public AP
 
 - **Feature freeze.** No new feature starts before the gate. The terminal launch and the key history are finished, because the rescore deducted for their absence.
 - **One branch.** All open work is merged on `gate/integration`. Each unit works in its own worktree from that branch, on its own files.
-- **Fix by class.** A finding names a fault class. The fix makes the class impossible by construction where that is practical: one mechanism, every caller moved to it, the old path deleted, and a guard that fails when a new caller brings the class back. Each test has a mutant that it catches.
+- **Fix by class (replaced on 2026-11-13, see "Root cause of the loop").** A finding names a fault class. The fix makes the class impossible by construction where that is practical: one mechanism, every caller moved to it, the old path deleted, and a guard that fails when a new caller brings the class back. Each test has a mutant that it catches.
 - **Fewer promises.** Where the operating system cannot give a guarantee, the product does not promise it. The limit is written in the contract, in the user documents and in [CLAIMS.md](../CLAIMS.md), and the review receives it.
-- **Review loop.** A unit gets a class sweep by its implementer, then a review ([REVIEWING.md](../REVIEWING.md)). At most 4 rounds per unit. A class that fails two rounds gets a redesign that removes its premise, chosen by a design review, before a third fix. A question goes to the owner only when it is about money, an account, an irreversible step or a contract change.
-- **Probe before the score.** Before the full review, each of the nine rubric areas gets a probe review with the full-review brief. The official full review starts only when the probes find no P2. A probe gives no score.
+- **Review loop (replaced on 2026-11-13, see "Root cause of the loop").** A unit gets a class sweep by its implementer, then a review ([REVIEWING.md](../REVIEWING.md)). At most 4 rounds per unit. A class that fails two rounds gets a redesign that removes its premise, chosen by a design review, before a third fix. A question goes to the owner only when it is about money, an account, an irreversible step or a contract change.
+- **Probe before the score (replaced on 2026-11-13, see "Root cause of the loop").** Before the full review, each of the nine rubric areas gets a probe review with the full-review brief. The official full review starts only when the probes find no P2. A probe gives no score.
 - **Workers leave the records alone.** Only the collector edits `docs/STATE.md`, `docs/FINDINGS.md`, `docs/ROADMAP.md`, `docs/PROJECT.md`, `AGENTS.md` and `docs/reviews/`. A worker returns its finding rows and its proposed contract wording in its report.
 
 ## Units
@@ -87,6 +87,47 @@ The routing file of the owner's harness names the models. Each node states its s
 - **Unit 1 after its first review.** [Review 1](../reviews/2026-11-13-unit1-review1.md) failed with 5 P2 and 2 P3. One design for each class, for the owner's veto: (B) a value that left the vault can be opened only by one function that checks its whole stamp (session, vault revision and view) under the gate, so no caller can drop a part of it; (P) a clipboard copy owns its publication, and every refusal after the publication takes it back, whatever the cause; (A) the hand-over of a notification to Windows is itself the act under the gate, and its real result is the delivery state; (N) the step that cannot be taken back marks its outcome record under the gate, so every later way out, an unwind too, reports a commit as a commit, and no reply after a commit invites a retry; (F) a temporary file has a new random name, is created only when no file has that name, and is the only file that its owner deletes; the guard of the commit point uses names that the compiler resolves; an operation ID has one accepted spelling.
 - **Unit 2 after its second failed review.** Two classes failed again, and each gets a design that removes its premise ([STATE.md](../STATE.md), "Unit 2 after two failed reviews"): every message from the native code changes the data generation unless its kind is listed as changing nothing, and the lists are read again from that generation; the source guards take resolved modules and decoded texts from the TypeScript compiler.
 - **Three more fault classes** for the AGENTS.md table, when their guards exist: a guard that reads input differently from its consumer and fails open (FR-28); arithmetic on a time value from the user without a check (FR-15); a destination chosen by an absence check, then written with a replacing rename (FR-14, core).
+
+## Root cause of the loop, and the changed rules (2026-11-13)
+
+The owner asked for the cause of the problem and told the planner to act as the tech lead and the product manager. This section is the answer. Each rule and each decision here is for the owner's veto.
+
+### What the numbers say
+
+- **The score was not measured since 9 Nov.** It is still 66.25/100. The campaign added 45,652 lines and removed 4,194 (`main..gate/integration`) with no new measurement.
+- **Each fix round wrote a new subsystem.** Lines added and removed by round: unit 1, 3,657 and 694 (native code); unit 2 round 1, 3,593 and 779; unit 3 round 1, 4,674 and 500; unit 4 round 1, 2,143 and 312.
+- **Each review after a round found about as many P2 findings as the one before.** Unit 1: 5. Unit 3: 6. Unit 4: 4. Unit 2: 4, then 1.
+- **Old fixes hold.** Unit 1 review 1 tried a second scenario on about 35 earlier rows and found no defect. Unit 2 review 2 found 8 fixes sound. Unit 3 review 2 verified 7 of 11.
+- **New findings are in new code.** Of the 16 open P2 findings, 5 are in the new native code of unit 1, 4 are in tools (3 of them in one tool, the public-snapshot scan), and 3 are a third failure of one promise each (backup ownership, name classes, journal confirmation). Six findings are against the guards that earlier fixes added (U1-R1-06, U2-R1-05, U2-R1-06, U2-R2-03, U2-R2-04, U4-R2-05).
+
+So the loop does not converge for one reason: a round fixes N findings and writes enough new code for about N new ones.
+
+### Causes
+
+1. **Fix size.** The rule "fix by class: one mechanism, a guard, a mutant" turned each finding into a mechanism, a structural guard and a design section. Example: for a notification that shows a count only, the round in progress added a second notification library and a lint rule.
+2. **Universal promises.** "Only", "never", "every" and "confirmed" need one counter-example to break, and the pass rule rates a broken contract P2. Three promises failed three reviews each. The product needs none of them in that strength.
+3. **The wrong meter.** A unit passed only with no P2 finding from a reviewer at maximum effort who assumes a defect. The release gate is the score of a full review, which counts deductions. The plan held back the full review until every unit passed, so nothing measured the distance to the gate.
+4. **Tools and guards with strong claims.** They are not the product, and each became review surface. The public-snapshot tool answers a deduction of about 0.5 points and has had about 10 P2 findings.
+5. **The planner's briefs.** After each failed review the planner wrote a larger design, also for P3 findings. This is the planner's fault, not the workers'.
+6. **Owner gates hold points.** About 3.25 points of the 33.75 deducted on 9 Nov need the owner (an estimate, not a score): signing, the updater, the install test, the native proofs, the redesigns that the owner has not accepted, and CI.
+
+### Rules from now on
+
+These replace "Fix by class", "Review loop" and "Probe before the score" above.
+
+- **Smallest fix.** A fix is the smallest change that makes the regression test of its finding pass. A class sweep finds the other places with the same defect and applies the same small fix. A round adds no module, mechanism, structural guard or design section, unless two P2 findings need the same one and the brief names it. Budget: 400 added lines outside tests for one unit and one round. A worker that needs more says for which finding, and why.
+- **Narrow the promise first.** When a finding breaks a promise that the product does not need in that strength, the planner narrows the promise in the contract, the threat model, the claims list and the screen text. The code stays. A promise names what AKM does, and avoids "only", "never" and "every" where the operating system or a file can make it false.
+- **Remove before you build.** A feature or a tool that failed review twice and has small value for the user is removed or narrowed. It does not get a third mechanism.
+- **A guard is a tripwire.** A structural guard reads the usual spelling of a mistake and says so in its comment. A way around a guard is a P3 finding at most, and the guard is not rebuilt for it. No new structural guard, unless it is a few lines.
+- **Measure with the meter of the gate.** The four rounds in flight are collected. Then one full review with the official brief runs on the integrated tree and gives a measured score. No further unit review is a gate. After the full review, fixes go in the order of the size of their deduction, under the rules above, and a second full review follows. If two full reviews in a row do not bring the deductions near 10, the planner tells the owner that the score is not reachable with this surface, with the features to cut.
+- **Short records.** One row for each finding, the raw review file, and the next action in STATE.md. No table of design questions for each round.
+
+### Product decisions (planner, for the owner's veto)
+
+- **The Windows notification goes away.** It shows a count, and only while AKM is open and unlocked, where the Keys view already shows the same count. The plugin hands the notification to Windows on its own task, so "never after a lock" cannot be true without a second library (U1-R1-03). Removing it also removes a dependency, a settings switch and an owner-present proof. It is removed after the collect of unit 1.
+- **Backups: the promise is narrowed, and no file identity record is built.** AKM keeps the five newest backups that the vault's list names beside the vault, and deletes older listed ones. A copy of a vault folder carries the list, so the rotation applies to the copy too (CORE-R2-01). A file that the list does not name is never deleted.
+- **Tools.** The public-snapshot tool, the notices generator and the claims check get no further review round before the full review. Their use is at publication, which is an owner gate; their open findings move to that gate unless the full review deducts for them.
+- **Unit 2 round 2** was done by the planner as six small fixes, in place of the two designs of "Unit 2 after its second failed review" above (the data clock for every native message, and guards that ask the compiler). Those two designs are withdrawn.
 
 ## Gates that need the owner
 
