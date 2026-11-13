@@ -172,7 +172,7 @@ private temporary file's permissions before writing and publishes without replac
 an existing destination. It reads the file's location from the open handle before it
 writes and after it publishes: a destination folder that was moved or replaced after the
 check (for example by a junction) stops the export. Write/flush/sync/publication failures trigger owned-file
-cleanup. If the CLI cannot confirm that it removed its temporary file, it says "could not confirm cleanup", names the file and exits with a failure, so you can delete it yourself. This is not secure erasure or a crash/power-loss cleanup guarantee.
+cleanup. If the CLI cannot confirm that it removed its temporary file, it says "could not confirm cleanup", names the file by its current name, read from the open handle, and exits with a failure, so you can delete it yourself. If it cannot read that name, it gives the name it created, says that the file may have another name now, and does not tell you to delete a file by that name. This is not secure erasure or a crash/power-loss cleanup guarantee.
 Desktop exports prepare outside the lock-state gate and check authorization before
 publication. A lock cancels an export that has not been authorized for publication;
 an already-authorized OS operation may finish and must report its completed outcome.

@@ -2016,6 +2016,134 @@ fn file_export_that_cannot_confirm_removal_of_its_plaintext_temp_says_so_and_nam
     );
 }
 
+/// The temporary file that a failed export left, and the folder that holds it.
+fn only_temp_in(folder: &Path) -> PathBuf {
+    let temp = fs::read_dir(folder)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert!(temp
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with(".akm-export-"));
+    temp
+}
+
+fn shown(path: &Path) -> String {
+    let canonical = path.canonicalize().unwrap().display().to_string();
+    canonical
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&canonical)
+        .to_string()
+}
+
+// FV-07: the owned temporary file is renamed, another file takes its old name, and the
+// cleanup fails. The warning names the renamed file, never the file at the old name.
+#[test]
+#[cfg(windows)]
+fn a_cleanup_warning_names_the_renamed_temporary_file_and_never_the_file_at_its_old_name() {
+    struct RenamedThenUndeletable {
+        renamed: PathBuf,
+        old: Option<PathBuf>,
+    }
+    impl export::ExportIo for RenamedThenUndeletable {
+        fn publish(&mut self, _file: &fs::File, destination: &Path) -> akm_core::Result<()> {
+            let temp = only_temp_in(destination.parent().unwrap());
+            fs::rename(&temp, &self.renamed)?;
+            fs::write(&temp, b"unrelated sentinel\n")?;
+            self.old = Some(temp);
+            Err(std::io::Error::other("injected publication failure").into())
+        }
+
+        fn discard(&mut self, _file: &fs::File) -> bool {
+            false
+        }
+    }
+
+    let directory = temporary_directory();
+    let mut io = RenamedThenUndeletable {
+        renamed: directory.path().join("renamed-owned.tmp"),
+        old: None,
+    };
+    let message = export::write_new_with(
+        &directory.path().join("out.env"),
+        &[("EXPORT_SECRET".into(), "fake-test-value".into())],
+        &mut io,
+    )
+    .unwrap_err()
+    .to_string();
+    let old = io.old.unwrap();
+    assert!(message.contains("could not confirm cleanup"), "{message}");
+    assert!(message.contains(&shown(&io.renamed)), "{message}");
+    assert!(!message.contains(".akm-export-"), "{message}");
+    assert!(!message.contains("fake-test-value"), "{message}");
+    assert_eq!(fs::read(&old).unwrap(), b"unrelated sentinel\n");
+}
+
+// FV-07: when AKM cannot read the current name of its file, the warning gives the name AKM
+// created, says the file may have another name now, and never tells the user to delete it.
+// When the name cannot be read before the first byte, nothing is written.
+#[test]
+fn a_cleanup_warning_without_a_current_name_never_directs_a_deletion() {
+    struct Nameless {
+        published: bool,
+        fail_at_once: bool,
+        wrote: bool,
+    }
+    impl export::ExportIo for Nameless {
+        fn write(
+            &mut self,
+            file: &mut fs::File,
+            envs: &[(String, String)],
+        ) -> akm_core::Result<()> {
+            self.wrote = true;
+            export::write(file, envs)
+        }
+
+        fn publish(&mut self, _file: &fs::File, _destination: &Path) -> akm_core::Result<()> {
+            self.published = true;
+            Err(std::io::Error::other("injected publication failure").into())
+        }
+
+        fn discard(&mut self, _file: &fs::File) -> bool {
+            false
+        }
+
+        fn current_path(&mut self, file: &fs::File) -> akm_core::Result<PathBuf> {
+            if self.published || self.fail_at_once {
+                return Err(std::io::Error::other("injected name failure").into());
+            }
+            export::final_path(file)
+        }
+    }
+
+    for fail_at_once in [false, true] {
+        let directory = temporary_directory();
+        let mut io = Nameless {
+            published: false,
+            fail_at_once,
+            wrote: false,
+        };
+        let message = export::write_new_with(
+            &directory.path().join("out.env"),
+            &[("EXPORT_SECRET".into(), "fake-test-value".into())],
+            &mut io,
+        )
+        .unwrap_err()
+        .to_string();
+        let temp = only_temp_in(directory.path());
+        assert!(message.contains("could not confirm cleanup"), "{message}");
+        assert!(message.contains(&shown(&temp)), "{message}");
+        assert!(message.contains("may have another name now"), "{message}");
+        assert!(!message.contains("Delete it yourself"), "{message}");
+        assert!(!message.contains("fake-test-value"), "{message}");
+        assert_eq!(io.wrote, !fail_at_once, "{message}");
+    }
+}
+
 #[test]
 fn file_export_whose_cleanup_is_confirmed_reports_only_its_own_failure() {
     struct ConfirmedDelete;

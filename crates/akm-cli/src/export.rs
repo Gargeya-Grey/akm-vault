@@ -226,9 +226,28 @@ pub(super) fn write_new_with(
         Ok(()) => Ok(()),
         Err(error) if io.discard(&temp.file) => Err(error),
         Err(error) => Err(Error::Io(std::io::Error::other(format!(
-            "{error}; could not confirm cleanup: the plaintext temporary file {} may still hold the exported values. Delete it yourself",
-            shown_path(&temp.path)
+            "{error}; could not confirm cleanup: {}",
+            leftover(io, &temp)
         )))),
+    }
+}
+
+/// FV-07: the file is named by the current path of the owned handle. The remembered name
+/// can belong to another file now, so it never comes with an instruction to delete.
+fn leftover(io: &mut impl ExportIo, temp: &PrivateTemp) -> String {
+    match io.current_path(&temp.file) {
+        Ok(current) if current == temp.path => format!(
+            "the plaintext temporary file {} may still hold the exported values. Delete it yourself",
+            shown_path(&current)
+        ),
+        Ok(current) => format!(
+            "the plaintext temporary file was renamed after AKM created it. It is now {} and may still hold the exported values. Delete it yourself",
+            shown_path(&current)
+        ),
+        Err(_) => format!(
+            "AKM created a plaintext temporary file as {}, which may still hold the exported values. AKM cannot read the file's current name: it may have another name now, and another file may have this name. Check that a file holds the export before you delete it",
+            shown_path(&temp.path)
+        ),
     }
 }
 
