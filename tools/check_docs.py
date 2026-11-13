@@ -1,40 +1,78 @@
-"""Fail when a tracked Markdown file names a test that does not exist, or holds a control character.
+"""Fail when a tracked Markdown file names a test that does not exist or holds a control character, or
+when a docs/CLAIMS.md row names evidence that does not run.
 
-Usage: python tools/check_docs.py              (the working tree)
-       python tools/check_docs.py --rev <rev>  (a commit, for example to show a past mistake)
+Usage: python tools/check_docs.py              (fast mode: the working tree, read as text)
+       python tools/check_docs.py --rev <rev>  (fast mode on a commit, for example to show a past mistake)
+       python tools/check_docs.py --full [--rust-list FILE] [--rust-ignored-list FILE]
+                                         [--vitest-list FILE] [--playwright-list FILE]
+                                       (full mode: the working tree and the test runners' own listings)
+
+TWO MODES (findings U4-R1-07, U4-R2-05). Fast mode is the default. It reads the sources as text and
+needs no build, so it cannot prove that a test runs, and its output says so. Full mode asks the test
+runners which tests they collect and would run:
+
+- Rust: `cargo test --workspace --locked --offline -- --list`, and the same with `--ignored` for the
+  ignored tests. A test runs under `cargo test` when the first listing holds it and the second does
+  not. A doc test is not a name. The steps of a `[[test]]` target with `harness = false` are read from
+  its source (every fn of its file counts), because cargo cannot list them: the listing starts that
+  binary, which runs its steps;
+- Vitest: `vitest list --json --staticParse=false` in desktop. Vitest then collects the tests by
+  running each test file; its static parse (the default) also lists a test call inside a function
+  that never runs. The listing holds only the tests that would run: a skipped or todo test, a test of
+  a skipped group, a skipIf or runIf test that is off and a test call that never runs are not in it;
+- Playwright: `playwright test --list --reporter=json` in desktop. A test whose expected status is
+  "skipped" does not run. The listing does not start the configured web server.
+
+An option names a file that holds a listing (CI passes none and the commands reuse its builds; a local
+run can list from its own target folder). Without the option, full mode runs the command. It reads
+each listing once, and a frontend listing only when a proof needs it.
+
+WORKFLOWS. Both modes read a workflow with PyYAML (pinned in CI; docs/TESTING.md): a job is a key of
+the workflow's `jobs` mapping, and a command is the `run` value of one of the job's steps, outside its
+whole-line shell comments. So a command in an `env` value, a job name in a comment and a key inside a
+scalar are not evidence.
+
+FAST MODE reads Rust as code: every comment, string, raw string and char literal is blanked first. A
+test is a fn with a `#[test]` or `#[<runtime>::test]` attribute, with other attributes around it.
+`#[ignore]` makes it an ignored test. A `#[cfg(...)]` on the fn, on a `mod` block around it or as
+`#![cfg(...)]` on its file turns it off when it is false for a Windows test build, or when fast mode
+cannot evaluate it: only test, windows, unix, debug_assertions, target_os, target_family, all, any and
+not are known. JavaScript and TypeScript are read with comments and the inside of every string
+blanked: a frontend test is a `test(` or `it(` call whose first argument is a string that is the
+title, not inside a skipped group (describe.skip, todo, fixme, skipIf or runIf, xdescribe), in a file
+without an `.only(` call. Fast mode does not see a runtime skip, a test call in a function that never
+runs, a test that a loop or a helper makes,
+a configuration that leaves a file out, a cfg on an out-of-line module (`mod x;`) or one that Cargo
+features decide. Full mode sees all of them.
+
+NAMES. A name in backticks that looks like a Rust test (snake_case with at least three underscores,
+for example `a_read_creates_no_folder_and_no_file`) must be a fn in the tracked Rust sources. When its
+line says "test", it must be a test, ignored or not (finding FR-24). A production function that a doc
+names as part of an API, on a line that does not say "test", is allowed. Raw reviews in docs/reviews/
+are exempt, because they are kept unchanged. THIRD_PARTY_NOTICES.md is exempt from this name rule only,
+because it holds the shipped packages' own READMEs and change logs; its control characters are still
+checked. A line that must keep a removed name (a history record) carries
+`<!-- check-docs: historical: <reason> -->`.
+
+CLAIMS. Each row of a docs/CLAIMS.md table whose header starts `| Claim |` has four cells: the claim,
+where it is stated, the evidence and the limit. Every name in backticks in the evidence cell must be a
+Rust test that `cargo test` runs (not an ignored test, and not one that a cfg turns off), or a proof
+name of PROOFS. At least one must be there, and the limit cell must not be empty. Each proof resolves
+to things that exist and run:
+
+- each of its files is tracked and, in the working tree, present on disk;
+- a workflow proof's job is a job of its workflow, and the job's commands hold the proof's command;
+- a frontend proof's title is a test of its file that its runner runs;
+- a proof's Rust test is a test, or an ignored test when the proof runs it with `--ignored`.
+
+The Named proofs table of docs/CLAIMS.md (header `| Proof name |`) lists exactly the names of PROOFS,
+each row's "What runs" cell names the proof's first file or its job, and a row's "Where it runs" cell
+starts "CI, each push" exactly when the proof runs in the build workflow.
 
 Git (class F): in the working tree the check lists the tracked files with `git ls-files`, a read of
 this checkout's index through git_child.existing. With --rev it reads the commit from
 git_child.source_copy, a copy of the Git data in a temporary folder, so Git never reads objects of the
 real repository, and a commit whose objects are missing fails plainly instead of being fetched.
-
-A name in backticks that looks like a Rust test (snake_case with at least three underscores, for
-example `a_read_creates_no_folder_and_no_file`) must exist as a test in the tracked Rust sources:
-a `fn <name>` that carries a `#[test]` or `#[<runtime>::test]` attribute. A name that is only a
-plain function fails too, when the line calls it a test (finding FR-24). Every fn in the file of a
-`[[test]]` target with `harness = false` counts as a test, because that file runs its own steps. A production function that
-a doc names as part of an API, on a line that does not say "test", is allowed. Raw reviews in
-docs/reviews/ are exempt, because they are kept unchanged. THIRD_PARTY_NOTICES.md is exempt from this
-name rule only, because it holds the shipped packages' own READMEs and change logs; its control characters are still checked. A line that must keep a removed name (a history record) carries
-`<!-- check-docs: historical: <reason> -->`. The Rust sources are read as code: a declaration inside a
-comment, a string, a raw string or a char literal is not a fn and not a test (finding U4-R1-07).
-
-Each row of a docs/CLAIMS.md table whose header starts `| Claim |` has four cells: the claim, where it is stated, the evidence and the
-limit. Every name in backticks in the evidence cell must be a test fn as above, or a proof name of
-PROOFS; at least one must be there, and the limit cell must not be empty. Each proof is resolved to
-things that exist and can run (finding U4-R1-07):
-
-- each of its files is tracked and, in the working tree, present on disk;
-- a workflow proof's job is a key of the workflow's `jobs` mapping, read by indentation, so a job name
-  in a comment, a block scalar or a quoted scalar is not a job; and the job's `run` steps hold the
-  proof's command, outside whole-line comments;
-- a frontend proof's test title is the first argument of a `test(` or `it(` call in its file, outside
-  comments (so a `test.skip(` call does not count);
-- a proof that runs a Rust test names a test fn as above.
-
-The Named proofs table of docs/CLAIMS.md (header `| Proof name |`) lists exactly the names of PROOFS,
-each row's "What runs" cell names the proof's first file or its job, and a row's "Where it runs" cell
-starts "CI, each push" exactly when the proof runs in the build workflow.
 
 A control character includes a vertical tab and a form feed. `str.splitlines` treats both as line
 breaks and would drop them before this check, so the lines are split on the newline only.
@@ -44,26 +82,41 @@ Exit 0 when clean, 1 with one line per problem.
 from __future__ import annotations
 
 import argparse
+import json
 import re
+import subprocess
 import sys
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import git_child  # noqa: E402  (every Git call goes through it: class F)
 
+try:
+    import yaml
+except ImportError:  # main() refuses to run without it and says how to install it
+    yaml = None
+
+PYYAML = "PyYAML==6.0.3"
 TEST_NAME = re.compile(r"`(?:[\w/.-]+\s*::\s*)?([a-z][a-z0-9]*(?:_[a-z0-9]+){3,})`")
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 RUST_FN = re.compile(r"\bfn\s+([a-z_][a-z0-9_]*)")
-# A test is a `fn` after a `#[test]` or `#[x::test]` attribute, with other attributes between. Comments
-# and literals are blanked first (rust_code), so they cannot hold or hide one.
-RUST_TEST = re.compile(
-    r"#\[(?:\w+::)*test\b[^\]]*\]"
-    r"(?:\s*#\[[^\]]*\])*"
-    r"\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+([a-z_][a-z0-9_]*)"
-)
+# A fn or a mod block with the attributes before it, in Rust whose comments and literals are blanked.
+RUST_ITEM = re.compile(r"((?:#\[[^\]]*\]\s*)+)(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+([a-z_][a-z0-9_]*)")
+RUST_MOD = re.compile(r"((?:#\[[^\]]*\]\s*)+)(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+ATTRIBUTE = re.compile(r"#!?\[[^\]]*\]")
+TEST_ATTRIBUTE = re.compile(r"#\[\s*(?:\w+\s*::\s*)*test\s*[\](]")
+IGNORE_ATTRIBUTE = re.compile(r"#\[\s*ignore\b")
+CFG_ATTRIBUTE = re.compile(r"#!?\[\s*cfg\s*\((.*)\)\s*\]$", re.DOTALL)
+FILE_CFG = re.compile(r"#!\[\s*cfg\s*\([^\]]*\)\s*\]")
+CFG_TOKEN = re.compile(r'\s*(?:([A-Za-z_]\w*)|("(?:[^"\\]|\\.)*")|(\S))')
+CFG_NAMES = {"test": True, "windows": True, "debug_assertions": True, "unix": False}
+CFG_VALUES = {"target_os": "windows", "target_family": "windows"}
 RAW_STRING = re.compile(r'(?:b|c)?r(#*)"')
+FRONTEND_CALL = re.compile(r"(?<![\w.$])(?:it|test)\s*\(\s*(?=[\"'`])")
+GROUP_OFF = re.compile(r"(?<![\w$])(?:(?:test\s*\.\s*)?describe\s*\.\s*(?:skip|todo|fixme|skipIf|runIf)\b|xdescribe\b)")
+ONLY = re.compile(r"\.\s*only\s*\(")
 SAYS_TEST = re.compile(r"\btests?\b", re.IGNORECASE)
 HISTORICAL = re.compile(r"<!-- check-docs: historical: \S.*? -->")
 EXEMPT_PREFIXES = ("docs/reviews/",)
@@ -73,18 +126,22 @@ CLAIMS = "docs/CLAIMS.md"
 EVIDENCE = re.compile(r"`([^`]+)`")
 BUILD = ".github/workflows/build.yml"
 NATIVE_PROOF = ".github/workflows/native-proof.yml"
+FAST_NOTE = "NOTE: fast mode reads the sources as text; it does not prove that a test runs. Run --full for the test runners' own listings."
 
 
 @dataclass(frozen=True)
 class Proof:
-    """What a proof name stands for. `files[0]` is the file that the Named proofs table names."""
+    """What a proof name stands for. `files[0]` is the file that the Named proofs table names. A
+    frontend proof has a title and the runner that runs it (vitest or playwright)."""
 
     files: tuple[str, ...]
     workflow: str | None = None
     job: str | None = None
     runs: tuple[str, ...] = ()
     rust_test: str | None = None
+    ignored: bool = False
     title: str | None = None
+    runner: str | None = None
 
 
 PROOFS = {
@@ -94,7 +151,7 @@ PROOFS = {
     "native-gui-proof": Proof(("tools/verify_windows_app.ps1",)),
     "frontend-reveal-timer": Proof(
         ("desktop/src/components/KeyDetail.timer.test.tsx",), BUILD, "verify", ("npm test",),
-        title="the countdown text is the only timer, and it resets on each reveal",
+        title="the countdown text is the only timer, and it resets on each reveal", runner="vitest",
     ),
     "public-snapshot-scan": Proof(
         ("tools/test_make_public_snapshot.py", "tools/test_snapshot_source.py"), BUILD, "verify",
@@ -105,12 +162,24 @@ PROOFS = {
         ("tools/generate_third_party_notices.py --check", "tools/test_third_party_notices.py"),
     ),
     "native-proof-real-clipboard": Proof(
-        (NATIVE_PROOF,), NATIVE_PROOF, "real-clipboard", ("actual_windows_private_formats_are_present",),
-        rust_test="actual_windows_private_formats_are_present",
+        (NATIVE_PROOF,), NATIVE_PROOF, "real-clipboard", ("actual_windows_private_formats_are_present", "--ignored"),
+        rust_test="actual_windows_private_formats_are_present", ignored=True,
     ),
     "native-proof-full-gui": Proof(("tools/verify_windows_app.ps1",), NATIVE_PROOF, "full-gui-proof", ("tools/verify_windows_app.ps1",)),
     "native-proof-install": Proof(("tools/test_install.ps1",), NATIVE_PROOF, "install-upgrade-uninstall", ("tools/test_install.ps1",)),
 }
+
+# Full mode: the listing commands, and the folder each runs in.
+LISTINGS = {
+    "rust": (("cargo", "test", "--workspace", "--locked", "--offline", "--", "--list"), "."),
+    "rust-ignored": (("cargo", "test", "--workspace", "--locked", "--offline", "--", "--list", "--ignored"), "."),
+    "vitest": (("node", "node_modules/vitest/vitest.mjs", "list", "--json", "--staticParse=false"), "desktop"),
+    "playwright": (("node", "node_modules/@playwright/test/cli.js", "test", "--list", "--reporter=json"), "desktop"),
+}
+
+
+class ListingError(Exception):
+    """A listing that full mode cannot read or make."""
 
 
 def source(rev, copy=None):
@@ -144,7 +213,7 @@ def lines_of(text):
     return [line.removesuffix("\r") for line in text.split("\n")]
 
 
-# Reading sources as code.
+# Reading Rust as code (fast mode).
 
 def rust_code(text):
     """The Rust text with every comment and every string, raw string and char literal blanked to
@@ -192,126 +261,263 @@ def rust_code(text):
     return "".join(out)
 
 
-def script_code(text):
-    """JavaScript or TypeScript with its comments blanked; strings and template literals stay."""
+def cfg_value(predicate):
+    """True, False or None (fast mode cannot tell) for a cfg predicate in a Windows test build."""
+    tokens = [next(group for group in match.groups() if group) for match in CFG_TOKEN.finditer(predicate) if any(match.groups())]
+    position = 0
+
+    def parse():
+        nonlocal position
+        name = tokens[position]
+        position += 1
+        if tokens[position:position + 1] == ["="]:
+            value = tokens[position + 1]
+            position += 2
+            return value == f'"{CFG_VALUES[name]}"' if name in CFG_VALUES and value.startswith('"') else None
+        if tokens[position:position + 1] == ["("]:
+            position += 1
+            items = []
+            while tokens[position] != ")":
+                items.append(parse())
+                if tokens[position] == ",":
+                    position += 1
+            position += 1
+            if name == "not" and len(items) == 1:
+                return None if items[0] is None else not items[0]
+            if name == "all":
+                return False if False in items else None if None in items else True
+            if name == "any":
+                return True if True in items else None if None in items else False
+            return None
+        return CFG_NAMES.get(name)
+
+    try:
+        value = parse()
+    except (IndexError, KeyError):
+        return None
+    return value if position == len(tokens) else None
+
+
+def cfg_off(text, code, start, end):
+    """Why the attributes in text[start:end] turn a test off: the first cfg there that is not true for a
+    Windows test build. None when every cfg there is true."""
+    for attribute in ATTRIBUTE.finditer(code, start, end):
+        written = text[attribute.start():attribute.end()]
+        cfg = CFG_ATTRIBUTE.match(written)
+        value = cfg_value(cfg.group(1)) if cfg else True
+        if value is False:
+            return f"`{' '.join(written.split())}` turns it off in a Windows test build"
+        if value is None:
+            return f"fast mode cannot evaluate `{' '.join(written.split())}`; run --full"
+    return None
+
+
+def closing(code, start, opening, closing_character):
+    """The index after the bracket that closes the one at code[start]."""
+    depth = 0
+    for index in range(start, len(code)):
+        if code[index] == opening:
+            depth += 1
+        elif code[index] == closing_character:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return len(code)
+
+
+def rust_tests(text):
+    """(tests that run, ignored tests, {test that a cfg turns off: why}) of one Rust file."""
+    code = rust_code(text)
+    file_off = next((off for match in FILE_CFG.finditer(code) if (off := cfg_off(text, code, match.start(), match.end()))), None)
+    blocks = []
+    for match in RUST_MOD.finditer(code):
+        off = cfg_off(text, code, match.start(1), match.end(1))
+        if off:
+            blocks.append((match.end() - 1, closing(code, match.end() - 1, "{", "}"), off))
+    runs, ignored, off_tests = set(), set(), {}
+    for match in RUST_ITEM.finditer(code):
+        attributes = code[match.start(1):match.end(1)]
+        if not TEST_ATTRIBUTE.search(attributes):
+            continue
+        name = match.group(2)
+        off = file_off or cfg_off(text, code, match.start(1), match.end(1))
+        off = off or next((cfg for start, end, cfg in blocks if start < match.start() < end), None)
+        if off:
+            off_tests[name] = off
+        elif IGNORE_ATTRIBUTE.search(attributes):
+            ignored.add(name)
+        else:
+            runs.add(name)
+    return runs, ignored, off_tests
+
+
+# Reading JavaScript and TypeScript (fast mode).
+
+def script_strings(text):
+    """(code, strings): the text with every comment and the inside of every string and template literal
+    blanked to spaces (offsets kept), and {offset of an opening quote: the literal's text}."""
     out = list(text)
+    strings = {}
     size = len(text)
+
+    def blank(start, end):
+        for position in range(start, min(end, size)):
+            if out[position] != "\n":
+                out[position] = " "
+
     index = 0
     while index < size:
-        character = text[index]
-        if character in "\"'`":
-            end = index + 1
-            while end < size and text[end] != character and (character == "`" or text[end] != "\n"):
+        if text[index] in "\"'`":
+            quote, end = text[index], index + 1
+            while end < size and text[end] != quote and (quote == "`" or text[end] != "\n"):
                 end += 2 if text[end] == "\\" else 1
+            strings[index] = text[index + 1:end]
+            blank(index + 1, end)
             index = end + 1
-            continue
-        if text.startswith("//", index):
+        elif text.startswith("//", index):
             end = text.find("\n", index)
             end = size if end < 0 else end
+            blank(index, end)
+            index = end
         elif text.startswith("/*", index):
             end = text.find("*/", index + 2)
             end = size if end < 0 else end + 2
+            blank(index, end)
+            index = end
         else:
             index += 1
-            continue
-        for position in range(index, end):
-            if out[position] != "\n":
-                out[position] = " "
-        index = end
-    return "".join(out)
+    return "".join(out), strings
 
 
-YAML_KEY = re.compile(r"""("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^\s#"'-][^:#]*?|-[^\s:#][^:#]*?)\s*:(?:\s+(.*))?$""")
-YAML_BLOCK = re.compile(r"[|>][0-9+-]*\s*(?:#.*)?$")
+def frontend_test_runs(text, title):
+    """Fast mode: the file has a `test(` or `it(` call titled `title` that is not skipped (module text)."""
+    code, strings = script_strings(text)
+    if ONLY.search(code):
+        return False
+    off = []
+    for match in GROUP_OFF.finditer(code):
+        start = position = match.end()
+        while True:
+            while position < len(code) and code[position].isspace():
+                position += 1
+            if position >= len(code) or code[position] != "(":
+                break
+            position = closing(code, position, "(", ")")
+        off.append((start, position))
+    return any(
+        strings.get(match.end()) == title and not any(start <= match.start() < end for start, end in off)
+        for match in FRONTEND_CALL.finditer(code)
+    )
 
 
-def closing_quote(text, quote):
-    """The index of the quote that closes a quoted YAML scalar in `text`, or -1."""
-    index = 0
-    while index < len(text):
-        if quote == '"' and text[index] == "\\":
-            index += 2
-            continue
-        if text[index] == quote:
-            if quote == "'" and text[index + 1:index + 2] == "'":
-                index += 2
-                continue
-            return index
-        index += 1
-    return -1
-
-
-def yaml_value(value):
-    """The scalar after `key:`, without its comment: (text, the quote that is still open or None)."""
-    value = (value or "").strip()
-    if value.startswith("#"):
-        return "", None
-    if value.startswith(("'", '"')):
-        end = closing_quote(value[1:], value[0])
-        return (value[1:], value[0]) if end < 0 else (value[1:end + 1], None)
-    return re.split(r"\s+#", value, maxsplit=1)[0].strip(), None
-
+# Workflows (both modes).
 
 def workflow_jobs(text):
-    """{job id: run lines} of a workflow: the keys of its top-level `jobs` mapping, read by
-    indentation, and the text of each job's `run` steps. A key inside a comment, a block scalar or a
-    quoted scalar that spans lines is not a key."""
-    jobs = {}
-    in_jobs = False
-    job_column = None
-    current = None
-    block = None  # (column of the key that opened a block scalar, the list it fills or None)
-    quote = None  # (quote character, the list it fills or None) of a quoted scalar that spans lines
-    for raw in lines_of(text):
-        stripped = raw.strip()
-        if quote is not None:
-            if quote[1] is not None:
-                quote[1].append(raw)
-            if closing_quote(raw, quote[0]) >= 0:
-                quote = None
+    """{job id: commands} of a workflow, read with PyYAML: the keys of its `jobs` mapping, and for each
+    job the `run` values of its steps, without their whole-line shell comments."""
+    document = yaml.safe_load(text)
+    jobs = document.get("jobs") if isinstance(document, dict) else None
+    found = {}
+    for job, body in (jobs.items() if isinstance(jobs, dict) else ()):
+        steps = body.get("steps") if isinstance(body, dict) else None
+        runs = [step["run"] for step in (steps if isinstance(steps, list) else ()) if isinstance(step, dict) and isinstance(step.get("run"), str)]
+        found[str(job)] = "\n".join(line for run in runs for line in run.split("\n") if not line.strip().startswith("#"))
+    return found
+
+
+# Full mode: the listings.
+
+def rust_listing(text):
+    """The test names of a `cargo test -- --list` output: the last path part of each `<path>: test`
+    line. Doc tests (`<file> - <item> (line N): test`) are left out."""
+    return {line[:-len(": test")].rsplit("::", 1)[-1].strip() for line in lines_of(text) if line.endswith(": test") and " - " not in line}
+
+
+def vitest_listing(text):
+    """[(file, full name)] of a `vitest list --json --staticParse=false` output: the tests that would run."""
+    return [(Path(entry["file"]).as_posix(), entry["name"]) for entry in json.loads(text)]
+
+
+def playwright_listing(text):
+    """[(file, title path)] of the tests in a `playwright test --list --reporter=json` output whose
+    expected status is not "skipped"."""
+    report = json.loads(text)
+    root = report.get("config", {}).get("rootDir", "")
+    found = []
+
+    def walk(suite, titles):
+        for spec in suite.get("specs", []):
+            if any(test.get("expectedStatus") != "skipped" for test in spec.get("tests", [])):
+                found.append((Path(root, spec["file"]).as_posix(), titles + [spec["title"]]))
+        for child in suite.get("suites", []):
+            walk(child, titles + [child["title"]])
+
+    for suite in report.get("suites", []):
+        walk(suite, [])
+    return found
+
+
+def listed_test(entries, runner, path, title):
+    """Whether a runner's listing holds a test of `path` (relative to the repository) titled `title`."""
+    for file, name in entries:
+        if not file.endswith("/" + path):
             continue
-        column = len(raw) - len(raw.lstrip(" "))
-        if block is not None:
-            if not stripped or column > block[0]:
-                if block[1] is not None:
-                    block[1].append(raw)
-                continue
-            block = None
-        if not stripped or stripped.startswith("#"):
-            continue
-        content = raw[column:]
-        while content == "-" or content.startswith("- "):
-            rest = content[1:]
-            column += 1 + len(rest) - len(rest.lstrip(" "))
-            content = rest.lstrip(" ")
-        match = YAML_KEY.match(content)
-        if not match:
-            continue
-        key = match.group(1)
-        if key[:1] in "\"'":
-            key = key[1:-1].replace("''", "'") if key[0] == "'" else key[1:-1]
-        value = match.group(2)
-        target = None
-        if column == 0:
-            in_jobs = key == "jobs" and not yaml_value(value)[0]
-            current = None
-        elif in_jobs:
-            if job_column is None:
-                job_column = column
-            if column == job_column:
-                current = key
-                jobs[current] = []
-            elif current is not None and column > job_column and key == "run":
-                target = jobs[current]
-        if value is not None and YAML_BLOCK.match(value.strip()):
-            block = (column, target)
-            continue
-        text_value, open_quote = yaml_value(value)
-        if target is not None and text_value:
-            target.append(text_value)
-        if open_quote:
-            quote = (open_quote, target)
-    return jobs
+        if runner == "vitest" and (name == title or name.endswith(" > " + title)):
+            return True
+        if runner == "playwright" and name and name[-1] == title:
+            return True
+    return False
+
+
+class Listings:
+    """Full mode: each runner's listing, read from its file or made by its command, once, when first needed."""
+
+    def __init__(self, files):
+        self.files = files
+        self.texts = {}
+
+    def text(self, kind):
+        if kind not in self.texts:
+            if self.files.get(kind):
+                try:
+                    self.texts[kind] = Path(self.files[kind]).read_text(encoding="utf-8")
+                except OSError as error:
+                    raise ListingError(f"the {kind} listing {self.files[kind]} cannot be read: {error}") from None
+            else:
+                command, folder = LISTINGS[kind]
+                try:
+                    done = subprocess.run(command, cwd=folder, stdout=subprocess.PIPE)
+                except OSError as error:
+                    raise ListingError(f"`{' '.join(command)}` cannot start in {folder}: {error}") from None
+                if done.returncode != 0:
+                    raise ListingError(f"`{' '.join(command)}` failed in {folder} with exit {done.returncode}; pass --{kind}-list with a listing file instead")
+                self.texts[kind] = done.stdout.decode("utf-8", errors="replace")
+        return self.texts[kind]
+
+    def rust(self):
+        """(tests that run, ignored tests) of the two cargo listings."""
+        listed, ignored = rust_listing(self.text("rust")), rust_listing(self.text("rust-ignored"))
+        if not listed:
+            raise ListingError("the Rust listing names no test; it must be the output of `cargo test --workspace -- --list`")
+        return listed - ignored, ignored
+
+    def frontend(self, runner, path, title):
+        try:
+            entries = vitest_listing(self.text(runner)) if runner == "vitest" else playwright_listing(self.text(runner))
+        except (ValueError, KeyError, TypeError) as error:
+            raise ListingError(f"the {runner} listing is not the JSON that the runner writes: {error}") from None
+        return listed_test(entries, runner, path, title)
+
+
+@dataclass
+class Inventory:
+    """The Rust tests that the checked tree runs, ignores or turns off, and how to ask whether a runner
+    runs a frontend test. Fast mode fills it from the sources; full mode from the listings."""
+
+    runs: set[str] = field(default_factory=set)
+    ignored: set[str] = field(default_factory=set)
+    off: dict[str, str] = field(default_factory=dict)
+    listings: Listings | None = None
 
 
 # The checks.
@@ -333,8 +539,8 @@ def harness_free_tests(names, read):
     return files
 
 
-def proof_problems(name, proof, tests, tracked, read, exists):
-    """Why proof `name` does not resolve to files, a job, a command and a test that exist; [] when it does."""
+def proof_problems(name, proof, inventory, tracked, read, exists):
+    """Why proof `name` does not resolve to files, a job, a command and a test that exist and run; [] when it does."""
     found = []
     for path in proof.files:
         if path not in tracked or not exists(path):
@@ -342,19 +548,28 @@ def proof_problems(name, proof, tests, tracked, read, exists):
     if proof.workflow:
         if proof.workflow not in tracked or not exists(proof.workflow):
             return found + [f"proof `{name}` needs the workflow {proof.workflow}, which is not in the checked tree"]
-        jobs = workflow_jobs(read(proof.workflow))
+        try:
+            jobs = workflow_jobs(read(proof.workflow))
+        except yaml.YAMLError as error:
+            return found + [f"proof `{name}` needs the workflow {proof.workflow}, which PyYAML cannot read: {' '.join(str(error).split())}"]
         if proof.job not in jobs:
             return found + [f"proof `{name}` needs the job `{proof.job}` in the jobs of {proof.workflow}"]
-        code = "\n".join(line for line in jobs[proof.job] if not line.strip().startswith("#"))
         for command in proof.runs:
-            if command not in code:
+            if command not in jobs[proof.job]:
                 found.append(f"proof `{name}` needs a run step of job `{proof.job}` that holds {command!r}")
-    if proof.rust_test and proof.rust_test not in tests:
-        found.append(f"proof `{name}` runs `{proof.rust_test}`, which is not a test fn in the Rust sources")
+    where = "the cargo listing" if inventory.listings else "the Rust sources"
+    if proof.rust_test and proof.rust_test not in (inventory.ignored if proof.ignored else inventory.runs):
+        kind = "an ignored test" if proof.ignored else "a test"
+        found.append(f"proof `{name}` runs `{proof.rust_test}`, which is not {kind} fn in {where}")
     if proof.title and not found and proof.files[0] in tracked and exists(proof.files[0]):
-        call = re.compile(r"(?<![\w.$])(?:it|test)\s*\(\s*([\"'`])" + re.escape(proof.title) + r"\1")
-        if not call.search(script_code(read(proof.files[0]))):
-            found.append(f"proof `{name}` needs a test( or it( call titled {proof.title!r} in {proof.files[0]}, outside comments")
+        if inventory.listings:
+            runs = inventory.listings.frontend(proof.runner, proof.files[0], proof.title)
+            how = f"in the {proof.runner} listing"
+        else:
+            runs = frontend_test_runs(read(proof.files[0]), proof.title)
+            how = "outside comments, strings and skipped groups"
+        if not runs:
+            found.append(f"proof `{name}` needs a test( or it( call titled {proof.title!r} in {proof.files[0]}, {how}")
     return found
 
 
@@ -400,7 +615,7 @@ def named_proof_problems(text):
     return found
 
 
-def claim_problems(text, tests, names, read, exists):
+def claim_problems(text, inventory, names, read, exists):
     """Problems of the docs/CLAIMS.md table rows, and the number of rows checked."""
     found = []
     tracked = set(names)
@@ -415,8 +630,12 @@ def claim_problems(text, tests, names, read, exists):
             found.append(f"{where}: the evidence cell names no test fn and no proof name")
         for item in evidence:
             if item in PROOFS:
-                found.extend(f"{where}: {problem}" for problem in proof_problems(item, PROOFS[item], tests, tracked, read, exists))
-            elif item not in tests:
+                found.extend(f"{where}: {problem}" for problem in proof_problems(item, PROOFS[item], inventory, tracked, read, exists))
+            elif item in inventory.ignored:
+                found.append(f"{where}: evidence `{item}` is an ignored test, which `cargo test` does not run; name the proof that runs it")
+            elif item in inventory.off:
+                found.append(f"{where}: evidence `{item}` is a test, but {inventory.off[item]}")
+            elif item not in inventory.runs:
                 found.append(f"{where}: evidence `{item}` is neither a test fn nor a proof name")
         if not cells[3]:
             found.append(f"{where}: the limit cell is empty")
@@ -425,18 +644,28 @@ def claim_problems(text, tests, names, read, exists):
     return found, len(rows)
 
 
-def problems(rev, copy=None):
+def problems(rev, copy=None, listings=None):
     names, read, exists = source(rev, copy)
     functions = set()
-    tests = set()
+    inventory = Inventory(listings=listings)
     custom = harness_free_tests(names, read)
     for path in names:
         if path.endswith(".rs") and exists(path):
-            code = rust_code(read(path))
-            functions.update(RUST_FN.findall(code))
-            tests.update(RUST_TEST.findall(code))
+            text = read(path)
+            declared = RUST_FN.findall(rust_code(text))
+            functions.update(declared)
             if path in custom:
-                tests.update(RUST_FN.findall(code))
+                inventory.runs.update(declared)
+            elif listings is None:
+                runs, ignored, off = rust_tests(text)
+                inventory.runs |= runs
+                inventory.ignored |= ignored
+                inventory.off.update(off)
+    if listings is not None:
+        runs, ignored = listings.rust()
+        inventory.runs |= runs
+        inventory.ignored |= ignored
+    tests = inventory.runs | inventory.ignored
     found = []
     for path in names:
         if not path.endswith(".md") or path.startswith(EXEMPT_PREFIXES) or not exists(path):
@@ -453,27 +682,43 @@ def problems(rev, copy=None):
                     found.append(f"{path}:{number}: names `{name}`, which is a fn but not a test")
     rows = 0
     if CLAIMS in names and exists(CLAIMS):
-        claim_found, rows = claim_problems(read(CLAIMS), tests, names, read, exists)
+        claim_found, rows = claim_problems(read(CLAIMS), inventory, names, read, exists)
         found.extend(claim_found)
     return found, rows
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--rev")
-    rev = parser.parse_args().rev
+    parser = argparse.ArgumentParser(description="Check the docs' test names, control characters and claims (module text).")
+    parser.add_argument("--rev", help="check a commit instead of the working tree (fast mode only)")
+    parser.add_argument("--full", action="store_true", help="resolve tests through the test runners' own listings")
+    for kind in LISTINGS:
+        parser.add_argument(f"--{kind}-list", metavar="FILE", help=f"the {kind} listing to read instead of running `{' '.join(LISTINGS[kind][0])}`")
+    arguments = parser.parse_args()
+    files = {kind: getattr(arguments, f"{kind.replace('-', '_')}_list") for kind in LISTINGS}
+    if any(files.values()) and not arguments.full:
+        parser.error("a listing file needs --full")
+    if arguments.full and arguments.rev:
+        parser.error("--full reads the working tree and its build; it cannot check --rev")
+    if yaml is None:
+        print(f"RESULT: FAIL (the check reads the workflows with PyYAML, which is not installed: python -m pip install {PYYAML})")
+        return 1
+    rev = arguments.rev
+    listings = Listings(files) if arguments.full else None
     try:
         if rev is None:
-            found, rows = problems(None)
+            found, rows = problems(None, listings=listings)
         else:
             with git_child.source_copy(Path.cwd()) as copy:
                 found, rows = problems(rev, copy)
-    except git_child.GitError as error:
+    except (git_child.GitError, ListingError) as error:
         print(f"RESULT: FAIL ({error})")
         return 1
     for line in found:
         print(line)
-    print(f"RESULT: {'FAIL' if found else 'PASS'} ({len(found)} problems at {rev or 'the working tree'}; {rows} claims checked)")
+    if not arguments.full:
+        print(FAST_NOTE)
+    mode = "full mode" if arguments.full else "fast mode"
+    print(f"RESULT: {'FAIL' if found else 'PASS'} ({len(found)} problems at {rev or 'the working tree'}; {rows} claims checked; {mode})")
     return 1 if found else 0
 
 

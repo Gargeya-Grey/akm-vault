@@ -41,10 +41,12 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
-      - name: Documentation check (stale test names, control characters)
+      # tools/check_docs.py reads the workflows with PyYAML (docs/TESTING.md): a pinned version, as a binary wheel only.
+      - name: Install the pinned PyYAML for the documentation check
         run: |
-          python tools/check_docs.py
-          python tools/test_check_docs.py
+          python -m pip install --disable-pip-version-check --only-binary :all: PyYAML==6.0.3
+      - name: Documentation check, fast mode (stale test names, control characters)
+        run: python tools/check_docs.py
       - name: KeePassXC fetch tool never deletes what it does not own
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_fetch_keepassxc.ps1
       - name: Verification helper never removes a folder it did not create
@@ -62,6 +64,9 @@ jobs:
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm ci
+      # After npm ci: the full-mode cases list fixtures with cargo and with desktop's Vitest and Playwright.
+      - name: Documentation check test (each runner's listing on fixtures)
+        run: python tools/test_check_docs.py --require-tools
       - name: Frontend regressions
         working-directory: desktop
         run: npm test
@@ -78,6 +83,9 @@ jobs:
         run: Remove-Item -LiteralPath target/akm-test-journal -Recurse -Force -ErrorAction SilentlyContinue
       - name: Native and executable regressions
         run: cargo test --workspace --locked
+      # After cargo test and npm ci, so the cargo listing reuses that build (findings U4-R1-07, U4-R2-05).
+      - name: Documentation check, full mode (the test runners' own listings)
+        run: python tools/check_docs.py --full
       - name: Rust lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Rust format
