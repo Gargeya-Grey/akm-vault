@@ -8,9 +8,9 @@ import { seal, stampFor } from "./sealed";
 import { NATIVE_ERROR_KINDS, type AuditReport, type BackupInfo, type HistoryVersion, type KeyView, type NativeError, type NativeErrorKind, type RecycledKey, type Status, type TransportFailure, type WarningReport, type Dispatched } from "./types";
 
 /**
- * The one boundary with native code. Only the files that `readGuard.test.ts` names may import this
- * module: the actions in api.ts, the read mechanism in nativeRead.ts and the session poll in
- * App.tsx. A view reads native state only through `useNativeRead`.
+ * The one boundary with native code. Only three files may import this module: the actions in
+ * api.ts, the read mechanism in nativeRead.ts and the session poll in App.tsx. A view reads native
+ * state only through `useNativeRead`. No test enforces this rule: a review does.
  */
 
 export const mutations: ReadonlySet<string> = new Set(["vault_create", "vault_upgrade", "key_add", "key_update", "key_remove", "key_rotate", "key_restore", "key_purge", "env_import", "env_save", "env_launch_terminal", "audit_recover"]);

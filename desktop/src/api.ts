@@ -10,7 +10,7 @@ export { errorKind, errorText } from "./errors";
 /**
  * The actions that the page can ask native code for. Each one changes state, asks native for an
  * effect, or ends a session. The reads of native state are not here: they live in native.ts, and a
- * view reaches them only through `useNativeRead` (readGuard.test.ts).
+ * view reaches them only through `useNativeRead`.
  */
 
 function declined(what: string) {
