@@ -13,6 +13,8 @@ interface Props {
   item?: KeyView;
   /** Null when an edit changed nothing, so native code saved nothing. */
   onSaved: (item: KeyView | null) => void;
+  /** The request failed. Its reply may have been lost after native code saved. */
+  onFailed?: () => void;
   onClose: () => void;
 }
 
@@ -66,7 +68,7 @@ function shownText(item?: KeyView) {
   };
 }
 
-export function KeyForm({ item, onSaved, onClose }: Props) {
+export function KeyForm({ item, onSaved, onFailed, onClose }: Props) {
   const editing = item !== undefined;
   const dialogRef = useDialogFocus<HTMLDivElement>();
   const targetId = useId();
@@ -148,6 +150,7 @@ export function KeyForm({ item, onSaved, onClose }: Props) {
       onSaved(saved);
     } catch (cause) {
       setError(errorText(cause));
+      onFailed?.();
     } finally {
       setBusy(false);
     }

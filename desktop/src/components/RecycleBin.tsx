@@ -41,6 +41,8 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
       setFlash(`Restored ${namedKey(binRowFacts({ ...item, key }, now))} to the key list.`);
     } catch (cause) {
       setActionError(errorText(cause));
+      // A lost reply may hide a change that native code made, so the list reads again (D2B-04).
+      read.reload();
     } finally {
       setBusyId(null);
     }
@@ -59,6 +61,7 @@ export function RecycleBin({ readOnly = false }: { readOnly?: boolean }) {
       setPurgingId(null);
     } catch (cause) {
       setPurgeError(errorText(cause));
+      read.reload();
     } finally {
       setBusyId(null);
     }

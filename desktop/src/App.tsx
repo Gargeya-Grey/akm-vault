@@ -316,7 +316,12 @@ export function App() {
       setStatus(next);
       setRevision((current) => current + 1);
       setError(null);
-    } catch (cause) { if (current()) setError(errorText(cause)); }
+    } catch (cause) {
+      if (!current()) return;
+      setError(errorText(cause));
+      // A lost reply may hide a reload that native code made, so the views read again (D2B-04).
+      setRevision((current) => current + 1);
+    }
   }
 
   async function upgrade() {

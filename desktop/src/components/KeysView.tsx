@@ -54,7 +54,9 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
   // Only a read that succeeded gives keys. Every count and every "empty" text comes from here.
   const keys = read.state.status === "ready" ? read.state.data : null;
   const all = keys ?? NO_KEYS;
-  const [flash, setFlash] = useState<string | null>(null);
+  // A notice, or the ID of a key whose edit native code did not save. That notice names the key
+  // as the newest read gives it, never as the form held it (D2B-04).
+  const [flash, setFlash] = useState<string | { unchanged: string } | null>(null);
   const [query, setQuery] = useState("");
   const [chosenShelf, setChosenShelf] = useState<Shelf>(ALL_KEYS);
   const [environment, setEnvironment] = useState("");
@@ -131,6 +133,9 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
   const deleting = find(deletingId);
   const deletingFacts = deleting && factsOf(deleting);
   const rotating = find(rotatingId);
+  const unchanged = flash !== null && typeof flash === "object" ? find(flash.unchanged) : null;
+  const notice = typeof flash === "string" || flash === null ? flash
+    : `No change: ${unchanged ? namedKey(factsOf(unchanged)) : "the key"} already has these values, so nothing was saved.`;
   const showSummary = keys !== null && attention.total > 0 && !(summary?.dismissed ?? summaryDismissed);
 
   function clearFilters() {
@@ -143,10 +148,12 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
     const edited = formItem;
     setFormItem(undefined);
     if (item === null) {
-      // The key already had these values, so native code saved nothing (FW-03).
+      // The key already had these values, so native code saved nothing (FW-03). An earlier
+      // request whose reply was lost may have saved them, so the list reads again (D2B-04).
+      read.reload();
       if (edited) {
         setSelectedId(edited.id);
-        setFlash(`No change: ${namedKey(factsOf(edited))} already has these values, so nothing was saved.`);
+        setFlash({ unchanged: edited.id });
       }
       return;
     }
@@ -178,6 +185,8 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
       setDeletingId(null);
     } catch (cause) {
       setDeleteError(errorText(cause));
+      // A lost reply may hide a removal that native code made, so the list reads again.
+      read.reload();
     } finally {
       setDeletingBusy(false);
     }
@@ -321,9 +330,9 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
           />
         </div>
 
-        {flash && (
+        {notice && (
           <div className="ledger-message">
-            <Notice tone="ok">{flash}</Notice>
+            <Notice tone="ok">{notice}</Notice>
           </div>
         )}
 
@@ -425,6 +434,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
         <KeyForm
           item={formItem ?? undefined}
           onSaved={saved}
+          onFailed={read.reload}
           onClose={() => setFormItem(undefined)}
         />
       )}
@@ -433,6 +443,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
         <RotateDialog
           item={rotating}
           onRotated={rotated}
+          onFailed={read.reload}
           onClose={() => { setSelectedId(rotating.id); setRotatingId(null); }}
         />
       )}
