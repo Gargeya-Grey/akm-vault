@@ -21,7 +21,7 @@ TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 import git_child  # noqa: E402
 
-AUTHOR = "Snapshot Check <snapshot@example.invalid>"  # public-snapshot: allow email (a synthetic author)
+AUTHOR = "Snapshot Check <snapshot@example.invalid>"
 PYTHON = [sys.executable]
 POWERSHELL = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
 CHECKS = [

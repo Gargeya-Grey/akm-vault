@@ -1,0 +1,41 @@
+# The exact texts that the e-mail rule of tools/make_public_snapshot.py accepts: "email <text>", one
+# per line. Each text is one whole e-mail hit, in the same case. It accepts no other hit and no other
+# rule. Add a line only after you check the text where it is used. The scan fails on an entry that no
+# e-mail hit outside this list and notice-addresses.txt uses (a stale entry), so remove the line when
+# its text goes. tools/public_snapshot/notice-addresses.txt holds the third-party addresses instead.
+#
+# The icon files of the desktop app: the paths, and the name in desktop/src-tauri/tauri.conf.json.
+email desktop/src-tauri/icons/128x128@2x.png
+email desktop/src-tauri/icons/ios/AppIcon-20x20@1x.png
+email desktop/src-tauri/icons/ios/AppIcon-20x20@2x-1.png
+email desktop/src-tauri/icons/ios/AppIcon-20x20@2x.png
+email desktop/src-tauri/icons/ios/AppIcon-20x20@3x.png
+email desktop/src-tauri/icons/ios/AppIcon-29x29@1x.png
+email desktop/src-tauri/icons/ios/AppIcon-29x29@2x-1.png
+email desktop/src-tauri/icons/ios/AppIcon-29x29@2x.png
+email desktop/src-tauri/icons/ios/AppIcon-29x29@3x.png
+email desktop/src-tauri/icons/ios/AppIcon-40x40@1x.png
+email desktop/src-tauri/icons/ios/AppIcon-40x40@2x-1.png
+email desktop/src-tauri/icons/ios/AppIcon-40x40@2x.png
+email desktop/src-tauri/icons/ios/AppIcon-40x40@3x.png
+email desktop/src-tauri/icons/ios/AppIcon-512@2x.png
+email desktop/src-tauri/icons/ios/AppIcon-60x60@2x.png
+email desktop/src-tauri/icons/ios/AppIcon-60x60@3x.png
+email desktop/src-tauri/icons/ios/AppIcon-76x76@1x.png
+email desktop/src-tauri/icons/ios/AppIcon-76x76@2x.png
+email desktop/src-tauri/icons/ios/AppIcon-83.5x83.5@2x.png
+email icons/128x128@2x.png
+#
+# The pinned versions of the dependency check tools in .github/workflows/build.yml.
+email cargo-deny@0.20.2
+email cargo-audit@0.22.2
+#
+# Synthetic committer addresses of the tool tests (tools/test_git_child.py, tools/test_snapshot_runs_its_checks.py).
+email user.email=t@example.com
+email snapshot@example.invalid
+#
+# The synthetic value of the dotenv fixture (crates/akm-core/tests/fixtures/dotenv: plain.dotenv,
+# expected.json, generate.py): a value with a slash, a colon, an at sign and a dot, not an address.
+email x/y:z@w+v.u-t_s
+email C=x/y:z@w+v.u-t_s
+email words\nC=x/y:z@w+v.u-t_s\n".encode

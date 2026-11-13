@@ -49,14 +49,14 @@ def check(output, addresses=ADDRESSES):
 run = check(NOTICES)
 case("the committed file and its address list are current", run.returncode == 0, run.stdout + run.stderr)
 
-# Finding U4-R1-04: the snapshot scan accepts exactly the generated addresses, and the check fails on any other list.
+# Findings U4-R1-04 and U4-R2-02: the snapshot scan accepts exactly the generated entries, and the check fails on any other list.
 listed = [line for line in ADDRESSES.read_text(encoding="utf-8").splitlines() if line and not line.startswith("#")]
-shaped = {match.group().casefold() for match in snapshot.EMAIL.finditer(NOTICES.read_text(encoding="utf-8"))}
-case("the address list holds every e-mail-shaped string of the notices once, and nothing else", sorted(line.casefold() for line in listed) == sorted(shaped) and len(shaped) > 0, f"{len(listed)} listed, {len(shaped)} in the file")
+hits = {hit for line in NOTICES.read_text(encoding="utf-8").split("\n") for hit in snapshot.email_hits(snapshot.views(line)[0])}
+case("the address list holds one entry `email <text>` for each e-mail hit of the notices, and nothing else", sorted(listed) == sorted(f"email {hit}" for hit in hits) and len(hits) > 0, f"{len(listed)} listed, {len(hits)} in the file")
 with tempfile.TemporaryDirectory(prefix="akm-notices-test-") as folder:
     copy = Path(folder) / "notice-addresses.txt"
     original = ADDRESSES.read_text(encoding="utf-8")
-    copy.write_bytes((original + "@".join(("someone.private", "private-mail.test")) + "\n").encode("utf-8"))
+    copy.write_bytes((original + "email " + "@".join(("someone.private", "private-mail.test")) + "\n").encode("utf-8"))
     run = check(NOTICES, copy)
     case("an address list with an added address fails the check", run.returncode == 1 and "notice-addresses.txt is out of date" in run.stdout, run.stdout + run.stderr)
     copy.write_bytes(original.replace(listed[0] + "\n", "", 1).encode("utf-8"))

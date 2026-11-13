@@ -1,12 +1,19 @@
-# Files that tools/make_public_snapshot.py cannot read as text, and that a person checked before
+# Files that are not plain text for tools/make_public_snapshot.py, and that a person checked before
 # listing them: "<sha256>  <path>", two spaces, one file per line. The scan publishes a listed file
 # only while its SHA-256 matches; a changed file is refused as stale until someone checks it again.
-# The scan cannot read inside these files. Print the lines for new files with --suggest-opaque.
+# The scan cannot read inside a file that is not UTF-8; it still scans a listed UTF-8 file. Print
+# the lines for new files with --suggest-opaque.
 #
 # Checked on 2026-11-13: 48 PNG, 1 ICO and 1 ICNS app icons and 2 BMP installer images (no PNG text
 # chunks; no printable ASCII or UTF-16 run breaks a scan rule), the KDBX 3 and KDBX 4 test vaults of
 # crates/akm-core/tests/fixtures (encrypted fake data; header and printable runs only), and
 # malformed_nul.dotenv (the six bytes "A=a", NUL, "b", newline).
+# Checked on 2026-11-13: three UTF-8 dotenv fixtures that are not plain text on purpose: bom.dotenv
+# (a leading byte order mark, then "A=1" and "B=2"), malformed_lone_cr.dotenv ("A=1", a lone CR,
+# "B=2") and expected.json (the expected results; one key holds a byte order mark).
+08b10b1c05d5de29a8e407e323abb7079428eb1fd8c70f48bc950c62844e524a  crates/akm-core/tests/fixtures/dotenv/bom.dotenv
+06a191ee1d5d9ef13178535bb29f0984bac5eb584f1522c347f26d76ef03a234  crates/akm-core/tests/fixtures/dotenv/expected.json
+90132c766257176e0c00ac19810693031aa8d9737c9c5a5311e1e412c6ec4b6b  crates/akm-core/tests/fixtures/dotenv/malformed_lone_cr.dotenv
 701a18f97c977159d5471c3862204dca23dda962780cac3ca4c60e651e6c398a  crates/akm-core/tests/fixtures/dotenv/malformed_nul.dotenv
 55cbb657659ef97077147c67bb7ba14b0efcc6812a74a0a8b72b506086f0537c  crates/akm-core/tests/fixtures/kdbx3.kdbx
 ea34e603d06542d20d50c2e30e3d07e73b6a273b277464b075e9529df4de42e2  crates/akm-core/tests/fixtures/kdbx40.kdbx

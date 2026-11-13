@@ -101,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix="akm-git-child-test-") as folder:
         made = git_child.create(repo)
         (repo / "file.txt").write_bytes(f"{repo.name}\n".encode())
         made.run("add", "file.txt")
-        made.run("-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "--no-gpg-sign", "-m", repo.name)  # public-snapshot: allow email (synthetic)
+        made.run("-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-q", "--no-gpg-sign", "-m", repo.name)
     hostile_config = base / "hostile.gitconfig"
     hostile_config.write_text("[core]\n\tbare = true\n", encoding="utf-8")
     hostile = {
