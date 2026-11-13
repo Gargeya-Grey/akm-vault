@@ -41,6 +41,13 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "a column heading of `akm list`",
     ),
     (
+        "crates/akm-cli/src/child.rs",
+        "AKM_",
+        "is_akm_name, which removes inherited AKM_ variables from a child: the desktop test \
+         the_akm_name_rule_mirrors_the_one_of_the_command_line pins its text, and the child.rs \
+         test the_akm_name_rule_is_the_akm_internal_class_of_name_class holds it to name_class",
+    ),
+    (
         "desktop/src-tauri/src/launch.rs",
         "AKM_",
         "the desktop removes inherited AKM_ variables from the terminal with its own prefix \
