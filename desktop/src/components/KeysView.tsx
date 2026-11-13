@@ -3,7 +3,7 @@ import { api, errorText } from "../api";
 import { nativeReads, useNativeRead } from "../nativeRead";
 import { needsAttention, plural, rotationUsed, statusDescription } from "../format";
 import { attentionOf } from "../reminders";
-import { keyRowDescription, keyRowFacts, namedKey, NO_PROJECT, searchText, useShortIds, type KeyRowFacts } from "../rowFacts";
+import { caseless, keyRowDescription, keyRowFacts, namedKey, NO_PROJECT, searchText, useShortIds, type KeyRowFacts } from "../rowFacts";
 import type { KeyView, RotationReceipt } from "../types";
 import { useNow } from "../useNow";
 import { FilterSelect, uniqueOptions } from "./FilterSelect";
@@ -100,7 +100,7 @@ export function KeysView({ readOnly = false, summary }: { readOnly?: boolean; su
   const unfiled = [...factsById.values()].filter((facts) => facts.project.text === NO_PROJECT).length;
 
   const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase();
+    const needle = caseless(query.trim());
     return all
       .filter((key) => {
         const facts = factsById.get(key.id);

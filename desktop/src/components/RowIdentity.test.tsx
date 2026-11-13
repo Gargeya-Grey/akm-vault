@@ -142,6 +142,32 @@ test("the edit form and the search use the stored value, and an untouched value 
   expect(update?.args?.draft).toEqual({});
 });
 
+// FW-05 and FW-06: the search matches the username, and compares text by AKM's caseless rule
+// (`caseless` in akm-core, and its test table): each letter becomes the lowercase of its uppercase
+// when that is one letter. So `ς` finds `Σ` and `ẞ` finds `ß`, but `STRASSE` does not find
+// `Straße`, and a combining accent does not find a precomposed letter.
+const SEARCHES: [query: string, stored: Partial<KeyView>, found: boolean][] = [
+  ["AKIAFAKEUSER", { username: "AKIAFAKEUSER" }, true],
+  ["akiafake", { username: "AKIAFAKEUSER" }, true],
+  ["ς", { title: "Σ" }, true],
+  ["Σ", { title: "λόγος" }, true],
+  ["νομοσ", { notes: "ΝΟΜΟΣ" }, true],
+  ["straße", { title: "STRAẞE" }, true],
+  ["Key", { title: "key" }, true],
+  ["ǆ", { title: "ǅ" }, true],
+  ["STRASSE", { title: "Straße" }, false],
+  ["é", { title: "é" }, false],
+];
+
+for (const [query, stored, found] of SEARCHES) {
+  test(`a search for ${JSON.stringify(query)} ${found ? "shows" : "does not show"} the key with ${JSON.stringify(stored)}`, async () => {
+    await showKeys([key({ id: ID.a1, title: "Fake", project: "p", environment: "e", envVar: "X", resolvedEnvVar: "X", ...stored })]);
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: query } });
+    if (found) expect(rows()).toHaveLength(1);
+    else expect(screen.getByRole("heading", { name: "Nothing matches those filters." })).toBeTruthy();
+  });
+}
+
 test("an edit that native code did not save says so, and does not claim a save (FW-03)", async () => {
   await showKeys([key({ id: ID.a1, title: "Unchanged title" })]);
   fireEvent.click(rows()[0]);
