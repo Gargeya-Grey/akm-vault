@@ -68,13 +68,21 @@ test("typing moves to the item that starts with those letters", () => {
   expect(onChange).not.toHaveBeenCalled();
 });
 
-test("typing compares by AKM's caseless rule, so a final sigma moves to a name that starts with a capital sigma (FW-06)", () => {
-  render(<FilterSelect id="demo" label="Project" value="" placeholder="Choose a project" options={[{ value: "alpha", label: "alpha" }, { value: "Σ-prod", label: "Σ-prod" }]} onChange={() => {}} />);
-  const field = screen.getByRole("combobox");
-  fireEvent.keyDown(field, { key: " " });
-  fireEvent.keyDown(field, { key: "ς" });
-  expect(screen.getByRole("listbox").querySelector(".active")?.textContent).toBe("Σ-prod");
-});
+// Typing compares by AKM's caseless rule (FW-06). A typed letter is one code point, so a letter
+// outside the Basic Multilingual Plane, two UTF-16 units, is one letter too (D2B-07).
+const TYPED: [name: string, key: string, label: string][] = [
+  ["a final sigma moves to a name that starts with a capital sigma (FW-06)", "ς", "Σ-prod"],
+  ["a Deseret small letter moves to a name that starts with its capital (D2B-07)", "\u{10428}", "\u{10400}-prod"],
+];
+for (const [name, key, label] of TYPED) {
+  test(`typing compares by AKM's caseless rule: ${name}`, () => {
+    render(<FilterSelect id="demo" label="Project" value="" placeholder="Choose a project" options={[{ value: "alpha", label: "alpha" }, { value: label, label }]} onChange={() => {}} />);
+    const field = screen.getByRole("combobox");
+    fireEvent.keyDown(field, { key: " " });
+    fireEvent.keyDown(field, { key });
+    expect(screen.getByRole("listbox").querySelector(".active")?.textContent).toBe(label);
+  });
+}
 
 test("Escape closes only the list, and a dialog behind it does not hear the key", () => {
   const { field, onChange } = setup("alpha");
