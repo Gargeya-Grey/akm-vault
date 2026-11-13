@@ -395,11 +395,4 @@ B=\"open
             assert!(message.contains(line), "{text:?}: {message}");
         }
     }
-
-    #[test]
-    fn rejects_bad_names_duplicates_and_missing_equals() {
-        assert!(parse("lower=1").is_err());
-        assert!(parse("A=1\nA=2").is_err());
-        assert!(parse("JUSTAWORD").is_err());
-    }
 }

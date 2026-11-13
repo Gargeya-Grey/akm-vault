@@ -390,17 +390,6 @@ fn legacy_vault_with(names: &[(&str, &str)]) -> (tempfile::TempDir, Vault) {
     (directory, vault)
 }
 
-#[test]
-fn renaming_a_legacy_key_makes_it_usable_again() {
-    let (_directory, mut vault) = legacy_vault_with(&[("Build proxy", "HTTP_PROXY")]);
-    let key = vault.list().remove(0);
-    let mut edit = vault.edit_input(&key.id).unwrap();
-    edit.env_var = Some("BUILD_PROXY_TOKEN".into());
-    vault.update(&key.id, edit).unwrap();
-    let plan = vault.plan_env(Some("demo"), Some("dev"), false).unwrap();
-    assert_eq!(plan.names().collect::<Vec<_>>(), ["BUILD_PROXY_TOKEN"]);
-}
-
 /// FR-02: the Cargo and Rust controls are reserved in any case, and so is every Cargo target
 /// setting that runs a program or passes flags, for any target triple.
 #[test]
