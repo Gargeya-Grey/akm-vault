@@ -324,7 +324,9 @@ export function UseKeys({ readOnly = false }: { readOnly?: boolean }) {
     }
 
     const currentRequest = ++importRequest.current;
-    const reply = api.importEnv(importText, importProject.trim(), importEnvironment.trim());
+    // The target starts as the chosen scope, a stored value, so it goes as the fields hold it.
+    // Native code cleans an import's target as it cleans an add's (D2B-05).
+    const reply = api.importEnv(importText, importProject, importEnvironment);
     const receipt = reply.receipt;
     if (receipt !== null) setImportOperation({ receipt, request: currentRequest });
     try {

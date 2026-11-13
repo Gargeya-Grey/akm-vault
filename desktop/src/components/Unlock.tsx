@@ -61,8 +61,10 @@ export function Unlock({ status, onUnlocked }: Props) {
     event.preventDefault();
     setError(null);
 
-    const target = path.trim();
-    if (!target) {
+    // Native code takes the path exactly as it is sent, and a file can exist at a path and at the
+    // same path without its outer spaces (D2B-05). So the path goes as the field holds it.
+    const target = path;
+    if (!target.trim()) {
       setError("Choose where the vault file should live.");
       return;
     }

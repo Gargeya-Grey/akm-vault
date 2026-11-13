@@ -83,6 +83,21 @@ test("import sends one request with the chosen scope and has no in-page confirm 
   expect(document.body.textContent).not.toContain("dev-secret");
 });
 
+// D2B-05: the import's target starts as the chosen scope, a stored value. The page sends it as the
+// fields hold it; native code cleans an import's target as it cleans an add's.
+test("import sends a chosen scope with outer spaces exactly as the fields hold it", async () => {
+  mocks.keys.mockResolvedValueOnce([{ project: " demo ", environment: "dev\u00A0" }]);
+  await act(async () => { render(<UseKeys />); });
+  await act(async () => {});
+  fireEvent.change(screen.getByLabelText("Project"), { target: { value: " demo " } });
+  fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "dev\u00A0" } });
+  fireEvent.click(screen.getByRole("button", { name: "Import .env…" }));
+  fireEvent.change(screen.getByLabelText("Paste the .env contents"), { target: { value: "TOKEN=fake" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review import" }));
+  await screen.findByText("Imported: 1 added, 1 updated.");
+  expect(mocks.importEnv).toHaveBeenCalledExactlyOnceWith("TOKEN=fake", " demo ", "dev\u00A0");
+});
+
 test("import refuses a missing target scope before asking the backend", async () => {
   render(<UseKeys />);
   fireEvent.click(screen.getByRole("button", { name: "Import .env…" }));
