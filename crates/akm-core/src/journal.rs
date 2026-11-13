@@ -53,11 +53,12 @@ impl JournalRoot {
         Self::resolve(
             std::env::var_os(ROOT_ENV),
             std::env::var_os("LOCALAPPDATA"),
-            cfg!(debug_assertions) && std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+            std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
         )
     }
 
-    /// `under_cargo`: a debug build that cargo started. Without an explicit root it never uses
+    /// `under_cargo`: a build that cargo started, in any profile (a test run of a release build
+    /// passed the earlier debug-only rule). Without an explicit root it never uses
     /// the real profile folder, so a test run from outside the repository fails instead of
     /// writing fake journals there (`.cargo/config.toml` sets the root only below the repository).
     fn resolve(
@@ -71,7 +72,7 @@ impl JournalRoot {
         if under_cargo {
             return Self {
                 location: Err(format!(
-                    "{ROOT_ENV} is not set in a debug build that cargo started; \
+                    "{ROOT_ENV} is not set in a build that cargo started; \
                      the real profile folder is never used for tests"
                 )),
             };

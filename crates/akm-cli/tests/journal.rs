@@ -579,6 +579,31 @@ fn an_unusable_root_never_falls_back_to_the_default_or_the_sidecar() {
     assert_no_journal_metadata_in(fixture.vault_dir());
 }
 
+/// Fault class F. On 13 Nov 2026 fake journals were found in the real profile folder: the guard
+/// held only in a debug build, and a test run of a release build passed it. The profile folder
+/// of this test is a fake one, so a failure writes nothing real.
+#[test]
+fn a_build_that_cargo_started_never_uses_the_profile_folder_in_any_profile() {
+    let fixture = Fixture::new();
+    let profile = fixture.directory.path().join("fake-local-app-data");
+    fs::create_dir(&profile).unwrap();
+    let mut command = fixture.cli();
+    command
+        .env_remove("AKM_JOURNAL_ROOT")
+        .env("LOCALAPPDATA", &profile)
+        .env("CARGO_MANIFEST_DIR", env!("CARGO_MANIFEST_DIR"))
+        .args(["get", TITLE, "--field", "secret"]);
+    let output = command.output().unwrap();
+    assert!(!output.status.success(), "{}", stdout(&output));
+    assert!(output.stdout.is_empty());
+    assert!(
+        stderr(&output).contains("AKM_JOURNAL_ROOT is not set"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(fs::read_dir(&profile).unwrap().count(), 0);
+}
+
 #[test]
 fn damage_is_reported_by_kind_keeps_the_bytes_and_refuses_appends() {
     let fixture = Fixture::new();
