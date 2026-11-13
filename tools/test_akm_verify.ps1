@@ -108,6 +108,25 @@ try {
     Expect (Test-Path -LiteralPath (Join-Path $sentinel 'precious.txt')) 'the sentinel was removed'
   }
 
+  Case 'cli passes each argument to the program exactly, also a trailing backslash, a quote and an empty text (FW-08)' {
+    # A program that prints the arguments that it received, one in brackets on each line.
+    $echo = Join-Path $work 'echo-arguments.exe'
+    Add-Type -OutputAssembly $echo -OutputType ConsoleApplication -TypeDefinition 'public static class EchoArguments { public static int Main(string[] received) { foreach (string one in received) { System.Console.Out.Write("[" + one + "]\n"); } return 0; } }'
+    $run = Invoke-AkmVerify @('new', '-Feature', 'arguments', '-Akm', $echo, '-EvidenceRoot', $evidence)
+    Expect ($run.ExitCode -eq 0) "new failed: $($run.Text)"
+    $dir = ($run.Text -split "`n" | Where-Object { $_ -like '*akm-verify-arguments-*' } | Select-Object -Last 1).Trim()
+    $sent = @('add', 'C:\fake folder\', 'say "hi"', 'ends\"', '', 'a\b', 'two words\\', 'plain')
+    # In this process: a child PowerShell would change the arguments before the script sees them.
+    $saved = @{ TEMP = $env:TEMP; TMP = $env:TMP; STATE = $env:AKM_VERIFY_STATE_ROOT }
+    $env:TEMP = $fakeTemp; $env:TMP = $fakeTemp; $env:AKM_VERIFY_STATE_ROOT = $state
+    try { $result = & $script cli -Session $dir -CliArgs $sent }
+    finally { $env:TEMP = $saved.TEMP; $env:TMP = $saved.TMP; $env:AKM_VERIFY_STATE_ROOT = $saved.STATE }
+    $expected = (($sent | ForEach-Object { "[$_]" }) -join "`n") + "`n"
+    Expect ($result.ExitCode -eq 0) "the program failed: $($result.Stderr)"
+    Expect ($result.Stdout -ceq $expected) "the program received other arguments:`n$($result.Stdout)"
+    $null = Invoke-AkmVerify @('clean', '-Session', $dir)
+  }
+
   Case 'a sentinel folder beside a real session survives a clean of the real one' {
     $sentinel = New-Sentinel 'akm-verify-sentinel-dddd4444'
     $dir = New-Session 'beside'

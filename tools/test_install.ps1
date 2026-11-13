@@ -108,7 +108,8 @@ function Assert-True([bool]$condition, [string]$message) { if (-not $condition) 
 function Invoke-Cli([string[]]$arguments, [string]$stdin) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $cliFull
-    $psi.Arguments = ($arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }) -join ' '
+    # A backslash before a quote, and at the end of a quoted argument, is doubled (FW-08).
+    $psi.Arguments = ($arguments | ForEach-Object { if ($_ -ne '' -and $_ -notmatch '[\s"]') { $_ } else { '"' + (($_ -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"' } }) -join ' '
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true

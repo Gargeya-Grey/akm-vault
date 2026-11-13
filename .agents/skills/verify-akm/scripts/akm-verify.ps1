@@ -77,6 +77,13 @@ function Read-Session([string]$dir) {
   return Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
 }
 
+# One argument in the form that the Windows command-line rules read back unchanged: a backslash
+# before a quote, and at the end of a quoted argument, is doubled (FW-08).
+function ConvertTo-CommandLineArgument([string]$value) {
+  if ($value -ne '' -and $value -notmatch '[\s"]') { return $value }
+  return '"' + (($value -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
+}
+
 switch ($Action) {
   'new' {
     if (!$Feature) { throw 'new needs -Feature <feature id from features/README.md>' }
@@ -106,7 +113,7 @@ switch ($Action) {
     $s = Read-Session $Session
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $s.akm
-    $psi.Arguments = ($CliArgs | ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }) -join ' '
+    $psi.Arguments = ($CliArgs | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join ' '
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
