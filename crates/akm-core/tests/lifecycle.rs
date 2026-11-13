@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use akm_core::model::{META_ROTATION_DAYS, META_SCOPES, META_SECRET_CHANGED};
+use akm_core::model::{META_ID, META_ROTATION_DAYS, META_SCOPES, META_SECRET_CHANGED};
 use akm_core::schedule::Remaining;
 use akm_core::{ApiKeyInput, Clock, Error, KeyDisclosure, Secret, SecretChange, Vault};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
@@ -1244,6 +1244,42 @@ fn an_update_gives_no_creation_time_to_a_key_that_has_none() {
     assert_eq!(answer.notes.as_deref(), Some("a note"));
     assert_eq!(answer.created_at, None);
     assert_eq!(f.entry(&key.id).times.creation, None);
+}
+
+/// D4-01, and contract 13 for a whole entry: another program made a key that holds a title and
+/// nothing else. An edit of its notes leaves the entry as it was, except for the notes, the
+/// time of the change, AKM's ID field and the history. So the edit invents no secret, no
+/// secret-change time and no other fact.
+#[test]
+fn an_update_of_one_field_changes_that_field_its_stamp_and_the_history_and_nothing_else() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_edit(&key.id, |entry| {
+        entry.fields.retain(|name, _| name == fields::TITLE);
+        entry.times.creation = None;
+        entry.times.expires = None;
+    });
+    let before = f.entry(&key.id);
+
+    f.clock.advance(Duration::days(1));
+    let edit = with_notes(f.vault.edit_input(&key.id).unwrap(), "a note");
+    f.vault.update(&key.id, edit).unwrap();
+
+    let after = f.entry(&key.id);
+    assert_ne!(
+        after.times.last_modification,
+        before.times.last_modification
+    );
+    let mut expected = before;
+    expected.set_unprotected(fields::NOTES, "a note");
+    expected.set_unprotected(META_ID, &key.id);
+    expected.times.last_modification = after.times.last_modification;
+    expected.history = after.history.clone();
+    assert!(
+        after == expected,
+        "the edit changed more:
+{after:#?}"
+    );
 }
 
 /// FX-03: `api-key` is a username like any other, and a key with no username has none.

@@ -436,7 +436,8 @@ impl Vault {
             return Ok(read_entry(&before));
         }
 
-        let secret_changed = before.get(fields::PASSWORD) != Some(input.secret.as_str());
+        // The same comparison as `write_fields`: a key with no secret field has the secret "".
+        let secret_changed = input.secret.as_str() != stored.secret.as_str();
         if secret_changed {
             input.reject_nul_secret()?;
         }
