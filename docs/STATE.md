@@ -201,7 +201,17 @@ One class is new in review 2: work without a bound on bytes that are not authent
 
 ## Next action
 
-The path is in "Destination, measures and path" above. The one next action: the second fix round, for the FW rows of [FINDINGS.md](FINDINGS.md). Decisions of the planner, for the owner's veto:
+The path is in "Destination, measures and path" above. The one next action: finish fix round 3 (merge the page branch, then every check on the final tree), then the third full review.
+
+**The diff review of fix round 2 failed (13 Nov 2026): 7 P2 and 7 P3** ([review](reviews/2026-11-13-diff-review-round2.md); the D2A, D2B and C3 rows of [FINDINGS.md](FINDINGS.md)). It is a cheap gate before the six reviewers of a full review, and it gives no score. Every check passed on the reviewed commit `bc28959` (710 Rust tests, 754 page tests, 182 browser tests, the CLI workflows, the two journal proofs on the built app), so the checks did not see these defects. Decisions of the planner for this round, for the owner's veto:
+
+- **An edit that changes or judges a field that it does not touch (D2B-01 to D2B-03; third failure of the class of FW-03).** The two earlier fixes controlled what the page and the native code send. The cause was in the core: each update judged and rewrote the whole entry. The rule is now in the core, once, for the CLI and the desktop app: an update judges and writes only the fields whose value differs from the stored key ([PROJECT.md](PROJECT.md), contract 13; `5650ace`). A changed field still adds one history version, the modification time and AKM's ID field. Veto effect: without this rule, AKM must say that an edit rewrites a key in AKM's form.
+- **The journal recovery (D2A-01, D2A-02; third failure).** No code. Both findings need a program that runs as the user and moves files in AKM's journal folder while a recovery runs. That program can delete every file there itself, so it gains nothing. Windows cannot replace a held file in one step, so a fix would bring back the gap of FW-02. THREAT_MODEL.md rows 12 and 13 state the limit, and row 13 no longer says "no other file changes".
+- **The export text (D2A-03): fixed, not accepted** (`2eb1f74`). One buffer of its exact length.
+- **A test that passed by chance (C3-01).** A clearing test of fix round 2 failed 5 of 8 runs on the committed code. Its allocator counted stale bytes of an earlier buffer. It gives zeroed buffers now: 30 of 30 runs pass, and a real uncleared copy still fails the test.
+- **The page findings (D2B-02 page part, D2B-04 to D2B-09)** are with one worker, in its own checkout.
+
+Earlier decisions of the planner (fix round 2), for the owner's veto:
 
 - **FW-03 (an edit changes untouched fields; the class failed twice).** No more patches of the conversion. A desktop edit sends only the fields that the user changed, and native code applies them to the stored values, as `akm edit` does. That command held in the review.
 - **FW-02 (the journal recovery; third failure).** One change of order for both recoveries: copy the damaged file to its dated name first, then replace the live file in one step. A stop between the two steps leaves the damaged file in place, and the recovery is offered again. **Fixed, not accepted** (`36b673c`, merged in `a3bfc3c`). A mapping that is missing beside journals now counts as damaged. One state is not handled, by the planner's decision: a journal that is missing at its bound name reads as an empty journal. Only a build from before this fix that stopped in a journal recovery, or a deletion, makes that state. No such build was released, and a deleted or truncated journal is a disclosed limit (THREAT_MODEL.md, row 13).
@@ -212,7 +222,7 @@ The path is in "Destination, measures and path" above. The one next action: the 
 - **FW-08: fixed, not accepted** (`f6733a5`). The helper writes each argument by the Windows command-line rules. The new case of `tools/test_akm_verify.ps1` failed first. With the built CLI and a fake vault, a note that ends in a backslash is stored unchanged. `tools/test_install.ps1` had the same line and has the same rule; it was parsed, not run.
 - **FR-26 (planner's decision): the tracked tree holds no path of the owner's computer and no account name**, except one file. The documents write `<archive>` and `<build>` ("Local state outside the repository"). The links to PR #7 and to two CI runs are plain text now. Two older review files had links to the reviewer's local checkout: each link is a repository path now, and a note at the top of each file says so. Five e-mail texts in the two unit 4 review files are made-up test inputs; each was read where it is used, and each is in `tools/public_snapshot/allowed-texts.txt`. The scan of the working tree has one hit left: a zero-width character in a test file of the desktop page, which the page worker owns until its merge. Git history still holds the old text, so publication stays the public snapshot of one commit, never a push of this history. The owner still reads the tree before it becomes public (owner gate).
 
-Then the full checks on the merged tree, and the third full review.
+The full checks ran on the merged tree of fix round 2 (`bc28959`) and passed. They run again on the final tree of fix round 3, before the third full review.
 
 Open with the owner:
 

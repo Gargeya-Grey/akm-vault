@@ -22,8 +22,8 @@
 
 `Session` keeps the clipboard lease in its own mutex, `clipboard`, with the cleanup-episode bookkeeping that belongs to it. Lock order is **vault, then clipboard, then gate**. Code that holds the gate never waits for the clipboard mutex.
 
-- Rejected: a cleanup worker thread with generation fences. More moving parts, and the lock notice does not need it.
-- Rejected: `try_lock` on the lease in lock. A lock that finds a running not-due tick would skip its attempt and leave a secret for a later tick.
+- Rejected: a cleanup worker thread with generation fences. More moving parts, and the lock notice does not need it. (FW-01, 13 Nov 2026, added one worker thread without fences, for the timer's cleanup only: the Windows message thread must not wait for clipboard work.)
+- Rejected at first, and taken for FW-01 (13 Nov 2026): `try_lock` on the lease in lock. The objection was that a lock that finds a running not-due tick would skip its attempt and leave a secret for a later tick. The attempt now stays owed, and the holder of the lease makes it when it lets the lease go (`release`), so no attempt is skipped.
 
 ### D2. Notice first, then one attempt, by a transition flag (1H-01, 1H-02)
 
@@ -118,11 +118,11 @@ Every row of the table reads the fake sequence and the exact application warning
 
 | Case | Result |
 |---|---|
-| Tick cleanup stalled in the backend, lock arrives | The notice is delivered. The lock call returns after the stalled cleanup ends. |
+| Tick cleanup stalled in the backend, lock arrives | The notice is delivered, and the lock call returns at once. The stalled cleanup makes the owed attempt when it ends (FW-01). |
 | Tick cleanup stalled, a copy arrives, lock arrives | The copy waits for the clipboard mutex, holding no gate. The notice is delivered. |
 | Session A lock settles after session B copied | The ticket rule skips B's lease. |
 | Idle expiry seen by `copy_stamped` | The copy answers `locked`. One attempt, after the gate is released. |
-| A lock arrives while a copy runs | The lock sends its notice at once. The copy finishes, then answers `locked` (it checks the ticket again). The lock's attempt removes what the copy published. Before this unit the lock waited for the copy and the copy answered `Ok`; the test `closing_serializes_with_a_copy_in_progress_and_clears_it` now accepts both answers and still requires an empty clipboard. |
+| A lock arrives while a copy runs | The lock sends its notice at once. The copy finishes, then answers `locked` (it checks the ticket again). The attempt that the lock owes removes what the copy published; the copy's thread makes it when the copy lets the lease go (FW-01). Before this unit the lock waited for the copy and the copy answered `Ok`; the test `closing_serializes_with_a_copy_in_progress_and_clears_it` now accepts both answers and still requires an empty clipboard. |
 | Window `CloseRequested`, `Destroyed`, `ExitRequested`, `Exit` | One attempt in all. |
 | Cleanup read triggers a delayed render | Nothing is emptied. The lease ends. |
 | `CloseClipboard` fails after a verified copy | Error, no lease, final warning. |
@@ -130,8 +130,8 @@ Every row of the table reads the fake sequence and the exact application warning
 
 ## 4. Limits
 
-- The lock waits for a copy or a cleanup already in progress (D2).
+- A lock does not wait for a copy or a cleanup in progress (FW-01, 13 Nov 2026). The attempt that it owes runs when that work lets the lease go, so the clipboard can hold the copy until then. Only `shutdown` waits for a copy.
 - Real Windows cannot be made to fail `CloseClipboard`, `DestroyWindow` or a delayed render here. The fake API stands in. The opt-in real-clipboard test and the owner's GUI test are not run (AGENTS.md safety).
 - `Secret` is `Zeroizing<String>`. Clones inside the KDBX library, the OS and the webview are not zeroized. This unit does not claim full memory zeroization.
 - `shutdown` is a latch, not a guarantee that the process exits. A close that the user cancels leaves it set until the next `start_open`.
-- The settle for a lock transition runs in the caller's thread. A caller that holds the vault mutex (`access`) waits there for a running cleanup.
+- The settle for a lock transition runs in the caller's thread when the lease is free, and that caller then waits for its own clipboard attempt. When a copy or a cleanup holds the lease, the caller does not wait, and the holder's thread makes the attempt (FW-01). The Windows message thread never makes an attempt.

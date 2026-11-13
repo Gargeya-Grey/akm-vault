@@ -376,7 +376,7 @@ from the vault, so it is not under the mechanism. Each form clears it when it cl
   lists no key, only scopes, and its preview comes from native code. The vault name in Settings is
   not a key. The native windows are class K and
   native code. The format-upgrade and journal-recovery dialogs name no key. The reminder sort
-  draws nothing. The fields of the edit form keep the stored values. `rowFactsGuard.test.ts`
+  draws nothing. The fields of the edit form keep the stored values, and an update writes only the fields that it changes (PROJECT.md, contract 13). `rowFactsGuard.test.ts`
   kept the class closed (removed on 13 Nov 2026; see the note at the top).
 - Class M in dialogs (U2-R1-02): the move to the Recycle Bin, the permanent delete, the rotation,
   the edit form and the key drawer list every row fact. The restore has no dialog, and its button
