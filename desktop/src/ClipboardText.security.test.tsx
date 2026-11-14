@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { KeyDetail } from "./components/KeyDetail";
 import { Settings } from "./components/Settings";
+import { UseKeys } from "./components/UseKeys";
 import type { KeyView, Status } from "./types";
 
 // Unit 1a, 1A-R8-02: clipboard cleanup is best effort, so no text may promise it.
@@ -61,7 +62,7 @@ function promisesNothing(text: string) {
 
 test("the key copy text says that cleanup is an attempt and that the copy may remain", async () => {
   respond();
-  render(<KeyDetail item={key} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
+  render(<KeyDetail current item={key} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Copy" }));
   expect(await screen.findByText(COPY_TEXT)).toBeTruthy();
   promisesNothing(document.body.textContent ?? "");
@@ -69,8 +70,11 @@ test("the key copy text says that cleanup is an attempt and that the copy may re
 
 test("the environment copy text and the lock text say that cleanup is an attempt", async () => {
   respond();
-  render(<Settings status={status} onLocked={() => {}} />);
+  const settings = render(<Settings status={status} onLocked={() => {}} />);
   expect(document.body.textContent).toContain(LOCK_TEXT);
+  promisesNothing(document.body.textContent ?? "");
+  settings.unmount();
+  render(<UseKeys />);
   await screen.findByRole("option", { name: "demo" });
   fireEvent.change(screen.getByLabelText("Project"), { target: { value: "demo" } });
   await screen.findByRole("option", { name: "dev" });

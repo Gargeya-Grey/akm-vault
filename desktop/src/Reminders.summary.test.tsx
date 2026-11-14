@@ -80,17 +80,17 @@ async function open() {
   await act(async () => {});
 }
 
-test("after unlock the summary lists expired, overdue, due soon and unknown keys by title and count only", async () => {
+test("after unlock the summary lists expired, overdue, due soon and unknown keys by title, short ID and count only", async () => {
   keys = mixed();
   await open();
   const box = summary()!;
   expect(box).toBeTruthy();
   expect(box.querySelector("h2")?.textContent).toBe("4 keys need attention");
   expect([...box.querySelectorAll("li")].map((item) => item.textContent)).toEqual([
-    "Expired (1): Expired key",
-    "Rotation overdue (1): Overdue key",
-    "Due soon (1): Soon key",
-    "Rotation unknown (1): Unknown key",
+    "Expired (1): “Expired key” (ID 1)",
+    "Rotation overdue (1): “Overdue key” (ID 2)",
+    "Due soon (1): “Soon key” (ID 3)",
+    "Rotation unknown (1): “Unknown key” (ID 4)",
   ]);
   expect(box.textContent).not.toContain("Fine key");
   for (const private_ of ["NOTE-SHOULD-NOT-APPEAR", "private.example", "FAKE_KEY", "demo"]) expect(box.textContent).not.toContain(private_);
@@ -105,13 +105,13 @@ test("one key that needs attention is worded in the singular", async () => {
 test("a key counts once, under its main state", async () => {
   keys = [key({ title: "Both", expiresAt: "2026-05-01T12:00:00Z", rotationDays: 30 })];
   await open();
-  expect([...summary()!.querySelectorAll("li")].map((item) => item.textContent)).toEqual(["Expired (1): Both"]);
+  expect([...summary()!.querySelectorAll("li")].map((item) => item.textContent)).toEqual(["Expired (1): “Both” (ID fake-id)"]);
 });
 
 test("a long list names five titles per state and counts the rest", async () => {
   keys = Array.from({ length: 7 }, (_, index) => key({ id: `k${index}`, title: `Old ${index}`, expiresAt: "2026-05-01T12:00:00Z" }));
   await open();
-  expect(summary()!.querySelector("li")?.textContent).toBe("Expired (7): Old 0, Old 1, Old 2, Old 3, Old 4, and 2 more");
+  expect(summary()!.querySelector("li")?.textContent).toBe("Expired (7): “Old 0” (ID k0), “Old 1” (ID k1), “Old 2” (ID k2), “Old 3” (ID k3), “Old 4” (ID k4), and 2 more");
 });
 
 test("no keys and no key that needs attention show no summary", async () => {
@@ -193,10 +193,10 @@ test("a hidden window neither dismisses the summary nor shows it again", async (
 test("the summary follows the clock while it is open", async () => {
   keys = [key({ title: "Clock key", expiresAt: "2026-06-04T12:00:00Z" })];
   await open();
-  expect(summary()!.querySelector("li")?.textContent).toBe("Due soon (1): Clock key");
+  expect(summary()!.querySelector("li")?.textContent).toBe("Due soon (1): “Clock key” (ID fake-id)");
   vi.setSystemTime(new Date("2026-06-05T12:00:00Z"));
   await act(async () => { window.dispatchEvent(new Event("focus")); });
-  expect(summary()!.querySelector("li")?.textContent).toBe("Expired (1): Clock key");
+  expect(summary()!.querySelector("li")?.textContent).toBe("Expired (1): “Clock key” (ID fake-id)");
 });
 
 test("the Keys screen count of keys that need attention equals the summary count", async () => {

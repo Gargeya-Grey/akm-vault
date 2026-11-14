@@ -25,7 +25,7 @@ for (const theme of ["light", "dark"]) {
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
         await page.goto("/");
-        await page.getByRole("button", { name: "Settings", exact: true }).click();
+        await page.getByRole("button", { name: "Use keys", exact: true }).click();
         await page.getByLabel("Project", { exact: true }).selectOption("demo");
         await page.getByLabel("Environment", { exact: true }).selectOption("dev");
         if (operation === "import") {
@@ -49,7 +49,10 @@ for (const theme of ["light", "dark"]) {
           document.dispatchEvent(new Event("visibilitychange"));
         });
         await expect(page.getByRole("dialog")).toHaveCount(0);
-        await expect(page.getByRole("button", { name: "Save .env…", exact: true })).toBeEnabled();
+        // A file save still waits on its receipt, so its button still waits; an import waits on
+        // its own receipt and leaves the export controls free (U2-R1-03).
+        if (operation === "export") await expect(page.getByRole("button", { name: "Saving…", exact: true })).toBeDisabled();
+        else await expect(page.getByRole("button", { name: "Save .env…", exact: true })).toBeEnabled();
         await page.getByRole("button", { name: "Keys", exact: true }).click();
         await page.evaluate((reply) => (window as unknown as { settleOutcome: (reply: string) => void }).settleOutcome(reply), reply);
         await expect(outcomes).toContainText(reply === "cancel" ? "cancelled" : reply === "success" ? "completed" : "reported an error");

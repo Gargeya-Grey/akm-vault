@@ -32,9 +32,10 @@ export function nativeNoticeStamp() { return noticeStamp; }
 export function nativeOpening() { return opening?.generation === sessionGeneration(); }
 export function nativeCancellation() { return { kind: "locked", message: CANCEL_MESSAGE }; }
 
-export function invalidateNativeView(message?: string) {
+// `asked`: the lock is the answer to a lock that this page asked for and already shows.
+export function invalidateNativeView(message?: string, asked = false) {
   invalidateSession();
-  window.dispatchEvent(new CustomEvent(NATIVE_INVALIDATION_EVENT, { detail: { message } }));
+  window.dispatchEvent(new CustomEvent(NATIVE_INVALIDATION_EVENT, { detail: { message, asked } }));
 }
 
 export function beginNativeOpen() {
@@ -69,11 +70,11 @@ export function adoptReservation(value: unknown): string {
   return id;
 }
 
-export function confirmNativeLock(expected: string | null) {
+export function confirmNativeLock(expected: string | null, asked = false) {
   if (expected !== null) invalidated.add(expected);
   if (owner !== null && owner === expected) {
     owner = null;
-    invalidateNativeView();
+    invalidateNativeView(undefined, asked);
   }
 }
 

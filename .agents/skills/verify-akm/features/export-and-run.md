@@ -13,7 +13,8 @@ A user exports the keys of one project and environment as a dotenv file, or star
 ## How to get to it (user POV)
 
 - CLI: `akm export --project <p> --env <e> [--output <file>]`, `akm run --project <p> --env <e> -- <command>`.
-- Desktop: Settings, Export (native save dialog). Covered by `-JournalExportOnly`.
+- Desktop: Use keys, Save .env… (native save dialog). Covered by `-JournalExportOnly`.
+- Desktop: Use keys, Preview and Copy to clipboard. Each opens a native window that lists the scope and the variables, and releases nothing until the user clicks `Show values` or `Copy values`. `-JournalExportOnly` does not meet this window, because it never clicks those two buttons. See [import-and-clipboard](./import-and-clipboard.md).
 
 ## Driving it with akm-verify
 

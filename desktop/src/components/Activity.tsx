@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { api, errorText } from "../api";
+import { nativeReads, useNativeRead } from "../nativeRead";
 import { formatDateTime } from "../format";
-import type { AuditReport } from "../types";
+import { journalKeyFacts, useShortIds } from "../rowFacts";
+import type { AuditReport, JournalRecovery } from "../types";
+import { EmptyPage } from "./glyphs";
 import { Notice } from "./Notice";
+import { ReadFailure } from "./ReadFailure";
 
 const ACTIONS: Record<string, string> = {
   "add-completed": "Added",
@@ -18,6 +22,7 @@ const ACTIONS: Record<string, string> = {
   "copy-requested": "Copy requested",
   "export-requested": "Export requested",
   "run-requested": "Launch requested",
+  "journal-recovered": "New journal started after damage",
 };
 
 const STATES: Record<AuditReport["state"], string> = {
@@ -34,37 +39,40 @@ const DAMAGE: Record<NonNullable<AuditReport["damage"]>, string> = {
   hashMismatch: "a record does not match its hash",
 };
 
-function keyLabel(keyTitle: string | null, keyId: string | null): string {
-  if (keyTitle !== null) return keyTitle;
-  return keyId === null ? "Vault" : `Key ${keyId.slice(0, 8)}`;
-}
-
 export function Activity() {
-  const [report, setReport] = useState<AuditReport | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const read = useNativeRead(nativeReads.journal);
+  // A failed read drops the snapshot, so no state badge outlives the read that gave it.
+  const report: AuditReport | null = read.state.status === "ready" ? read.state.data : null;
+  const [recovering, setRecovering] = useState(false);
+  const [recovery, setRecovery] = useState<{ kind: "done"; result: JournalRecovery } | { kind: "declined" } | { kind: "failed"; error: string } | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  // Native asks first, in its own window. The page only asks; it cannot approve for the user.
+  // A decline and a failure are separate outcomes: a decline changed nothing, and a failure
+  // reports what native said.
+  async function recover() {
+    setRecovering(true);
+    setRecovery(null);
     try {
-      setReport(await api.audit(500));
-      setError(null);
+      const result = await api.recoverJournal();
+      setRecovery(result === null ? { kind: "declined" } : { kind: "done", result });
     } catch (cause) {
-      setReport(null);
-      setError(errorText(cause));
+      setRecovery({ kind: "failed", error: errorText(cause) });
     } finally {
-      setLoading(false);
+      setRecovering(false);
+      read.reload();
     }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  }
 
   const entries = report ? [...report.entries].reverse() : [];
+  const shortId = useShortIds(entries.flatMap((entry) => (entry.keyId === null ? [] : [entry.keyId])));
+  const startNew = (
+    <button type="button" className="btn-secondary" onClick={() => void recover()} disabled={recovering || read.busy} aria-busy={recovering || undefined}>
+      {recovering ? "Waiting for your answer…" : "Start a new journal…"}
+    </button>
+  );
 
   return (
-    <main className="wrap view">
+    <main className="view">
       <header className="view-head">
         <div>
           <h1>
@@ -79,30 +87,48 @@ export function Activity() {
         <button
           type="button"
           className="btn-secondary"
-          onClick={() => void load()}
-          disabled={loading}
-          aria-busy={loading || undefined}
+          onClick={read.reload}
+          disabled={read.busy}
+          aria-busy={read.busy || undefined}
         >
-          {loading ? "Reading…" : "Refresh"}
+          {read.busy ? "Reading…" : "Refresh"}
         </button>
       </header>
 
-      <section className="raised ledger" aria-label="Activity journal">
-        <div className="ledger-tools audit-tools">
+      <section aria-label="Activity journal">
+        <div className="audit-tools">
           <div>
             <p className="label">Journal file</p>
-            <p className="mono path-text">{report?.path ?? "Reading…"}</p>
+            <p className="mono path-text">{report?.path ?? (read.state.status === "failed" ? "Not read" : "Reading…")}</p>
           </div>
-          {report && <p className={`state ${report.state === "corrupt" ? "state-warn" : ""}`}>{STATES[report.state]}</p>}
+          {report && (
+            <div className="audit-status">
+              <p className={`state ${report.state === "corrupt" ? "state-warn" : ""}`}>{STATES[report.state]}</p>
+              <p className="label">Completeness unknown</p>
+            </div>
+          )}
         </div>
 
-        {error && (
-          <div className="ledger-message">
-            <Notice tone="error">{error}</Notice>
-          </div>
+        {read.state.status === "failed" && (
+          <ReadFailure
+            heading="AKM could not read the journal."
+            detail="This does not mean that nothing was recorded. Select Refresh to try again."
+            error={read.state.error}
+            busy={read.busy}
+          />
         )}
 
-        {report && <div className="ledger-message"><p>Completeness unknown</p></div>}
+        {/* FV-01: a damaged mapping file stops the read itself, so no snapshot can say that it is damaged. Native finds the damaged file and names it in its window. */}
+        {read.state.status === "failed" && (
+          <div className="ledger-message">
+            <Notice tone="info">
+              If the error says that the mapping file is damaged, key reveal, copy and export stay blocked for every vault on this device.
+              You can start again. A window names the damaged file and asks you first. The damaged file is kept unchanged beside it, and the next record of each vault states the gap.
+              History before the damage cannot be proved complete. When no file is damaged, nothing changes.
+            </Notice>
+            {startNew}
+          </div>
+        )}
 
         {report?.notices.map((notice) => (
           <div className="ledger-message" key={notice.kind}>
@@ -119,6 +145,37 @@ export function Activity() {
           </div>
         )}
 
+        {report?.state === "corrupt" && (
+          <div className="ledger-message">
+            <Notice tone="info">
+              Key reveal, copy and export stay blocked while the journal is damaged, so that no disclosure goes unrecorded.
+              You can start a new journal. A window will ask you first. The damaged file is kept unchanged beside it, and the new journal records the gap.
+              History before the damage cannot be proved complete.
+            </Notice>
+            {startNew}
+          </div>
+        )}
+
+        {recovery?.kind === "done" && (
+          <div className="ledger-message">
+            <Notice tone="ok">
+              The damaged file was kept as <span className="mono path-text">{recovery.result.keptName}</span> ({recovery.result.bytes} bytes, SHA-256 <span className="mono path-text">{recovery.result.sha256}</span>), and a new file took its place. History before the damage cannot be proved complete.
+            </Notice>
+          </div>
+        )}
+
+        {recovery?.kind === "declined" && (
+          <div className="ledger-message">
+            <Notice tone="info">Cancelled. The journal is unchanged and still blocks disclosure.</Notice>
+          </div>
+        )}
+
+        {recovery?.kind === "failed" && (
+          <div className="ledger-message">
+            <Notice tone="error">{recovery.error}</Notice>
+          </div>
+        )}
+
         {report && (
           <div className="audit-head" aria-hidden="true">
             <span>#</span>
@@ -129,38 +186,39 @@ export function Activity() {
           </div>
         )}
 
-        {loading && !report ? (
+        {read.state.status === "loading" ? (
           <div className="empty-state">
             <h2>Reading the journal…</h2>
             <p>Entries appear newest first.</p>
           </div>
-        ) : entries.length === 0 ? (
+        ) : read.state.status === "failed" ? null : entries.length === 0 ? (
           <div className="empty-state">
+            <EmptyPage />
             <h2>No records displayed.</h2>
             <p>This is not proof of inactivity. Records may be absent, unavailable or incomplete.</p>
           </div>
         ) : (
           <ol className="audit-rows">
-            {entries.map((entry) => (
+            {entries.map((entry) => {
+              const named = journalKeyFacts(entry, shortId);
+              return (
               <li className="audit-row" key={entry.seq}>
                 <span className="audit-seq mono">
                   {String(entry.seq).padStart(3, "0")}
                 </span>
                 <span className="audit-time mono">{formatDateTime(entry.ts)}</span>
-                <span className="audit-action">
+                <span className="audit-action" data-kind={entry.action === "reveal-requested" || entry.action === "copy-requested" || entry.action.startsWith("export") ? "disclosure" : undefined}>
                   {Object.hasOwn(ACTIONS, entry.action) ? ACTIONS[entry.action] : `Legacy ${entry.action} (outcome unknown)`}
                 </span>
                 <span className="audit-key">
-                  <span>{keyLabel(entry.keyTitle, entry.keyId)}</span>
-                  <span className="key-sub">
-                    {[entry.project, entry.environment]
-                      .filter(Boolean)
-                      .join(" · ") || "—"}
-                  </span>
+                  <bdi>{named.name}</bdi>
+                  {named.id !== null && <span className="key-sub key-id mono">ID {named.id}</span>}
+                  <span className="key-sub">{named.scope}</span>
                 </span>
-                <span className="audit-detail">{entry.detail ?? "—"}</span>
+                <span className="audit-detail" data-empty={entry.detail ? undefined : true}>{entry.detail ?? "—"}</span>
               </li>
-            ))}
+              );
+            })}
           </ol>
         )}
 

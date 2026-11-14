@@ -1,0 +1,71 @@
+# Files that are not plain text for tools/make_public_snapshot.py, and that a person checked before
+# listing them: "<sha256>  <path>", two spaces, one file per line. The scan publishes a listed file
+# only while its SHA-256 matches; a changed file is refused as stale until someone checks it again.
+# The scan cannot read inside a file that is not UTF-8; it still scans a listed UTF-8 file. Print
+# the lines for new files with --suggest-opaque.
+#
+# Checked on 2026-11-13: 48 PNG, 1 ICO and 1 ICNS app icons and 2 BMP installer images (no PNG text
+# chunks; no printable ASCII or UTF-16 run breaks a scan rule), the KDBX 3 and KDBX 4 test vaults of
+# crates/akm-core/tests/fixtures (encrypted fake data; header and printable runs only), and
+# malformed_nul.dotenv (the six bytes "A=a", NUL, "b", newline).
+# Checked on 2026-11-13: three UTF-8 dotenv fixtures that are not plain text on purpose: bom.dotenv
+# (a leading byte order mark, then "A=1" and "B=2"), malformed_lone_cr.dotenv ("A=1", a lone CR,
+# "B=2") and expected.json (the expected results; one key holds a byte order mark).
+08b10b1c05d5de29a8e407e323abb7079428eb1fd8c70f48bc950c62844e524a  crates/akm-core/tests/fixtures/dotenv/bom.dotenv
+06a191ee1d5d9ef13178535bb29f0984bac5eb584f1522c347f26d76ef03a234  crates/akm-core/tests/fixtures/dotenv/expected.json
+90132c766257176e0c00ac19810693031aa8d9737c9c5a5311e1e412c6ec4b6b  crates/akm-core/tests/fixtures/dotenv/malformed_lone_cr.dotenv
+701a18f97c977159d5471c3862204dca23dda962780cac3ca4c60e651e6c398a  crates/akm-core/tests/fixtures/dotenv/malformed_nul.dotenv
+55cbb657659ef97077147c67bb7ba14b0efcc6812a74a0a8b72b506086f0537c  crates/akm-core/tests/fixtures/kdbx3.kdbx
+ea34e603d06542d20d50c2e30e3d07e73b6a273b277464b075e9529df4de42e2  crates/akm-core/tests/fixtures/kdbx40.kdbx
+70d352f66a1aa0c59c575aaba29096697dbd550b487d486dd5b08ea8dd952c45  desktop/src-tauri/icons/128x128.png
+cb53fab41df23e90fbacc9f0ffe7a560d087b1e50ed9e573d79867d7888ffa53  desktop/src-tauri/icons/128x128@2x.png
+8a42fc807b96361f3a76bd596d360ac76949ef03c90431c368c544a26a65bd75  desktop/src-tauri/icons/32x32.png
+8d390ee64ca52c82ed0270915e62c7d8195f9442412f71434a98ae7f0d94e2d6  desktop/src-tauri/icons/64x64.png
+f1329538f0a3ad2f6055936c1f363318d0aee720ba115705cd2057e03821dd8f  desktop/src-tauri/icons/Square107x107Logo.png
+a8c30c06650fdb877621e831dfa3424add72bed7af3800eb5cb4d6fd8fa18ddb  desktop/src-tauri/icons/Square142x142Logo.png
+40672cb6194bd012d72dfb8b19886cfb65af1110e5fd2724da37320f7622465b  desktop/src-tauri/icons/Square150x150Logo.png
+69b87db7133824492ecd9289618807a97e0ddc5a1423a801a0edccb4ec29b97f  desktop/src-tauri/icons/Square284x284Logo.png
+48c899c1146df645eea464fa35fbe256b34d6fe37732c5fa0b0cdde26245840a  desktop/src-tauri/icons/Square30x30Logo.png
+f59d9ea64fa76ceef2a1569479d8f281120a2f77b4bea0e2fcc28fe5170eeee5  desktop/src-tauri/icons/Square310x310Logo.png
+516fdc03ad829b4d9f9d2f5cf01e659090edc9de4e13f1c82de6603480e6c777  desktop/src-tauri/icons/Square44x44Logo.png
+bfa12986a4b297e9f048918f9f041cd6e4764acd18e0075af5f3e0ebaafaffa0  desktop/src-tauri/icons/Square71x71Logo.png
+661f2769f06a170860a7db86bf6830c60fc5d5e42700dd708d1a62e9ebcb877d  desktop/src-tauri/icons/Square89x89Logo.png
+fd7139eff9710b360d3b763da191dce90ca95e439a112c8d7a1e51ca8b948cf7  desktop/src-tauri/icons/StoreLogo.png
+9e8570f8090372f9f0f27091a42dcf5848bb045b517a9d318fd4a52cc512475c  desktop/src-tauri/icons/android/mipmap-hdpi/ic_launcher.png
+cfdd4446d236d98881f2bdf98457f11ff13dc9e9f203b57dc47aa27ab24a15bd  desktop/src-tauri/icons/android/mipmap-hdpi/ic_launcher_foreground.png
+cee459fe2b2f5d28574b9d6cb6845384ea9014aef963750d7c912e36249ad882  desktop/src-tauri/icons/android/mipmap-hdpi/ic_launcher_round.png
+fb88cadde07d6ebe308da99606022443b2644c9f98ac9cb90aa432cdda5e0def  desktop/src-tauri/icons/android/mipmap-mdpi/ic_launcher.png
+420837ec6c95bd3ebc191d959bc2254956e3c7bd68da71853614a7f604b25e6b  desktop/src-tauri/icons/android/mipmap-mdpi/ic_launcher_foreground.png
+ff23d913c8b264767bb40098a536cbb12b9063b4925f8dfa7f14496ee587f699  desktop/src-tauri/icons/android/mipmap-mdpi/ic_launcher_round.png
+68ddca5d1d0dacb5f1775bc63e4757dfb37e64cb7a21c497e126e6538cf89358  desktop/src-tauri/icons/android/mipmap-xhdpi/ic_launcher.png
+a450ece1b5286923def11cd07383b737d6fae382931e7d583d542e66d1bd7319  desktop/src-tauri/icons/android/mipmap-xhdpi/ic_launcher_foreground.png
+648c5f338f16123ed8d21533ad819fbe5f0f898b0cccdbc531604460b83b261f  desktop/src-tauri/icons/android/mipmap-xhdpi/ic_launcher_round.png
+6cd523b0ee59387c8c8717ed434f62fa3c970d4d6a776b991ae6345542f81daf  desktop/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher.png
+d0b31ba2eedcedcc303f191c5ac00fd4cf2c50a351289ec9816a90e7a042557c  desktop/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_foreground.png
+1394a0dab52e2a66bcdcbeeae0728c36a395a12dbc511701d173a4e749123101  desktop/src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_round.png
+33b4ac67d99fd3c9203fdb2db22d47e03e3017f7288285518d6d621ba3815894  desktop/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher.png
+43349255720f04e7caf5849b37a67f10d7b6a4002e84e6d8da7af1c114bfdf81  desktop/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_foreground.png
+70e8c559615131b165029115c61ecca21e44b5148adcd22d2b5edf7f61887b81  desktop/src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_round.png
+35eb51f9f72370c5d500200b1428b1816438a43937075242cc24ef5a831ab4ee  desktop/src-tauri/icons/icon.icns
+3eee2467d38baae7bd1846853b48a75f78150eb23fe57d06e3f037b26152bfce  desktop/src-tauri/icons/icon.ico
+32e0534884c19846a6cc64914708b3804baa9c07c50f6f1c4706472b5916bdb8  desktop/src-tauri/icons/icon.png
+a7b74987e020439db17efb6e30079c078d69b05c8eee1f649725c3217ae16793  desktop/src-tauri/icons/ios/AppIcon-20x20@1x.png
+744894f5c7efd06cf4e827501b650d22cb4e2cca0919cb4dd6590418c626a269  desktop/src-tauri/icons/ios/AppIcon-20x20@2x-1.png
+744894f5c7efd06cf4e827501b650d22cb4e2cca0919cb4dd6590418c626a269  desktop/src-tauri/icons/ios/AppIcon-20x20@2x.png
+0b28c6308a7384c7dc14220c0ef4dc9cfd00f1b9d6d08e524bf900024c997df7  desktop/src-tauri/icons/ios/AppIcon-20x20@3x.png
+0d8c4973eb53a7fd136c66980c0d0bc154ddc9748c29bcecc8655b2363a5a040  desktop/src-tauri/icons/ios/AppIcon-29x29@1x.png
+debfeac6f1dcb5755759b7522a96f51b21fd963ab047d98ed1d7636f8b03de31  desktop/src-tauri/icons/ios/AppIcon-29x29@2x-1.png
+debfeac6f1dcb5755759b7522a96f51b21fd963ab047d98ed1d7636f8b03de31  desktop/src-tauri/icons/ios/AppIcon-29x29@2x.png
+711ade6ef65c4e544e5b78eb213bf6036793657434022a310c6c698dcbc40517  desktop/src-tauri/icons/ios/AppIcon-29x29@3x.png
+744894f5c7efd06cf4e827501b650d22cb4e2cca0919cb4dd6590418c626a269  desktop/src-tauri/icons/ios/AppIcon-40x40@1x.png
+28e440e7c81028870d188853f5eacdc514271978e687ef18a0bb655e9b39378e  desktop/src-tauri/icons/ios/AppIcon-40x40@2x-1.png
+28e440e7c81028870d188853f5eacdc514271978e687ef18a0bb655e9b39378e  desktop/src-tauri/icons/ios/AppIcon-40x40@2x.png
+8f92490d92981508f37f223bf1b664c079173adfd36cb4adea1334c61ef20113  desktop/src-tauri/icons/ios/AppIcon-40x40@3x.png
+b2f377413d1b38efecf0cd49cc5e53e34b9c3d9451293454a64b3379a334c560  desktop/src-tauri/icons/ios/AppIcon-512@2x.png
+8f92490d92981508f37f223bf1b664c079173adfd36cb4adea1334c61ef20113  desktop/src-tauri/icons/ios/AppIcon-60x60@2x.png
+2914f29d45059918d3f74ece6c71c9ce100060d72e14801368155f5bd0b5325d  desktop/src-tauri/icons/ios/AppIcon-60x60@3x.png
+9e6c0ee809beb8925fde08f9adbaa0cac210b149188e779b624a5ae6b482a0fd  desktop/src-tauri/icons/ios/AppIcon-76x76@1x.png
+28408f4af64b1bf4e0bedd77768a9b0ec27b6c4c069c208ff908c7328ea53494  desktop/src-tauri/icons/ios/AppIcon-76x76@2x.png
+33fa8a6b7e541343791b024d40803956a580a8ac1a2ebc381a1fb21d3031fd1f  desktop/src-tauri/icons/ios/AppIcon-83.5x83.5@2x.png
+656afc5ac1e924c35a1eb41075579e10d50c351d3670c477769c41c339c29dc7  desktop/src-tauri/installer/header.bmp
+9fe34de6533f1f058024d22639b7c0f5a4763740a7d515bd77eea4aebea99d2d  desktop/src-tauri/installer/sidebar.bmp

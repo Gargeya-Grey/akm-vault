@@ -5,7 +5,271 @@ use std::sync::{Arc, Barrier};
 
 use akm_core::audit::{AuditLog, AuditState};
 use akm_core::journal::{Identity, JournalRoot, NoticeKind, VaultEvidence};
+use akm_core::vault::VaultWarningKind;
+use akm_core::{ApiKeyInput, KeyDisclosure, Vault};
+use keepass::db::fields;
+use keepass::{Database, DatabaseKey};
 use sha2::{Digest, Sha256};
+
+const VAULT_PASSWORD: &str = "fake journal vault password";
+
+/// An outside program rewrites the vault: the same vault ID, every secret changed, so the
+/// file holds a version that no journal recorded.
+fn rewrite_externally(path: &Path, secret: &str) {
+    let key = DatabaseKey::new().with_password(VAULT_PASSWORD);
+    let mut db = Database::parse(&fs::read(path).unwrap(), key.clone()).unwrap();
+    db.foreach_entry_mut(|mut entry| entry.set_protected(fields::PASSWORD, secret));
+    db.save(&mut fs::File::create(path).unwrap(), key).unwrap();
+}
+
+/// CORE-R2-03, the reviewer's closing test: a bound vault is replaced by a clone that an
+/// outside program rewrote, the clone is opened, and the file changes again before any read
+/// of the Activity or any disclosure. The stale snapshot is unconfirmed, with a notice; each
+/// disclosure from it is refused until the vault is reopened; and nothing about the clone is
+/// recorded in the mapping.
+#[test]
+fn a_stale_snapshot_of_an_unseen_clone_is_never_confirmed() {
+    let f = Fixture::new();
+    let path = f.directory.path().join("vault.kdbx");
+    let mut vault =
+        Vault::create_in(&path, VAULT_PASSWORD, None, JournalRoot::at(&f.root)).unwrap();
+    let key = vault
+        .add(ApiKeyInput::new("Fake key", "fake-original"))
+        .unwrap();
+    drop(vault);
+
+    rewrite_externally(&path, "fake-clone");
+    let clone = Vault::open_in(&path, VAULT_PASSWORD, JournalRoot::at(&f.root)).unwrap();
+    assert_eq!(
+        clone.audit_log().snapshot(10).unwrap().identity,
+        Identity::Unconfirmed
+    );
+
+    rewrite_externally(&path, "fake-later");
+    let mapping = fs::read(f.root.join("mapping.json")).unwrap();
+    let snapshot = clone.audit_log().snapshot(10).unwrap();
+    assert_eq!(
+        snapshot.identity,
+        Identity::Unconfirmed,
+        "the stale snapshot"
+    );
+    assert!(
+        snapshot
+            .notices
+            .iter()
+            .any(|notice| notice.kind == NoticeKind::IdentityUnconfirmed),
+        "{:?}",
+        snapshot.notices
+    );
+    for attempt in 0..2 {
+        let found = clone.get_by_id(&key.id).unwrap();
+        let refused = clone
+            .disclose_key(KeyDisclosure::Reveal, &found, Some("test"))
+            .unwrap_err();
+        assert!(
+            refused.to_string().contains("Reopen the vault"),
+            "disclosure {attempt}: {refused}"
+        );
+    }
+    assert_eq!(
+        fs::read(f.root.join("mapping.json")).unwrap(),
+        mapping,
+        "nothing about the clone was learned"
+    );
+}
+
+/// CORE-R2-03: the supported case stays. A stale snapshot whose version the journal recorded
+/// (the session's own save) is confirmed, with no notice and no warning.
+#[test]
+fn a_stale_snapshot_of_a_recorded_version_stays_confirmed() {
+    let f = Fixture::new();
+    let path = f.directory.path().join("vault.kdbx");
+    let mut vault =
+        Vault::create_in(&path, VAULT_PASSWORD, None, JournalRoot::at(&f.root)).unwrap();
+    let key = vault
+        .add(ApiKeyInput::new("Fake key", "fake-original"))
+        .unwrap();
+    vault.take_warning_records();
+
+    rewrite_externally(&path, "fake-outside");
+    let snapshot = vault.audit_log().snapshot(10).unwrap();
+    assert_eq!(snapshot.identity, Identity::Confirmed);
+    assert!(
+        snapshot
+            .notices
+            .iter()
+            .all(|notice| notice.kind != NoticeKind::IdentityUnconfirmed),
+        "{:?}",
+        snapshot.notices
+    );
+    let found = vault.get_by_id(&key.id).unwrap();
+    vault
+        .disclose_key(KeyDisclosure::Reveal, &found, Some("test"))
+        .unwrap();
+    let warnings = vault.take_warning_records();
+    assert!(
+        warnings
+            .iter()
+            .all(|warning| warning.kind != VaultWarningKind::JournalLineageUnconfirmed),
+        "{warnings:?}"
+    );
+}
+
+/// CORE-R2-03, the sibling at a new path: an outside program rewrites a bound vault in place,
+/// so the file keeps its file ID, and the file is renamed. The journal follows the file, but
+/// only the file ID and the vault ID vouch for the version, so the session is unconfirmed
+/// until a record passes the warning on. That record settles the version and the new path.
+#[test]
+fn a_moved_file_that_changed_outside_akm_is_unconfirmed_until_a_record_warns() {
+    let f = Fixture::new();
+    let path = f.directory.path().join("vault.kdbx");
+    let mut vault =
+        Vault::create_in(&path, VAULT_PASSWORD, None, JournalRoot::at(&f.root)).unwrap();
+    let key = vault
+        .add(ApiKeyInput::new("Fake key", "fake-original"))
+        .unwrap();
+    let journal = vault.audit_log().journal_path().unwrap().unwrap();
+    drop(vault);
+
+    rewrite_externally(&path, "fake-outside");
+    let moved = f.directory.path().join("moved.kdbx");
+    fs::rename(&path, &moved).unwrap();
+    let mut vault = Vault::open_in(&moved, VAULT_PASSWORD, JournalRoot::at(&f.root)).unwrap();
+    let snapshot = vault.audit_log().snapshot(10).unwrap();
+    assert_eq!(snapshot.identity, Identity::Unconfirmed);
+    assert!(
+        snapshot
+            .notices
+            .iter()
+            .any(|notice| notice.kind == NoticeKind::IdentityUnconfirmed),
+        "{:?}",
+        snapshot.notices
+    );
+
+    assert_eq!(
+        disclosure_warnings(&mut vault, &key.id),
+        1,
+        "the record warns"
+    );
+    assert_eq!(
+        vault.audit_log().journal_path().unwrap().unwrap(),
+        journal,
+        "the journal follows the file"
+    );
+    assert_eq!(
+        vault.audit_log().snapshot(10).unwrap().identity,
+        Identity::Confirmed,
+        "the warned record settled the version"
+    );
+    assert_eq!(disclosure_warnings(&mut vault, &key.id), 0, "settled once");
+}
+
+/// The lineage warnings of one disclosure through the vault, a record that reports them.
+fn disclosure_warnings(vault: &mut Vault, id: &str) -> usize {
+    let found = vault.get_by_id(id).unwrap();
+    vault
+        .disclose_key(KeyDisclosure::Reveal, &found, Some("test"))
+        .unwrap();
+    lineage_warnings(vault)
+}
+
+/// A bound vault that an outside program rewrote, opened again: the session holds a version
+/// that no journal recorded. Gives the vault and the ID of its key.
+fn unseen_revision(f: &Fixture) -> (Vault, String) {
+    let path = f.directory.path().join("vault.kdbx");
+    let mut vault =
+        Vault::create_in(&path, VAULT_PASSWORD, None, JournalRoot::at(&f.root)).unwrap();
+    let key = vault
+        .add(ApiKeyInput::new("Fake key", "fake-original"))
+        .unwrap();
+    drop(vault);
+    rewrite_externally(&path, "fake-outside");
+    let vault = Vault::open_in(&path, VAULT_PASSWORD, JournalRoot::at(&f.root)).unwrap();
+    assert_eq!(
+        vault.audit_log().snapshot(10).unwrap().identity,
+        Identity::Unconfirmed
+    );
+    (vault, key.id)
+}
+
+/// CORE-R2-04, the reviewer's closing test: a record through the public `AuditLog::append`
+/// under an unseen revision has no way to pass the lineage warning on, so it leaves the
+/// version unsettled. The next record through the vault warns, and settles it.
+#[test]
+fn the_public_append_leaves_an_unseen_revision_for_the_next_warning() {
+    let f = Fixture::new();
+    let (mut vault, id) = unseen_revision(&f);
+    vault.audit_log().append("fake-record", None, None).unwrap();
+    assert_eq!(
+        vault.audit_log().snapshot(10).unwrap().identity,
+        Identity::Unconfirmed,
+        "the public append settled nothing"
+    );
+    assert_eq!(
+        disclosure_warnings(&mut vault, &id),
+        1,
+        "the next record warns"
+    );
+    assert_eq!(
+        vault.audit_log().snapshot(10).unwrap().identity,
+        Identity::Confirmed
+    );
+    assert_eq!(disclosure_warnings(&mut vault, &id), 0, "settled once");
+}
+
+/// CORE-R2-04: no public journal writer of `AuditLog` settles an unseen revision, because
+/// none of them passes the warning on. Each one leaves it for the next record through the
+/// vault, which warns.
+#[test]
+fn no_public_journal_writer_settles_an_unseen_revision() {
+    type Writer = (&'static str, fn(&AuditLog));
+    let writers: [Writer; 7] = [
+        ("append", |log| {
+            log.append("fake-record", None, None).unwrap()
+        }),
+        ("snapshot", |log| {
+            log.snapshot(10).unwrap();
+        }),
+        ("read", |log| {
+            log.read(10).unwrap();
+        }),
+        ("verify", |log| {
+            log.verify().unwrap();
+        }),
+        ("journal_path", |log| {
+            log.journal_path().unwrap();
+        }),
+        ("create_journal_path", |log| {
+            log.create_journal_path().unwrap();
+        }),
+        ("recover_damaged", |log| {
+            use std::io::Write;
+            let journal = log.journal_path().unwrap().unwrap();
+            fs::OpenOptions::new()
+                .append(true)
+                .open(journal)
+                .unwrap()
+                .write_all(b"not a record\n")
+                .unwrap();
+            log.recover_damaged().unwrap();
+        }),
+    ];
+    for (name, write) in writers {
+        let f = Fixture::new();
+        let (mut vault, id) = unseen_revision(&f);
+        write(&vault.audit_log());
+        assert_eq!(
+            vault.audit_log().snapshot(10).unwrap().identity,
+            Identity::Unconfirmed,
+            "{name}"
+        );
+        assert_eq!(
+            disclosure_warnings(&mut vault, &id),
+            1,
+            "{name}: the next record warns"
+        );
+    }
+}
 
 struct Fixture {
     directory: tempfile::TempDir,
@@ -31,6 +295,15 @@ impl Fixture {
             JournalRoot::at(&self.root),
             VaultEvidence::unlocked(path, Some(sha), vault_id.to_string()),
         )
+    }
+
+    /// The log of a version that AKM's own save made from `from`: the session's lineage holds
+    /// the version that it read, so the journal confirms the new version (CORE-R2-04).
+    fn saved(&self, path: &Path, bytes: &[u8], from: &[u8], vault_id: &str) -> AuditLog {
+        let sha = hex::encode(Sha256::digest(bytes));
+        let evidence = VaultEvidence::unlocked(path, Some(sha), vault_id.to_string())
+            .with_lineage(vec![hex::encode(Sha256::digest(from))]);
+        AuditLog::new(JournalRoot::at(&self.root), evidence)
     }
 
     fn locked(&self, path: &Path) -> AuditLog {
@@ -142,7 +415,7 @@ fn restoring_an_earlier_version_is_recorded_in_the_same_journal() {
         .append("first", None, None)
         .unwrap();
     fs::write(&path, b"fake-two").unwrap();
-    f.log(&path, b"fake-two", "root-a")
+    f.saved(&path, b"fake-two", b"fake-one", "root-a")
         .append("second", None, None)
         .unwrap();
     fs::write(&path, b"fake-one").unwrap();
@@ -387,15 +660,16 @@ impl Fixture {
         fs::read(self.root.join("mapping.json")).unwrap()
     }
 
-    /// Two versions of one vault are observed, then the first one is restored. Returns the
-    /// log of the restored version, with the journal holding `first` and `second`.
+    /// Two versions of one vault are recorded (AKM's own save made the second), then the
+    /// first one is restored. Returns the log of the restored version, with the journal
+    /// holding `first` and `second`.
     fn rolled_back_vault(&self) -> (PathBuf, AuditLog) {
         let path = self.vault("a.kdbx", b"fake-one");
         self.log(&path, b"fake-one", "root-a")
             .append("first", None, None)
             .unwrap();
         fs::write(&path, b"fake-two").unwrap();
-        self.log(&path, b"fake-two", "root-a")
+        self.saved(&path, b"fake-two", b"fake-one", "root-a")
             .append("second", None, None)
             .unwrap();
         fs::write(&path, b"fake-one").unwrap();
@@ -1333,4 +1607,319 @@ fn a_renamed_replacement_is_not_moved_onto_the_journal_of_the_file_it_replaced()
         w.actions_with("renamed-marker"),
         strings(&["renamed-marker"])
     );
+}
+
+// ---------------------------------------------- FR-12: an unseen clone at a bound path warns
+
+fn lineage_warnings(vault: &mut akm_core::Vault) -> usize {
+    vault
+        .take_warning_records()
+        .iter()
+        .filter(|warning| {
+            warning.kind == akm_core::vault::VaultWarningKind::JournalLineageUnconfirmed
+        })
+        .count()
+}
+
+/// FR-12 and P2R2-04, the reviewer's probe: copy A to B, change B where A's journal cannot
+/// see it, then replace A with B. The vault ID is the same, so the journal of A continues
+/// (that fallback stays), but the vault says that the continuity is not confirmed. It says
+/// so once; the version is then known to the journal.
+#[test]
+fn an_unseen_clone_that_replaces_a_bound_vault_continues_its_journal_with_a_warning() {
+    use clones::*;
+    let w = World::new();
+    let original = w.create("a.kdbx");
+    mark(&original, "original-marker").unwrap();
+    drop(original);
+    w.copy("a.kdbx", "b.kdbx");
+    let elsewhere = w.directory.path().join("other-journal");
+    let mut clone =
+        akm_core::Vault::open_in(w.path("b.kdbx"), PASSWORD, JournalRoot::at(&elsewhere)).unwrap();
+    change(&mut clone, "Beta");
+    drop(clone);
+
+    w.copy("b.kdbx", "a.kdbx");
+    let mut replacement = w.open("a.kdbx");
+    assert_eq!(
+        lineage_warnings(&mut replacement),
+        0,
+        "opening records nothing"
+    );
+    replacement.log("replacement-marker", None, None).unwrap();
+    assert_eq!(lineage_warnings(&mut replacement), 1);
+    let warning_text = {
+        replacement.log("again-marker", None, None).unwrap();
+        replacement.take_warnings()
+    };
+    assert!(
+        warning_text.is_empty(),
+        "the warning is given once: {warning_text:?}"
+    );
+
+    assert_eq!(
+        w.actions_with("original-marker"),
+        strings(&[
+            "add-completed",
+            "original-marker",
+            "replacement-marker",
+            "again-marker"
+        ]),
+        "the history continues in the existing journal"
+    );
+    // The message says what happened and does not claim a cause it cannot know.
+    let mut fresh = w.open("a.kdbx");
+    fresh.log("third-marker", None, None).unwrap();
+    assert_eq!(
+        lineage_warnings(&mut fresh),
+        0,
+        "a later session sees a known version"
+    );
+}
+
+/// FR-12: the warning is for an unseen file only. Ordinary saves, a second session on the
+/// version the first one saved, and a rename give none.
+#[test]
+fn ordinary_saves_and_reopens_give_no_lineage_warning() {
+    use clones::*;
+    let w = World::new();
+    let mut vault = w.create("a.kdbx");
+    change(&mut vault, "Beta");
+    vault.log("one", None, None).unwrap();
+    assert_eq!(lineage_warnings(&mut vault), 0);
+    change(&mut vault, "Gamma");
+    vault.log("two", None, None).unwrap();
+    assert_eq!(lineage_warnings(&mut vault), 0);
+    drop(vault);
+
+    let mut again = w.open("a.kdbx");
+    again.log("three", None, None).unwrap();
+    assert_eq!(lineage_warnings(&mut again), 0);
+    drop(again);
+
+    w.copy("a.kdbx", "b.kdbx");
+    let mut copy = w.open("b.kdbx");
+    copy.log("copy-marker", None, None).unwrap();
+    assert_eq!(
+        lineage_warnings(&mut copy),
+        0,
+        "a copy starts its own journal"
+    );
+}
+
+// ------------------------- core review 1, findings 4 and 5: the lineage table, row by row
+//
+// | File at the bound path | Read            | Append succeeds | Append fails, retry  | Lock between |
+// | Bound vault            | confirmed       | no warning      | no change; no warning | no warning   |
+// | Unseen clone           | unconfirmed +   | one warning,    | no change; the retry  | the first    |
+// |                        | notice          | then known      | warns                 | append warns |
+// | Seen clone (earlier)   | confirmed       | rollback record | no change; rollback   | rollback     |
+//
+// "No change" means that the mapping bytes are as they were. A read never changes them.
+
+/// The reviewer's probe: the file at `a.kdbx` is a copy of the bound vault that was changed
+/// where the bound journal could not see it.
+fn bound_with_unseen_clone() -> clones::World {
+    use clones::*;
+    let w = World::new();
+    let original = w.create("a.kdbx");
+    mark(&original, "original-marker").unwrap();
+    drop(original);
+    w.copy("a.kdbx", "b.kdbx");
+    let elsewhere = w.directory.path().join("other-journal");
+    let mut clone =
+        akm_core::Vault::open_in(w.path("b.kdbx"), PASSWORD, JournalRoot::at(&elsewhere)).unwrap();
+    change(&mut clone, "Beta");
+    drop(clone);
+    w.copy("b.kdbx", "a.kdbx");
+    w
+}
+
+/// Holds a journal file open with no sharing, so an append cannot open it: the reviewer's
+/// way to make an append fail.
+#[cfg(windows)]
+fn hold(path: &Path) -> fs::File {
+    use std::os::windows::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(path)
+        .unwrap()
+}
+
+fn unconfirmed_notices(snapshot: &akm_core::audit::AuditSnapshot) -> usize {
+    snapshot
+        .notices
+        .iter()
+        .filter(|notice| notice.kind == NoticeKind::IdentityUnconfirmed)
+        .count()
+}
+
+/// Finding 5, the read column: an Activity read of an unseen clone, with the password-less
+/// evidence and with the unlocked evidence that the desktop's `audit_read` uses, is
+/// unconfirmed with a notice. It changes no mapping byte. After the first successful append
+/// (which warns), the version is known and a read is confirmed.
+#[test]
+fn a_read_of_an_unseen_clone_is_unconfirmed_with_a_notice_and_changes_nothing() {
+    let w = bound_with_unseen_clone();
+    let mapping = w.mapping_text();
+    let locked = w.view("a.kdbx");
+    assert_eq!(locked.identity, Identity::Unconfirmed);
+    assert_eq!(unconfirmed_notices(&locked), 1, "{:?}", locked.notices);
+    let mut vault = w.open("a.kdbx");
+    let unlocked = vault.audit_log().snapshot(100).unwrap();
+    assert_eq!(
+        unlocked.identity,
+        Identity::Unconfirmed,
+        "{:?}",
+        unlocked.notices
+    );
+    assert_eq!(unconfirmed_notices(&unlocked), 1, "{:?}", unlocked.notices);
+    assert_eq!(w.mapping_text(), mapping, "a read changes nothing");
+    assert_eq!(
+        lineage_warnings(&mut vault),
+        0,
+        "a read consumes no warning"
+    );
+
+    vault.log("first-marker", None, None).unwrap();
+    assert_eq!(lineage_warnings(&mut vault), 1);
+    let after = vault.audit_log().snapshot(100).unwrap();
+    assert_eq!(after.identity, Identity::Confirmed);
+    assert_eq!(unconfirmed_notices(&after), 0);
+}
+
+/// Finding 4, the failure column: an append that fails under an unseen clone leaves the
+/// mapping as it was, so the retry still warns. The same holds when the vault is locked and
+/// opened again between the failure and the retry.
+#[cfg(windows)]
+#[test]
+fn a_failed_append_under_an_unseen_clone_keeps_the_lineage_warning_for_the_retry() {
+    for lock_between in [false, true] {
+        let w = bound_with_unseen_clone();
+        let mapping = w.mapping_text();
+        let journal = w.journal_with("original-marker");
+        let mut vault = w.open("a.kdbx");
+        {
+            let _held = hold(&journal);
+            assert!(
+                vault.log("failed-marker", None, None).is_err(),
+                "the append fails while the journal is held"
+            );
+        }
+        assert_eq!(
+            w.mapping_text(),
+            mapping,
+            "lock between: {lock_between}: a failed append changes no mapping"
+        );
+        assert_eq!(lineage_warnings(&mut vault), 0);
+        if lock_between {
+            drop(vault);
+            vault = w.open("a.kdbx");
+        }
+        vault.log("retry-marker", None, None).unwrap();
+        assert_eq!(
+            lineage_warnings(&mut vault),
+            1,
+            "lock between: {lock_between}: the retry warns"
+        );
+        vault.log("next-marker", None, None).unwrap();
+        assert_eq!(lineage_warnings(&mut vault), 0, "the warning is given once");
+        assert_eq!(
+            w.actions_with("original-marker"),
+            clones::strings(&[
+                "add-completed",
+                "original-marker",
+                "retry-marker",
+                "next-marker"
+            ])
+        );
+    }
+}
+
+/// The other rows: a bound vault and a seen clone (an earlier version that the journal saw).
+/// Reads are confirmed and change nothing, a failed append changes nothing, and the retry
+/// gives no lineage warning. For the seen clone the retry records the rollback first.
+#[cfg(windows)]
+#[test]
+fn the_lineage_table_rows_for_a_bound_vault_and_a_seen_clone() {
+    use clones::*;
+    for seen_clone in [false, true] {
+        let w = World::new();
+        let mut vault = w.create("a.kdbx");
+        mark(&vault, "original-marker").unwrap();
+        w.copy("a.kdbx", "earlier.kdbx");
+        change(&mut vault, "Beta");
+        drop(vault);
+        if seen_clone {
+            let earlier = w.bytes("earlier.kdbx");
+            w.put("a.kdbx", &earlier);
+        }
+        let mapping = w.mapping_text();
+        let view = w.view("a.kdbx");
+        assert_eq!(
+            view.identity,
+            Identity::Confirmed,
+            "seen clone: {seen_clone}"
+        );
+        let mut vault = w.open("a.kdbx");
+        let unlocked = vault.audit_log().snapshot(100).unwrap();
+        assert_eq!(
+            unlocked.identity,
+            Identity::Confirmed,
+            "seen clone: {seen_clone}"
+        );
+        assert_eq!(
+            w.mapping_text(),
+            mapping,
+            "seen clone: {seen_clone}: a read"
+        );
+
+        let journal = w.journal_with("original-marker");
+        {
+            let _held = hold(&journal);
+            assert!(vault.log("failed-marker", None, None).is_err());
+        }
+        assert_eq!(
+            w.mapping_text(),
+            mapping,
+            "seen clone: {seen_clone}: a failure"
+        );
+        vault.log("retry-marker", None, None).unwrap();
+        assert_eq!(lineage_warnings(&mut vault), 0, "seen clone: {seen_clone}");
+        let actions = w.actions_with("original-marker");
+        let tail: Vec<&str> = actions.iter().rev().take(2).map(String::as_str).collect();
+        if seen_clone {
+            assert_eq!(tail, ["retry-marker", "vault-rolled-back"], "{actions:?}");
+        } else {
+            assert_eq!(tail[0], "retry-marker", "{actions:?}");
+            assert!(!actions.iter().any(|action| action == "vault-rolled-back"));
+        }
+    }
+}
+
+/// Findings 4 and 5, the sweep of the class: every other path that reaches the mapping under
+/// an unseen clone. Creating the journal path and recovering a damaged journal report no
+/// lineage warning, so neither settles it: the next append still warns.
+#[test]
+fn neither_recovery_nor_placing_the_journal_settles_an_unseen_lineage() {
+    for recover in [false, true] {
+        let w = bound_with_unseen_clone();
+        let mut vault = w.open("a.kdbx");
+        let log = vault.audit_log();
+        let journal = log.create_journal_path().unwrap();
+        if recover {
+            let mut file = fs::OpenOptions::new().append(true).open(&journal).unwrap();
+            std::io::Write::write_all(&mut file, b"{this is not a record}").unwrap();
+            drop(file);
+            log.recover_damaged().unwrap();
+        }
+        assert_eq!(lineage_warnings(&mut vault), 0, "recover: {recover}");
+        vault.log("after-marker", None, None).unwrap();
+        assert_eq!(
+            lineage_warnings(&mut vault),
+            1,
+            "recover: {recover}: the next append still warns"
+        );
+    }
 }

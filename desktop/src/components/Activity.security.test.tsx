@@ -1,9 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Activity } from "./Activity";
 
-const native = vi.hoisted(() => ({ audit: vi.fn() }));
+const native = vi.hoisted(() => ({ audit: vi.fn(), recoverJournal: vi.fn() }));
 vi.mock("../api", () => ({ api: native, errorText: (error: unknown) => String(error) }));
+vi.mock("../native", () => ({ reads: native }));
 afterEach(cleanup);
 
 const base = { path: "C:/fake/journal/j-0.jsonl", entries: [], state: "consistent", damage: null, identity: "confirmed", notices: [], brokenAt: null, problemLine: null, totalEntries: 0 };
@@ -114,7 +115,146 @@ test("a key that is no longer in the vault shows its short id, and a vault event
     { seq: "2", ts: "2026-10-31T00:00:00Z", action: "upgrade-completed", keyTitle: null, keyId: null, detail: null },
   ] }));
   render(<Activity />);
-  expect(await screen.findByText("Key 01234567")).toBeTruthy();
+  expect((await screen.findByText("ID 01234567")).closest(".audit-key")?.textContent).toBe("KeyID 01234567—");
   expect(screen.queryByText(/89abcdef/)).toBeNull();
   expect(screen.getByText("Vault")).toBeTruthy();
+});
+
+// FR-14. The control appears only for a damaged journal or a failed read (FV-01), asks native
+// (which asks the user), and shows what was kept. The page cannot approve for the user: it sends
+// one request with no argument.
+const KEPT = { keptName: "j-0.jsonl.damaged-20261109T101500Z", sha256: "ab".repeat(32), bytes: 213 };
+const startButton = () => screen.queryByRole("button", { name: "Start a new journal…" }) as HTMLButtonElement | null;
+
+for (const state of ["absent", "empty", "consistent"]) {
+  test(`a ${state} journal offers no recovery`, async () => {
+    native.audit.mockResolvedValue(shown({ state }));
+    render(<Activity />);
+    await screen.findByText("Completeness unknown");
+    expect(startButton()).toBeNull();
+  });
+}
+
+test("a damaged journal says that disclosure is blocked, that the file is kept and that history cannot be proved complete", async () => {
+  native.audit.mockResolvedValue(shown({ state: "corrupt", damage: "malformedJson", problemLine: 4 }));
+  render(<Activity />);
+  const button = await screen.findByRole("button", { name: "Start a new journal…" });
+  expect(button).toBeTruthy();
+  const text = document.body.textContent!;
+  expect(text).toContain("stay blocked while the journal is damaged");
+  expect(text).toContain("A window will ask you first");
+  expect(text).toContain("kept unchanged");
+  expect(text).toContain("cannot be proved complete");
+  expect(native.recoverJournal).not.toHaveBeenCalled();
+});
+
+test("a recovery the user approved reloads the journal and names the kept file and its hash", async () => {
+  const damaged = shown({ state: "corrupt", damage: "hashMismatch", problemLine: 4, totalEntries: 3 });
+  const fresh = shown({ state: "consistent", totalEntries: 1, entries: [{ seq: "1", ts: "2026-11-09T10:15:00Z", action: "journal-recovered", keyTitle: null, keyId: null, detail: "A new journal started after damage." }] });
+  native.audit.mockResolvedValueOnce(damaged).mockResolvedValueOnce(fresh);
+  native.recoverJournal.mockResolvedValueOnce(KEPT);
+  render(<Activity />);
+  await screen.findByRole("button", { name: "Start a new journal…" });
+  await act(async () => { fireEvent.click(startButton()!); });
+  expect(native.recoverJournal).toHaveBeenCalledExactlyOnceWith();
+  expect(native.audit).toHaveBeenCalledTimes(2);
+  expect(await screen.findByText("Recorded chain is consistent")).toBeTruthy();
+  expect(startButton()).toBeNull();
+  expect(screen.getByText(KEPT.keptName)).toBeTruthy();
+  expect(screen.getByText(KEPT.sha256)).toBeTruthy();
+  expect(document.body.textContent).toContain("213 bytes");
+  expect(screen.getByText("New journal started after damage")).toBeTruthy();
+  // The new journal is consistent. Nothing on screen says that the old history was verified.
+  const result = screen.getByText(KEPT.keptName).closest(".notice")!;
+  expect(result.className).toContain("notice-ok");
+  expect(result.textContent).toContain("History before the damage cannot be proved complete.");
+  expect(document.body.textContent).not.toMatch(/(?<!not )verified/i);
+  expect(document.body.textContent).not.toMatch(/(?<!(?:cannot be proved|cannot prove a) )\bcomplete\b/i);
+});
+
+test("a recovery the user declined leaves the damaged journal on screen and still offers it", async () => {
+  native.audit.mockResolvedValue(shown({ state: "corrupt", damage: "malformedJson", problemLine: 4 }));
+  native.recoverJournal.mockResolvedValueOnce(null);
+  render(<Activity />);
+  await screen.findByRole("button", { name: "Start a new journal…" });
+  await act(async () => { fireEvent.click(startButton()!); });
+  expect(await screen.findByText(/Cancelled\. The journal is unchanged/)).toBeTruthy();
+  expect(screen.getByText(/Cancelled\. The journal is unchanged/).closest(".notice")!.className).toContain("notice-info");
+  expect(screen.getByText("Journal data is damaged")).toBeTruthy();
+  expect(startButton()!.disabled).toBe(false);
+  expect(screen.queryByText(KEPT.keptName)).toBeNull();
+  expect(screen.queryByText(/A new journal started/)).toBeNull();
+});
+
+test("a recovery that failed shows the error, keeps the damaged journal and can be tried again", async () => {
+  native.audit.mockResolvedValue(shown({ state: "corrupt", damage: "malformedJson", problemLine: 4 }));
+  native.recoverJournal.mockRejectedValueOnce("The damaged journal could not be set aside. It is unchanged.").mockResolvedValueOnce(KEPT);
+  render(<Activity />);
+  await screen.findByRole("button", { name: "Start a new journal…" });
+  await act(async () => { fireEvent.click(startButton()!); });
+  expect(await screen.findByText(/could not be set aside/)).toBeTruthy();
+  expect(screen.getByText(/could not be set aside/).closest(".notice")!.className).toContain("notice-error");
+  expect(screen.queryByText(/Cancelled/)).toBeNull();
+  expect(screen.queryByText(KEPT.keptName)).toBeNull();
+  expect(startButton()!.disabled).toBe(false);
+  await act(async () => { fireEvent.click(startButton()!); });
+  expect(native.recoverJournal).toHaveBeenCalledTimes(2);
+});
+
+test("the button is busy while the user answers the window, and one click sends one request", async () => {
+  native.audit.mockResolvedValue(shown({ state: "corrupt", damage: "malformedJson", problemLine: 4 }));
+  let answer!: (value: typeof KEPT | null) => void;
+  native.recoverJournal.mockReturnValueOnce(new Promise((done) => { answer = done; }));
+  render(<Activity />);
+  await screen.findByRole("button", { name: "Start a new journal…" });
+  await act(async () => { fireEvent.click(startButton()!); });
+  const waiting = screen.getByRole("button", { name: "Waiting for your answer…" }) as HTMLButtonElement;
+  expect(waiting.disabled).toBe(true);
+  fireEvent.click(waiting);
+  expect(native.recoverJournal).toHaveBeenCalledTimes(1);
+  await act(async () => answer(null));
+});
+
+// FV-01. A damaged mapping file stops the read itself, so no snapshot says "corrupt". The failed
+// read offers the same request; native finds the damaged file, names it in its window, and
+// refuses before any window when nothing is damaged.
+const MAPPING_DAMAGED = "activity journal unavailable: the mapping file C:/fake/journal/mapping.json is damaged. Its bytes were kept. No record is written until it is repaired, moved, or recovered";
+const KEPT_MAPPING = { keptName: "mapping.json.damaged-20261113T101500Z", sha256: "cd".repeat(32), bytes: 97 };
+
+test("a failed read offers a recovery and says what it blocks, keeps and cannot prove", async () => {
+  native.audit.mockRejectedValue(MAPPING_DAMAGED);
+  render(<Activity />);
+  const button = await screen.findByRole("button", { name: "Start a new journal…" });
+  expect(button).toBeTruthy();
+  const text = document.body.textContent!;
+  expect(text).toContain("AKM could not read the journal.");
+  expect(text).toContain(MAPPING_DAMAGED);
+  expect(text).toContain("blocked for every vault on this device");
+  expect(text).toContain("A window names the damaged file and asks you first");
+  expect(text).toContain("kept unchanged");
+  expect(text).toContain("the next record of each vault states the gap");
+  expect(text).toContain("cannot be proved complete");
+  expect(text).toContain("When no file is damaged, nothing changes.");
+  expect(native.recoverJournal).not.toHaveBeenCalled();
+});
+
+test("a recovery after a failed read reloads the journal and names the kept mapping and its hash", async () => {
+  const notice = { kind: "identityUnconfirmed", message: "The journal mapping of this device was damaged and was started again." };
+  native.audit.mockRejectedValueOnce(MAPPING_DAMAGED).mockResolvedValueOnce(shown({ state: "absent", identity: "unconfirmed", notices: [notice] }));
+  native.recoverJournal.mockResolvedValueOnce(KEPT_MAPPING);
+  render(<Activity />);
+  await screen.findByRole("button", { name: "Start a new journal…" });
+  await act(async () => { fireEvent.click(startButton()!); });
+  expect(native.recoverJournal).toHaveBeenCalledExactlyOnceWith();
+  expect(native.audit).toHaveBeenCalledTimes(2);
+  expect(await screen.findByText(notice.message)).toBeTruthy();
+  expect(screen.getByText("Journal unavailable")).toBeTruthy();
+  expect(screen.queryByText("AKM could not read the journal.")).toBeNull();
+  expect(startButton()).toBeNull();
+  const result = screen.getByText(KEPT_MAPPING.keptName).closest(".notice")!;
+  expect(result.className).toContain("notice-ok");
+  expect(result.textContent).toContain(KEPT_MAPPING.sha256);
+  expect(result.textContent).toContain("97 bytes");
+  expect(result.textContent).toContain("History before the damage cannot be proved complete.");
+  expect(result.textContent).not.toContain("A new journal started");
 });

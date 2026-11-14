@@ -210,8 +210,29 @@ function Confirm-NativeImport([string]$expect, [string]$button = 'Import', [int]
 }
 
 function Set-Field([string]$name, [string]$value) {
-  $element = Find-Control $name ([System.Windows.Automation.ControlType]::Edit)
-  $element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($value)
+  # The page can replace a form just after it shows it: a lock shows the unlock form, and the
+  # native confirmation of that lock mounts the form again. An element found before the
+  # replacement is stale, and text set in it is lost. So read the value back from the element
+  # that is there after a short wait. A password field gives no value to read.
+  $edit = [System.Windows.Automation.ControlType]::Edit
+  $pattern = [System.Windows.Automation.ValuePattern]::Pattern
+  $until = [DateTime]::UtcNow.AddMilliseconds(12000)
+  $last = ''
+  do {
+    try {
+      $element = Find-Control $name $edit
+      $element.GetCurrentPattern($pattern).SetValue($value)
+      if ($element.Current.IsPassword) { return }
+      Start-Sleep -Milliseconds 250
+      $shown = (Find-Control $name $edit).GetCurrentPattern($pattern).Current.Value
+      if ($shown -ceq $value) { return }
+      $last = 'the field did not keep the value'
+    } catch [System.InvalidOperationException], [System.Windows.Automation.ElementNotAvailableException] {
+      $last = $_.Exception.Message
+    }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $until)
+  throw "Could not set AKM field ${name}: $last"
 }
 
 function Click-Control([string]$name) {
@@ -232,11 +253,11 @@ function Wait-Text([string]$pattern, [int]$milliseconds = 15000) {
   return $false
 }
 
-function Invoke-TestCli([string[]]$words) {
+function Invoke-TestCli([string[]]$words, [string]$standardInput) {
   $previous = [Environment]::GetEnvironmentVariable('AKM_PASSWORD', 'Process')
   try {
     [Environment]::SetEnvironmentVariable('AKM_PASSWORD', $password, 'Process')
-    $result = & $cli --vault $vault @words
+    $result = if ($PSBoundParameters.ContainsKey('standardInput')) { $standardInput | & $cli --vault $vault @words } else { & $cli --vault $vault @words }
     if ($LASTEXITCODE -ne 0) { throw "Fake-vault CLI failed: $($words[0])" }
     return $result
   } finally { [Environment]::SetEnvironmentVariable('AKM_PASSWORD', $previous, 'Process') }
@@ -325,7 +346,9 @@ function Invoke-FilterOption($ownedIds, $combo, [string]$value) {
       if (!$item.Current.IsEnabled -or $item.Current.IsOffscreen) { continue }
       $action = $null
       if ($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$action)) {
-        $action.Invoke()
+        # The element can go away during the call when the list closes or the view reloads.
+        # Select-Filter reads the field after this, and tries again if the value did not stick.
+        try { $action.Invoke() } catch { Write-Output "RETRY: the option '$value' went away during Invoke: $($_.Exception.Message)" | Out-Host }
         return $true
       }
       if ($item.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$action)) {
@@ -414,7 +437,8 @@ function Select-FilterOnce([string]$label, [string]$value) {
         $stage = 'no-expand-pattern'; $detail = 'ExpandCollapse is not exposed yet'
       } else {
         $stage = 'expand-failed'
-        $expand.Expand()
+        # The field toggles AKM's list, so a second Expand would close a list that is open.
+        if ($expand.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) { $expand.Expand() }
         $stage = 'option-missing'; $detail = "no enabled option named '$value' was found"
         $ownedIds = Get-OwnedProcessIds
         $scanUntil = [DateTime]::UtcNow.AddSeconds(5)
@@ -423,7 +447,9 @@ function Select-FilterOnce([string]$label, [string]$value) {
           if (Invoke-FilterOption $ownedIds $combo $value) { return }
           Start-Sleep -Milliseconds 100
         } while ([DateTime]::UtcNow -lt $scanUntil)
-        try { $expand.Collapse() } catch { }
+        try {
+          if ($expand.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Expanded) { $expand.Collapse() }
+        } catch { }
       }
     } catch {
       $detail = $_.Exception.Message
@@ -653,7 +679,7 @@ function Test-KeyDetailExpiry([switch]$Rehearse) {
 
 function Test-CancelledOutcome([int]$Count = 1) {
   $pattern = 'File export was cancelled\. No file was saved by this request\.'
-  Click-Control 'Settings'
+  Click-Control 'Use keys'
   Select-Filter 'Project' 'demo'
   Select-Filter 'Environment' 'prod'
   for ($i = 1; $i -le $Count; $i++) {
@@ -681,7 +707,7 @@ function Assert-NoOutcomeResurrection {
 
 function Test-OutcomeHandoff {
   Test-KeyDetailExpiry
-  Click-Control 'Settings'
+  Click-Control 'Use keys'
   Click-Control ('Import .env' + [char]0x2026)
   Set-Field 'Paste the .env contents' 'HANDOFF_TOKEN=fake-outcome-import-value'
   Set-Field 'Target project' 'outcome-import-project'
@@ -700,16 +726,16 @@ function Test-OutcomeHandoff {
     Assert-Proof $changed 'the fake encrypted import commits while its reply waits on the test-owned journal lock'
     Minimize-RestoreOwnedWindow
     Assert-GoneAndStable 'Keys' { param($s) !(Test-ProofText $s '^Import keys$') } 'actual minimize/restore expired the local import dialog'
-    Assert-Proof (Find-Control ('Import .env' + [char]0x2026) ([System.Windows.Automation.ControlType]::Button)).Current.IsEnabled 'the hidden confirmation does not leave Settings busy'
+    Assert-Proof (Find-Control ('Import .env' + [char]0x2026) ([System.Windows.Automation.ControlType]::Button)).Current.IsEnabled 'the hidden confirmation does not leave Use keys busy'
     Click-Control 'Keys'
   } finally { $hold.Unlock(0, [Int64]::MaxValue); $hold.Dispose() }
   Assert-OutcomeRegion 'Import completed\.'
-  Assert-OwnedStable 'Keys' { param($s) !(Test-ProofText $s 'Imported: 1 added') } 2000 'obsolete Settings details do not reappear on Keys'
+  Assert-OwnedStable 'Keys' { param($s) !(Test-ProofText $s 'Imported: 1 added') } 2000 'obsolete Use keys details do not reappear on Keys'
   $keys = Invoke-TestCli @('list', '--json') | Out-String | ConvertFrom-Json
   Assert-Proof (@($keys | Where-Object { $_.env_var -eq 'HANDOFF_TOKEN' -and $_.project -eq 'outcome-import-project' -and $_.environment -eq 'outcome-import-env' }).Count -eq 1) 'the actual CLI confirms the dispatched import saved once in its reviewed scope'
   Dismiss-Outcome 'Import completed\.'
 
-  Click-Control 'Settings'
+  Click-Control 'Use keys'
   Select-Filter 'Project' 'demo'
   Select-Filter 'Environment' 'prod'
   $hold = Hold-TestJournal
@@ -765,7 +791,7 @@ try {
   Write-Output ([AkmProofClipboard]::DesktopDescription())
   if ($RemainingOnly -or $JournalOnly) {
     Invoke-TestCli @('init', '--name', 'Remaining native proof') | Out-Null
-    Invoke-TestCli @('add', 'OpenAI prod proof', '--project', 'demo', '--env', 'prod', '--env-var', 'OPENAI_API_KEY', '--secret', 'fake-prod-must-stay') | Out-Null
+    Invoke-TestCli @('add', 'OpenAI prod proof', '--project', 'demo', '--env', 'prod', '--env-var', 'OPENAI_API_KEY', '--secret-stdin') 'fake-prod-must-stay' | Out-Null
     if ($JournalOnly) {
       $vault = $secondVault
       Invoke-TestCli @('init', '--name', 'Second fake vault') | Out-Null
@@ -833,7 +859,7 @@ try {
       }
       if ($JournalExportOnly) {
         $encryptedBefore = [Convert]::ToBase64String([IO.File]::ReadAllBytes($vault))
-        Click-Control 'Settings'
+        Click-Control 'Use keys'
         Select-Filter 'Project' 'demo'
         Select-Filter 'Environment' 'prod'
         Click-Control ('Save .env' + [char]0x2026)
@@ -967,7 +993,7 @@ try {
   Find-Control 'Add key' ([System.Windows.Automation.ControlType]::Button) | Out-Null
   Assert-Proof (Test-Path -LiteralPath $vault) 'the GUI created its fake vault'
 
-  Invoke-TestCli @('add', 'OpenAI prod proof', '--project', 'demo', '--env', 'prod', '--env-var', 'OPENAI_API_KEY', '--secret', 'fake-prod-must-stay') | Out-Null
+  Invoke-TestCli @('add', 'OpenAI prod proof', '--project', 'demo', '--env', 'prod', '--env-var', 'OPENAI_API_KEY', '--secret-stdin') 'fake-prod-must-stay' | Out-Null
   Click-Control 'Add key'
   Set-Field 'Title' 'Phantom must not exist'
   Set-Field 'Secret' 'fake-unsaved-value'
@@ -980,7 +1006,7 @@ try {
   Click-Control 'Reload vault'
   Find-Control 'Open OpenAI prod proof' ([System.Windows.Automation.ControlType]::Button) | Out-Null
 
-  Click-Control 'Settings'
+  Click-Control 'Use keys'
   $beforeInvalid = [Convert]::ToBase64String([IO.File]::ReadAllBytes($vault))
   foreach ($inputText in @('TOKEN=', 'bad-name=fake', "TOKEN=fake`nTOKEN=other")) {
     Click-Control ('Import .env' + [char]0x2026)
@@ -1058,7 +1084,7 @@ try {
   Find-Control 'Unlock vault' ([System.Windows.Automation.ControlType]::Button) | Out-Null
   Unlock-FakeVault
   }
-  Click-Control 'Settings'
+  Click-Control 'Use keys'
   Select-Filter 'Project' 'demo'
   Select-Filter 'Environment' 'prod'
   Click-Control ('Save .env' + [char]0x2026)

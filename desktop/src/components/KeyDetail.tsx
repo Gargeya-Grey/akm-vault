@@ -1,8 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { api, errorText } from "../api";
 import { clipboardCopyText } from "../clipboardText";
-import { formatDate, formatDateTime, isExpired, keyState, plural, rotationLabel, secretChangeLabel } from "../format";
-import type { KeyView } from "../types";
+import { formatDate, formatDateTime, isExpired, plural, rotationLabel, secretChangeLabel } from "../format";
+import { nativeReads, useNativeRead } from "../nativeRead";
+import { Plaintext, plaintextScope, useSealed } from "../plaintext";
+import { keyDetails, useKeyRowFacts } from "../rowFacts";
+import type { HistoryVersion, KeyView } from "../types";
+import { KeyTarget } from "./FactList";
+import { KeyCut } from "./glyphs";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { useDialogFocus } from "./useDialogFocus";
@@ -11,6 +16,11 @@ import { useNow } from "../useNow";
 
 interface Props {
   item: KeyView;
+  /**
+   * True while the list read that gave `item` holds. A read that fails or starts again makes it
+   * false, and a revealed secret then goes (U2-R1-04).
+   */
+  current: boolean;
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -20,20 +30,69 @@ interface Props {
 
 const HIDE_SECONDS = 30;
 
-export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly = false }: Props) {
+// The names a vault entry gives its fields, in words. The marker of the secret's change time says
+// nothing a reader needs: the secret already counts as changed.
+const FIELD_WORDS: Record<string, string> = {
+  Title: "title", UserName: "username", URL: "URL", Notes: "notes", Tags: "tags", Expiry: "expiry",
+  AKM_ISSUER: "issuer", AKM_PROJECT: "project", AKM_ENV: "environment", AKM_SCOPES: "scopes",
+  AKM_ENV_VAR: "variable name", AKM_ROTATION_DAYS: "rotation interval", Other: "another field",
+};
+const SECRET_FIELDS = new Set(["Password", "AKM_SECRET_CHANGED"]);
+
+function changedText(version: HistoryVersion): string {
+  const others = version.changed.filter((name) => !SECRET_FIELDS.has(name) && name !== "AKM_ID").map((name) => FIELD_WORDS[name] ?? "another field");
+  const all = version.secretChanged ? ["secret", ...others] : others;
+  return all.length > 0 ? `Changed: ${all.join(", ")}` : "No field changed";
+}
+
+/** The earlier versions of one key. It reads when it mounts, so closing the list drops the read. */
+function EarlierVersions({ id }: { id: string }) {
+  const read = useNativeRead(nativeReads.history(id), [id]);
+  if (read.state.status === "loading") return <p className="history-note" role="status">Reading the earlier versions…</p>;
+  if (read.state.status === "failed") {
+    return (
+      <div className="history-note">
+        <Notice tone="error">{read.state.error}</Notice>
+        <button type="button" className="text-button" onClick={read.reload} disabled={read.busy} aria-busy={read.busy || undefined}>
+          {read.busy ? "Trying again…" : "Try again"}
+        </button>
+      </div>
+    );
+  }
+  if (read.state.data.length === 0) return <p className="history-note">AKM read the vault history and found no versions of this key.</p>;
+  return (
+    <ol className="history-list" aria-label="Earlier versions">
+      {read.state.data.map((version) => (
+        <li key={version.index}>
+          {version.modifiedAt ? <span className="mono">{formatDateTime(version.modifiedAt)}</span> : <span>Time unknown</span>}
+          <span className="history-change">{changedText(version)}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+export function KeyDetail({ item, current, onClose, onEdit, onDelete, onRotate, readOnly = false }: Props) {
   const dialogRef = useDialogFocus<HTMLDivElement>();
-  const [secret, setSecret] = useState<string | null>(null);
+  const targetId = useId();
+  // The secret is plaintext: it shows only for this key, while the read and the vault data hold.
+  const secretScope = current ? plaintextScope.reveal(item.id) : null;
+  const secret = useSealed(secretScope);
+  const holdSecret = secret.hold;
   const [seconds, setSeconds] = useState(HIDE_SECONDS);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  // The key whose earlier versions are open. Bound to the key, so another key never shows them.
+  const [historyFor, setHistoryFor] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
   const presentation = useRef(0);
 
   useEffect(() => {
     const expire = () => {
       presentation.current += 1;
-      setSecret(null); setBusy(false); setError(null); setCopied(null);
+      holdSecret(null); setBusy(false); setError(null); setCopied(null);
+      setHistoryFor(null);
     };
     expire();
     const hidden = () => { if (document.hidden) expire(); };
@@ -44,7 +103,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
       window.removeEventListener(PROTECTED_VIEW_EXPIRY_EVENT, expire);
       document.removeEventListener("visibilitychange", hidden);
     };
-  }, [item.id]);
+  }, [item.id, holdSecret]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -55,14 +114,14 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
   }, [onClose]);
 
   useEffect(() => {
-    if (!secret) return;
+    if (secret.value === null) return;
     setSeconds(HIDE_SECONDS);
     // A monotonic clock: a wall clock that moves back must not keep the secret on screen.
     const started = performance.now();
     timer.current = window.setInterval(() => {
       const left = HIDE_SECONDS - Math.floor((performance.now() - started) / 1000);
       if (left <= 0) {
-        setSecret(null);
+        holdSecret(null);
         if (timer.current !== null) window.clearInterval(timer.current);
         timer.current = null;
       } else {
@@ -73,7 +132,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
       if (timer.current !== null) window.clearInterval(timer.current);
       timer.current = null;
     };
-  }, [secret]);
+  }, [secret.value, holdSecret]);
 
   useEffect(() => {
     if (!copied) return;
@@ -91,7 +150,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
         // Reset the countdown in the same render as the secret, so the
         // "Hides in N seconds" text never starts from an earlier reveal's value.
         setSeconds(HIDE_SECONDS);
-        setSecret(value);
+        holdSecret(value);
       }
     } catch (cause) {
       if (view === presentation.current) setError(errorText(cause));
@@ -101,7 +160,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
   }
 
   function hide() {
-    setSecret(null);
+    holdSecret(null);
   }
 
   async function copy() {
@@ -116,23 +175,19 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
   }
 
   const now = useNow([item]);
-  const state = keyState(item, now);
-  const facts: { key: string; value: React.ReactNode }[] = [];
+  // The row's facts, ID included, come first and describe the drawer (U2-R1-02). The details
+  // below them are values that only the drawer shows.
+  const rowFacts = useKeyRowFacts(item);
+  const details = keyDetails(item);
+  const facts: { key: string; value: React.ReactNode; below?: React.ReactNode }[] = [];
 
-  if (item.issuer) facts.push({ key: "Issuer", value: item.issuer });
-  if (item.project) facts.push({ key: "Project", value: item.project });
-  if (item.environment)
-    facts.push({ key: "Environment", value: item.environment });
-  facts.push({
-    key: "Environment variable",
-    value: <span className="mono">{item.resolvedEnvVar}</span>,
-  });
-  if (item.scopes.length > 0) {
+  if (details.username) facts.push({ key: "Username", value: details.username });
+  if (details.scopes.length > 0) {
     facts.push({
-      key: "Scopes",
+      key: "Scope names",
       value: (
         <span className="chips">
-          {item.scopes.map((scope) => (
+          {details.scopes.map((scope) => (
             <span className="chip mono" key={scope}>
               {scope}
             </span>
@@ -141,12 +196,12 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
       ),
     });
   }
-  if (item.tags.length > 0) {
+  if (details.tags.length > 0) {
     facts.push({
       key: "Tags",
       value: (
         <span className="chips">
-          {item.tags.map((tag) => (
+          {details.tags.map((tag) => (
             <span className="chip" key={tag}>
               {tag}
             </span>
@@ -155,7 +210,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
       ),
     });
   }
-  if (item.url) facts.push({ key: "URL", value: item.url });
+  if (details.url) facts.push({ key: "URL", value: details.url });
   facts.push({
     key: "Expires",
     value: item.expiresAt ? (
@@ -191,6 +246,22 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
       item.historyCount === 0
         ? "No earlier versions"
         : `${plural(item.historyCount, "earlier version")} in the vault history`,
+    below: item.historyCount > 0 && (
+      <div className="history-fact">
+        {historyFor !== item.id ? (
+          <button type="button" className="text-button history-toggle" onClick={() => setHistoryFor(item.id)}>
+            Show earlier versions
+          </button>
+        ) : (
+          <>
+            <button type="button" className="text-button history-toggle" onClick={() => setHistoryFor(null)}>
+              Hide earlier versions
+            </button>
+            <EarlierVersions id={item.id} />
+          </>
+        )}
+      </div>
+    ),
   });
   if (item.createdAt)
     facts.push({
@@ -205,7 +276,7 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
 
   return (
     <div
-      className="overlay"
+      className="overlay overlay-drawer"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
@@ -214,19 +285,23 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="modal detail-modal raised"
+        className="drawer raised"
         role="dialog"
         aria-modal="true"
         aria-labelledby="detail-title"
+        aria-describedby={targetId}
       >
         <header className="modal-head">
-          <div>
-            <p className="label">{item.issuer ?? "API key"}</p>
-            <h2 id="detail-title">{item.title}</h2>
-            <p className={`state state-${state.tone}`}>
-              <span className="state-dot" aria-hidden="true" />
-              {state.label}
-            </p>
+          <div className="drawer-ident">
+            <span className="key-tile"><KeyCut id={item.id} /></span>
+            <div>
+              <p className="label"><bdi>{rowFacts.issuer.set ? rowFacts.issuer.text : "API key"}</bdi></p>
+              <h2 id="detail-title"><bdi>{rowFacts.title}</bdi></h2>
+              <p className={`state state-${rowFacts.tone}`}>
+                <span className="state-dot" aria-hidden="true" />
+                {rowFacts.state}
+              </p>
+            </div>
           </div>
           <button
             type="button"
@@ -238,15 +313,14 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
           </button>
         </header>
 
-        <section className="secret-box" aria-label="Secret value">
-          <div className="secret-copy">
-            <span className="label">Secret</span>
-            <code className={`mono secret-value${secret ? "" : " masked"}`}>
-              {secret ?? "••••••••••••••••••••••••"}
-            </code>
-          </div>
+        <div className="drawer-body">
+        <section className="secret-stage" aria-label="Secret value">
+          <span className="label">Secret</span>
+          <code className={`mono secret-value${secret.shown ? "" : " masked"}`}>
+            <Plaintext value={secret.value} scope={secretScope} fallback="••••••••••••••••••••••••" />
+          </code>
           <div className="secret-actions">
-            {secret ? (
+            {secret.shown ? (
               <button type="button" className="text-button" onClick={hide}>
                 <Icon name="eyeOff" />
                 Hide
@@ -268,33 +342,48 @@ export function KeyDetail({ item, onClose, onEdit, onDelete, onRotate, readOnly 
               Copy
             </button>
           </div>
+          {secret.shown && (
+            <p className="secret-note">
+              Hides in <span className="mono">{seconds}</span> seconds. Revealing
+              is written to the activity log.
+            </p>
+          )}
         </section>
-        {secret && (
-          <p className="field-note">
-            Hides in <span className="mono">{seconds}</span> seconds. Revealing
-            is written to the activity log.
-          </p>
+        {(copied || error) && (
+          <div className="drawer-notes">
+            {copied && <Notice tone="ok">{copied}</Notice>}
+            {error && <Notice tone="error">{error}</Notice>}
+          </div>
         )}
-        {copied && <Notice tone="ok">{copied}</Notice>}
-        {error && <Notice tone="error">{error}</Notice>}
 
+        <KeyTarget facts={rowFacts} id={targetId} />
         <div className="fact-list">
           {facts.map((fact) => (
             <div className="fact-row" key={fact.key}>
               <span className="fact-key">{fact.key}</span>
               <span className="fact-value">{fact.value}</span>
+              {fact.below}
             </div>
           ))}
         </div>
 
-        {item.notes && (
+        {details.notes && (
           <section className="detail-notes">
             <h3>Notes</h3>
-            <p className="reading">{item.notes}</p>
+            <p className="reading">
+              {details.notes.map((line, index) => (
+                <Fragment key={index}>
+                  {index > 0 && <br />}
+                  {line}
+                </Fragment>
+              ))}
+            </p>
           </section>
         )}
 
-        <div className="dialog-actions spread">
+        </div>
+
+        <div className="drawer-foot">
           <button type="button" className="text-button danger-text" onClick={onDelete} disabled={readOnly}>
             <Icon name="trash" />
             Move to Recycle Bin

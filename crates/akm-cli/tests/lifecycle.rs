@@ -268,16 +268,28 @@ fn a_byte_order_mark_from_a_windows_pipe_does_not_become_part_of_the_secret() {
     assert_eq!(f.secret("Alpha"), NEW_SECRET);
 }
 
+// FV-11, the class: like `add`, `rotate` refuses a secret argument and prints no part of it.
 #[test]
 fn rotate_takes_no_secret_as_an_argument() {
     let f = Fixture::new();
-    let output = f.run(T0, &["rotate", "Alpha", "--secret", NEW_SECRET]);
-    assert_failure(&output);
-    assert!(
-        stderr(&output).contains("unexpected argument"),
-        "{}",
-        stderr(&output)
-    );
+    let before = fs::read(&f.vault).unwrap();
+    let joined = format!("--secret={NEW_SECRET}");
+    for args in [
+        vec!["rotate", "Alpha", "--secret", NEW_SECRET],
+        vec!["rotate", "Alpha", joined.as_str()],
+    ] {
+        let output = f.run(T0, &args);
+        assert_failure(&output);
+        assert!(
+            stderr(&output).contains("unexpected argument"),
+            "{}",
+            stderr(&output)
+        );
+        for shown in [stdout(&output), stderr(&output)] {
+            assert!(!shown.contains("fake-new"), "{args:?}: {shown}");
+        }
+        assert_eq!(fs::read(&f.vault).unwrap(), before, "{args:?}");
+    }
     assert_eq!(f.secret("Alpha"), OLD_SECRET);
 }
 

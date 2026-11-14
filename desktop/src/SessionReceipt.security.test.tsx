@@ -26,7 +26,7 @@ for (const between of [true, false]) {
     let deliverSave!: () => void;
     native.invoke.mockImplementation(async (command: string) => {
       if (command === "vault_status") return { sessionId: native.owner, path: "C:/fake/b.kdbx", exists: true, unlocked: true, keyCount: 0, vaultName: "B", needsUpgrade: false };
-      if (command === "env_save") return new Promise((done, reject) => { deliverSave = () => reply === "success" ? done("C:/fake/private-a-export.env") : reject({ kind: "completedWhileLocked" }); });
+      if (command === "env_save") return new Promise((done, reject) => { deliverSave = () => reply === "success" ? done("C:/fake/private-a-export.env") : reject({ kind: "completedWhileLocked", message: "fake native completion" }); });
       if (command === "vault_warnings") return { application: [], operations: [] };
       if (command === "vault_activity") return;
       throw new Error(command);

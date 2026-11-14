@@ -2,7 +2,7 @@
 
 Phase two fixes the remaining privacy, history and compatibility problems without weakening the [project contracts](PROJECT.md#contracts-every-change-keeps). Finishing this list does not guarantee a score. Only a new full review measures one.
 
-**Phase two status (2026-11-07).** The owner authorized units 1c, 1h, 1b, 2, 3 and 4 and security proposals A1 to A3 on 2026-11-07. All are built, in [PR #7](https://github.com/Gargeya-Grey/akm-vault/pull/7). Both phase two reviews failed; the owner chose one redesign round after review 2, with no third review. No unit is accepted: each fix is "fixed, not accepted" in [FINDINGS.md](FINDINGS.md). What remains for each unit is its owner-present proof ([FIRST_USE.md](FIRST_USE.md)) and, for the release gate, unit 5's full rescore.
+**Phase two status (2026-11-07).** The owner authorized units 1c, 1h, 1b, 2, 3 and 4 and security proposals A1 to A3 on 2026-11-07. All are built, in PR #7. Both phase two reviews failed; the owner chose one redesign round after review 2, with no third review. No unit is accepted: each fix is "fixed, not accepted" in [FINDINGS.md](FINDINGS.md). What remains for each unit is its owner-present proof ([FIRST_USE.md](FIRST_USE.md)) and, for the release gate, unit 5's full rescore.
 
 **Authorization.** Each unit not named above needs the owner's explicit authorization in chat before implementation starts. Work units run in this order. Units that share `model.rs`, `vault.rs`, the IPC types or the CLI command definitions run one after another, never in parallel. Do not redo the closed findings in [FINDINGS.md](FINDINGS.md).
 
@@ -70,7 +70,7 @@ The master-password change (M2) needs its own plan: old backups keep the old pas
 ## Unit 3: dotenv, time and CLI selection
 
 - Write an external dotenv profile and pin reference fixtures: comments, quotes, escapes, BOM, CRLF, multiline values and malformed input. Never execute or interpolate file content. Keep the duplicate-name, empty-secret, scope and reserved-name protections.
-- Choose one instant for a date-only expiry and use it in the CLI, GUI, exports and reminders. Test time-zone boundaries. Keep display rounding apart from rotation scheduling.
+- Choose one instant for a date-only expiry and use it in the CLI, GUI, exports and key states. Test time-zone boundaries. Keep display rounding apart from rotation scheduling.
 - Fix P2-TIME-REFRESH. Status must update while Keys stays open, after hide and resume, and after a clock change. A refresh does not extend the idle deadline.
 - Decide whether the CLI fallback search through notes and URL is safe for disclosure and delete commands.
 - Remove the secret-bearing `Debug` and the secret loading for metadata-only callers. Do not claim full memory zeroization.
@@ -79,17 +79,21 @@ Acceptance: external parser fixtures as well as round trips, controlled clocks a
 
 ## Unit 4: reminders and accessibility
 
-- Specify the unlock summary and the opt-in Windows notification content. A notification on the lock screen shows no secret and no sensitive metadata. Do not add an always-running service as a hidden prerequisite.
+- Specify the unlock summary. AKM shows no Windows notification (removed on 2026-11-13, U1-R1-03) and adds no always-running service.
 - Check focus containment and return for every modal, including import. On the Keys screen, each key row's accessible name or description must announce its expiry and rotation status.
 - Fix the Keys-screen layout debt, or list it as kept debt. Functional fixes and visual changes go in separate pull requests.
 
-Acceptance: expired, overdue, unknown-date and no-key states; locked and hidden transitions; denied or disabled notifications; accessible status; and keyboard-only paths. Mocked UI tests do not prove native notification delivery.
+Acceptance: expired, overdue, unknown-date and no-key states; locked and hidden transitions; accessible status; and keyboard-only paths.
 
 ## Unit 5: second reader and full rescore
 
 - Keep KeePassXC coverage. Add a pinned kdbxweb reader and writer suite where the format allows.
 - Run the cross-reader fixtures for history, delete, attachments, the journal and scoped env on the exact rebuilt build.
 - Run a new full review over all nine areas of the baseline rubric, with independent security, architecture and premise, and correctness reviewers. Count each root cause once. State how many reviewers ran.
+- Done on 2026-11-09: five independent reviewers scored `c0a7d3b` at 66.25/100 ([record](reviews/2026-11-09-full-rescore.md)). The kdbxweb and KeePassXC suites passed on that build. The open work is the FR rows in [FINDINGS.md](FINDINGS.md). A later score needs a new full review.
+- Done on 2026-11-13: six independent reviewers scored `1d5cc82` at 83.5/100 ([record](reviews/2026-11-13-full-review.md)). The open work is the FV rows in [FINDINGS.md](FINDINGS.md).
+- Done on 2026-11-13, after one fix round and a test audit: six new independent reviewers scored `51cbb0e` at 87.5/100 ([record](reviews/2026-11-13-full-review-2.md)). The open work is the FW rows in [FINDINGS.md](FINDINGS.md).
+- Done on 2026-11-14, after fix rounds 2 and 3: six new independent reviewers scored `dff3d5c` at 91.75/100 ([record](reviews/2026-11-14-full-review-3.md)), above the bar of 90. The open work is the FX rows in [FINDINGS.md](FINDINGS.md) and the owner-present tests of [FIRST_USE.md](FIRST_USE.md).
 
 ## Security proposals (not authorized)
 

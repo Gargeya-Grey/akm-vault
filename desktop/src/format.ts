@@ -45,7 +45,7 @@ export const EXPIRES_SOON_DAYS = 30;
 export const ROTATE_SOON_DAYS = 14;
 
 /**
- * The one state of a key that the list, the detail, the summary and the notification share.
+ * The one state of a key that the list, the detail and the summary share.
  * The order is the order of precedence: a key that is expired and also overdue is "expired".
  */
 export type KeyStateKind = "expired" | "overdue" | "expiresSoon" | "rotateSoon" | "unknown" | "ok";
@@ -110,6 +110,14 @@ export function rotationSentence(key: KeyView, now: number): string {
 /** The accessible description of a key row: the expiry and the rotation status, in words. */
 export function statusDescription(key: KeyView, now: number): string {
   return `${expirySentence(key, now)}. ${rotationSentence(key, now)}.`;
+}
+
+/** How much of the rotation interval has passed, from 0 to 1. Null when AKM cannot say. */
+export function rotationUsed(key: KeyView, now: number): number | null {
+  if (key.rotationDays === null || key.rotationDueAt === null) return null;
+  const due = Date.parse(key.rotationDueAt);
+  if (Number.isNaN(due)) return null;
+  return Math.min(1, Math.max(0, 1 - (due - now) / (key.rotationDays * 86_400_000)));
 }
 
 export function expiryLabel(key: KeyView): string {

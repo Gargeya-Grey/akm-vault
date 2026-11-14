@@ -59,7 +59,7 @@ function fixture() {
 async function settings() {
   const root = render(<App />);
   await screen.findByText("Current unlocked keys");
-  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "Use keys" }));
   await screen.findByRole("option", { name: "demo" });
   return root;
 }
@@ -94,10 +94,12 @@ for (const operation of ["import", "export"] as const) {
         act(() => expire(f.owner));
         expect(document.hidden).toBe(false);
         expect(sessionGeneration()).toBe(generation); // Local view expiry is NOT session loss.
+        // The receipt still waits, so the form still waits: the expiry hides what the view showed
+        // and never ends the wait of a native window that is still open (U2-R1-03).
         if (operation === "import") {
           expect(screen.queryByRole("dialog")).toBeNull();
-          expect(screen.getByRole("button", { name: "Import .env…" })).toHaveProperty("disabled", false);
-        } else expect(screen.getByRole("button", { name: "Save .env…" })).toHaveProperty("disabled", false);
+          expect(screen.getByRole("button", { name: "Import .env…" })).toHaveProperty("disabled", true);
+        } else expect(screen.getByRole("button", { name: /Saving…/ })).toHaveProperty("disabled", true);
         if (handoff === "navigate") fireEvent.click(screen.getByRole("button", { name: "Keys" }));
         if (handoff === "remount") { root.unmount(); render(<App />); await screen.findByText("Current unlocked keys"); }
         await act(async () => {
@@ -107,6 +109,9 @@ for (const operation of ["import", "export"] as const) {
         const expected = reply === "cancel" ? "cancelled" : reply === "success" ? (handoff === "remount" ? "completedWhileLocked" : "completed") : (handoff === "remount" ? "unconfirmed" : "reportedError");
         expect(retainedCompletions()).toMatchObject([{ id, operation, outcome: expected }]);
         expect(retainedCompletions()).toHaveLength(1);
+        if (handoff === "same-view") {
+          expect(screen.getByRole("button", { name: operation === "import" ? "Import .env…" : "Save .env…" })).toHaveProperty("disabled", false);
+        }
         const outcomes = screen.getByRole("region", { name: "Operation outcomes" });
         for (const privateText of ["private-project", "private-environment", "fake-private-input", "private-error-detail", "C:/private/export.env"]) {
           expect(outcomes.textContent).not.toContain(privateText);
@@ -156,7 +161,7 @@ test("native expiry ignores a late import reply and duplicate notices do not cle
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
-test("old A or disposed-root expiry never clears active B's newer Settings input", async () => {
+test("old A or disposed-root expiry never clears active B's newer Use keys input", async () => {
   const a = fixture();
   const first = await settings();
   const disposed = native.listeners.get("vault-view-expired");
@@ -191,7 +196,7 @@ test("an unknown-owner hide is coalesced across bootstrap adoption, not replayed
   const hide = crypto.randomUUID();
   act(() => expire(f.owner, hide));
   await act(async () => response.resolve(f.status()));
-  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "Use keys" }));
   await screen.findByRole("option", { name: "demo" });
   fireEvent.click(screen.getByRole("button", { name: "Import .env…" }));
   fireEvent.change(screen.getByLabelText("Paste the .env contents"), { target: { value: "TOKEN=fake-after-bootstrap" } });
@@ -206,7 +211,7 @@ for (const phase of ["pending", "displayed", "error"] as const) {
   test(`the native expiry's direct disclosure consumer fences a ${phase} reveal result`, async () => {
     const f = fixture(); f.hold("key_reveal");
     const item: KeyView = { id: "fake-key", title: "Fake reveal fixture", username: null, issuer: null, project: "demo", environment: "dev", scopes: [], envVar: "TOKEN", resolvedEnvVar: "TOKEN", url: null, notes: null, tags: [], expiresAt: null, rotationDays: null, createdAt: null, updatedAt: null, rotationDueAt: null, secretChangedAt: null, secretChange: "unknown", historyCount: 0 };
-    render(<><App /><KeyDetail item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} /></>);
+    render(<><App /><KeyDetail current item={item} onClose={() => {}} onEdit={() => {}} onDelete={() => {}} onRotate={() => {}} /></>);
     await screen.findByText("Current unlocked keys");
     fireEvent.click(screen.getByRole("button", { name: "Reveal" }));
     if (phase === "displayed") { await act(async () => f.pending.resolve("fake-reveal-value")); expect(screen.getByText("fake-reveal-value")).toBeTruthy(); }

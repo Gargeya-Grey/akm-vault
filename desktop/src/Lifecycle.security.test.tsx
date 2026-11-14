@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
 import { api } from "./api";
+import { reads } from "./native";
 import { adoptReservation } from "./nativeSession";
 import { acknowledgeCompletions, invalidateSession, retainedCompletions } from "./sessionBoundary";
 import type { KeyView } from "./types";
@@ -139,10 +140,10 @@ test("removing a key says it moved to the Recycle Bin, and the bin restores it",
   await openDetail("Rotation proof");
   fireEvent.click(screen.getByRole("button", { name: "Move to Recycle Bin" }));
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Move to Recycle Bin" }));
-  await screen.findByText(/Moved “Rotation proof” to the Recycle Bin/);
+  await screen.findByText(/Moved “Rotation proof” \(ID [^)]+\) to the Recycle Bin/);
   fireEvent.click(screen.getByRole("button", { name: "Recycle Bin" }));
   fireEvent.click(await screen.findByRole("button", { name: "Restore Rotation proof" }));
-  await screen.findByText(/Restored “Rotation proof” to the key list/);
+  await screen.findByText(/Restored “Rotation proof” \(ID [^)]+\) to the key list/);
   expect(screen.queryByRole("button", { name: "Restore Rotation proof" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Keys" }));
   await screen.findByRole("button", { name: "Open Rotation proof" });
@@ -165,7 +166,7 @@ test("deleting for good needs a confirmation, and cancelling sends nothing", asy
   expect(native.invoke.mock.calls.some(([command]) => command === "key_purge")).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "Delete Rotation proof for good" }));
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete for good" }));
-  await screen.findByText(/Deleted “Rotation proof” for good/);
+  await screen.findByText(/Deleted “Rotation proof” \(ID [^)]+\) for good/);
   expect(native.invoke.mock.calls.filter(([command]) => command === "key_purge")).toEqual([["key_purge", { id: "fake-id", sessionId }]]);
   await waitFor(() => expect(screen.getByText("The Recycle Bin is empty.")).toBeTruthy());
 });
@@ -199,11 +200,22 @@ for (const [name, call] of [
   });
 }
 
+test("a late reply to a manual lock keeps what a person typed in the unlock form (U2-C-01)", async () => {
+  let confirm = () => {};
+  boot({ vault_lock: () => new Promise<void>((resolve) => { confirm = resolve; }) }, () => [key()]);
+  await act(async () => { render(<App />); });
+  fireEvent.click(await screen.findByRole("button", { name: "Lock now" }));
+  fireEvent.change(await screen.findByLabelText("Master password"), { target: { value: "fake-typed-password" } });
+  await act(async () => { confirm(); });
+  await act(async () => {});
+  expect((screen.getByLabelText("Master password") as HTMLInputElement).value).toBe("fake-typed-password");
+});
+
 test("a list of recycled keys overtaken by lock is refused as locked", async () => {
   adoptReservation(crypto.randomUUID());
   let resolve!: (value: unknown) => void;
   native.invoke.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
-  const outcome = api.recycled().catch((error: unknown) => error);
+  const outcome = reads.recycled().catch((error: unknown) => error);
   invalidateSession();
   resolve([{ key: key(), deletedAt: null }]);
   expect(await outcome).toMatchObject({ kind: "locked" });

@@ -40,6 +40,23 @@ fn assert_success(output: &Output) {
     assert!(output.status.success(), "{}", stderr(output));
 }
 
+/// A child process with this input on its stdin.
+fn output_with_stdin(command: &mut Command, input: &str) -> Output {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
 fn write_database(path: &Path, password: &str) {
     let mut db = Database::new();
     db.config.kdf_config = KdfConfig::Aes { rounds: 10 };
@@ -239,8 +256,7 @@ fn nothing_but_the_vault_and_its_backups_appears_beside_a_synced_vault() {
                 PROJECT.into(),
                 "--env".into(),
                 ENVIRONMENT.into(),
-                "--secret".into(),
-                "fake-second-secret".into(),
+                "--secret-stdin".into(),
             ],
         ),
         (
@@ -280,7 +296,10 @@ fn nothing_but_the_vault_and_its_backups_appears_beside_a_synced_vault() {
         ),
     ];
     for (name, args) in steps {
-        let output = fixture.cli().args(&args).output().unwrap();
+        let output = match name {
+            "add" => output_with_stdin(fixture.cli().args(&args), "fake-second-secret\n"),
+            _ => fixture.cli().args(&args).output().unwrap(),
+        };
         assert_success(&output);
         assert_no_journal_metadata_in(fixture.vault_dir());
         assert!(
@@ -352,13 +371,10 @@ fn a_legacy_sidecar_is_reported_and_left_byte_identical() {
     let lock = PathBuf::from(format!("{}.lock", sidecar.display()));
 
     assert_success(&fixture.reveal());
-    assert_success(
-        &fixture
-            .cli()
-            .args(["add", "AnotherFake", "--secret", "fake-another"])
-            .output()
-            .unwrap(),
-    );
+    assert_success(&output_with_stdin(
+        fixture.cli().args(["add", "AnotherFake", "--secret-stdin"]),
+        "fake-another\n",
+    ));
     let audit = fixture.audit();
     assert_success(&audit);
 
@@ -478,11 +494,10 @@ fn an_extra_ace_for_another_account_fails_closed_before_disclosure_and_warns_aft
         stderr(&reveal)
     );
 
-    let add = fixture
-        .cli()
-        .args(["add", "SavedAnyway", "--secret", "fake-saved-anyway"])
-        .output()
-        .unwrap();
+    let add = output_with_stdin(
+        fixture.cli().args(["add", "SavedAnyway", "--secret-stdin"]),
+        "fake-saved-anyway\n",
+    );
     assert_success(&add);
     let error = stderr(&add);
     assert!(error.contains("warning:"), "{error}");
@@ -562,6 +577,31 @@ fn an_unusable_root_never_falls_back_to_the_default_or_the_sidecar() {
         );
     }
     assert_no_journal_metadata_in(fixture.vault_dir());
+}
+
+/// Fault class F. On 13 Nov 2026 fake journals were found in the real profile folder: the guard
+/// held only in a debug build, and a test run of a release build passed it. The profile folder
+/// of this test is a fake one, so a failure writes nothing real.
+#[test]
+fn a_build_that_cargo_started_never_uses_the_profile_folder_in_any_profile() {
+    let fixture = Fixture::new();
+    let profile = fixture.directory.path().join("fake-local-app-data");
+    fs::create_dir(&profile).unwrap();
+    let mut command = fixture.cli();
+    command
+        .env_remove("AKM_JOURNAL_ROOT")
+        .env("LOCALAPPDATA", &profile)
+        .env("CARGO_MANIFEST_DIR", env!("CARGO_MANIFEST_DIR"))
+        .args(["get", TITLE, "--field", "secret"]);
+    let output = command.output().unwrap();
+    assert!(!output.status.success(), "{}", stdout(&output));
+    assert!(output.stdout.is_empty());
+    assert!(
+        stderr(&output).contains("AKM_JOURNAL_ROOT is not set"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(fs::read_dir(&profile).unwrap().count(), 0);
 }
 
 #[test]
@@ -752,13 +792,10 @@ fn restoring_an_earlier_copy_is_recorded_in_the_same_journal() {
     let fixture = Fixture::new();
     assert_success(&fixture.reveal());
     let earlier = fs::read(&fixture.vault).unwrap();
-    assert_success(
-        &fixture
-            .cli()
-            .args(["add", "LaterFake", "--secret", "fake-later"])
-            .output()
-            .unwrap(),
-    );
+    assert_success(&output_with_stdin(
+        fixture.cli().args(["add", "LaterFake", "--secret-stdin"]),
+        "fake-later\n",
+    ));
     fs::write(&fixture.vault, &earlier).unwrap();
     assert_success(&fixture.reveal());
     assert_eq!(fixture.journals().len(), 1);
@@ -951,13 +988,10 @@ fn a_failed_disclosure_keeps_the_rollback_indication_for_the_next_process() {
     let fixture = Fixture::new();
     assert_success(&fixture.reveal());
     let earlier = fs::read(&fixture.vault).unwrap();
-    assert_success(
-        &fixture
-            .cli()
-            .args(["add", "LaterFake", "--secret", "fake-later"])
-            .output()
-            .unwrap(),
-    );
+    assert_success(&output_with_stdin(
+        fixture.cli().args(["add", "LaterFake", "--secret-stdin"]),
+        "fake-later\n",
+    ));
     fs::write(&fixture.vault, &earlier).unwrap();
 
     let journal = fixture.journals().remove(0);
@@ -1063,10 +1097,11 @@ impl Fixture {
     }
 
     fn add_at(&self, vault: &Path, title: &str) -> Output {
-        self.command(vault, Some(PASSWORD))
-            .args(["add", title, "--secret", "fake-clone-secret"])
-            .output()
-            .unwrap()
+        output_with_stdin(
+            self.command(vault, Some(PASSWORD))
+                .args(["add", title, "--secret-stdin"]),
+            "fake-clone-secret\n",
+        )
     }
 
     fn audit_at(&self, vault: &Path) -> Output {
@@ -1303,4 +1338,57 @@ fn a_version_that_two_journals_recorded_fails_closed_across_processes() {
         bound_actions(&fixture.root, &e),
         strings(&["reveal-requested"])
     );
+}
+
+/// FR-12: the reviewer's probe through the real binary. Copy A to B, change B under a journal
+/// A never sees, replace A with B. The journal of A continues, and the command says that the
+/// file changed outside AKM and that AKM cannot confirm it is the same vault. It says so
+/// once, on stderr, and the command still succeeds.
+#[test]
+fn an_unseen_clone_that_replaces_the_vault_warns_once_and_keeps_the_journal() {
+    for verb in ["get", "export"] {
+        let fixture = Fixture::new();
+        assert_success(&fixture.reveal());
+        let before = fixture.journal_text();
+        let clone = fixture.directory.path().join("clone.kdbx");
+        fs::copy(&fixture.vault, &clone).unwrap();
+        let other_root = fixture.directory.path().join("other-journal-root");
+        let added = output_with_stdin(
+            fixture
+                .command(&clone, Some(PASSWORD))
+                .env("AKM_JOURNAL_ROOT", &other_root)
+                .args(["add", "ClonedKey", "--secret-stdin"]),
+            "fake-clone-secret\n",
+        );
+        assert_success(&added);
+        fs::copy(&clone, &fixture.vault).unwrap();
+
+        let run = |fixture: &Fixture| match verb {
+            "get" => fixture.reveal(),
+            _ => fixture
+                .cli()
+                .args(["export", "--project", PROJECT, "--env", ENVIRONMENT])
+                .output()
+                .unwrap(),
+        };
+        let first = run(&fixture);
+        assert_success(&first);
+        let text = stderr(&first);
+        assert!(
+            text.contains("changed outside AKM") && text.contains("cannot confirm"),
+            "{verb}: {text}"
+        );
+        assert!(text.contains("history continues"), "{verb}: {text}");
+        assert!(!text.contains(SECRET) && !stdout(&first).is_empty());
+        assert_eq!(fixture.journals().len(), 1, "{verb}: one journal continues");
+        assert!(fixture.journal_text().starts_with(&before), "{verb}");
+
+        let second = run(&fixture);
+        assert_success(&second);
+        assert!(
+            !stderr(&second).contains("changed outside AKM"),
+            "{verb}: the warning comes once: {}",
+            stderr(&second)
+        );
+    }
 }

@@ -43,25 +43,43 @@ export interface RotationReceipt {
   previousChangedAt: string | null;
 }
 
+/** One earlier version of a key. It holds a time and field names, never a value. */
+export interface HistoryVersion {
+  /** 0 is the version that the newest change replaced. */
+  index: number;
+  modifiedAt: string | null;
+  /** The KDBX field names that differ from the version that replaced this one. */
+  changed: string[];
+  secretChanged: boolean;
+}
+
 export interface RecycledKey {
   key: KeyView;
   deletedAt: string | null;
 }
 
+/**
+ * A key as the page sends it (FW-03). An add names every field. An edit names only the fields that
+ * the user changed: native code keeps a field that the request leaves out exactly as it was stored.
+ * An empty text, an empty list or `null` clears a field, and native code cleans a text as an add
+ * does. The title cannot be cleared. A secret that is left out or empty keeps the stored secret.
+ */
 export interface KeyDraft {
-  title: string;
-  secret?: string | null;
-  username?: string | null;
-  issuer?: string | null;
-  project?: string | null;
-  environment?: string | null;
-  scopes: string[];
-  envVar?: string | null;
-  url?: string | null;
-  notes?: string | null;
-  tags: string[];
-  expiresAt: string | null;
-  rotationDays: number | null;
+  title?: string;
+  secret?: string;
+  username?: string;
+  issuer?: string;
+  project?: string;
+  environment?: string;
+  scopes?: string[];
+  envVar?: string;
+  url?: string;
+  notes?: string;
+  tags?: string[];
+  /** A date or an RFC 3339 time; `null` clears the expiry. */
+  expiresAt?: string | null;
+  /** `null` clears the interval. */
+  rotationDays?: number | null;
 }
 
 export interface AuditEntry {
@@ -92,10 +110,22 @@ export interface AuditReport {
   totalEntries: number;
 }
 
+/** The result of starting a new journal after damage (FR-14). The damaged file is kept beside it. */
+export interface JournalRecovery {
+  /** File name only. The folder is the one shown as the journal path. */
+  keptName: string;
+  /** SHA-256 of the kept bytes, as 64 lowercase hex digits. */
+  sha256: string;
+  bytes: number;
+}
+
 export interface OperationNotice {
   id: string;
   originSession: string;
-  kind: "journal" | "backupRefresh" | "backupPrune" | "backupRetention" | "exportJournal" | "preference" | "importApplied" | "importSessionEnded" | "importFailed" | "importDeclined";
+  kind:
+    | "journal" | "backupRefresh" | "backupPrune" | "backupRetention" | "exportJournal" | "preference" | "filePermissions" | "journalLineageUnconfirmed"
+    | "importApplied" | "importSessionEnded" | "importFailed" | "importDeclined"
+    | "terminalStarted" | "terminalSessionEnded" | "terminalFailed" | "terminalDeclined";
 }
 
 export interface WarningReport {
@@ -125,16 +155,45 @@ export interface CommandError {
   message: string;
 }
 
+export type View = "keys" | "use" | "bin" | "activity" | "settings";
+export type Theme = "light" | "dark";
+
 /**
- * The opt-in notification, as the native layer reports it. `blocked` means that AKM stopped
- * trying for this run, after a refused permission or a failed notification.
+ * The kinds of a native error reply: the contract with native code (U2-R1-07). A native command
+ * rejects only with a `CommandError`, a plain object `{ kind, message }` whose kind is on this list.
+ * `native.ts` treats a rejection of any other shape as a transport failure. A kind that native
+ * code adds must be added here too: no test compares the two lists.
  */
-export interface ReminderStatus {
-  enabled: boolean;
-  permission: "granted" | "denied" | "prompt";
-  delivery: "none" | "sent" | "failed";
-  blocked: boolean;
+export const NATIVE_ERROR_KINDS = [
+  "ambiguous", "busy", "changedOnDisk", "clipboard", "clipboardLost", "clipboardNotReleased", "clipboardUncertain",
+  "completedWhileLocked", "config", "internal", "invalid", "invalidPath", "io", "journal", "launch", "locked",
+  "notFound", "open", "reviewFailed", "save", "sessionUnavailable", "stalePreview", "tooLarge", "upgradeRequired",
+  "viewChanged",
+] as const;
+
+export type NativeErrorKind = (typeof NATIVE_ERROR_KINDS)[number];
+
+/** An error reply from a native command. */
+export interface NativeError {
+  kind: NativeErrorKind;
+  message: string;
 }
 
-export type View = "keys" | "bin" | "activity" | "settings";
-export type Theme = "light" | "dark";
+/**
+ * The reply of a request that has a receipt (U2-R1-03): an import, a terminal launch or a file
+ * export. `receipt` names it in sessionBoundary.ts, which owns its state.
+ */
+export type Dispatched<T> = Promise<T> & { readonly receipt: number | null };
+
+declare const sealedBrand: unique symbol;
+/**
+ * Plaintext from the vault, sealed at the boundary (U2-R1-04). It holds no text that a view can
+ * read: only `plaintext.tsx` draws it, and only while its session, the vault data and its scope hold.
+ */
+export type Sealed = { readonly [sealedBrand]: true };
+
+/** A rejection that no native command sent: the page cannot know what the request did. */
+export interface TransportFailure {
+  kind: "transport";
+  message: string;
+}

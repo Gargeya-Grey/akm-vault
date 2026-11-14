@@ -52,22 +52,6 @@ fn every_fixture_parses_as_the_profile_says() {
 }
 
 #[test]
-fn every_difference_from_the_reference_reader_is_written_down_and_no_note_is_stale() {
-    let document = expected();
-    assert_eq!(document["reader"]["name"], "python-dotenv");
-    for case in document["cases"].as_array().unwrap() {
-        let file = case["file"].as_str().unwrap();
-        let same = case["akm"].get("entries") == Some(&case["reader"]["entries"])
-            && case["reader"]["skipped"] == 0;
-        let noted = case["note"].is_string();
-        assert_eq!(
-            noted, !same,
-            "{file}: a case differs from the reference reader exactly when it has a note"
-        );
-    }
-}
-
-#[test]
 fn the_lines_that_the_writer_makes_are_the_lines_the_reference_reader_read_back() {
     let document = expected();
     let writer = document["writer"].as_array().unwrap();

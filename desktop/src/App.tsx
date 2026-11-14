@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, errorText } from "./api";
+import { reads } from "./native";
 import { Activity } from "./components/Activity";
-import { AttentionNotifier } from "./components/AttentionNotifier";
 import { KeysView } from "./components/KeysView";
 import { NavBar } from "./components/NavBar";
 import { RecycleBin } from "./components/RecycleBin";
 import { ConfirmDialog, Notice } from "./components/Notice";
 import { Settings } from "./components/Settings";
 import { Unlock } from "./components/Unlock";
+import { UseKeys } from "./components/UseKeys";
 import { useTheme } from "./theme";
 import type { OperationNotice, Status, View, WarningReport } from "./types";
 import { acknowledgeCompletions, COMPLETION_EVENT, COMPLETION_MESSAGE, invalidateSession, retainedCompletions, sessionGeneration, SESSION_LOSS_EVENT, WARNING_EVENT } from "./sessionBoundary";
@@ -28,13 +29,30 @@ const OPERATION_MESSAGES: Record<OperationNotice["kind"], string> = {
   backupRetention: "A vault change was saved, but retention of its pre-change encrypted backup could not be confirmed. Do not repeat the saved operation. Inspect its backups before relying on recovery.",
   backupPrune: "A vault change was saved, but old backups could not be pruned. Do not repeat the saved operation. Check its retained backups.",
   preference: "A vault was opened, but its path preference was not saved. Check the vault path the next time you open AKM.",
+  filePermissions: "A vault was saved, but AKM could not make its files private to your account. Anyone who can read its folder can copy the encrypted vault and its backups. Do not repeat the saved operation. Check who can read that folder.",
+  journalLineageUnconfirmed: "A vault file changed outside AKM, or the journal mapping of this device was started again, so AKM cannot confirm that it is the same vault as before. Its activity continues in the journal that AKM keeps for this path. Check that you opened the vault you meant to before you rely on its journal.",
+  terminalStarted: "A terminal opened with keys, but this window did not receive its result. That terminal keeps the keys until you close it, even after AKM locks. Close it when you are done, and open another one only if you need it.",
+  terminalSessionEnded: "A terminal opened with keys, but its session ended before the result arrived. That terminal keeps the keys until you close it, even after AKM locks. Close it when you are done, and open another one only if you need it.",
+  terminalFailed: "A terminal launch failed. No terminal from that request runs.",
+  terminalDeclined: "A terminal launch was cancelled in a native window. No terminal from that request runs.",
   importApplied: "An import was applied to the vault, but this window did not receive its result. Do not repeat it. Check the keys in the relevant vault.",
   importSessionEnded: "An import was saved, but its session ended before the result arrived. Do not repeat it. Open the vault and check the keys.",
   importFailed: "An import reported an error. This does not confirm that nothing was saved. Check the vault before you try again.",
   importDeclined: "An import was declined in the confirmation window. Nothing was saved.",
 };
 
+const TERMINAL_OUTCOMES: Record<OperationOutcome["outcome"], string> = {
+  pending: "A terminal launch is awaiting an outcome. A terminal may already hold keys. Do not start another one while it is pending.",
+  completed: "A terminal opened with keys. It keeps them until you close it, even after AKM locks. Open another one only if you need it.",
+  completedWhileLocked: "A terminal opened with keys. It keeps them until you close it, even after AKM locks. Its session ended before the result arrived. Open another one only if you need it.",
+  cancelled: "A terminal launch was cancelled in a native window. No terminal from that request runs.",
+  reportedError: "A terminal launch reported an error. This does not confirm that no terminal runs. Check for an open terminal before you try again.",
+  unconfirmed: "A terminal launch could not be confirmed after the session changed. A terminal may hold keys. Check for an open terminal before you try again.",
+  lost: "A terminal launch sent no answer to this window. A terminal may hold keys. A saved-operation notice gives the outcome when AKM recorded one. Check for an open terminal before you try again.",
+};
+
 function outcomeMessage({ operation, outcome }: OperationOutcome) {
+  if (operation === "terminal") return TERMINAL_OUTCOMES[outcome];
   const name = operation === "import" ? "Import" : operation === "export" ? "File export" : "Operation";
   switch (outcome) {
     case "pending": return `${name} is awaiting an outcome. Do not repeat it while it is pending.`;
@@ -42,6 +60,7 @@ function outcomeMessage({ operation, outcome }: OperationOutcome) {
     case "cancelled": return operation === "import" ? "Import was declined in the confirmation window. No keys were changed by this request." : "File export was cancelled. No file was saved by this request.";
     case "reportedError": return `${name} reported an error. This does not confirm that nothing was saved. Inspect the relevant vault or export before retrying.`;
     case "unconfirmed": return `${name} outcome could not be confirmed after the session changed. Inspect the relevant vault or export before retrying.`;
+    case "lost": return `${name} sent no answer to this window. This does not confirm that nothing was saved. A saved-operation notice gives the outcome when AKM recorded one. Inspect the relevant vault or export before retrying.`;
     case "completedWhileLocked": return COMPLETION_MESSAGE;
   }
 }
@@ -71,14 +90,22 @@ export function App() {
   const epoch = useRef(0);
   const transition = useRef(0);
   const request = useRef(0);
+  // The page shows the lock, and its unlock form is mounted.
+  const lockShown = useRef(false);
+  if (status?.unlocked) lockShown.current = false;
   const renderedEpoch = epoch.current;
 
-  const showLocked = useCallback(() => {
+  const showLocked = useCallback((asked = false) => {
     invalidateSession();
     request.current += 1;
-    epoch.current += 1;
     transition.current += 1;
-    setSessionEpoch(epoch.current);
+    // The answer to a lock that this page asked for, when the page already shows the lock, keeps the
+    // unlock form and what a person typed in it (U2-C-01). Every other lock signal mounts a new form.
+    if (!(asked === true && lockShown.current)) {
+      epoch.current += 1;
+      setSessionEpoch(epoch.current);
+    }
+    lockShown.current = true;
     setBootInterrupted(true);
     setStatus((current) => current ? { ...current, sessionId: null, unlocked: false, keyCount: 0, vaultName: null } : current);
     setView("keys");
@@ -124,8 +151,9 @@ export function App() {
       setError(null);
     };
     const invalidated = (event: Event) => {
-      showLocked();
-      const message = (event as CustomEvent<{ message?: string }>).detail?.message;
+      const detail = (event as CustomEvent<{ message?: string; asked?: boolean }>).detail;
+      showLocked(detail?.asked === true);
+      const message = detail?.message;
       if (message) setError(message);
     };
     window.addEventListener(NATIVE_OPEN_EVENT, opening);
@@ -160,8 +188,8 @@ export function App() {
     window.addEventListener(WARNING_EVENT, receive);
     setWarnings(retainedApplicationWarnings());
     setOperationNotices(retainedOperationNotices());
-    void api.warnings().catch(() => {});
-    const poll = window.setInterval(() => { void api.warnings().catch(() => {}); }, 3000);
+    void reads.warnings().catch(() => {});
+    const poll = window.setInterval(() => { void reads.warnings().catch(() => {}); }, 3000);
     return () => { window.removeEventListener(WARNING_EVENT, receive); window.clearInterval(poll); };
   }, []);
 
@@ -189,7 +217,7 @@ export function App() {
     const currentTransition = transition.current;
     const current = () => !nativeOpening() && currentRequest === request.current && currentEpoch === epoch.current && currentTransition === transition.current;
     try {
-      const next = await api.status();
+      const next = await reads.status();
       if (currentEpoch === epoch.current && currentTransition === transition.current && next.unlocked) lastAccepted.current = Date.now();
       if (!current()) return;
       if (!next.unlocked) showLocked();
@@ -288,7 +316,12 @@ export function App() {
       setStatus(next);
       setRevision((current) => current + 1);
       setError(null);
-    } catch (cause) { if (current()) setError(errorText(cause)); }
+    } catch (cause) {
+      if (!current()) return;
+      setError(errorText(cause));
+      // A lost reply may hide a reload that native code made, so the views read again (D2B-04).
+      setRevision((current) => current + 1);
+    }
   }
 
   async function upgrade() {
@@ -310,53 +343,55 @@ export function App() {
   }
 
   const bootError = error ?? (bootInterrupted ? "The session changed while AKM was starting. Try again." : null);
+  const unlocked = status?.unlocked ?? false;
 
   return (
-    <>
+    <div className={`app ${unlocked ? "app-open" : "app-closed"}`}>
       <NavBar
         view={view}
         onView={setView}
-        unlocked={status?.unlocked ?? false}
+        unlocked={unlocked}
         theme={theme}
         onToggleTheme={toggle}
         onLock={() => void lock()}
         onReload={() => void reload()}
       />
 
-      {completions.length > 0 && <section className="wrap session-notices" aria-label="Operation outcomes">
-        {completions.map((record) => <Notice key={record.id} tone={record.outcome === "reportedError" || record.outcome === "unconfirmed" ? "error" : "info"}>{outcomeMessage(record)}</Notice>)}
+      <div className="stage">
+      {completions.length > 0 && <section className="session-notices" aria-label="Operation outcomes">
+        {completions.map((record) => <Notice key={record.id} tone={record.outcome === "reportedError" || record.outcome === "unconfirmed" || record.outcome === "lost" ? "error" : "info"}>{outcomeMessage(record)}</Notice>)}
         <button type="button" className="text-button" disabled={completions.every(({ outcome }) => outcome === "pending")} onClick={() => acknowledgeCompletions(completions.filter(({ outcome }) => outcome !== "pending").map(({ id }) => id))}>Dismiss operation outcomes</button>
       </section>}
 
-      {status && error && <div className="wrap session-notices"><Notice tone="error">{error}</Notice></div>}
+      {status && error && <div className="session-notices"><Notice tone="error">{error}</Notice></div>}
       {operationNotices.length > 0 && (
-        <section className="wrap session-notices" aria-label="Saved-operation notices">
+        <section className="session-notices" aria-label="Saved-operation notices">
           {operationNotices.map((notice) => <Notice key={notice.id}>{OPERATION_MESSAGES[notice.kind]}</Notice>)}
           {dismissError && <Notice tone="error">Could not dismiss these notices. They remain available; try dismissing again.</Notice>}
           <button type="button" className="text-button" disabled={dismissBusy} onClick={() => void dismissNotices()}>Dismiss saved-operation notices</button>
         </section>
       )}
       {warnings.length > 0 && (
-        <div className="wrap session-notices">
+        <div className="session-notices">
           {warnings.map((warning) => <Notice tone="error" key={warning.id}>{warning.message}</Notice>)}
           {warningDismissError && <Notice tone="error">Could not dismiss these warnings. They remain available; try dismissing again.</Notice>}
           <button type="button" className="text-button" disabled={warningDismissBusy} onClick={() => void dismissApplicationWarnings()}>Dismiss warnings</button>
         </div>
       )}
       {status?.unlocked && status.needsUpgrade && (
-        <section className="wrap session-notices" aria-label="Vault format upgrade">
+        <section className="session-notices" aria-label="Vault format upgrade">
           <Notice>This older vault is read-only in AKM until you upgrade it to KDBX 4.1. The password and encryption settings stay unchanged.</Notice>
           <button type="button" className="btn-secondary" onClick={() => setConfirmUpgrade(true)}>Review format upgrade</button>
         </section>
       )}
 
       {watch === "failed" ? (
-        <main className="wrap view boot">
+        <main className="view boot">
           <Notice tone="error">{WATCH_FAILED_MESSAGE}</Notice>
           {lockUnconfirmed && <Notice tone="error">{LOCK_UNCONFIRMED_MESSAGE}</Notice>}
         </main>
       ) : status === null ? (
-        <main className="wrap view boot">
+        <main className="view boot">
           {bootError ? (
             <Notice tone="error">{bootError}</Notice>
           ) : (
@@ -394,6 +429,8 @@ export function App() {
             onDismiss: () => setSummaryDismissedFor(status.sessionId),
           }}
         />
+      ) : view === "use" ? (
+        <UseKeys key={revision} readOnly={status.needsUpgrade} />
       ) : view === "bin" ? (
         <RecycleBin key={revision} readOnly={status.needsUpgrade} />
       ) : view === "activity" ? (
@@ -402,13 +439,13 @@ export function App() {
         <Settings key={revision} status={status} onLocked={() => void lock()} />
       )}
 
-      {status?.unlocked && <AttentionNotifier key={status.sessionId ?? "none"} />}
+      </div>
 
       {confirmUpgrade && status?.unlocked && (
         <ConfirmDialog title="Upgrade this vault to KDBX 4.1?" confirmLabel="Upgrade format" busy={upgradeBusy} destructive={false} onConfirm={() => void upgrade()} onCancel={() => setConfirmUpgrade(false)}>
           <p>AKM will retain the original encrypted file as a backup, write KDBX 4.1, and decrypt it again to verify the contents before replacement. The password and KDF settings do not change. Older KeePass clients may no longer open the upgraded file.</p>
         </ConfirmDialog>
       )}
-    </>
+    </div>
   );
 }

@@ -4,7 +4,7 @@ This folder is the maintained source for proving AKM's user-facing behaviour. Re
 
 ## Baseline preconditions
 
-- A release build of `akm.exe` (and `akm-desktop.exe` for GUI features) from the commit under test, built with `CARGO_TARGET_DIR` off drive W:.
+- A release build of `akm.exe` (and `akm-desktop.exe` for GUI features) from the commit under test. Set `CARGO_TARGET_DIR` to a drive with about 10 GB free when the repository's drive has less (SKILL.md, Launch).
 - `./.agents/skills/verify-akm/scripts/doctor.ps1` prints no `STOP` line.
 - Every CLI command goes through `scripts/akm-verify.ps1 cli`, which supplies a fresh fake vault, a fake password and a private test journal root.
 - Fake values only. A fake secret starts with `fake-`, so a transcript search for `fake-` finds every leak.
@@ -24,8 +24,9 @@ This folder is the maintained source for proving AKM's user-facing behaviour. Re
 
 ## Features
 
-- [Vault and keys](./vault-and-keys.md): create a vault, add, list, show masked, reveal.
+- [Vault and keys](./vault-and-keys.md): create a vault, add, edit, list, show masked, reveal.
 - [Journal and Activity](./journal-and-activity.md): the private journal, `audit`, `audit --verify`, the Activity view.
 - [Export and run](./export-and-run.md): scoped dotenv export to stdout or a file, and `run` with injected variables.
 - [Rotation and Recycle Bin](./rotation-and-recycle-bin.md): `rotate`, `history`, `rm`, `bin`, `restore`, `purge`.
 - [Import and clipboard](./import-and-clipboard.md): the desktop `.env` import with its native confirmation, and private clipboard copy. Owner present.
+- [Terminal and history](./terminal-and-history.md): the desktop terminal that holds one project's keys, and a key's earlier versions. The real flow needs the owner present.

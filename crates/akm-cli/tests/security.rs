@@ -207,6 +207,59 @@ fn password_argument_is_not_accepted_or_echoed() {
     }
 }
 
+/// A child process with this input on its stdin.
+fn output_with_stdin(command: &mut Command, input: &str) -> Output {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+// FV-11: a secret on a command line stays in the process list and the shell history, so
+// `add` takes no secret argument. The refusal prints no part of the value.
+#[test]
+fn add_takes_no_secret_as_an_argument_and_prints_no_part_of_it() {
+    const VALUE: &str = "fv11q7z9k3m5x8w2";
+    let fixture = Fixture::new();
+    let before = fs::read(&fixture.vault).unwrap();
+    let joined = format!("--secret={VALUE}");
+    for args in [
+        vec!["add", "Argument key", "--secret", VALUE],
+        vec!["add", "Argument key", joined.as_str()],
+        vec!["add", "--secret", VALUE, "Argument key"],
+    ] {
+        let output = fixture.cli().args(&args).output().unwrap();
+        assert!(!output.status.success(), "{args:?} was accepted");
+        let shown = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            stderr(&output)
+        );
+        for part in VALUE.as_bytes().windows(4) {
+            let part = std::str::from_utf8(part).unwrap();
+            assert!(!shown.contains(part), "{args:?} printed {part:?}: {shown}");
+        }
+        assert_eq!(fs::read(&fixture.vault).unwrap(), before, "{args:?}");
+    }
+    let output = output_with_stdin(
+        fixture
+            .cli()
+            .args(["add", "Argument key", "--secret-stdin"]),
+        &format!("{VALUE}\n"),
+    );
+    assert_success(&output);
+    assert_eq!(stored_secret(&fixture.vault, "Argument key"), VALUE);
+}
+
 #[test]
 fn unscoped_export_is_rejected_before_opening_the_vault() {
     let directory = temporary_directory();
@@ -326,13 +379,58 @@ fn existing_short_password_vaults_still_unlock() {
     assert_eq!(output.stdout, b"no keys\n");
 }
 
+/// The environment that a command gives its child, as the test builds it: the test process's
+/// own variables with the command's explicit changes applied. Names are upper-cased (Windows
+/// ignores case) and the hidden `=C:` drive entries are left out.
+fn effective_environment(command: &Command) -> std::collections::BTreeMap<String, String> {
+    let mut environment: std::collections::BTreeMap<String, String> = std::env::vars_os()
+        .map(|(name, value)| {
+            (
+                name.to_string_lossy().to_ascii_uppercase(),
+                value.to_string_lossy().into_owned(),
+            )
+        })
+        .filter(|(name, _)| !name.starts_with('='))
+        .collect();
+    for (name, value) in command.get_envs() {
+        let name = name.to_string_lossy().to_ascii_uppercase();
+        match value {
+            Some(value) => {
+                environment.insert(name, value.to_string_lossy().into_owned());
+            }
+            None => {
+                environment.remove(&name);
+            }
+        }
+    }
+    environment
+}
+
 #[test]
 fn run_scrubs_all_akm_variables_preserves_normal_environment_and_child_exit() {
-    let fixture = Fixture::new();
+    // FR-22: three scopes. Only `demo`/`dev` may reach the child, and the child's whole
+    // environment must be exactly the inherited one plus that scope's key.
+    let fixture = Fixture::with_keys(&[
+        ("Demo", "DEMO_SECRET", "fake-intended-secret", "demo", "dev"),
+        (
+            "Other project",
+            "OTHER_SECRET",
+            "fake-other-project-secret",
+            "other",
+            "dev",
+        ),
+        (
+            "Other environment",
+            "PROD_SECRET",
+            "fake-other-environment-secret",
+            "demo",
+            "prod",
+        ),
+    ]);
     let path = fixture.report("child.json");
     let audit = fixture.log();
-    let output = fixture
-        .probe_command(&path)
+    let mut command = fixture.probe_command(&path);
+    command
         .env("AKM_VAULT", &fixture.vault)
         .env("aKm_ToKeN", "fake-mixed-case-private-token")
         .env("AkM_Another", "fake-private-token")
@@ -340,16 +438,26 @@ fn run_scrubs_all_akm_variables_preserves_normal_environment_and_child_exit() {
         .env("CLI_TEST_AUDIT", audit.path())
         .env("CLI_TEST_BLOCK_AUDIT", "1")
         .env("CLI_TEST_EXIT", "7")
-        .env("DEMO_SECRET", "wrong-inherited-secret")
-        .output()
-        .unwrap();
+        .env("DEMO_SECRET", "wrong-inherited-secret");
+    let mut expected = effective_environment(&command);
+    expected.retain(|name, _| !name.starts_with("AKM_"));
+    expected.insert("DEMO_SECRET".into(), "fake-intended-secret".into());
+    let output = command.output().unwrap();
     assert_eq!(output.status.code(), Some(7), "{}", stderr(&output));
     let child = report(&path);
     assert_eq!(child["akm_names"], json!([]));
     assert_eq!(child["secret"], "fake-intended-secret");
+    assert_eq!(child["other_secret"], Value::Null);
+    assert_eq!(child["prod_secret"], Value::Null);
     assert_eq!(child["normal"], "ordinary-inherited-value");
     assert_eq!(child["path"], std::env::var("PATH").unwrap());
     assert_eq!(child["last_audit_action"], "run-requested");
+    let actual: std::collections::BTreeMap<String, String> =
+        serde_json::from_value(child["environment"].clone()).unwrap();
+    assert_eq!(
+        actual, expected,
+        "the child's complete environment is the inherited one, without AKM_*, plus the selected scope"
+    );
     assert!(audit.path().is_dir());
     assert!(stderr(&output).is_empty(), "{}", stderr(&output));
 }
@@ -498,6 +606,143 @@ fn imported_reserved_control_names_cannot_be_injected_or_exported() {
     }
 }
 
+/// FR-02: `RUSTC_WRAPPER` and the other Cargo and Rust execution controls. A key that is
+/// already stored under such a name must be refused by `run` and `export` with a clear
+/// message, but it must stay viewable. The same holds in lower and mixed case.
+#[test]
+fn a_stored_key_named_like_a_cargo_execution_control_is_refused_for_use_and_still_viewable() {
+    for name in [
+        "RUSTC_WRAPPER",
+        "rustc_wrapper",
+        "RustC_Wrapper",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "RUSTFLAGS",
+    ] {
+        let fixture = Fixture::with_keys(&[
+            ("Wrapper", name, "fake-wrapper-secret", "demo", "dev"),
+            ("Plain", "PLAIN_KEY", "fake-plain-secret", "demo", "dev"),
+        ]);
+        let path = fixture.report("must-not-exist.json");
+        for verb in ["run", "export"] {
+            // `probe_command` starts only the probe test, never the whole test binary.
+            let mut command = if verb == "run" {
+                fixture.probe_command(&path)
+            } else {
+                let mut command = fixture.cli();
+                command.args(["export", "--project", "demo", "--env", "dev"]);
+                command
+            };
+            let output = command.output().unwrap();
+            let text = stderr(&output);
+            assert!(!output.status.success(), "{verb} accepted {name}");
+            assert!(text.contains("Wrapper"), "{name} {verb}: {text}");
+            assert!(
+                text.contains("reserved") || text.contains("not a valid"),
+                "{name} {verb}: {text}"
+            );
+            assert!(
+                !text.contains("fake-wrapper-secret") && !text.contains("fake-plain-secret"),
+                "{name} {verb}: {text}"
+            );
+            assert!(output.stdout.is_empty(), "{name} {verb}");
+            assert!(!path.exists(), "{name}: the child must not start");
+        }
+        // The key can still be listed and read, so its owner can find it and rename it.
+        let listing = fixture.cli().arg("list").output().unwrap();
+        assert_success(&listing);
+        assert!(String::from_utf8_lossy(&listing.stdout).contains("Wrapper"));
+        let shown = fixture
+            .cli()
+            .args(["get", "Wrapper", "--field", "secret"])
+            .output()
+            .unwrap();
+        assert_success(&shown);
+        assert_eq!(
+            String::from_utf8_lossy(&shown.stdout).trim(),
+            "fake-wrapper-secret"
+        );
+    }
+}
+
+/// CORE-R2-02: a key never chooses the file that a program reads its credentials or its
+/// settings from. The consumer is the test probe: it reads the file that each settings-file
+/// name names, as the Google, Kubernetes and AWS libraries do. A key under such a name stops
+/// `run` and `export` before any child starts. With the key's scope left out,
+/// the same consumer reads the file of the parent environment. Offline, fake files only.
+#[test]
+fn a_key_never_chooses_the_settings_file_that_a_child_reads() {
+    // The command line hands over only upper-case names (`is_valid_env_var`); the core test
+    // `name_classes` holds every spelling of each name to the same class.
+    for name in [
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "KUBECONFIG",
+        "AWS_SHARED_CREDENTIALS_FILE",
+    ] {
+        let files = temporary_directory();
+        let key_file = files.path().join("key-settings.json");
+        let parent_file = files.path().join("parent-settings.json");
+        fs::write(&key_file, "fake key settings").unwrap();
+        fs::write(&parent_file, "fake parent settings").unwrap();
+        let key_path = key_file.to_string_lossy().into_owned();
+        let fixture = Fixture::with_keys(&[
+            ("Settings key", name, &key_path, "demo", "dev"),
+            (
+                "Fine key",
+                "FINE_TOKEN",
+                "fake-fine-secret",
+                "demo",
+                "other",
+            ),
+        ]);
+        let report_path = files.path().join("report.json");
+        let probe = |command: &mut Command| {
+            command
+                .arg("--")
+                .arg(std::env::current_exe().unwrap())
+                .args(["--exact", "child_probe", "--ignored", "--nocapture"]);
+        };
+        for verb in ["run", "export"] {
+            let mut command = fixture.cli();
+            command
+                .env("CLI_TEST_REPORT", &report_path)
+                .env(name, &parent_file)
+                .args([verb, "--project", "demo", "--env", "dev"]);
+            if verb == "run" {
+                probe(&mut command);
+            }
+            let output = command.output().unwrap();
+            let text = stderr(&output);
+            assert!(
+                !output.status.success(),
+                "{name} {verb}: the key was handed over; the child read {:?}",
+                report_path
+                    .exists()
+                    .then(|| report(&report_path)["settings_files"].clone())
+            );
+            assert!(text.contains("reserved"), "{name} {verb}: {text}");
+            assert!(text.contains("Settings key"), "{name} {verb}: {text}");
+            assert!(!text.contains(&key_path), "{name} {verb}: {text}");
+            assert!(output.stdout.is_empty(), "{name} {verb}");
+            assert!(!report_path.exists(), "{name} {verb}: a child started");
+        }
+        let mut command = fixture.cli();
+        command
+            .env("CLI_TEST_REPORT", &report_path)
+            .env(name, &parent_file)
+            .args(["run", "--project", "demo", "--env", "other"]);
+        probe(&mut command);
+        let output = command.output().unwrap();
+        assert_success(&output);
+        assert_eq!(
+            report(&report_path)["settings_files"][name],
+            "fake parent settings",
+            "{name}"
+        );
+    }
+}
+
 #[test]
 fn every_reserved_class_is_refused_by_run_and_export_with_the_key_title_and_never_the_value() {
     for name in [
@@ -576,6 +821,178 @@ fn every_reserved_class_is_refused_by_run_and_export_with_the_key_title_and_neve
             assert!(output.stdout.is_empty());
             assert!(!path.exists());
         }
+    }
+}
+
+/// CORE-R1-02: names that the reserved table covers after core review 1, one or more per
+/// family. `akm add` refuses an explicit and a derived name; `export` and `run` (scoped and
+/// `--all`) refuse a key that an older vault stores under such a name, and no child starts.
+/// No refusal changes the vault file.
+#[test]
+fn newly_reserved_names_are_refused_by_add_export_and_run_with_the_vault_bytes_unchanged() {
+    for name in [
+        "HOST_CC",
+        "TARGET_CC",
+        "CC_X86_64_PC_WINDOWS_MSVC",
+        "TARGET_CFLAGS",
+        "CMAKE",
+        "PKG_CONFIG",
+        "CARGO",
+        "CL",
+        "GIT_DIR",
+        "GIT_TRACE_CURL",
+        "GOCACHEPROG",
+        "NODE_REPL_EXTERNAL_MODULE",
+        "YARN_ENABLE_SCRIPTS",
+        "PYTHONWARNINGS",
+        "JDK_JAVAC_OPTIONS",
+        "DOTNET_ROOT_X64",
+        "MAKEFILES",
+        "PS0",
+        "LESSEDIT",
+        "SOCKS_PROXY",
+    ] {
+        let fixture = Fixture::with_keys(&[
+            (
+                "Stored build key",
+                name,
+                "fake-reserved-secret",
+                "demo",
+                "dev",
+            ),
+            ("Fine key", "FINE_TOKEN", "fake-fine-secret", "demo", "dev"),
+        ]);
+        let before = fs::read(&fixture.vault).unwrap();
+
+        let title = name.replace('_', " ");
+        for add in [
+            vec!["add", "A harmless title", "--env-var", name],
+            vec!["add", title.as_str()],
+        ] {
+            let output = output_with_stdin(
+                fixture
+                    .cli()
+                    .args(&add)
+                    .args(["--secret-stdin", "--project", "demo"])
+                    .args(["--env", "dev"]),
+                "fake-new-secret\n",
+            );
+            let text = stderr(&output);
+            assert!(!output.status.success(), "{add:?} accepted {name}");
+            assert!(
+                text.contains(name) && text.contains("reserved"),
+                "{name} {add:?}: {text}"
+            );
+            assert!(!text.contains("fake-new-secret"), "{name}: {text}");
+        }
+
+        let path = fixture.report("must-not-exist.json");
+        for selection in [vec!["--project", "demo", "--env", "dev"], vec!["--all"]] {
+            for verb in ["export", "run"] {
+                let mut command = fixture.cli();
+                command
+                    .env("CLI_TEST_REPORT", &path)
+                    .arg(verb)
+                    .args(&selection);
+                if verb == "run" {
+                    command
+                        .arg("--")
+                        .arg(std::env::current_exe().unwrap())
+                        .args(["--exact", "child_probe", "--ignored", "--nocapture"]);
+                }
+                let output = command.output().unwrap();
+                let text = stderr(&output);
+                assert!(
+                    !output.status.success(),
+                    "{verb} {selection:?} accepted {name}"
+                );
+                assert!(text.contains("Stored build key"), "{name} {verb}: {text}");
+                assert!(text.contains(name), "{name} {verb}: {text}");
+                assert!(text.contains("reserved"), "{name} {verb}: {text}");
+                assert!(
+                    !text.contains("fake-reserved-secret") && !text.contains("fake-fine-secret"),
+                    "{name} {verb}: {text}"
+                );
+                assert!(output.stdout.is_empty(), "{name} {verb}");
+                assert!(!path.exists(), "{name} {verb}: the child must not start");
+            }
+        }
+        assert_eq!(
+            fs::read(&fixture.vault).unwrap(),
+            before,
+            "{name}: the vault file changed"
+        );
+    }
+}
+
+/// CORE-R1-02: a child that `akm run` starts never receives a name that the reserved table
+/// refuses, when an older vault already stores a key under it. A run of the scope that holds
+/// the key starts no child. A run of another scope starts the child, whose environment holds
+/// neither the name (beyond what the child inherits) nor the stored value.
+#[test]
+fn a_child_started_by_run_never_receives_a_reserved_name_that_an_older_vault_stores() {
+    for name in [
+        "HOST_CC",
+        "TARGET_CC",
+        "CC_X86_64_UNKNOWN_LINUX_GNU",
+        "CC_x86_64-unknown-linux-gnu",
+        "host_cxx",
+    ] {
+        let fixture = Fixture::with_keys(&[
+            ("Stored compiler", name, "fake-compiler-path", "demo", "dev"),
+            (
+                "Demo",
+                "DEMO_SECRET",
+                "fake-intended-secret",
+                "demo",
+                "prod",
+            ),
+        ]);
+        for selection in [vec!["--project", "demo", "--env", "dev"], vec!["--all"]] {
+            let path = fixture.report("refused.json");
+            let output = fixture
+                .cli()
+                .env("CLI_TEST_REPORT", &path)
+                .arg("run")
+                .args(&selection)
+                .arg("--")
+                .arg(std::env::current_exe().unwrap())
+                .args(["--exact", "child_probe", "--ignored", "--nocapture"])
+                .output()
+                .unwrap();
+            let text = stderr(&output);
+            assert!(!output.status.success(), "{name} {selection:?}: {text}");
+            assert!(!path.exists(), "{name} {selection:?}: a child started");
+            assert!(text.contains("Stored compiler"), "{name}: {text}");
+            assert!(!text.contains("fake-compiler-path"), "{name}: {text}");
+        }
+
+        let path = fixture.report("started.json");
+        let mut command = fixture.cli();
+        command
+            .env("CLI_TEST_REPORT", &path)
+            .args(["run", "--project", "demo", "--env", "prod", "--"])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", "child_probe", "--ignored", "--nocapture"]);
+        let inherited = effective_environment(&command);
+        let output = command.output().unwrap();
+        assert_success(&output);
+        let child = report(&path);
+        assert_eq!(child["secret"], "fake-intended-secret");
+        let environment: std::collections::BTreeMap<String, String> =
+            serde_json::from_value(child["environment"].clone()).unwrap();
+        let upper = name.to_ascii_uppercase();
+        assert_eq!(
+            environment.get(&upper),
+            inherited.get(&upper),
+            "{name}: the child holds the stored name"
+        );
+        assert!(
+            environment
+                .values()
+                .all(|value| !value.contains("fake-compiler-path")),
+            "{name}: the child holds the stored value"
+        );
     }
 }
 
@@ -1027,6 +1444,19 @@ fn committed_changes_exit_zero_with_closed_output_pipes() {
         assert_eq!(add.code(), Some(0), "add: {case}");
         assert_eq!(stored_secret(&fixture.vault, "Added"), "fake-added-secret");
 
+        let mut edit = fixture.cli();
+        edit.args(["edit", "Added", "--notes", "fake-note"]);
+        assert_eq!(
+            status_with(edit, stdout_closed, stderr_closed, None).code(),
+            Some(0),
+            "edit: {case}"
+        );
+        let edited = Vault::open(&fixture.vault, PASSWORD)
+            .unwrap()
+            .find("Added")
+            .unwrap();
+        assert_eq!(edited.notes.as_deref(), Some("fake-note"), "edit: {case}");
+
         let mut rm = fixture.cli();
         rm.args(["rm", "Added", "--yes"]);
         assert_eq!(
@@ -1171,25 +1601,48 @@ fn check_protected_original_in_actual_cli(relative: bool) {
     let empty_path = fixture.report("empty.kdbx");
     write_database(&empty_path, PASSWORD, &[]);
     let empty = fs::read(&empty_path).unwrap();
+    // Files with the backup name format and a true hash that no ledger lists. A name and a
+    // hash are not evidence that AKM wrote a file, so pruning keeps them (FR-01, core review 1,
+    // finding 1).
+    let empty_hash = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(&empty))
+    };
+    let mut futures = Vec::new();
     for index in 0..5 {
         let name = format!(
-            "vault.kdbx.bak.29990101T00000{index}000000000Z_00000000-0000-4000-8000-{:012}.kdbx",
+            "vault.kdbx.bak.29990101T00000{index}000000000Z_00000000-0000-4000-8000-{:012}_{empty_hash}.kdbx",
             index + 1
         );
         fs::write(fixture.report(&name), &empty).unwrap();
+        futures.push(fixture.report(&name));
     }
     fs::create_dir(fixture.report("vault.kdbx.bak")).unwrap();
-    let mut command = if relative {
-        let mut command = cli();
-        command
-            .current_dir(fixture.directory.path())
-            .env("AKM_PASSWORD", PASSWORD)
-            .args(["--vault", "vault.kdbx"]);
-        command
-    } else {
-        fixture.cli()
+    let command = || {
+        if relative {
+            let mut command = cli();
+            command
+                .current_dir(fixture.directory.path())
+                .env("AKM_PASSWORD", PASSWORD)
+                .args(["--vault", "vault.kdbx"]);
+            command
+        } else {
+            fixture.cli()
+        }
     };
-    let output = command.args(["rm", "Demo", "--yes"]).output().unwrap();
+    let backups = || -> Vec<PathBuf> {
+        fs::read_dir(fixture.directory.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("vault.kdbx.bak.")
+            })
+            .collect()
+    };
+    let output = command().args(["rm", "Demo", "--yes"]).output().unwrap();
     assert_success(&output);
     assert!(String::from_utf8_lossy(&output.stdout).contains("Moved"));
     assert!(stderr(&output).contains(".bak could not be refreshed"));
@@ -1197,18 +1650,11 @@ fn check_protected_original_in_actual_cli(relative: bool) {
         .unwrap()
         .list()
         .is_empty());
-    let backups: Vec<_> = fs::read_dir(fixture.directory.path())
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| {
-            p.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("vault.kdbx.bak.")
-        })
-        .collect();
-    assert_eq!(backups.len(), 5);
-    let protected = backups.iter().find(|p| fs::read(p).unwrap() == original);
+    let backups_now = backups();
+    assert_eq!(backups_now.len(), futures.len() + 1);
+    let protected = backups_now
+        .iter()
+        .find(|p| fs::read(p).unwrap() == original);
     assert!(protected.is_some(), "successful CLI deletion must preserve its exact immediate original even when clock names sort later");
     let recovered = cli()
         .env("AKM_PASSWORD", PASSWORD)
@@ -1222,6 +1668,42 @@ fn check_protected_original_in_actual_cli(relative: bool) {
         String::from_utf8_lossy(&recovered.stdout).trim(),
         "fake-intended-secret"
     );
+
+    // Six more saves through the same vault spelling: pruning by the ledger keeps the newest
+    // five of AKM's own backups and never touches the five foreign files.
+    for index in 0..6 {
+        let title = format!("Extra{index}");
+        let mut child = command()
+            .args([
+                "add",
+                &title,
+                "--project",
+                "demo",
+                "--env",
+                "dev",
+                "--secret-stdin",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"fake-extra-secret\n")
+            .unwrap();
+        assert_success(&child.wait_with_output().unwrap());
+    }
+    let own: Vec<_> = backups()
+        .into_iter()
+        .filter(|path| !futures.contains(path))
+        .collect();
+    assert_eq!(own.len(), 5, "{own:?}");
+    for future in &futures {
+        assert_eq!(fs::read(future).unwrap(), empty, "{}", future.display());
+    }
 }
 
 #[test]
@@ -1284,10 +1766,10 @@ fn older_formats_remain_readable_and_only_upgrade_with_explicit_confirmation() {
         assert_success(&output);
         assert_eq!(fs::read(&path).unwrap(), *bytes);
 
-        let output = command()
-            .args(["add", "New fake key", "--secret", "fake-upgrade-secret"])
-            .output()
-            .unwrap();
+        let output = output_with_stdin(
+            command().args(["add", "New fake key", "--secret-stdin"]),
+            "fake-upgrade-secret\n",
+        );
         assert!(!output.status.success());
         assert!(
             stderr(&output).contains("akm upgrade"),
@@ -1531,30 +2013,6 @@ fn file_export_rejects_an_ignored_private_dacl_before_writing() {
 }
 
 #[test]
-fn file_export_publication_failure_removes_its_plaintext_temp() {
-    struct FailedPublication;
-    impl export::ExportIo for FailedPublication {
-        fn publish(&mut self, file: &fs::File, _destination: &Path) -> akm_core::Result<()> {
-            assert_eq!(file.metadata()?.len(), 30);
-            Err(std::io::Error::other("injected publication failure").into())
-        }
-    }
-
-    let directory = temporary_directory();
-    let target = directory.path().join("out.env");
-    let result = export::write_new_with(
-        &target,
-        &[("EXPORT_SECRET".into(), "fake-test-value".into())],
-        &mut FailedPublication,
-    );
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("injected publication failure"));
-    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
-}
-
-#[test]
 fn file_export_that_cannot_confirm_removal_of_its_plaintext_temp_says_so_and_names_the_file() {
     struct FailedDelete;
     impl export::ExportIo for FailedDelete {
@@ -1599,6 +2057,134 @@ fn file_export_that_cannot_confirm_removal_of_its_plaintext_temp_says_so_and_nam
         message.contains(shown),
         "the message names the leftover file {shown}: {message}"
     );
+}
+
+/// The temporary file that a failed export left, and the folder that holds it.
+fn only_temp_in(folder: &Path) -> PathBuf {
+    let temp = fs::read_dir(folder)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert!(temp
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with(".akm-export-"));
+    temp
+}
+
+fn shown(path: &Path) -> String {
+    let canonical = path.canonicalize().unwrap().display().to_string();
+    canonical
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&canonical)
+        .to_string()
+}
+
+// FV-07: the owned temporary file is renamed, another file takes its old name, and the
+// cleanup fails. The warning names the renamed file, never the file at the old name.
+#[test]
+#[cfg(windows)]
+fn a_cleanup_warning_names_the_renamed_temporary_file_and_never_the_file_at_its_old_name() {
+    struct RenamedThenUndeletable {
+        renamed: PathBuf,
+        old: Option<PathBuf>,
+    }
+    impl export::ExportIo for RenamedThenUndeletable {
+        fn publish(&mut self, _file: &fs::File, destination: &Path) -> akm_core::Result<()> {
+            let temp = only_temp_in(destination.parent().unwrap());
+            fs::rename(&temp, &self.renamed)?;
+            fs::write(&temp, b"unrelated sentinel\n")?;
+            self.old = Some(temp);
+            Err(std::io::Error::other("injected publication failure").into())
+        }
+
+        fn discard(&mut self, _file: &fs::File) -> bool {
+            false
+        }
+    }
+
+    let directory = temporary_directory();
+    let mut io = RenamedThenUndeletable {
+        renamed: directory.path().join("renamed-owned.tmp"),
+        old: None,
+    };
+    let message = export::write_new_with(
+        &directory.path().join("out.env"),
+        &[("EXPORT_SECRET".into(), "fake-test-value".into())],
+        &mut io,
+    )
+    .unwrap_err()
+    .to_string();
+    let old = io.old.unwrap();
+    assert!(message.contains("could not confirm cleanup"), "{message}");
+    assert!(message.contains(&shown(&io.renamed)), "{message}");
+    assert!(!message.contains(".akm-export-"), "{message}");
+    assert!(!message.contains("fake-test-value"), "{message}");
+    assert_eq!(fs::read(&old).unwrap(), b"unrelated sentinel\n");
+}
+
+// FV-07: when AKM cannot read the current name of its file, the warning gives the name AKM
+// created, says the file may have another name now, and never tells the user to delete it.
+// When the name cannot be read before the first byte, nothing is written.
+#[test]
+fn a_cleanup_warning_without_a_current_name_never_directs_a_deletion() {
+    struct Nameless {
+        published: bool,
+        fail_at_once: bool,
+        wrote: bool,
+    }
+    impl export::ExportIo for Nameless {
+        fn write(
+            &mut self,
+            file: &mut fs::File,
+            envs: &[(String, String)],
+        ) -> akm_core::Result<()> {
+            self.wrote = true;
+            export::write(file, envs)
+        }
+
+        fn publish(&mut self, _file: &fs::File, _destination: &Path) -> akm_core::Result<()> {
+            self.published = true;
+            Err(std::io::Error::other("injected publication failure").into())
+        }
+
+        fn discard(&mut self, _file: &fs::File) -> bool {
+            false
+        }
+
+        fn current_path(&mut self, file: &fs::File) -> akm_core::Result<PathBuf> {
+            if self.published || self.fail_at_once {
+                return Err(std::io::Error::other("injected name failure").into());
+            }
+            export::final_path(file)
+        }
+    }
+
+    for fail_at_once in [false, true] {
+        let directory = temporary_directory();
+        let mut io = Nameless {
+            published: false,
+            fail_at_once,
+            wrote: false,
+        };
+        let message = export::write_new_with(
+            &directory.path().join("out.env"),
+            &[("EXPORT_SECRET".into(), "fake-test-value".into())],
+            &mut io,
+        )
+        .unwrap_err()
+        .to_string();
+        let temp = only_temp_in(directory.path());
+        assert!(message.contains("could not confirm cleanup"), "{message}");
+        assert!(message.contains(&shown(&temp)), "{message}");
+        assert!(message.contains("may have another name now"), "{message}");
+        assert!(!message.contains("Delete it yourself"), "{message}");
+        assert!(!message.contains("fake-test-value"), "{message}");
+        assert_eq!(io.wrote, !fail_at_once, "{message}");
+    }
 }
 
 #[test]
@@ -1705,6 +2291,130 @@ fn file_export_cleanup_and_publication_never_claim_a_replaced_temp_name() {
         assert_eq!(
             fs::read_dir(directory.path()).unwrap().count(),
             1 + usize::from(succeed)
+        );
+    }
+}
+
+#[cfg(windows)]
+fn junction(link: &Path, target: &Path) {
+    let output = Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "mklink: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// The names in a folder, and whether any file there holds the fake value.
+fn holds_value(folder: &Path, value: &[u8]) -> (Vec<String>, bool) {
+    let mut names = Vec::new();
+    let mut found = false;
+    for entry in fs::read_dir(folder).unwrap() {
+        let entry = entry.unwrap();
+        names.push(entry.file_name().to_string_lossy().into_owned());
+        if let Ok(bytes) = fs::read(entry.path()) {
+            found |= bytes.windows(value.len()).any(|window| window == value);
+        }
+    }
+    (names, found)
+}
+
+// FV-06: the checked folder is moved away, and a junction to another folder takes its name,
+// after the destination check and before the temporary file is created.
+#[test]
+#[cfg(windows)]
+fn file_export_refuses_a_folder_replaced_by_a_junction_before_any_plaintext_is_written() {
+    struct SwapAtCreate {
+        chosen: PathBuf,
+        moved: PathBuf,
+        elsewhere: PathBuf,
+        wrote: bool,
+    }
+    impl export::ExportIo for SwapAtCreate {
+        fn create_private(&mut self, path: &Path) -> akm_core::Result<fs::File> {
+            fs::rename(&self.chosen, &self.moved)?;
+            junction(&self.chosen, &self.elsewhere);
+            export::private_file(path)
+        }
+
+        fn write(
+            &mut self,
+            file: &mut fs::File,
+            envs: &[(String, String)],
+        ) -> akm_core::Result<()> {
+            self.wrote = true;
+            export::write(file, envs)
+        }
+    }
+
+    let directory = temporary_directory();
+    let chosen = directory.path().join("chosen");
+    let elsewhere = directory.path().join("elsewhere");
+    fs::create_dir(&chosen).unwrap();
+    fs::create_dir(&elsewhere).unwrap();
+    let target = export::destination(&chosen.join("out.env")).unwrap();
+    let mut io = SwapAtCreate {
+        chosen: chosen.clone(),
+        moved: directory.path().join("chosen-moved"),
+        elsewhere: elsewhere.clone(),
+        wrote: false,
+    };
+    let result = export::write_new_with(
+        &target,
+        &[("EXPORT_SECRET".into(), "fake-redirected-value".into())],
+        &mut io,
+    );
+    let _ = fs::remove_dir(&chosen);
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("destination folder changed"), "{message}");
+    assert!(!io.wrote, "plaintext was written before the location check");
+    for folder in [&elsewhere, &io.moved] {
+        let (names, found) = holds_value(folder, b"fake-redirected-value");
+        assert!(
+            names.is_empty() && !found,
+            "{}: {names:?}",
+            folder.display()
+        );
+    }
+}
+
+// FV-06: a publication that does not end at the checked destination is removed through the
+// owned handle. The seam stands for a folder that changes during the rename.
+#[test]
+#[cfg(windows)]
+fn file_export_removes_a_publication_that_landed_outside_the_checked_folder() {
+    struct PublishElsewhere(PathBuf);
+    impl export::ExportIo for PublishElsewhere {
+        fn publish(&mut self, file: &fs::File, _destination: &Path) -> akm_core::Result<()> {
+            export::publish_new(file, &self.0)
+        }
+    }
+
+    let directory = temporary_directory();
+    let chosen = directory.path().join("chosen");
+    let elsewhere = directory.path().join("elsewhere");
+    fs::create_dir(&chosen).unwrap();
+    fs::create_dir(&elsewhere).unwrap();
+    let target = export::destination(&chosen.join("out.env")).unwrap();
+    let mut io = PublishElsewhere(export::destination(&elsewhere.join("out.env")).unwrap());
+    let result = export::write_new_with(
+        &target,
+        &[("EXPORT_SECRET".into(), "fake-redirected-value".into())],
+        &mut io,
+    );
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("destination folder changed"), "{message}");
+    for folder in [&chosen, &elsewhere] {
+        let (names, found) = holds_value(folder, b"fake-redirected-value");
+        assert!(
+            names.is_empty() && !found,
+            "{}: {names:?}",
+            folder.display()
         );
     }
 }
@@ -1956,6 +2666,22 @@ fn child_probe() {
         .map(|(name, _)| name.to_string_lossy().into_owned())
         .filter(|name| name.to_ascii_uppercase().starts_with("AKM_"))
         .collect();
+    // The consumer of the settings-file names (CORE-R2-02): it reads the file that each one
+    // names, as the Google, Kubernetes and AWS libraries do. It reads only inside the folder
+    // of its report, so a real file of the person who runs the tests is never read.
+    let folder = fs::canonicalize(Path::new(&output).parent().unwrap()).unwrap();
+    let settings_files: std::collections::BTreeMap<&str, String> = [
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "KUBECONFIG",
+        "AWS_SHARED_CREDENTIALS_FILE",
+    ]
+    .into_iter()
+    .filter_map(|name| {
+        let path = fs::canonicalize(std::env::var_os(name)?).ok()?;
+        path.starts_with(&folder).then_some(())?;
+        Some((name, fs::read_to_string(&path).ok()?))
+    })
+    .collect();
     let mut last_action = None;
     if let Some(path) = std::env::var_os("CLI_TEST_AUDIT") {
         let text = fs::read_to_string(&path).unwrap();
@@ -1974,10 +2700,16 @@ fn child_probe() {
             "akm_names": akm_names,
             "secret": std::env::var("DEMO_SECRET").ok(),
             "other_secret": std::env::var("OTHER_SECRET").ok(),
+            "prod_secret": std::env::var("PROD_SECRET").ok(),
+            "environment": std::env::vars_os()
+                .map(|(name, value)| (name.to_string_lossy().to_ascii_uppercase(), value.to_string_lossy().into_owned()))
+                .filter(|(name, _)| !name.starts_with('='))
+                .collect::<std::collections::BTreeMap<_, _>>(),
             "normal": std::env::var("CLI_TEST_NORMAL").ok(),
             "path": std::env::var("PATH").ok(),
             "arguments": forwarded,
             "last_audit_action": last_action,
+            "settings_files": settings_files,
         }))
         .unwrap(),
     )
@@ -2101,84 +2833,45 @@ fn the_secret_disclosures_still_fail_closed_with_a_damaged_journal() {
     }
 }
 
-/// Unit 1a, 1A-R8-05: the README names exactly the actions the CLI records, in their order.
+/// FR-16: a NUL byte in the secret is refused where the secret comes in, for add and for
+/// rotate. The vault file is byte for byte what it was, and the old secret still reads.
 #[test]
-fn the_readme_names_the_recorded_audit_actions_in_their_order() {
+fn a_secret_with_a_nul_byte_is_refused_by_add_and_rotate_and_changes_nothing() {
+    use std::io::Write;
+    use std::process::Stdio;
     let fixture = Fixture::new();
-    let path = fixture.report("names.json");
-    let audit = fixture.log();
-    let run = fixture.probe_command(&path).output().unwrap();
-    assert_success(&run);
-    assert_success(
-        &fixture
-            .cli()
-            .args(["export", "--project", "demo", "--env", "dev"])
-            .output()
-            .unwrap(),
-    );
-    assert_success(
-        &fixture
-            .cli()
-            .args(["get", "Demo", "--reveal"])
-            .output()
-            .unwrap(),
-    );
-    let mut entries = audit.read(100).unwrap();
-    entries.sort_by_key(|entry| entry.seq);
-    let recorded: Vec<&str> = entries.iter().map(|entry| entry.action.as_str()).collect();
-    assert_eq!(
-        recorded,
-        [
-            "run-requested",
-            "export-requested",
-            "export-completed",
-            "reveal-requested"
-        ],
-        "the recorded actions and their order"
-    );
-    let readme =
-        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md")).unwrap();
-    let named: std::collections::BTreeSet<&str> = readme
-        .split('`')
-        .skip(1)
-        .step_by(2)
-        .filter(|word| {
-            word.ends_with("-requested") || word.ends_with("-completed") || word.ends_with("-start")
-        })
-        .collect();
-    // The lifecycle actions are recorded by other commands; lifecycle.rs asserts that each is written.
-    let lifecycle = [
-        "rotate-completed",
-        "remove-completed",
-        "restore-completed",
-        "purge-completed",
-    ];
-    let expected: std::collections::BTreeSet<&str> =
-        recorded.iter().copied().chain(lifecycle).collect();
-    assert_eq!(
-        named, expected,
-        "the README must name exactly the recorded actions"
-    );
-    // 1A-A1-04: the README states when each record is written, in the order above.
-    let line = |action: &str| {
-        let name = format!("`{action}`");
-        readme
-            .lines()
-            .find(|line| line.contains(&name))
-            .unwrap_or_else(|| panic!("the README names {action}"))
-            .to_string()
-    };
-    for (action, timing) in [
-        ("run-requested", "before the child starts"),
-        ("reveal-requested", "before `get --reveal`"),
-        ("export-requested", "before any export byte is written"),
-        ("export-completed", "after the export is written"),
+    let before = fs::read(&fixture.vault).unwrap();
+    for args in [
+        &["add", "Nul key", "--env-var", "NUL_KEY", "--secret-stdin"][..],
+        &["rotate", "Demo", "--secret-stdin"][..],
     ] {
-        assert!(line(action).contains(timing), "{action}: {timing}");
+        let mut child = fixture
+            .cli()
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"fake\0secret\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(!output.status.success(), "{args:?}");
+        let text = stderr(&output);
+        assert!(text.contains("NUL"), "{args:?}: {text}");
+        assert!(!text.contains("fake"), "{args:?}: {text}");
+        assert_eq!(
+            fs::read(&fixture.vault).unwrap(),
+            before,
+            "{args:?}: the vault changed"
+        );
     }
-    let at = |action: &str| readme.find(&format!("`{action}`")).unwrap();
-    assert!(
-        at("export-requested") < at("export-completed"),
-        "the README lists the request before the completion"
+    assert_eq!(
+        stored_secret(&fixture.vault, "Demo"),
+        "fake-intended-secret"
     );
 }

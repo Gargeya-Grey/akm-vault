@@ -7,7 +7,7 @@
   - Design first, in unit 1a.
   - The CLI default view shows a fixed mask, with no secret characters and no length.
   - Clipboard cleanup is best effort, and every clipboard text says that the copy may remain.
-  - Lock rule, narrowed after design review 1: lock sends its notice first, then makes one cleanup attempt that never retries and never waits for a busy clipboard. Lock may wait for a copy in progress (a recorded limit). This rule is built in unit 1h, not in 1a (split, below).
+  - Lock rule, narrowed after design review 1: lock sends its notice first, then makes one cleanup attempt that never retries and never waits for a busy clipboard. Since FW-01 (13 Nov 2026), a lock does not wait for a copy in progress; the copy makes the owed attempt when it ends. This rule is built in unit 1h, not in 1a (split, below).
   - **Split (after design review 2):** unit 1a closes 1A-R8-01 to 1A-R8-05 with narrow fixes, each proved through its production caller. The wider hardening that the design reviews found goes to a new unit 1h, with its own design and its own authorization (FINDINGS.md, rows 1H-01 to 1H-08). The 1a acceptance review judges 1a against this scope. There is no third design review.
 - Public API changes:
   - The CLI default `get` output (the mask).

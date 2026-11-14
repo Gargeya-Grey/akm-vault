@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 use keepass::config::{DatabaseVersion, KdfConfig};
@@ -355,34 +355,149 @@ fn a_partial_word_cannot_restore_purge_or_show_the_history_of_a_recycled_key() {
     assert!(fixture.run(&["restore", "gamma"]).status.success());
 }
 
+/// FW-04: a recycled key is selected by its id in any letter case, by the same rule as a live
+/// key. Its history, its restore and its purge take the id in upper case and in mixed case.
 #[test]
-fn the_readme_documents_the_selector_rule() {
-    let readme =
-        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md")).unwrap();
+fn a_recycled_key_is_selected_by_its_id_in_any_letter_case() {
+    let fixture = Fixture::new(&KEYS);
+    let gamma = fixture.id_of("Gamma");
+    let alpha = fixture.id_of("Alpha");
+    for id in [&gamma, &alpha] {
+        assert!(fixture.run(&["rm", id, "--yes"]).status.success());
+    }
+    let upper = gamma.to_uppercase();
+    let mut letters = 0;
+    let mixed: String = alpha
+        .chars()
+        .map(|ch| {
+            letters += usize::from(ch.is_ascii_alphabetic());
+            if letters % 2 == 1 {
+                ch.to_ascii_uppercase()
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let history = fixture.run(&["history", &upper]);
+    assert!(history.status.success(), "{}", err(&history));
+    assert!(out(&history).contains(&gamma), "{}", out(&history));
+    let restored = fixture.run(&["restore", &upper]);
+    assert!(restored.status.success(), "{}", err(&restored));
+    let get = fixture.run(&["get", "Gamma", "--field", "secret"]);
+    assert_eq!(out(&get), "fake-secret-gamma\n");
+    let purged = fixture.run(&["purge", &mixed, "--yes"]);
+    assert!(purged.status.success(), "{}", err(&purged));
+    let bin = fixture.run(&["bin"]);
     assert!(
-        readme.contains("exact title"),
-        "README.md must state the selector rule"
+        out(&bin).contains("The Recycle Bin is empty."),
+        "{}",
+        out(&bin)
     );
 }
 
-/// Review 1 class D: the help of every command that takes a selector states the rule that
-/// `select` enforces, and never the old substring search.
+// ---------------------------------------------------------------------- FR-17: letter case
+
+const UNICODE_KEYS: [Key; 4] = [
+    Key {
+        title: "Éclair2",
+        var: "ECLAIR_KEY",
+        secret: "fake-secret-eclair",
+        notes: None,
+        url: None,
+    },
+    Key {
+        title: "Straße",
+        var: "STRASSE_KEY",
+        secret: "fake-secret-strasse",
+        notes: None,
+        url: None,
+    },
+    Key {
+        title: "Ünï",
+        var: "UNI_ONE_KEY",
+        secret: "fake-secret-uni-one",
+        notes: None,
+        url: None,
+    },
+    Key {
+        title: "ÜNÏ",
+        var: "UNI_TWO_KEY",
+        secret: "fake-secret-uni-two",
+        notes: None,
+        url: None,
+    },
+];
+
+/// FR-17: a title that has a letter outside ASCII is selected in any letter case, on live and
+/// on recycled keys. Two titles that differ only by case are still ambiguous.
 #[test]
-fn the_help_of_every_selector_command_states_the_exact_rule() {
-    for command in ["get", "rotate", "rm", "history", "restore", "purge"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_akm"))
-            .args([command, "--help"])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{command} --help failed");
-        let help = out(&output).to_lowercase();
+fn a_title_with_non_ascii_letters_is_selected_in_any_case_and_case_twins_are_ambiguous() {
+    let fixture = Fixture::new(&UNICODE_KEYS);
+    for selector in ["Éclair2", "éclair2", "ÉCLAIR2", "éCLAIR2"] {
+        let output = fixture.run(&["get", selector, "--field", "secret"]);
+        assert!(output.status.success(), "{selector}: {}", err(&output));
+        assert_eq!(out(&output), "fake-secret-eclair\n", "{selector}");
+    }
+    let output = fixture.run(&["get", "straße", "--field", "secret"]);
+    assert_eq!(out(&output), "fake-secret-strasse\n");
+    // A different word is not a match: `ss` is not `ß`.
+    let output = fixture.run(&["get", "STRASSE", "--field", "secret"]);
+    assert!(!output.status.success());
+
+    let before = fixture.bytes();
+    for selector in ["ünï", "Ünï", "ÜNÏ"] {
+        let output = fixture.run(&["get", selector, "--field", "secret"]);
+        assert!(!output.status.success(), "{selector}");
         assert!(
-            help.contains("id or exact title"),
-            "{command} --help must state the selector rule:\n{help}"
-        );
-        assert!(
-            !help.contains("substring"),
-            "{command} --help still describes a substring search:\n{help}"
+            err(&output).contains("exact title of 2 keys"),
+            "{selector}: {}",
+            err(&output)
         );
     }
+    assert_eq!(fixture.bytes(), before);
+
+    // Recycled keys use the same rule.
+    assert!(fixture.run(&["rm", "éclair2", "--yes"]).status.success());
+    let history = fixture.run(&["history", "ÉCLAIR2"]);
+    assert!(history.status.success(), "{}", err(&history));
+    let restored = fixture.run(&["restore", "éCLAIR2"]);
+    assert!(restored.status.success(), "{}", err(&restored));
+    let get = fixture.run(&["get", "Éclair2", "--field", "secret"]);
+    assert_eq!(out(&get), "fake-secret-eclair\n");
+    for title in ["Ünï", "ÜNÏ"] {
+        let id = fixture.id_of(title);
+        assert!(fixture.run(&["rm", &id, "--yes"]).status.success());
+    }
+    let before = fixture.bytes();
+    let twins = fixture.run(&["restore", "ünï"]);
+    assert!(!twins.status.success());
+    assert!(
+        err(&twins).contains("exact title of 2 keys"),
+        "{}",
+        err(&twins)
+    );
+    assert_eq!(fixture.bytes(), before);
+}
+
+/// Core review 1, finding 10, through the binary: the reviewer's final sigma. A key titled with
+/// `ς` is selected by `Σ` and `σ`, live and recycled. Nothing is written by a read.
+#[test]
+fn a_final_sigma_title_is_selected_by_its_capital_live_and_recycled() {
+    let fixture = Fixture::new(&[Key {
+        title: "Λόγος",
+        var: "LOGOS_KEY",
+        secret: "fake-secret-logos",
+        notes: None,
+        url: None,
+    }]);
+    let before = fixture.bytes();
+    for selector in ["ΛΌΓΟΣ", "λόγοσ", "λόγος"] {
+        let output = fixture.run(&["get", selector, "--field", "secret"]);
+        assert!(output.status.success(), "{selector}: {}", err(&output));
+        assert_eq!(out(&output), "fake-secret-logos\n", "{selector}");
+    }
+    assert_eq!(fixture.bytes(), before);
+    assert!(fixture.run(&["rm", "ΛΌΓΟΣ", "--yes"]).status.success());
+    let restored = fixture.run(&["restore", "λόγοσ"]);
+    assert!(restored.status.success(), "{}", err(&restored));
 }

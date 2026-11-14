@@ -135,3 +135,240 @@ fn an_unknown_secret_change_time_gives_no_due_time_and_no_state() {
     assert_eq!(key.rotation_remaining(utc("2027-01-01T00:00:00Z")), None);
     assert_eq!(key.expiry_remaining(utc("2027-01-01T00:00:00Z")), None);
 }
+
+// ---------------------------------------------------------------------- FR-15: the interval
+
+/// A vault file written by a program other than AKM, with one key whose stored rotation
+/// interval is `days` and whose secret changed on 2026-01-01.
+fn vault_with_stored_interval(days: &str) -> (tempfile::TempDir, Vault) {
+    use akm_core::model::{META_ROTATION_DAYS, META_SECRET_CHANGED};
+    use keepass::db::fields;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("vault.kdbx");
+    let mut db = keepass::Database::new();
+    db.config.kdf_config = keepass::config::KdfConfig::Aes { rounds: 10 };
+    let mut root = db.root_mut();
+    let mut group = root.add_group();
+    group.name = "API Keys".into();
+    let mut entry = group.add_entry();
+    entry.set_unprotected(fields::TITLE, "Stored interval");
+    entry.set_protected(fields::PASSWORD, "fake-stored-secret");
+    entry.set_unprotected(META_ROTATION_DAYS, days);
+    entry.set_unprotected(META_SECRET_CHANGED, "2026-01-01T00:00:00Z");
+    db.save(
+        &mut std::fs::File::create(&path).unwrap(),
+        keepass::DatabaseKey::new().with_password(PASSWORD),
+    )
+    .unwrap();
+    let vault = Vault::open(&path, PASSWORD).unwrap();
+    (directory, vault)
+}
+
+/// FR-15: input bounds the interval at 100 years. A value over the bound is refused on add
+/// and on edit with a message that names the bound, and the vault does not change.
+#[test]
+fn a_rotation_interval_over_the_limit_is_refused_by_add_and_edit() {
+    let (_directory, mut vault, _) = vault_at("2026-01-01T00:00:00Z");
+    let limit = akm_core::model::MAX_ROTATION_DAYS;
+    assert_eq!(limit, 36_500);
+    for days in [limit + 1, 100_000, u32::MAX] {
+        let mut input = ApiKeyInput::new("Too long", "fake-secret");
+        input.rotation_days = Some(days);
+        let text = vault.add(input).unwrap_err().to_string();
+        assert!(text.contains("36500"), "{days}: {text}");
+        assert!(!text.contains("fake-secret"));
+    }
+    assert!(vault.list().is_empty(), "nothing was stored");
+
+    let mut at_limit = ApiKeyInput::new("At the limit", "fake-secret");
+    at_limit.rotation_days = Some(limit);
+    let key = vault.add(at_limit).unwrap();
+    assert_eq!(key.rotation_due_at(), Some(utc("2125-12-08T00:00:00Z")));
+
+    let before = vault.get_by_id(&key.id).unwrap();
+    let mut edit = vault.edit_input(&key.id).unwrap();
+    edit.rotation_days = Some(u32::MAX);
+    let text = vault.update(&key.id, edit).unwrap_err().to_string();
+    assert!(text.contains("36500"), "{text}");
+    assert_eq!(
+        vault.get_by_id(&key.id).unwrap().rotation_days,
+        before.rotation_days
+    );
+}
+
+/// FR-15: a stored interval is not trusted. A value no date can hold gives no due date, and
+/// nothing panics: listing, reading, the due time and the remaining time all answer.
+#[test]
+fn a_stored_out_of_range_rotation_interval_gives_no_due_date_and_never_panics() {
+    use akm_core::schedule::rotation_due;
+    assert_eq!(rotation_due(utc("2026-01-01T00:00:00Z"), u32::MAX), None);
+    assert_eq!(
+        rotation_due(utc("2026-01-01T00:00:00Z"), 36_500),
+        Some(utc("2125-12-08T00:00:00Z"))
+    );
+    assert_eq!(
+        rotation_due(DateTime::<Utc>::MAX_UTC, 1),
+        None,
+        "the end of the range is not wrapped"
+    );
+
+    for days in ["4294967295", "4000000000", "99999999"] {
+        let (_directory, vault) = vault_with_stored_interval(days);
+        let key = vault.list().remove(0);
+        assert_eq!(key.rotation_days, Some(days.parse().unwrap()));
+        assert_eq!(key.rotation_due_at(), None, "{days}");
+        assert_eq!(key.rotation_remaining(utc("2026-06-01T00:00:00Z")), None);
+        let read = vault.get_by_id(&key.id).unwrap();
+        assert_eq!(read.title, "Stored interval");
+    }
+    // A stored interval inside the range still counts.
+    let (_directory, vault) = vault_with_stored_interval("36500");
+    assert_eq!(
+        vault.list().remove(0).rotation_due_at(),
+        Some(utc("2125-12-08T00:00:00Z"))
+    );
+}
+
+// ---------------------------------------------------------------- FR-18: whole seconds only
+
+/// FR-18: an instant with a fraction of a second is refused with a message that says why and
+/// shows the accepted form. A zero fraction and every whole-second form still parse.
+#[test]
+fn an_expiry_with_a_fraction_of_a_second_is_refused_and_a_zero_fraction_is_not() {
+    for input in [
+        "2026-11-10T12:00:00.5Z",
+        "2026-11-10T12:00:00.123Z",
+        "2026-11-10T12:00:00.000001Z",
+        "2026-11-10T12:00:00.999999999+02:00",
+    ] {
+        let message = parse_expiry(input)
+            .expect_err(&format!("{input} was accepted"))
+            .to_string();
+        assert!(
+            message.contains("fraction of a second"),
+            "{input}: {message}"
+        );
+    }
+    let message = parse_expiry("2026-11-10T12:00:00.5Z")
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("fraction of a second"), "{message}");
+    assert!(message.contains("2026-11-10T12:00:00Z"), "{message}");
+
+    for (input, instant) in [
+        ("2026-11-10T12:00:00.000Z", "2026-11-10T12:00:00Z"),
+        (
+            "2026-11-10T12:00:00.000000000+02:00",
+            "2026-11-10T10:00:00Z",
+        ),
+        ("2026-11-10T12:00:00Z", "2026-11-10T12:00:00Z"),
+        ("2026-11-10", "2026-11-10T23:59:59Z"),
+    ] {
+        assert_eq!(parse_expiry(input).unwrap(), utc(instant), "{input}");
+    }
+}
+
+// ------------------------------------------- core review 1, finding 6: extreme day counts
+
+/// Finding 6 (the FR-15 class): every day count that a caller passes gives a controlled
+/// result. A count beyond the calendar lists every key with an expiry, or none; a purge cutoff
+/// beyond the calendar purges nothing. No value panics, and nothing is written.
+#[test]
+fn extreme_day_counts_for_expiry_and_purge_never_panic_and_change_nothing() {
+    let (directory, mut vault, _) = vault_at("2026-01-01T00:00:00Z");
+    let mut dated = ApiKeyInput::new("Dated", "fake-secret");
+    dated.expires_at = Some(parse_expiry("2026-11-10").unwrap());
+    vault.add(dated).unwrap();
+    vault
+        .add(ApiKeyInput::new("Undated", "fake-other"))
+        .unwrap();
+    let recycled = vault
+        .add(ApiKeyInput::new("Recycled", "fake-recycled"))
+        .unwrap();
+    vault.remove(&recycled.id).unwrap();
+    let path = directory.path().join("vault.kdbx");
+    let before = std::fs::read(&path).unwrap();
+    for days in [i64::MAX, i64::from(u32::MAX), 106_751_991_167_301, 1 << 40] {
+        let titles: Vec<String> = vault.expiring(days).into_iter().map(|k| k.title).collect();
+        assert_eq!(titles, ["Dated"], "{days}");
+    }
+    for days in [i64::MIN, -i64::from(u32::MAX), -(1 << 40)] {
+        assert!(vault.expiring(days).is_empty(), "{days}");
+    }
+    for days in [u32::MAX, 100_000_000] {
+        assert!(
+            vault.purge_recycled_older_than(days).unwrap().is_empty(),
+            "{days}"
+        );
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), before, "nothing was written");
+    assert_eq!(vault.recycled().len(), 1);
+}
+
+// ---------------------------------------------- core review 1, finding 7: whole seconds only
+
+/// Finding 7 (class O, validate where input comes in): the rule lives in `ApiKeyInput`, so
+/// core `add` and `update` refuse a sub-second expiry from any caller, the desktop draft
+/// included. Nothing is stored, and the stored key keeps its expiry.
+#[test]
+fn core_add_and_update_refuse_a_sub_second_expiry_and_change_nothing() {
+    let (directory, mut vault, _) = vault_at("2026-01-01T00:00:00Z");
+    let fractional = [
+        utc("2030-01-02T00:00:45.900Z"),
+        utc("2030-01-02T00:00:45.000000001Z"),
+        utc("2030-01-02T00:00:45.999999999Z"),
+    ];
+    for expires in fractional {
+        let mut input = ApiKeyInput::new("Fractional", "fake-secret");
+        input.expires_at = Some(expires);
+        let message = vault.add(input).unwrap_err().to_string();
+        assert!(
+            message.contains("fraction of a second"),
+            "{expires}: {message}"
+        );
+    }
+    assert!(vault.list().is_empty(), "nothing was stored");
+
+    let mut whole = ApiKeyInput::new("Whole", "fake-secret");
+    whole.expires_at = Some(utc("2030-01-02T00:00:45Z"));
+    let key = vault.add(whole).unwrap();
+    let path = directory.path().join("vault.kdbx");
+    let before = std::fs::read(&path).unwrap();
+    for expires in fractional {
+        let mut edit = vault.edit_input(&key.id).unwrap();
+        edit.expires_at = Some(expires);
+        let message = vault.update(&key.id, edit).unwrap_err().to_string();
+        assert!(
+            message.contains("fraction of a second"),
+            "{expires}: {message}"
+        );
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), before, "nothing was written");
+    assert_eq!(
+        vault.get_by_id(&key.id).unwrap().expires_at,
+        Some(utc("2030-01-02T00:00:45Z"))
+    );
+}
+
+/// Finding 7, the text path: chrono keeps nine fraction digits and drops the rest, so the check
+/// reads the text that the person wrote. Any nonzero fraction digit refuses, at any position.
+#[test]
+fn an_expiry_fraction_beyond_nine_digits_is_refused_from_the_text() {
+    for input in [
+        "2030-01-02T00:00:45.0000000001Z",
+        "2030-01-02T00:00:45.000000000000000009Z",
+        "2030-01-02T00:00:45.0000000001+02:00",
+    ] {
+        let message = parse_expiry(input)
+            .expect_err(&format!("{input} was accepted"))
+            .to_string();
+        assert!(
+            message.contains("fraction of a second"),
+            "{input}: {message}"
+        );
+    }
+    assert_eq!(
+        parse_expiry("2030-01-02T00:00:45.000000000000Z").unwrap(),
+        utc("2030-01-02T00:00:45Z")
+    );
+}

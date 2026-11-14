@@ -1,12 +1,16 @@
 # AKM: a Windows API-key manager
 
-**Untrusted development build. Use fake keys only.** The initial adversarial
-review scored the implementation 40.5/100, rounded to 41. See the
-[baseline review](docs/reviews/2026-10-30-baseline.md). Fixing the reported bugs
+**Untrusted development build. Use fake keys only.** The latest full review
+scored the implementation 83.5/100 on 13 November 2026. See the
+[full review](docs/reviews/2026-11-13-full-review.md). The
+[baseline review](docs/reviews/2026-10-30-baseline.md) scored 40.5/100. Fixing the reported bugs
 does not itself establish a new score or certify security. The release gate is an
 independent re-review above 90, followed by real-use testing before wider
 distribution. Current status: [docs/STATE.md](docs/STATE.md). The owner's own use
 before that gate follows [docs/FIRST_USE.md](docs/FIRST_USE.md).
+
+**New here?** [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) shows how to install
+AKM and add your first key, with no command line.
 
 AKM is for a Windows developer who wants a local, account-free KeePass file plus
 API-key fields and process-environment injection. KeePassXC, 1Password CLI and
@@ -40,20 +44,40 @@ and native expiry. Other groups and unrelated custom fields are not AKM's data.
 
 ## Writes and cloud folders
 
-The vault defaults to `%APPDATA%\akm\vault.kdbx`. Use `--vault` or `AKM_VAULT` to
-choose a different file, including a fully downloaded OneDrive, Dropbox or
-Syncthing folder.
+The CLI's default vault is `%APPDATA%\akm\vault.kdbx`. `%APPDATA%` is the Roaming
+profile, and a domain roaming profile can sync it to a server. To keep the vault on this
+computer, choose another file: pass `--vault <file>` to each command, or set `AKM_VAULT`
+once, for example under `%LOCALAPPDATA%`:
+
+```powershell
+[Environment]::SetEnvironmentVariable('AKM_VAULT', "$env:LOCALAPPDATA\akm-vault\vault.kdbx", 'User')
+```
+
+Open a new terminal afterwards. The same options choose a fully downloaded OneDrive,
+Dropbox or Syncthing folder.
 
 - Readers open independent snapshots. The GUI and CLI can be open together.
-- A sidecar lock serializes cooperating AKM writers only during a write.
+- A sidecar lock serializes cooperating AKM writers only during a write. Its
+  file, `<vault file name>.lock`, is empty and stays beside the vault.
 - A mutation is committed in memory only after the encrypted write succeeds.
 - A candidate file is decrypted and compared with the intended database before
   replacing the original. This catches integration/writer failures; using the
   same library for that check is not independent cryptographic validation.
 - Fingerprints are checked before writing and again just before replacement.
   A stale snapshot must be reloaded, not silently merged.
-- The original is retained in encrypted backups. Five dated backups and a
-  `.bak` convenience copy are kept beside the vault.
+- Each save keeps the previous version beside the vault, as a dated encrypted
+  backup and as a `.bak` convenience copy. A list inside the vault names the
+  dated backups that AKM wrote. AKM keeps the newest five of them, and deletes an
+  older one only while the file still holds the bytes that the list records. It
+  never deletes a backup that the list does not name: one from an AKM version
+  before the list, one that a crash left during a save, or one from before the
+  vault was renamed. Those stay until you remove them. A copy of the vault
+  folder carries the list, so AKM rotates the listed backups in the copy too.
+- A vault file with two names (hard links) can be read, but AKM does not save
+  it. Copy the vault to a new file, open the copy, and save there.
+- A vault opened through a file symbolic link can be read, but AKM does not save
+  it. Open the vault by its real path. A folder reached through a junction or a
+  folder link works.
 
 **This is not a distributed lock or an atomic compare-and-swap with your sync
 provider.** KeePassXC and cloud clients do not honor AKM's lock. An external writer
@@ -79,7 +103,7 @@ and replacements, then confirm; the review does not display secret values.
 
 The native backend enforces idle locking after 10 minutes and Windows session
 lock/suspend handling. Status polling does not count as activity. **Lock now** is
-always available in the navigation bar while unlocked.
+in the navigation bar while the vault is unlocked.
 
 Revealed values and export previews hide after 30 seconds. Windows clipboard
 copies request exclusion from clipboard history, cloud clipboard and monitoring.
@@ -97,7 +121,9 @@ screen-capture path.
 
 Commands below assume a freshly built `akm.exe` is on PATH. Without `AKM_PASSWORD`,
 the CLI prompts for the master password. There is no password argument because
-command lines are observable by other processes.
+command lines are observable by other processes. For the same reason, a key's secret
+never comes from an argument: `add` and `rotate` read it from a hidden prompt, or from
+stdin with `--secret-stdin`.
 
 ```powershell
 akm init --name "Personal API keys"
@@ -106,6 +132,7 @@ akm list
 akm get "OpenAI dev"                # masked
 akm get "OpenAI dev" --reveal       # full value; private screen only
 akm get <entry-uuid> --field secret
+akm edit "OpenAI dev" --env staging --clear notes   # metadata only; the secret stays
 
 akm run --project my-app --env dev -- npm test
 akm export --project my-app --env dev --output .env.local
@@ -113,8 +140,11 @@ akm upgrade --yes                   # explicit older-vault format upgrade
 akm audit --verify
 ```
 
-A key is selected by its entry id or its exact title (any letter case). A partial word,
-or a word found in a note or URL, selects nothing: `get`, `rm`, `rotate`, `history`,
+A key is selected by its entry id or its exact title, in any letter case. One rule
+compares letters: each letter becomes the lowercase of its uppercase, so `Σ`, `σ` and
+`ς` match, but `ß` does not match `ss`, and an accent typed as a separate mark does not
+match the same accented letter typed as one character. A partial word,
+or a word found in a note or URL, selects nothing: `get`, `edit`, `rm`, `rotate`, `history`,
 `restore` and `purge` refuse it and list candidates by id, title, project and
 environment, never a secret, note or URL. Two keys with the same title are refused
 until you pass the id.
@@ -122,8 +152,9 @@ until you pass the id.
 `run` and `export` require **both** project and environment, or an explicit `--all`
 without filters. The GUI deliberately offers only scoped exports. No-match and
 duplicate-variable cases fail rather than silently launching with the wrong
-credentials. Reserved process-control names such as `PATH`, `NODE_OPTIONS` and
-`AKM_*` cannot be injected.
+credentials. Reserved names cannot be injected: process-control names such as `PATH`,
+`NODE_OPTIONS` and `AKM_*`, and settings-file names such as `KUBECONFIG` and
+`GOOGLE_APPLICATION_CREDENTIALS`.
 
 `run` removes every inherited `AKM_*` variable from the child, including
 `AKM_PASSWORD`, and releases the vault before launch. Normal parent environment
@@ -144,8 +175,10 @@ the current Windows account or an administrator from reading an export.
 
 File exports require Windows storage with persistent ACLs. The CLI verifies its
 private temporary file's permissions before writing and publishes without replacing
-an existing destination. Write/flush/sync/publication failures trigger owned-file
-cleanup. If the CLI cannot confirm that it removed its temporary file, it says "could not confirm cleanup", names the file and exits with a failure, so you can delete it yourself. This is not secure erasure or a crash/power-loss cleanup guarantee.
+an existing destination. It reads the file's location from the open handle before it
+writes and after it publishes: a destination folder that was moved or replaced after the
+check (for example by a junction) stops the export. Write/flush/sync/publication failures trigger owned-file
+cleanup. If the CLI cannot confirm that it removed its temporary file, it says "could not confirm cleanup", names the file by its current name, read from the open handle, and exits with a failure, so you can delete it yourself. If it cannot read that name, it gives the name it created, says that the file may have another name now, and does not tell you to delete a file by that name. This is not secure erasure or a crash/power-loss cleanup guarantee.
 Desktop exports prepare outside the lock-state gate and check authorization before
 publication. A lock cancels an export that has not been authorized for publication;
 an already-authorized OS operation may finish and must report its completed outcome.
@@ -153,8 +186,9 @@ an already-authorized OS operation may finish and must report its completed outc
 ## Activity journal and privacy
 
 The journal lives on this device, in a private folder (`%LOCALAPPDATA%\akm\journal\`).
-Nothing is written beside the vault, so a sync provider sees no journal. Only your
-Windows account can open the folder. AKM checks that on every use and refuses to use a
+AKM writes no journal beside the vault, so a sync provider sees only the vault and its
+backups. The folder's permissions give access to your Windows account only; an
+administrator can still change them. AKM checks that on every use and refuses to use a
 folder that other accounts, links or non-local disks could reach. It does not repair
 the folder and it does not fall back to another place.
 
@@ -164,23 +198,38 @@ names from the unlocked vault. `akm audit` runs without the password and shows i
 
 The journal belongs to the device, not to the vault. AKM links a vault to its journal
 with a device-local mapping. It never writes to the vault for that. A renamed vault
-keeps its journal. A copy, a different vault at the same path, and a second vault start
-their own journals, and AKM never merges them. When AKM cannot tell which vault it has
-(for example, a locked file it has not seen before), it shows the journal read-only and
-says so. An older `<vault>.audit.jsonl` file is reported and left untouched. AKM does
+keeps its journal. A vault file that changed outside AKM, and that this device has not
+seen, keeps the existing journal. AKM cannot confirm that it is the same vault, and it
+warns about this. So a copy that replaces the vault file can continue the journal of the
+original; AKM does not promise that copies have separate journals. A different vault at
+the same path, and a second vault, start their own journals. AKM never merges journals.
+When AKM cannot tell which vault it has (for example, a locked file it has not seen
+before), it shows the journal read-only and says so. An older `<vault>.audit.jsonl` file is reported and left untouched. AKM does
 not read, move, delete or import it.
 
 The hash chain detects some edits but cannot prove completeness. Truncating the
 end, deleting the log or rewriting the whole chain is not authenticated. Treat it
 as a convenience journal, not security evidence. A damaged journal is kept as it is,
 reported by kind (`truncatedTail`, `malformedJson`, `brokenLink`, `hashMismatch`) with
-no claim about the cause, and gets no new records. If a record cannot be saved
+no claim about the cause, and gets no new records. A damaged journal stops the reveals,
+copies, exports and launches of its vault. A damaged mapping file stops them for every
+vault on this device. Nothing recovers by itself. In the desktop app, Activity can start
+again after you approve in a native window that names the damaged file. AKM keeps a copy
+of that file beside it, byte for byte, under a dated name, and then puts a new file in its
+place. After a
+damaged journal, the new journal starts with a record of the gap. After a damaged mapping
+file, the earlier journals stay in the folder, unchanged and linked to no vault. The next
+record of each vault then starts a new journal with a record of the gap, and AKM warns
+that it cannot confirm the vault's lineage. The CLI has no recovery. If a record cannot be saved
 before a disclosure, an export or a launch, the action does not happen. If it cannot
 be saved after a committed change, AKM prints a warning that says the change is saved
 and that you must not repeat it.
 
 Tests and proof scripts set `AKM_JOURNAL_ROOT` to a temporary absolute folder, so they
-never touch the real journal.
+never touch the real journal. The one exception is the install test of the native-proof
+workflow (`tools/test_install.ps1`): it runs the installed app without `AKM_JOURNAL_ROOT` on
+a disposable runner, so it writes that runner's default journal. Its guard refuses any
+other computer.
 
 ## Build and verify on Windows
 
@@ -195,11 +244,13 @@ npm run tauri -- build -- --locked
 ```
 
 The CLI is `target\release\akm.exe`. The unsigned development installers go to
-`target\release\bundle\msi` and `target\release\bundle\nsis`. Do not distribute
+`target\release\bundle\nsis`. Do not distribute
 them as trusted software. A checksum identifies a build; it is not a publisher
-signature. The full test commands, the KeePassXC interchange test and the native
+signature. The plan for signed releases is in [docs/RELEASING.md](docs/RELEASING.md).
+The full test commands, the KeePassXC interchange test and the native
 GUI proof are in [docs/TESTING.md](docs/TESTING.md). Actual OS lock/suspend
-delivery is not verified yet.
+delivery is not verified yet. Each promise about security, privacy or data safety, with
+its evidence and its limit, is in [docs/CLAIMS.md](docs/CLAIMS.md).
 
 ## Limits
 
@@ -208,17 +259,25 @@ delivery is not verified yet.
   Closing a session is not a promise to erase every allocator or JavaScript copy.
 - Malware or a compromised Windows account is outside the protection offered by
   an unlocked password manager.
-- Reminders reach you inside AKM: a summary after unlock, and a status on every key
-  row. An optional Windows notification (Settings, off by default) says only how
-  many keys need attention. AKM runs nothing in the background, so it can show one
-  only while it is open and unlocked, and Windows decides whether to display it. A
-  key with a rotation interval and no known secret-change time shows "Rotation
-  unknown". Native notification delivery is not tested yet.
-- No updater, publisher signing or external professional security audit exists yet.
+- Reminders reach you inside AKM only: a summary after unlock, and a status on every
+  key row. A key with a rotation interval and no known secret-change time shows
+  "Rotation unknown".
+- No updater, publisher signing or external professional security audit exists yet
+  ([docs/RELEASING.md](docs/RELEASING.md)).
+- AKM's own code has no network client and no listener. `tools/check_no_network.py`
+  looks for the usual entry points; it cannot prove that no connection exists. This
+  no-network promise covers AKM when it runs. The setup program holds Microsoft's
+  WebView2 bootstrapper. When the WebView2 runtime is missing, the bootstrapper downloads
+  it from Microsoft while AKM installs. The WebView2 runtime is Microsoft software and
+  is outside the promise.
 - This source tree's `.gitignore` is not protection for secrets exported into a
   different repository.
 
 ## Development
+
+AKM is licensed under the MIT licence ([LICENSE](LICENSE)). The dependencies and their
+licences are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). To report a
+vulnerability, follow [SECURITY.md](SECURITY.md).
 
 Agents and contributors start with [AGENTS.md](AGENTS.md). The requirements and
 contracts are in [docs/PROJECT.md](docs/PROJECT.md), open findings in

@@ -10,7 +10,7 @@ import type { KeyView } from "./types";
 // and takes Enter, using the keyboard only. The inventory below is from
 //   grep -rn "role=\"dialog\"" desktop/src --include=*.tsx
 // KeyDetail, KeyForm (add and edit), RotateDialog, ConfirmDialog (move to the Recycle Bin,
-// delete for good, format upgrade) and the Settings import dialog.
+// delete for good, format upgrade) and the Use keys import dialog.
 
 const native = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
@@ -185,11 +185,37 @@ test("the Recycle Bin confirmation from Key Detail contains focus; Escape and En
   await user.keyboard("{Enter}");
   await tabTo(user, "Move to Recycle Bin");
   await user.keyboard("{Enter}");
-  await screen.findByText(/Moved “Keyboard proof” to the Recycle Bin/);
+  await screen.findByText(/Moved “Keyboard proof” \(ID [^)]+\) to the Recycle Bin/);
   expect(dialogs()).toHaveLength(0);
   expect(row.isConnected).toBe(false);
   expect(focused()).toBe(screen.getByRole("searchbox", { name: "Search keys" }));
 }, 30_000);
+
+// Cancel is the default of every destructive confirmation, so an Enter typed by habit deletes nothing.
+for (const [name, open, request] of [
+  ["Delete for good", async (user: User) => {
+    await act(async () => { render(<App />); });
+    await user.click(await screen.findByRole("button", { name: "Recycle Bin" }));
+    (await screen.findByRole("button", { name: "Delete Keyboard proof for good" })).focus();
+    await user.keyboard("{Enter}");
+  }, "key_purge"],
+  ["Move to Recycle Bin", async (user: User) => {
+    await start(user);
+    await tabTo(user, "Move to Recycle Bin");
+    await user.keyboard("{Enter}");
+  }, "key_remove"],
+] as const) {
+  test(`${name}: the first Enter in its confirmation cancels, and sends nothing`, async () => {
+    boot({ recycled_list: () => [{ key: key(), deletedAt: null }], key_purge: () => {}, key_remove: () => {} }, () => [key()]);
+    const user = userEvent.setup({ delay: null });
+    await open(user);
+    expect(dialog()).toBeTruthy();
+    expect(focused()).toBe(buttonNamed(dialog(), "Cancel"));
+    await user.keyboard("{Enter}");
+    expect(native.invoke.mock.calls.map(([command]) => command)).not.toContain(request);
+    expect(screen.queryByRole("heading", { name: /for good\?|to the Recycle Bin\?/ })).toBeNull();
+  }, 30_000);
+}
 
 test("Delete for good contains focus, Escape returns to its button, and success lands on the Recycle Bin heading", async () => {
   let bin = [{ key: key(), deletedAt: null as string | null }];
@@ -208,7 +234,7 @@ test("Delete for good contains focus, Escape returns to its button, and success 
   await user.keyboard("{Enter}");
   await tabTo(user, "Delete for good");
   await user.keyboard("{Enter}");
-  await screen.findByText(/Deleted “Keyboard proof” for good/);
+  await screen.findByText(/Deleted “Keyboard proof” \(ID [^)]+\) for good/);
   expect(dialogs()).toHaveLength(0);
   expect(focused()).toBe(screen.getByRole("heading", { level: 1 }));
 }, 30_000);
@@ -217,7 +243,7 @@ test("the import dialog contains focus, Escape returns to Import, and Enter subm
   boot({ env_import: () => ({ added: 1, updated: 0 }) }, () => []);
   const user = userEvent.setup({ delay: null });
   await act(async () => { render(<App />); });
-  await user.click(await screen.findByRole("button", { name: "Settings" }));
+  await user.click(await screen.findByRole("button", { name: "Use keys" }));
   const open = await screen.findByRole("button", { name: "Import .env…" });
   open.focus();
   await user.keyboard("{Enter}");

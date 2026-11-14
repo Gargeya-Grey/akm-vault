@@ -5,11 +5,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use akm_core::model::META_SECRET_CHANGED;
+use akm_core::model::{META_ID, META_ROTATION_DAYS, META_SCOPES, META_SECRET_CHANGED};
 use akm_core::schedule::Remaining;
 use akm_core::{ApiKeyInput, Clock, Error, KeyDisclosure, Secret, SecretChange, Vault};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
-use keepass::db::{fields, Database};
+use keepass::db::{fields, Database, Entry};
 use keepass::DatabaseKey;
 
 const PASSWORD: &str = "correct horse battery staple";
@@ -834,10 +834,13 @@ fn unrelated_history_attachments_groups_custom_data_and_kdf_survive_every_operat
 /// attachments and custom data, the metadata custom data and the cipher and KDF settings.
 fn foreign_parts(db: &Database) -> String {
     let mut out = format!("{:?}\n", db.config);
+    // `AKM_BACKUPS` is AKM's own ledger of its backups (FR-01), which every save updates.
+    // Every other item is foreign and must not change.
     let mut custom: Vec<_> = db
         .meta
         .custom_data
         .iter()
+        .filter(|(key, _)| key.as_str() != "AKM_BACKUPS")
         .map(|(key, item)| format!("{key}={item:?}"))
         .collect();
     custom.sort();
@@ -1138,4 +1141,162 @@ fn a_foreign_future_location_time_orders_a_rotation_and_a_removal_after_it() {
         f.vault.recycled()[0].deleted_at,
         Some(utc("2030-01-01T00:00:02Z"))
     );
+}
+
+// ------------------------- diff review of fix round 2: an update keeps what it does not change
+
+impl Fixture {
+    /// Another KeePass program rewrites the entry of `id` in the vault file, then the vault is
+    /// opened again with the same controlled clock.
+    fn with_foreign_edit(&mut self, id: &str, edit: impl FnOnce(&mut Entry)) {
+        let mut db = self.raw();
+        let entry_id = keepass::db::EntryId::from_uuid(id.parse().unwrap());
+        edit(&mut db.entry_mut(entry_id).unwrap());
+        write_database(&self.path, &db);
+        self.vault = Vault::open(&self.path, PASSWORD)
+            .unwrap()
+            .with_clock(Arc::new(self.clock.clone()));
+    }
+
+    fn entry(&self, id: &str) -> Entry {
+        let entry_id = keepass::db::EntryId::from_uuid(id.parse().unwrap());
+        (*self.raw().entry(entry_id).unwrap()).clone()
+    }
+}
+
+/// D2B-01, D2B-02: another KeePass program stored a title with outer spaces and a rotation
+/// interval above AKM's limit. An edit of the notes changes the notes and nothing else: the
+/// title keeps its spaces, and the interval is not judged, because the edit does not change it.
+#[test]
+fn an_update_writes_and_judges_only_the_fields_that_it_changes() {
+    const TITLE: &str = "  Foreign\u{200B} e\u{301}  ";
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_edit(&key.id, |entry| {
+        entry.set_unprotected(fields::TITLE, TITLE);
+        entry.set_unprotected(META_ROTATION_DAYS, "50000");
+        entry.fields.remove(fields::USERNAME);
+        entry.fields.remove(META_SCOPES);
+    });
+    let before = f.entry(&key.id);
+
+    f.clock.advance(Duration::days(1));
+    let mut edit = f.vault.edit_input(&key.id).unwrap();
+    edit.notes = Some("new note".into());
+    let saved = f.vault.update(&key.id, edit).unwrap();
+
+    assert_eq!(saved.title, TITLE);
+    assert_eq!(saved.rotation_days, Some(50_000));
+    let mut after = f.entry(&key.id);
+    assert_eq!(after.get(fields::NOTES), Some("new note"));
+    after.fields.remove(fields::NOTES);
+    assert_eq!(after.fields, before.fields, "an untouched field changed");
+    assert_eq!(after.tags, before.tags);
+    assert_eq!(after.times.expires, before.times.expires);
+
+    let mut edit = f.vault.edit_input(&key.id).unwrap();
+    edit.rotation_days = Some(50_001);
+    assert!(
+        matches!(f.vault.update(&key.id, edit), Err(Error::Invalid(_))),
+        "an interval that the edit changes is judged"
+    );
+}
+
+/// D2B-03: a key that another program wrote, with no field of AKM. An update that gives the
+/// values that the key already has saves nothing: the vault file keeps its bytes.
+#[test]
+fn an_update_with_the_stored_values_of_a_key_from_another_program_saves_nothing() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_edit(&key.id, |entry| {
+        entry
+            .fields
+            .retain(|name, _| name == fields::TITLE || name == fields::PASSWORD);
+        entry.times.expires = None;
+    });
+    let stored = f.vault.get_by_id(&key.id).unwrap();
+    let bytes = fs::read(&f.path).unwrap();
+
+    f.clock.advance(Duration::days(1));
+    let same = f.vault.edit_input(&key.id).unwrap();
+    let answer = f.vault.update(&key.id, same).unwrap();
+
+    assert_eq!(answer, stored);
+    assert!(
+        fs::read(&f.path).unwrap() == bytes,
+        "the vault file was written"
+    );
+}
+
+/// FX-02: a key of another program has no creation time. An edit of its notes changes the
+/// notes, and the key still has no creation time in the file.
+#[test]
+fn an_update_gives_no_creation_time_to_a_key_that_has_none() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_edit(&key.id, |entry| entry.times.creation = None);
+    assert_eq!(f.entry(&key.id).times.creation, None, "the fixture");
+
+    f.clock.advance(Duration::days(1));
+    let edit = with_notes(f.vault.edit_input(&key.id).unwrap(), "a note");
+    let answer = f.vault.update(&key.id, edit).unwrap();
+
+    assert_eq!(answer.notes.as_deref(), Some("a note"));
+    assert_eq!(answer.created_at, None);
+    assert_eq!(f.entry(&key.id).times.creation, None);
+}
+
+/// D4-01, and contract 13 for a whole entry: another program made a key that holds a title and
+/// nothing else. An edit of its notes leaves the entry as it was, except for the notes, the
+/// time of the change, AKM's ID field and the history. So the edit invents no secret, no
+/// secret-change time and no other fact.
+#[test]
+fn an_update_of_one_field_changes_that_field_its_stamp_and_the_history_and_nothing_else() {
+    let mut f = Fixture::new();
+    let key = f.vault.add(input("Alpha", "secret-one")).unwrap();
+    f.with_foreign_edit(&key.id, |entry| {
+        entry.fields.retain(|name, _| name == fields::TITLE);
+        entry.times.creation = None;
+        entry.times.expires = None;
+    });
+    let before = f.entry(&key.id);
+
+    f.clock.advance(Duration::days(1));
+    let edit = with_notes(f.vault.edit_input(&key.id).unwrap(), "a note");
+    f.vault.update(&key.id, edit).unwrap();
+
+    let after = f.entry(&key.id);
+    assert_ne!(
+        after.times.last_modification,
+        before.times.last_modification
+    );
+    let mut expected = before;
+    expected.set_unprotected(fields::NOTES, "a note");
+    expected.set_unprotected(META_ID, &key.id);
+    expected.times.last_modification = after.times.last_modification;
+    expected.history = after.history.clone();
+    assert!(
+        after == expected,
+        "the edit changed more:
+{after:#?}"
+    );
+}
+
+/// FX-03: `api-key` is a username like any other, and a key with no username has none.
+#[test]
+fn a_username_reads_back_exactly_and_a_key_without_one_has_none() {
+    let mut f = Fixture::new();
+    let mut named = input_named("Alpha", "secret-one", "ALPHA_KEY");
+    named.username = Some("api-key".into());
+    let named = f.vault.add(named).unwrap();
+    let plain = f
+        .vault
+        .add(input_named("Beta", "secret-two", "BETA_KEY"))
+        .unwrap();
+
+    let reopened = Vault::open(&f.path, PASSWORD).unwrap();
+    let username = |id: &str| reopened.get_by_id(id).unwrap().username;
+    assert_eq!(username(&named.id).as_deref(), Some("api-key"));
+    assert_eq!(username(&plain.id), None);
+    assert_eq!(f.entry(&plain.id).get(fields::USERNAME), Some(""));
 }

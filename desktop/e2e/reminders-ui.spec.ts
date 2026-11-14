@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { installNativeBoundaryMock } from "./native-boundary";
 
-// Unit 4: accessible key status, the unlock summary, focus in modals and the reminder setting,
-// in headless Edge with a mocked native boundary. They do not prove native notification delivery.
+// Unit 4: accessible key status, the unlock summary and focus in modals, in headless Edge with a
+// mocked native boundary.
 
 const DAY = 86_400_000;
 const at = (days: number) => new Date(Date.now() + days * DAY).toISOString();
@@ -15,8 +15,8 @@ const keys = () => [
   { title: "Fine key", expiresAt: at(400) },
 ];
 
-async function open(page: Page, theme: string, reminders?: { enabled: boolean; permission: "granted" | "denied" | "prompt"; delivery: "none" | "sent" | "failed"; blocked: boolean }) {
-  await installNativeBoundaryMock(page, theme, undefined, undefined, { keys: keys(), reminders });
+async function open(page: Page, theme: string) {
+  await installNativeBoundaryMock(page, theme, undefined, undefined, { keys: keys() });
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
@@ -37,7 +37,7 @@ for (const theme of ["light", "dark"]) {
     for (const [title, description] of expectations) {
       const row = page.getByRole("button", { name: `Open ${title}`, exact: true });
       await expect(row).toHaveAccessibleName(`Open ${title}`);
-      await expect(row).toHaveAccessibleDescription(description);
+      await expect(row).toHaveAccessibleDescription(new RegExp(`^Project demo, environment dev, variable OPENAI_API_KEY, issuer [^,]+, 1 scope, ID test-entry-uuid-\\d\\. ${description.replace(/[.]/g, "\\.")}$`));
     }
     expect(errors).toEqual([]);
   });
@@ -47,10 +47,10 @@ for (const theme of ["light", "dark"]) {
     const summary = page.getByRole("region", { name: "Keys needing attention" });
     await expect(summary.getByRole("heading")).toHaveText("4 keys need attention");
     await expect(summary.getByRole("listitem")).toHaveText([
-      "Expired (1): Old key",
-      "Rotation overdue (1): Late rotation",
-      "Due soon (1): Soon key",
-      "Rotation unknown (1): Unknown key",
+      "Expired (1): “Old key” (ID test-entry-uuid-0)",
+      "Rotation overdue (1): “Late rotation” (ID test-entry-uuid-1)",
+      "Due soon (1): “Soon key” (ID test-entry-uuid-2)",
+      "Rotation unknown (1): “Unknown key” (ID test-entry-uuid-3)",
     ]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await page.getByRole("button", { name: "Dismiss summary" }).focus();
@@ -92,29 +92,6 @@ for (const theme of ["light", "dark"]) {
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(row).toBeFocused();
-    expect(errors).toEqual([]);
-  });
-
-  test(`${theme}: the reminder setting is off, turns on by keyboard, and shows a denied permission as a state`, async ({ page }) => {
-    const errors = await open(page, theme);
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
-    const toggle = page.getByRole("checkbox", { name: "Show a Windows notification when keys need attention" });
-    await expect(toggle).not.toBeChecked();
-    await expect(toggle).toHaveAccessibleDescription(/only how many keys need attention/);
-    await expect(page.getByRole("status").filter({ hasText: "Off." })).toBeVisible();
-    await toggle.focus();
-    await page.keyboard.press("Space");
-    await expect(toggle).toBeChecked();
-    await expect(page.getByRole("status").filter({ hasText: "On. AKM sends one count-only notification" })).toBeVisible();
-    expect(await page.evaluate(() => window.__akmTest.calls.filter((call) => call.command === "reminders_set"))).toEqual([{ command: "reminders_set", args: { enabled: true } }]);
-    expect(errors).toEqual([]);
-  });
-
-  test(`${theme}: a denied notification permission is visible in Settings and nothing is sent`, async ({ page }) => {
-    const errors = await open(page, theme, { enabled: true, permission: "denied", delivery: "none", blocked: true });
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await expect(page.getByRole("status").filter({ hasText: "Windows has not allowed notifications for AKM" })).toBeVisible();
-    expect(await page.evaluate(() => window.__akmTest.calls.filter((call) => call.command === "reminders_notify"))).toEqual([]);
     expect(errors).toEqual([]);
   });
 }

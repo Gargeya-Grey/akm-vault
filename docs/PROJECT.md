@@ -39,8 +39,8 @@ Reuse established encrypted storage and cryptographic implementations. Do not in
 ## Contracts every change keeps
 
 1. Mutations work on a candidate snapshot. A pre-commit failure must not mutate the open snapshot or leak into a later save.
-2. Decrypt and compare the candidate before replacing the vault. Recheck the source fingerprint immediately before publication and retain five dated encrypted backups plus the convenience `.bak`.
-3. Readers hold independent snapshots. Cooperating writers take short write locks. Journal appends use their own short lock.
+2. Decrypt and compare the candidate before replacing the vault. Recheck the source fingerprint immediately before publication. Keep the five newest dated encrypted backups that the vault's own list names beside the vault, plus the convenience `.bak`. Delete only older listed backups whose file still holds the listed bytes. Never delete a file that the list does not name. A copy of a vault folder carries the list, so the rotation applies to the copy too.
+3. Readers hold independent snapshots. Cooperating writers take short write locks. A lock and a replacement each cover one name of a file, so a save refuses a vault file with more than one name (a hard link): once when it opens the file and again just before the replacement. A save also refuses a vault path whose last part is a symbolic link, at the same two points (FV-03). Journal appends use their own short lock.
 4. A committed operation overtaken by locking returns a secret-free `completedWhileLocked` receipt. Do not turn success into a retryable unsaved error. Reads suppress obsolete plaintext.
 5. Frontend epochs and request/transition identities reject stale results. A receipt from session A must not invalidate a newer session B.
 6. Native idle/session/suspend policy is authoritative. Polling is not activity. GUI state alone is not proof that native state is locked.
@@ -48,8 +48,9 @@ Reuse established encrypted storage and cryptographic implementations. Do not in
 8. Exports validate explicit scope, permitted local persistent-ACL storage and private handle permissions before plaintext writing. Keep file-handle ownership through publication and cleanup. CLI never overwrites an existing destination; desktop overwrite requires the native dialog's approval.
 9. Bulk export I/O stays outside the security gate. Prepublication authorization is the cancellation boundary. Already-authorized filesystem publication may finish after a lock and must report truthfully.
 10. Clipboard exclusions and Unicode/ANSI/OEM/locale formats are installed before sequence capture in one open interval. Cleanup must not adopt a later sequence or erase a newer identical user copy.
-11. Child processes never inherit `AKM_*`, including `AKM_PASSWORD`. Release the vault before starting a child. Windows command shims are resolved explicitly with conservative argument handling.
+11. Child processes never inherit `AKM_*`, including `AKM_PASSWORD`. CLI: release the vault before starting a child. Desktop (owner, 2026-11-09): the vault lock is released before the child starts, the child inherits no vault handle and no `AKM_*` variable, and the decrypted vault stays in AKM's memory while AKM is unlocked. Windows command shims are resolved explicitly with conservative argument handling.
 12. Post-commit journal failure is a warning, not an invitation to repeat a completed mutation. Logging failure before disclosure/export/launch currently fails closed and is covered by CLI regressions; do not silently replace it with the post-commit policy.
+13. An update judges and writes only the fields whose value differs from the stored key (`Vault::update`; the CLI and the desktop app both use it). Every other field of the entry keeps the bytes that the file has, also when another KeePass program stored a form that AKM does not write or would not take today. An update that changes a field adds one history version, the modification time and AKM's ID field. An update that changes no field writes nothing (planner, 13 Nov 2026, after three failed reviews of this class: D2B-01 to D2B-03).
 
 These contracts do not claim that every nearby seam is complete. Open defects are in [FINDINGS.md](FINDINGS.md).
 
@@ -59,7 +60,7 @@ These contracts do not claim that every nearby seam is complete. Open defects ar
 - Explicit upgrades replaced automatic format changes. Password policy for newly created vaults is a minimum of 12 Unicode characters, not a claim of password strength.
 - Conflict refusal and reload replaced lifetime reader locks. Automatic cross-device merging remains deliberately absent.
 - Scope confirmation, generation-owned receipts, handle-owned exports and Windows clipboard synthesis handling were added after reproduced adversarial failures. They are preservation requirements, not optional refactors.
-- Source fixes, runtime proof and a numerical score are separate gates. The only full numerical assessment is the 40.5/100 [baseline review](reviews/2026-10-30-baseline.md).
+- Source fixes, runtime proof and a numerical score are separate gates. The latest full numerical assessment is the 91.75/100 [third full review](reviews/2026-11-14-full-review-3.md) of 14 Nov 2026. The [second full review](reviews/2026-11-13-full-review-2.md) of 13 Nov 2026 gave 87.5/100, and the [first full review](reviews/2026-11-13-full-review.md) of that day gave 83.5/100. The [rescore of 9 Nov](reviews/2026-11-09-full-rescore.md) gave 66.25/100, and the [baseline review](reviews/2026-10-30-baseline.md) 40.5/100.
 
 ## Source map
 

@@ -1,9 +1,19 @@
 use akm_core::ImportPreview;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
-use crate::error::CommandError;
+use crate::{
+    error::CommandError,
+    review_window::{
+        check_shown_in_full, review_name, review_names, NativeReviewDialog, ReviewAnswer,
+        ReviewDialog,
+    },
+};
+
+/// What the review says about every name that it lists (FR-02, core review 2). No rule can
+/// tell from a name whether a program reads its value as a secret, a file or a setting, so the
+/// review sorts no name into a safer group. The person who clicks is the check.
+pub const NAME_CAUTION: &str = "A program that you start with these keys gets each name as a variable, and can read it as a setting. Import only the names that you expect.";
 
 /// One dialog lists every change. A bigger import is refused instead of cut short,
 /// so the user never approves names that the dialog did not show.
@@ -29,6 +39,14 @@ impl ImportReview {
                 ),
             ));
         }
+        check_shown_in_full(
+            [project.as_str(), environment.as_str()].into_iter().chain(
+                preview
+                    .changes
+                    .iter()
+                    .flat_map(|change| [change.name.as_str(), change.title.as_str()]),
+            ),
+        )?;
         Ok(Self {
             project,
             environment,
@@ -52,11 +70,25 @@ impl ImportReview {
         "Confirm import into the vault"
     }
 
+    /// Shows the review and waits for the click. No gate is held. The write that follows
+    /// checks the session and the revision again.
+    pub fn ask(&self, dialog: &dyn ReviewDialog) -> ReviewAnswer {
+        review_names(
+            dialog,
+            self.title(),
+            &self.message(),
+            &[],
+            "Import",
+            self.replaces_secrets(),
+        )
+    }
+
     /// Names, entry titles and counts only. A secret value never reaches this text.
     pub fn message(&self) -> String {
         let mut text = format!(
             "Import into project \"{}\", environment \"{}\"?\n",
-            self.project, self.environment
+            review_name(&self.project),
+            review_name(&self.environment)
         );
         let listed = |action: &str| {
             self.preview
@@ -69,14 +101,18 @@ impl ImportReview {
         if !added.is_empty() {
             text.push_str(&format!("\nAdd {}:\n", added.len()));
             for change in added {
-                text.push_str(&format!("  {}\n", change.name));
+                text.push_str(&format!("  {}\n", review_name(&change.name)));
             }
         }
         let replaced = listed("update");
         if !replaced.is_empty() {
             text.push_str(&format!("\nReplace the secret of {}:\n", replaced.len()));
             for change in replaced {
-                text.push_str(&format!("  {} (entry \"{}\")\n", change.name, change.title));
+                text.push_str(&format!(
+                    "  {} (entry \"{}\")\n",
+                    review_name(&change.name),
+                    review_name(&change.title)
+                ));
             }
         }
         if self.preview.unchanged > 0 {
@@ -84,6 +120,9 @@ impl ImportReview {
                 "\nKeep unchanged: {} (not listed).\n",
                 self.preview.unchanged
             ));
+        }
+        if self.changes_anything() {
+            text.push_str(&format!("\n{NAME_CAUTION}\n"));
         }
         text.push_str("\nSecret values are not shown.");
         text
@@ -93,11 +132,17 @@ impl ImportReview {
 /// The only authority to apply an import. It answers on the user's own click in a
 /// window that the webview cannot script.
 pub trait ImportConfirm: Send + Sync {
-    fn confirm(&self, review: &ImportReview) -> bool;
+    fn review_dialog(&self) -> Box<dyn ReviewDialog + '_>;
     /// Whether the main window is shown and not minimized right now. Native asks it only
     /// before the dialog opens, so that no dialog appears over a window nobody can see. It
     /// does not gate the answer: the user's click in the dialog stands.
     fn window_live(&self) -> bool;
+    /// Runs right after a recovery moved the damaged journal, inside its vault access.
+    /// Production does nothing here. A test locks there.
+    fn journal_moved(&self) {}
+    /// Runs right after the import replaced the vault file, inside its vault access.
+    /// Production does nothing here. A test fails there (U1-R1-04).
+    fn imported(&self) {}
 }
 
 pub struct ConfirmState(pub Arc<dyn ImportConfirm>);
@@ -105,25 +150,8 @@ pub struct ConfirmState(pub Arc<dyn ImportConfirm>);
 pub struct NativeConfirm<R: tauri::Runtime>(pub AppHandle<R>);
 
 impl<R: tauri::Runtime> ImportConfirm for NativeConfirm<R> {
-    fn confirm(&self, review: &ImportReview) -> bool {
-        let mut dialog = self
-            .0
-            .dialog()
-            .message(review.message())
-            .title(review.title())
-            .kind(if review.replaces_secrets() {
-                MessageDialogKind::Warning
-            } else {
-                MessageDialogKind::Info
-            })
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "Import".into(),
-                "Cancel".into(),
-            ));
-        if let Some(window) = self.0.get_webview_window("main") {
-            dialog = dialog.parent(&window);
-        }
-        dialog.blocking_show()
+    fn review_dialog(&self) -> Box<dyn ReviewDialog + '_> {
+        Box::new(NativeReviewDialog(self.0.clone()))
     }
 
     fn window_live(&self) -> bool {
@@ -174,10 +202,58 @@ mod tests {
              \n\
              Keep unchanged: 3 (not listed).\n\
              \n\
+             A program that you start with these keys gets each name as a variable, and can read it as a setting. Import only the names that you expect.\n\
+             \n\
              Secret values are not shown."
         );
         assert!(review.replaces_secrets());
         assert!(review.changes_anything());
+    }
+
+    #[test]
+    fn hostile_names_cannot_pass_for_a_line_of_the_import_review() {
+        let review = ImportReview::new(
+            "demo\"\nKeep unchanged: 0".into(),
+            "dev\u{202e}".into(),
+            ImportPreview {
+                added: 0,
+                updated: 1,
+                unchanged: 0,
+                changes: vec![change("OLD", "title\nAdd 9:", "update")],
+            },
+        )
+        .unwrap();
+        let message = review.message();
+        assert!(!message.contains("\nKeep unchanged"), "{message}");
+        assert!(!message.contains("\nAdd 9:"), "{message}");
+        assert!(!message.contains('\u{202e}'), "{message}");
+    }
+
+    #[test]
+    fn a_name_too_long_to_show_in_full_is_refused_before_the_import_review() {
+        let long = "x".repeat(400);
+        let preview = |name: &str, title: &str| ImportPreview {
+            added: 1,
+            updated: 0,
+            unchanged: 0,
+            changes: vec![change(name, title, "add")],
+        };
+        for (project, environment, name, title) in [
+            (long.as_str(), "dev", "OK", "OK"),
+            ("app", long.as_str(), "OK", "OK"),
+            ("app", "dev", long.as_str(), "OK"),
+            ("app", "dev", "OK", long.as_str()),
+        ] {
+            let error = ImportReview::new(
+                project.to_string(),
+                environment.to_string(),
+                preview(name, title),
+            )
+            .err()
+            .unwrap();
+            assert_eq!(error.kind, "tooLarge");
+            assert!(!error.message.contains(&long));
+        }
     }
 
     #[test]
@@ -199,9 +275,64 @@ mod tests {
              \n\
              Add 1:\n  ONLY\n\
              \n\
+             A program that you start with these keys gets each name as a variable, and can read it as a setting. Import only the names that you expect.\n\
+             \n\
              Secret values are not shown."
         );
         assert!(!review.replaces_secrets());
+    }
+
+    /// FR-02 and core review 2: the review lists every name in the same way, whatever its
+    /// shape, and says once what a name does. A name that looks like a credential gets no
+    /// other treatment than a file location or a plain setting.
+    #[test]
+    fn every_name_is_listed_the_same_way_and_the_review_says_what_a_name_does() {
+        let names = [
+            "OPENAI_API_KEY",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "AWS_SHARED_CREDENTIALS_FILE",
+            "DATABASE_URL",
+            "DEBUG",
+            "db_password",
+        ];
+        for action in ["add", "update"] {
+            let mut lines = Vec::new();
+            for name in names {
+                let review = ImportReview::new(
+                    "app".into(),
+                    "dev".into(),
+                    ImportPreview {
+                        added: usize::from(action == "add"),
+                        updated: usize::from(action == "update"),
+                        unchanged: 0,
+                        changes: vec![change(name, "Same title", action)],
+                    },
+                )
+                .unwrap();
+                let message = review.message();
+                assert_eq!(message.matches(NAME_CAUTION).count(), 1, "{message}");
+                assert_eq!(message.matches(name).count(), 1, "{message}");
+                // The same text for every name, with only the name changed.
+                lines.push(message.replace(name, "NAME"));
+            }
+            assert!(
+                lines.windows(2).all(|pair| pair[0] == pair[1]),
+                "{lines:#?}"
+            );
+        }
+        // A review that changes nothing lists no name, so it has no caution.
+        let nothing = ImportReview::new(
+            "app".into(),
+            "dev".into(),
+            ImportPreview {
+                added: 0,
+                updated: 0,
+                unchanged: 2,
+                changes: vec![change("SAME", "Same", "unchanged")],
+            },
+        )
+        .unwrap();
+        assert!(!nothing.message().contains(NAME_CAUTION));
     }
 
     #[test]

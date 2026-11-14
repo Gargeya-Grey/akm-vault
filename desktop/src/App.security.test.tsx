@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
-import { acknowledgeCompletions, COMPLETION_MESSAGE, reportCompletion, retainedCompletions } from "./sessionBoundary";
+import { acknowledgeCompletions, beginOutcome, COMPLETION_MESSAGE, reportCompletion, retainedCompletions, sessionGeneration, settleOutcome } from "./sessionBoundary";
 import { beginNativeOpen, endNativeOpen } from "./nativeSession";
 
 const native = vi.hoisted(() => ({
@@ -93,6 +93,35 @@ test("a completed-operation receipt stays visible without reopening views", asyn
   act(() => native.onLock?.({ payload: { sessionId: native.owner } }));
   expect(screen.getByText(COMPLETION_MESSAGE)).toBeTruthy();
 });
+
+test("the retained notice of a terminal from an older session names the terminal and leaves the newer session open", async () => {
+  render(<App />);
+  await screen.findByText("Unlocked secrets region");
+  act(() => settleOutcome(beginOutcome("terminal", sessionGeneration() - 1), "completedWhileLocked"));
+  expect(screen.getByText(/A terminal opened with keys\. It keeps them until you close it, even after AKM locks\./)).toBeTruthy();
+  expect(screen.getByText("Unlocked secrets region")).toBeTruthy();
+});
+
+// Each terminal outcome says only what is known: whether a terminal holds keys, may hold them, or none runs.
+for (const [outcome, says, never] of [
+  ["pending", /A terminal may already hold keys\./, /opened with keys/],
+  ["completed", /A terminal opened with keys\. It keeps them until you close it/, /may|No terminal/],
+  ["cancelled", /No terminal from that request runs\./, /opened with keys|may/],
+  ["reportedError", /This does not confirm that no terminal runs\./, /opened with keys|No terminal from/],
+  ["unconfirmed", /A terminal may hold keys\./, /opened with keys|No terminal from/],
+] as const) {
+  test(`a ${outcome} terminal receipt says only what is known`, async () => {
+    render(<App />);
+    await screen.findByText("Unlocked secrets region");
+    let id = 0;
+    act(() => { id = beginOutcome("terminal", sessionGeneration()); if (outcome !== "pending") settleOutcome(id, outcome); });
+    const text = screen.getByRole("region", { name: "Operation outcomes" }).textContent!;
+    expect(text).toMatch(says);
+    expect(text).not.toMatch(never);
+    expect(screen.getByText("Unlocked secrets region")).toBeTruthy();
+    act(() => settleOutcome(id, "cancelled")); // A pending receipt cannot be dismissed, so settle it for the next test.
+  });
+}
 
 test("a lock during the initial status request requires fresh metadata for a usable locked screen", async () => {
   let resolve!: (value: unknown) => void;

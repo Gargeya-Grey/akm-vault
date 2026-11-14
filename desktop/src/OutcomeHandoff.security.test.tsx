@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 type Operation = "import" | "export";
-type Reply = "success" | "error" | "cancel";
+type Reply = "success" | "error" | "cancel" | "transport";
 type Handoff = "normal" | "hide" | "navigate" | "return" | "between-roots" | "after-remount" | "lock-b";
 
 async function dispatch(operation: Operation) {
@@ -36,6 +36,8 @@ async function dispatch(operation: Operation) {
       return new Promise((resolve, reject) => {
         settle = (reply) => reply === "error"
           ? reject({ kind: "io", message: "Error for C:/fake/private-origin-a-export.env: FAKE_DETAIL_MARKER" })
+          // U2-R1-07: a rejection that no native command sent.
+          : reply === "transport" ? reject(new Error("Fake channel closed."))
           : resolve(reply === "cancel" ? null : operation === "import" ? { added: 1, updated: 0 } : "C:/fake/private-origin-a-export.env");
       });
     }
@@ -43,7 +45,7 @@ async function dispatch(operation: Operation) {
   });
   const root = render(<App />);
   await screen.findByText("Unlocked keys region");
-  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "Use keys" }));
   if (operation === "import") {
     fireEvent.click(screen.getByRole("button", { name: "Import .env…" }));
     for (const [label, value] of [["Paste the .env contents", "PRIVATE_TOKEN=fake-private-import-value"], ["Target project", "private-scope-a"], ["Target environment", "private-env-a"]]) {
@@ -67,7 +69,7 @@ function hideAndRestore() {
 }
 
 for (const operation of ["import", "export"] as const) {
-  for (const reply of ["success", "error"] as const) {
+  for (const reply of ["success", "error", "transport"] as const) {
     for (const handoff of ["normal", "hide", "navigate", "return", "between-roots", "after-remount", "lock-b"] as Handoff[]) {
       test(`${operation} ${reply}: retained once through ${handoff}`, async () => {
         const { root, settle } = await dispatch(operation);
@@ -83,12 +85,12 @@ for (const operation of ["import", "export"] as const) {
         } else if (handoff !== "normal" && handoff !== "hide") {
           fireEvent.click(screen.getByRole("button", { name: "Keys" }));
           await screen.findByText("Unlocked keys region");
-          if (handoff === "return") fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+          if (handoff === "return") fireEvent.click(screen.getByRole("button", { name: "Use keys" }));
         }
         await act(async () => settle(reply));
         if (handoff === "between-roots") { render(<App />); await screen.findByText("Unlocked keys region"); }
         const changed = ["between-roots", "after-remount", "lock-b"].includes(handoff);
-        const expected = reply === "success" ? (changed ? "completedWhileLocked" : "completed") : (changed ? "unconfirmed" : "reportedError");
+        const expected = reply === "success" ? (changed ? "completedWhileLocked" : "completed") : changed ? "unconfirmed" : reply === "transport" ? "lost" : "reportedError";
         const records = retainedCompletions();
         expect(records).toHaveLength(1);
         expect(records[0]).toMatchObject({ operation, outcome: expected });
@@ -102,6 +104,7 @@ for (const operation of ["import", "export"] as const) {
         }
         if (handoff === "normal") {
           if (reply === "error") expect(screen.getAllByText(/FAKE_DETAIL_MARKER/).length).toBeGreaterThan(0);
+          else if (reply === "transport") expect(region.textContent).toContain("sent no answer to this window. This does not confirm that nothing was saved.");
           else if (operation === "import") expect(screen.getByText("Imported: 1 added, 0 updated.")).toBeTruthy();
           else expect(screen.getByText(/Saved plaintext secrets to C:\/fake\/private-origin-a-export.env/)).toBeTruthy();
         }

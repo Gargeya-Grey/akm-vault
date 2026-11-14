@@ -218,6 +218,11 @@ FRONTEND_URL_ALLOWED = [
         "placeholder=",
         "placeholder text for the console URL field; a form hint, never fetched",
     ),
+    (
+        "styles.css",
+        "--grain: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'",
+        "the XML namespace name of the inline SVG grain; an identifier, never fetched, and the CSP has no remote image source",
+    ),
 ]
 
 FRONTEND_NETWORK_PATTERNS = [

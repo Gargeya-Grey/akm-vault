@@ -83,7 +83,7 @@ The old check held 9 names and 3 prefixes, compared them case-sensitively (`Path
 
 Add and edit also check the variable that a key will get when `env_var` is empty (derived from the title), so a title such as "Path" is refused with the advice to set another variable name.
 
-A vault entry that already breaks the rule (made by an older AKM, by import, or by KeePassXC) is not changed or hidden. `run` and `export` refuse it and name the key by title, never by value: `key "Old proxy" cannot be used: "HTTPS_PROXY" is reserved: ...`. The user renames the variable (edit), and the key works again (`renaming_a_legacy_key_makes_it_usable_again`).
+A vault entry that already breaks the rule (made by an older AKM, by import, or by KeePassXC) is not changed or hidden. `run` and `export` refuse it and name the key by title, never by value: `key "Old proxy" cannot be used: "HTTPS_PROXY" is reserved: ...`. The user renames the variable (edit), and the key works again (`a_key_stored_under_a_newly_reserved_name_is_refused_for_use_but_can_be_viewed_and_renamed`).
 
 Rejected: (a) a deny list per command only (it drifts); (b) refusing on the key's title (a title is free text); (c) an allow list of "safe" names (API key names are free: `ACME_TOKEN`).
 

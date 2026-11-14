@@ -4,7 +4,7 @@
   and exits 1 when any STOP line was printed.
 
 .EXAMPLE
-  ./.agents/skills/verify-akm/scripts/doctor.ps1 -Akm C:\build\release\akm.exe -Desktop C:\build\release\akm-desktop.exe
+  ./.agents/skills/verify-akm/scripts/doctor.ps1 -Akm target\release\akm.exe -Desktop target\release\akm-desktop.exe
 #>
 param([string]$Akm, [string]$Desktop, [switch]$NeedClipboard)
 $stop = $false
@@ -14,8 +14,12 @@ function Report([string]$level, [string]$text) {
 }
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..\..')).Path
-Report 'OK' "repository $repo at $(git -C $repo rev-parse --short HEAD) on $(git -C $repo branch --show-current)"
-$dirty = @(git -C $repo status --porcelain -- crates desktop tools)
+# Every Git call goes through the helper: no inherited GIT_ variable, no fetch, no transport, no hook and
+# no fsmonitor (class F). These are reads of this checkout. Status skips rename detection and submodules,
+# so it reads no blob for renames and starts no Git in another repository.
+Import-Module (Join-Path $repo 'tools\GitChild.psm1') -Force
+Report 'OK' "repository $repo at $(Invoke-CleanGit $repo @('rev-parse', '--short', 'HEAD')) on $(Invoke-CleanGit $repo @('branch', '--show-current'))"
+$dirty = @(Invoke-CleanGit $repo @('status', '--porcelain', '--no-renames', '--ignore-submodules=all', '--', 'crates', 'desktop', 'tools'))
 if ($dirty.Count) { Report 'WARN' "source differs from HEAD ($($dirty.Count) paths): a build of this tree is not a build of HEAD" }
 
 foreach ($pair in @(@('akm.exe', $Akm), @('akm-desktop.exe', $Desktop))) {

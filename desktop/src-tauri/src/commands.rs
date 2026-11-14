@@ -5,7 +5,9 @@ use std::{
     sync::Arc,
 };
 
-use akm_core::{audit::AuditLog, dotenv, ApiKey, EnvDisclosure, KeyDisclosure, Secret, Vault};
+use akm_core::{
+    audit::AuditLog, dotenv, ApiKey, EnvDisclosure, HistoryVersion, KeyDisclosure, Secret, Vault,
+};
 use chrono::{DateTime, Utc};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -13,12 +15,16 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     clipboard::CLEAR_AFTER,
+    disclosure::{self, Approval, BulkUse, DisclosureReview},
     error::CommandError,
     import_review::{ConfirmState, ImportConfirm, ImportReview},
+    launch::{self, TerminalState},
+    outcome::{self, Operation},
     private_export,
-    reminders::{ReminderState, ReminderStatus},
+    review_window::ReviewAnswer,
     session::{
-        Access, OperationWarningKind, Session, Snapshot, Stamped, VaultState, WarningReport,
+        Access, Admission, Binding, OperationWarningKind, Session, Snapshot, Stamped, VaultState,
+        WarningReport,
     },
     settings::{current_path, settings_file, PreferenceState, PreferenceStore},
     views::*,
@@ -46,19 +52,19 @@ macro_rules! production_handlers {
             key_update,
             key_remove,
             key_rotate,
+            key_history,
             recycled_list,
             key_restore,
             key_purge,
             audit_read,
+            audit_recover,
             env_export,
             env_copy,
             env_save,
+            env_launch_terminal,
             env_import,
             view_discard,
-            backup_info,
-            reminders_status,
-            reminders_set,
-            reminders_notify
+            backup_info
         ]
     };
 }
@@ -168,7 +174,7 @@ async fn open_vault(
     let ticket = session.claim_open(session_id)?;
     let completion = if create { Access::Write } else { Access::Read };
     let worker = session.clone();
-    let opened = tauri::async_runtime::spawn_blocking(move || {
+    let opened = blocking(move || {
         let load = || load_vault(&target, &password, name.as_deref(), create);
         if create {
             worker.open_created(ticket, load)?;
@@ -186,8 +192,7 @@ async fn open_vault(
                 }
             })
     })
-    .await
-    .map_err(CommandError::internal)??;
+    .await?;
     if opened.snapshot.ticket != ticket {
         return Err(completion.cancelled_after_completion());
     }
@@ -195,9 +200,7 @@ async fn open_vault(
     if preferences
         .save_vault_path(
             ticket,
-            &|effect| {
-                let _ = session.while_current(ticket, |held| effect(held));
-            },
+            &|effect| session.commit(Binding::Ticket(ticket), effect),
             &opened.value.path,
         )
         .is_err()
@@ -311,20 +314,18 @@ async fn run_session<T: Send + 'static>(
     operation: impl FnOnce(&mut Vault) -> Result<T, CommandError> + Send + 'static,
 ) -> Result<T, CommandError> {
     let worker = session.clone();
-    let completed = tauri::async_runtime::spawn_blocking(move || {
-        worker.access(access, Some(expected), operation)
-    })
-    .await
-    .map_err(CommandError::internal)??;
+    let completed = blocking(move || worker.access(access, Some(expected), operation)).await?;
     session.finish(access, completed)
 }
 
+/// Runs a native step on a blocking thread. It is the one place that starts one. A step that
+/// panicked gives a fixed text: the panic message can name a path or hold a value.
 async fn blocking<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T, CommandError> + Send + 'static,
 ) -> Result<T, CommandError> {
     tauri::async_runtime::spawn_blocking(operation)
         .await
-        .map_err(CommandError::internal)?
+        .map_err(|_| CommandError::failed_step())?
 }
 
 #[tauri::command]
@@ -340,19 +341,57 @@ pub async fn keys_list(
     .await
 }
 
+/// Shows one key's value to the page. `None` means that the user declined in the native window
+/// that a request over the budget needs (`session::FREE_SINGLE_DISCLOSURES`).
 #[tauri::command]
 pub async fn key_reveal(
     state: State<'_, VaultState>,
+    confirm: State<'_, ConfirmState>,
     session_id: String,
     id: String,
-) -> Result<String, CommandError> {
+) -> Result<Option<String>, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot_for(&session_id)?;
+    let confirm = confirm.0.clone();
     blocking(move || {
-        let secret = requested_key_at(&session, expected, &id, KeyDisclosure::Reveal)?;
-        session.reveal(secret)
+        single_disclosure(
+            &session,
+            confirm.as_ref(),
+            &session_id,
+            &id,
+            KeyDisclosure::Reveal,
+        )?
+        .map(|secret| session.reveal(secret))
+        .transpose()
     })
     .await
+}
+
+/// One key's secret, if the budget allows it or the user approves it. The budget counts the
+/// request before anything is read. Over it, a native window names the key and nothing else,
+/// no gate is held while it is open, and the read that follows is bound to the session, the
+/// revision and the presentation of the request, so a lock, a change or a hide during the
+/// window refuses it.
+fn single_disclosure(
+    session: &Session,
+    host: &dyn ImportConfirm,
+    session_id: &str,
+    id: &str,
+    action: KeyDisclosure,
+) -> Result<Option<Stamped<Zeroizing<String>>>, CommandError> {
+    let expected = session.snapshot_for(session_id)?;
+    if session.admit_single_disclosure(expected.ticket)? == Admission::NeedsApproval {
+        let title = session
+            .access_reviewed(Access::Read, expected, |vault| {
+                Ok(vault.get_by_id(id)?.title)
+            })?
+            .value;
+        let review = DisclosureReview::single(action, &title)?;
+        match disclosure::ask(session, host, expected.ticket, &review)? {
+            Approval::Declined => return Ok(None),
+            Approval::Approved => session.count_approved_disclosure(expected.ticket)?,
+        }
+    }
+    requested_key_at(session, expected, id, action).map(Some)
 }
 
 #[cfg(test)]
@@ -377,18 +416,30 @@ fn requested_key_at(
     })
 }
 
+/// Copies one key's value. `None` means that the user declined (see `key_reveal`). Nothing
+/// reaches the clipboard then.
 #[tauri::command]
 pub async fn key_copy(
     state: State<'_, VaultState>,
+    confirm: State<'_, ConfirmState>,
     session_id: String,
     id: String,
-) -> Result<u64, CommandError> {
+) -> Result<Option<u64>, CommandError> {
     let session = state.0.clone();
-    let expected = session.snapshot_for(&session_id)?;
+    let confirm = confirm.0.clone();
     blocking(move || {
-        let secret = requested_key_at(&session, expected, &id, KeyDisclosure::Copy)?;
+        let Some(secret) = single_disclosure(
+            &session,
+            confirm.as_ref(),
+            &session_id,
+            &id,
+            KeyDisclosure::Copy,
+        )?
+        else {
+            return Ok(None);
+        };
         session.copy_stamped(secret)?;
-        Ok(CLEAR_AFTER.as_secs())
+        Ok(Some(CLEAR_AFTER.as_secs()))
     })
     .await
 }
@@ -402,7 +453,7 @@ pub async fn key_add(
     let session = state.0.clone();
     let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Write, move |vault| {
-        let key = vault.add(draft.into_input(None)?)?;
+        let key = vault.add(draft.apply(akm_core::ApiKeyInput::default())?)?;
         Ok(KeyView::from(&key))
     })
     .await
@@ -414,15 +465,25 @@ pub async fn key_update(
     session_id: String,
     id: String,
     draft: KeyDraft,
-) -> Result<KeyView, CommandError> {
+) -> Result<Option<KeyView>, CommandError> {
     let session = state.0.clone();
     let expected = session.snapshot_for(&session_id)?;
     run_session(session, expected, Access::Write, move |vault| {
-        let existing = vault.edit_input(&id)?;
-        let key = vault.update(&id, draft.into_input(Some(existing))?)?;
-        Ok(KeyView::from(&key))
+        update_key(vault, &id, draft)
     })
     .await
+}
+
+/// FW-03: starts from the stored key and changes only the fields that the request names, as
+/// `akm edit` does. `None` when the key already had these values, so nothing was saved.
+fn update_key(
+    vault: &mut Vault,
+    id: &str,
+    draft: KeyDraft,
+) -> Result<Option<KeyView>, CommandError> {
+    let stored = vault.get_by_id(id)?;
+    let key = vault.update(id, draft.apply(vault.edit_input(id)?)?)?;
+    Ok((key != stored).then(|| KeyView::from(&key)))
 }
 
 #[tauri::command]
@@ -460,6 +521,81 @@ pub async fn key_rotate(
 fn rotate_key(vault: &mut Vault, id: &str, secret: String) -> Result<RotationView, CommandError> {
     let rotation = vault.rotate(id, Secret::from(secret))?;
     Ok(RotationView::from(&rotation))
+}
+
+/// One earlier version of a key. It holds a time and the names of the fields that changed,
+/// never a value.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryView {
+    index: usize,
+    modified_at: Option<DateTime<Utc>>,
+    changed: Vec<String>,
+    secret_changed: bool,
+}
+
+/// The fields that AKM and KDBX name themselves. A custom field in a foreign vault can have
+/// any name, even a secret pasted there, so the page gets only that some other field changed.
+const KNOWN_HISTORY_FIELDS: [&str; 15] = [
+    "Title",
+    "UserName",
+    "URL",
+    "Notes",
+    "Password",
+    "Tags",
+    "Expiry",
+    akm_core::model::META_ID,
+    akm_core::model::META_ISSUER,
+    akm_core::model::META_PROJECT,
+    akm_core::model::META_ENVIRONMENT,
+    akm_core::model::META_SCOPES,
+    akm_core::model::META_ENV_VAR,
+    akm_core::model::META_ROTATION_DAYS,
+    akm_core::model::META_SECRET_CHANGED,
+];
+const OTHER_HISTORY_FIELD: &str = "Other";
+
+fn shown_history_fields(changed: &[String]) -> Vec<String> {
+    let mut shown: Vec<String> = changed
+        .iter()
+        .filter(|name| KNOWN_HISTORY_FIELDS.contains(&name.as_str()))
+        .cloned()
+        .collect();
+    if shown.len() < changed.len() {
+        shown.push(OTHER_HISTORY_FIELD.to_string());
+    }
+    shown
+}
+
+impl From<&HistoryVersion> for HistoryView {
+    fn from(version: &HistoryVersion) -> Self {
+        Self {
+            index: version.index,
+            modified_at: version.modified_at,
+            changed: shown_history_fields(&version.changed),
+            secret_changed: version.secret_changed,
+        }
+    }
+}
+
+fn history_views(vault: &Vault, id: &str) -> Result<Vec<HistoryView>, CommandError> {
+    Ok(vault.history(id)?.iter().map(HistoryView::from).collect())
+}
+
+/// The earlier versions of one key, newest first. A read: the page may show it, and it has
+/// no secret in it.
+#[tauri::command]
+pub async fn key_history(
+    state: State<'_, VaultState>,
+    session_id: String,
+    id: String,
+) -> Result<Vec<HistoryView>, CommandError> {
+    let session = state.0.clone();
+    let expected = session.snapshot_for(&session_id)?;
+    run_session(session, expected, Access::Read, move |vault| {
+        history_views(vault, &id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -510,6 +646,89 @@ fn purge_recycled(vault: &mut Vault, id: &str) -> Result<(), CommandError> {
     let recycled = vault.find_recycled(id)?;
     vault.purge(&recycled.key.id)?;
     Ok(())
+}
+
+/// What a recovery kept, for the page. The folder is the one that the page already shows as the
+/// journal path, so only the file name goes with it.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalRecoveryView {
+    kept_name: String,
+    sha256: String,
+    bytes: u64,
+}
+
+/// Starts a new journal after the old one was found damaged (finding FR-14). `None` means that
+/// the user declined in the native window. The page only asks: it cannot approve for the user.
+#[tauri::command]
+pub async fn audit_recover(
+    state: State<'_, VaultState>,
+    confirm: State<'_, ConfirmState>,
+    session_id: String,
+) -> Result<Option<JournalRecoveryView>, CommandError> {
+    let session = state.0.clone();
+    let confirm = confirm.0.clone();
+    blocking(move || run_recovery(&session, confirm.as_ref(), &session_id)).await
+}
+
+/// The recovery, in the order that keeps the damaged file in place after every failure:
+/// nothing damaged is refused before any window; the user approves in a native window that
+/// names the damaged file and holds no gate; the recovery runs bound to the session, the
+/// revision and the presentation of the request, so a lock, a change or a hide during the
+/// window refuses it with nothing moved. The damaged file is the journal of this vault, or the
+/// mapping of the device, which no snapshot can read (FV-01). The recovery moves only the file
+/// that the window named (`AuditLog::recover_damaged_file`). The core call keeps a copy of the
+/// old bytes under a dated name first, and then replaces the damaged file in one move (FW-02).
+fn run_recovery(
+    session: &Session,
+    host: &dyn ImportConfirm,
+    session_id: &str,
+) -> Result<Option<JournalRecoveryView>, CommandError> {
+    let expected = session.snapshot_for(session_id)?;
+    let damaged = session
+        .access_reviewed(Access::Read, expected, |vault| {
+            vault.audit_log().damaged_file()?.ok_or_else(|| {
+                CommandError::new(
+                    "journal",
+                    "The journal is not damaged, so nothing was changed.",
+                )
+            })
+        })?
+        .value;
+    let file = damaged
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let review = DisclosureReview::recovery(&file)?;
+    if disclosure::ask(session, host, expected.ticket, &review)? == Approval::Declined {
+        return Ok(None);
+    }
+    // The recovery moves the journal outside the session gate (limit 4 of
+    // `docs/design/commit-point.md`). Once it moved, the answer must not say that nothing moved:
+    // an access that then refuses means that the session ended during the move.
+    let mut recovered = None;
+    let finished = session.access_reviewed(Access::Read, expected, |vault| {
+        recovered = Some(vault.audit_log().recover_damaged_file(&damaged)?);
+        host.journal_moved();
+        Ok(())
+    });
+    let Some(recovery) = recovered else {
+        return Err(finished
+            .err()
+            .unwrap_or_else(|| CommandError::internal("The recovery gave no result.")));
+    };
+    if finished.is_err() {
+        return Err(CommandError::completed_while_locked());
+    }
+    Ok(Some(JournalRecoveryView {
+        kept_name: recovery
+            .kept
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        sha256: recovery.sha256,
+        bytes: recovery.bytes,
+    }))
 }
 
 #[tauri::command]
@@ -572,8 +791,8 @@ impl ExportScope {
         environment: Option<String>,
         all: bool,
     ) -> Result<Self, CommandError> {
-        let project = clean(project);
-        let environment = clean(environment);
+        let project = chosen(project);
+        let environment = chosen(environment);
         if (all && (project.is_some() || environment.is_some()))
             || (!all && (project.is_none() || environment.is_none()))
         {
@@ -616,13 +835,7 @@ fn export_body(
     }
     let proof = vault.disclose_env(kind, &plan, Some(&detail(plan.len())))?;
     let vars = SecretEntries(vault.env_vars(&plan, &proof)?);
-    let mut body = Zeroizing::new(String::new());
-    for (name, value) in &vars.0 {
-        let line = Zeroizing::new(dotenv::line(name, value));
-        body.push_str(&line);
-        body.push('\n');
-    }
-    Ok((body, vars.0.len()))
+    Ok((dotenv::document(&vars.0), vars.0.len()))
 }
 
 #[cfg(test)]
@@ -652,47 +865,108 @@ fn extract_export_at(
     })
 }
 
+/// The values of a scope, for the preview. Every request needs the user's click in a native
+/// window that lists the scope and the names: a page can read its session ID, so the ID is no
+/// gesture (FR-03). `None` means that the user declined, and no value left the vault.
 #[tauri::command]
 pub async fn env_export(
     state: State<'_, VaultState>,
+    confirm: State<'_, ConfirmState>,
     session_id: String,
     project: Option<String>,
     environment: Option<String>,
     all: bool,
-) -> Result<String, CommandError> {
+) -> Result<Option<String>, CommandError> {
     let scope = ExportScope::new(project, environment, all)?;
     let session = state.0.clone();
-    let expected = session.snapshot_for(&session_id)?;
+    let confirm = confirm.0.clone();
     blocking(move || {
-        let exported = extract_export_at(&session, expected, &scope, ".env preview")?;
-        session.reveal(exported)
+        bulk_disclosure(
+            &session,
+            confirm.as_ref(),
+            &session_id,
+            &scope,
+            BulkUse::Preview,
+            |expected| {
+                let exported = extract_export_at(&session, expected, &scope, ".env preview")?;
+                session.reveal(exported)
+            },
+        )
     })
     .await
 }
 
+/// The values of a scope, for the clipboard. Approved like `env_export`. `None` means that the
+/// user declined, and nothing reached the clipboard.
 #[tauri::command]
 pub async fn env_copy(
     state: State<'_, VaultState>,
+    confirm: State<'_, ConfirmState>,
     session_id: String,
     project: Option<String>,
     environment: Option<String>,
     all: bool,
-) -> Result<u64, CommandError> {
+) -> Result<Option<u64>, CommandError> {
     let scope = ExportScope::new(project, environment, all)?;
     let session = state.0.clone();
-    let expected = session.snapshot_for(&session_id)?;
+    let confirm = confirm.0.clone();
     blocking(move || {
-        let exported = extract_export_at(&session, expected, &scope, "clipboard")?;
-        if exported.value.is_empty() {
-            return Err(CommandError::new(
-                "invalid",
-                "No keys match that export scope.",
-            ));
-        }
-        session.copy_stamped(exported)?;
-        Ok(CLEAR_AFTER.as_secs())
+        bulk_disclosure(
+            &session,
+            confirm.as_ref(),
+            &session_id,
+            &scope,
+            BulkUse::Clipboard,
+            |expected| {
+                let exported = extract_export_at(&session, expected, &scope, "clipboard")?;
+                if exported.value.is_empty() {
+                    return Err(CommandError::new(
+                        "invalid",
+                        "No keys match that export scope.",
+                    ));
+                }
+                session.copy_stamped(exported)?;
+                Ok(CLEAR_AFTER.as_secs())
+            },
+        )
     })
     .await
+}
+
+/// A bulk disclosure after the user approved it. The names come from a plan that holds no value.
+/// An empty scope shows no window, because no value can leave. `disclose` reads the vault bound
+/// to the session, the revision and the presentation of the request, so the plan that the user
+/// approved is the plan that is read: a change in between refuses it.
+fn bulk_disclosure<T>(
+    session: &Session,
+    host: &dyn ImportConfirm,
+    session_id: &str,
+    scope: &ExportScope,
+    purpose: BulkUse,
+    disclose: impl FnOnce(Snapshot) -> Result<T, CommandError>,
+) -> Result<Option<T>, CommandError> {
+    let expected = session.snapshot_for(session_id)?;
+    let names = session
+        .access_reviewed(Access::Read, expected, |vault| {
+            let plan = vault.plan_env(
+                scope.project.as_deref(),
+                scope.environment.as_deref(),
+                scope.all,
+            )?;
+            Ok(plan.names().map(str::to_owned).collect::<Vec<_>>())
+        })?
+        .value;
+    if !names.is_empty() {
+        let review = DisclosureReview::bulk(
+            purpose,
+            scope.project.as_deref().zip(scope.environment.as_deref()),
+            names,
+        )?;
+        if disclosure::ask(session, host, expected.ticket, &review)? == Approval::Declined {
+            return Ok(None);
+        }
+    }
+    disclose(expected).map(Some)
 }
 
 #[tauri::command]
@@ -707,7 +981,7 @@ pub async fn env_save<R: tauri::Runtime>(
     let scope = ExportScope::new(project, environment, all)?;
     let session = state.0.clone();
     let expected = session.snapshot_for(&session_id)?;
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         // FileSaveDialog keeps its default overwrite-approval prompt. No session mutex spans the dialog.
         let selected = app
             .dialog()
@@ -723,6 +997,7 @@ pub async fn env_save<R: tauri::Runtime>(
         let target = selected
             .into_path()
             .map_err(|error| CommandError::new("invalidPath", error.to_string()))?;
+        let chosen = private_export::choose(&target)?;
         let FileExport {
             body,
             count,
@@ -734,14 +1009,16 @@ pub async fn env_save<R: tauri::Runtime>(
             .path()
             .app_config_dir()
             .map_err(CommandError::internal)?;
+        let remnants = private_export::Remnants::default();
         let saved = session.publish(
             expected,
             || {
                 private_export::prepare_private(
-                    &target,
+                    chosen,
                     &body,
                     &[vault_path, settings],
                     &[config_dir],
+                    &remnants,
                 )
             },
             |prepared| {
@@ -753,11 +1030,11 @@ pub async fn env_save<R: tauri::Runtime>(
                     )
                 })
             },
-        )?;
+        );
+        let saved = report_remnants(&session, &remnants, saved)?;
         Ok(Some(saved.display().to_string()))
     })
     .await
-    .map_err(CommandError::internal)?
 }
 
 struct FileExport {
@@ -791,6 +1068,25 @@ fn requested_file_export_at(
         .map(|exported| exported.value)
 }
 
+/// A temporary file whose deletion could not be confirmed may still hold the plaintext keys, so
+/// the user must hear of it however the export ended. The text goes to the error of a failed
+/// export, and to the application warnings too: a lock can overtake the reply, and a warning
+/// outlives the session.
+fn report_remnants<T>(
+    session: &Session,
+    remnants: &private_export::Remnants,
+    result: Result<T, CommandError>,
+) -> Result<T, CommandError> {
+    let Some(warning) = remnants.warning() else {
+        return result;
+    };
+    session.warn(warning.clone());
+    result.map_err(|error| CommandError {
+        message: format!("{} {warning}", error.message),
+        ..error
+    })
+}
+
 fn publish_and_record(
     session: &Session,
     expected: Snapshot,
@@ -802,6 +1098,36 @@ fn publish_and_record(
         session.warn_for(expected.ticket, OperationWarningKind::ExportJournal);
     }
     Ok(saved)
+}
+
+/// Opens a terminal that holds one project's keys. The page names the session, the scope and
+/// an operation ID that it made. It cannot name a program, a folder or an argument: native
+/// code shows the folder picker and the review, and starts the system command prompt. `None`
+/// means that the user cancelled in one of those windows. The number is how many keys the
+/// terminal holds. The outcome record under the operation ID tells a page that lost this
+/// reply what happened (`outcome.rs`).
+#[tauri::command]
+pub async fn env_launch_terminal(
+    state: State<'_, VaultState>,
+    terminal: State<'_, TerminalState>,
+    session_id: String,
+    operation_id: String,
+    project: Option<String>,
+    environment: Option<String>,
+) -> Result<Option<usize>, CommandError> {
+    let session = state.0.clone();
+    let host = terminal.0.clone();
+    blocking(move || {
+        launch::run_launch(
+            &session,
+            host.as_ref(),
+            &session_id,
+            &operation_id,
+            project,
+            environment,
+        )
+    })
+    .await
 }
 
 fn ensure_window_shown(confirm: &dyn ImportConfirm) -> Result<(), CommandError> {
@@ -861,69 +1187,70 @@ fn run_import(
     project: Option<String>,
     environment: Option<String>,
 ) -> Result<Option<ImportReport>, CommandError> {
-    let operation = uuid::Uuid::parse_str(operation_id)
-        .map_err(|_| CommandError::new("invalid", "The import request is malformed."))?
-        .to_string();
-    let expected = session.snapshot_for(session_id)?;
-    let (project, environment) = (clean(project), clean(environment));
-    let entries = SecretEntries(dotenv::parse(&text)?);
-    let reviewed = session.access_reviewed(Access::Read, expected, |vault| {
-        vault
-            .preview_import_env(&entries.0, project.as_deref(), environment.as_deref())
-            .map_err(Into::into)
-    })?;
-    let review = ImportReview::new(
-        project.clone().unwrap_or_default(),
-        environment.clone().unwrap_or_default(),
-        reviewed.value,
-    )?;
-    let ticket = reviewed.snapshot.ticket;
-    if review.changes_anything() {
-        // No dialog for a window nobody sees, or for a vault that is no longer what was read.
-        // A modal dialog cannot be shown under the session gate, so the write below checks
-        // the session and the revision again, under the gate.
-        ensure_window_shown(confirm)?;
-        if !session.snapshot()?.same_vault(&reviewed.snapshot) {
-            return Err(CommandError::new(
-                "stalePreview",
-                "The vault changed before the confirmation could be shown. Start it again.",
-            ));
-        }
-        if !confirm.confirm(&review) {
-            session.record_import(ticket, &operation, OperationWarningKind::ImportDeclined);
-            return Ok(None);
-        }
-    }
-    // The write is bound to the session and the revision of the request: a lock, another
-    // session or another write since then makes it stale. The presentation is not part of the
-    // binding. The plan must also still equal what the user was shown.
-    let applied = session
-        .access_reviewed(Access::Write, reviewed.snapshot, |vault| {
-            let current =
-                vault.preview_import_env(&entries.0, project.as_deref(), environment.as_deref())?;
-            if &current != review.preview() {
-                return Err(CommandError::new(
-                    "stalePreview",
-                    "The vault changed while the import waited for confirmation. Start it again.",
-                ));
+    // Every way out after the session check leaves one outcome record (contract 7). The page can
+    // lose this reply, and the record is then the only truth about the request.
+    outcome::dispatched(
+        session,
+        Operation::Import,
+        operation_id,
+        session_id,
+        |_, expected| {
+            let (project, environment) = (clean(project), clean(environment));
+            let entries = SecretEntries(dotenv::parse(&text)?);
+            let reviewed = session.access_reviewed(Access::Read, expected, |vault| {
+                vault
+                    .preview_import_env(&entries.0, project.as_deref(), environment.as_deref())
+                    .map_err(Into::into)
+            })?;
+            let review = ImportReview::new(
+                project.clone().unwrap_or_default(),
+                environment.clone().unwrap_or_default(),
+                reviewed.value,
+            )?;
+            if review.changes_anything() {
+                // No dialog for a window nobody sees, or for a vault that is no longer what was
+                // read. A modal dialog cannot be shown under the session gate, so the write below
+                // checks the session and the revision again, under the gate.
+                ensure_window_shown(confirm)?;
+                if !session.snapshot()?.same_vault(&reviewed.snapshot) {
+                    return Err(CommandError::new(
+                        "stalePreview",
+                        "The vault changed before the confirmation could be shown. Start it again.",
+                    ));
+                }
+                let dialog = confirm.review_dialog();
+                session.ensure(reviewed.snapshot.ticket)?;
+                match review.ask(dialog.as_ref()) {
+                    ReviewAnswer::Approved => {}
+                    ReviewAnswer::Declined => return Ok(None),
+                    ReviewAnswer::Failed(failure) => return Err(failure.into()),
+                }
             }
-            let (added, updated) =
-                vault.import_env(&entries.0, project.as_deref(), environment.as_deref())?;
-            Ok(ImportReport { added, updated })
-        })
-        .and_then(|stamped| session.finish(Access::Write, stamped));
-    session.record_import(
-        ticket,
-        &operation,
-        match &applied {
-            Ok(_) => OperationWarningKind::ImportApplied,
-            Err(error) if error.kind == "completedWhileLocked" => {
-                OperationWarningKind::ImportSessionEnded
-            }
-            Err(_) => OperationWarningKind::ImportFailed,
+            // The write is bound to the session and the revision of the request: a lock, another
+            // session or another write since then makes it stale. The presentation is not part of
+            // the binding. The plan must also still equal what the user was shown.
+            session
+                .access_reviewed(Access::Write, reviewed.snapshot, |vault| {
+                    let current = vault.preview_import_env(
+                        &entries.0,
+                        project.as_deref(),
+                        environment.as_deref(),
+                    )?;
+                    if &current != review.preview() {
+                        return Err(CommandError::new(
+                            "stalePreview",
+                            "The vault changed while the import waited for confirmation. Start it again.",
+                        ));
+                    }
+                    let (added, updated) =
+                        vault.import_env(&entries.0, project.as_deref(), environment.as_deref())?;
+                    confirm.imported();
+                    Ok(ImportReport { added, updated })
+                })
+                .and_then(|stamped| session.finish(Access::Write, stamped))
+                .map(Some)
         },
-    );
-    applied.map(Some)
+    )
 }
 
 /// The page tells native that it discarded its protected views (the document was hidden), and
@@ -949,31 +1276,6 @@ fn discard_view(
     emit: impl FnOnce(&crate::session::NativeViewNotice) -> Result<(), ()>,
 ) -> Result<(), CommandError> {
     crate::visibility::expire_and_notify_for(session, session_id, emit).map(|_| ())
-}
-
-#[tauri::command]
-pub fn reminders_status(state: State<'_, ReminderState>) -> Result<ReminderStatus, CommandError> {
-    state.0.status()
-}
-
-#[tauri::command]
-pub fn reminders_set(
-    state: State<'_, ReminderState>,
-    enabled: bool,
-) -> Result<ReminderStatus, CommandError> {
-    state.0.set_enabled(enabled)
-}
-
-/// The page sends a count and the session it counted in, and nothing else. The text of the
-/// notification is built natively, and only while that session is still the current one.
-#[tauri::command]
-pub fn reminders_notify(
-    vault: State<'_, VaultState>,
-    state: State<'_, ReminderState>,
-    session_id: String,
-    count: u32,
-) -> Result<ReminderStatus, CommandError> {
-    state.0.notify(&vault.0, &session_id, count)
 }
 
 #[tauri::command]
@@ -1018,8 +1320,6 @@ mod tests {
             "vault_dismiss_warnings",
             "application-wide, takes record ids",
         ),
-        ("reminders_status", "application-wide preference"),
-        ("reminders_set", "application-wide preference"),
     ];
 
     /// Commands that take `session_id` and that the page sets by hand, not through the
@@ -1030,7 +1330,6 @@ mod tests {
         "vault_lock",
         "env_import",
         "view_discard",
-        "reminders_notify",
     ];
 
     /// How many times the identifier `session_id` appears in the text, as a whole word.
@@ -1086,9 +1385,9 @@ mod tests {
             );
         }
 
-        // The page side: api.ts adds the session to exactly the commands that Rust expects it
-        // for, apart from the ones the page sets by hand.
-        let page = include_str!("../../src/api.ts");
+        // The page side: native.ts adds the session to exactly the commands that Rust expects
+        // it for, apart from the ones the page sets by hand.
+        let page = include_str!("../../src/native.ts");
         let list = &page[page.find("const sessionScoped = new Set([").unwrap()..];
         let list = &list[..list.find("]);").unwrap()];
         let mut scoped: Vec<&str> = list.split('"').skip(1).step_by(2).collect();
@@ -1103,11 +1402,16 @@ mod tests {
         expected.sort_unstable();
         assert_eq!(
             scoped, expected,
-            "api.ts sessionScoped matches the commands"
+            "native.ts sessionScoped matches the commands"
         );
     }
 
-    fn test_session() -> (Session, tempfile::TempDir) {
+    fn test_session() -> (Arc<Session>, tempfile::TempDir) {
+        test_session_with(false)
+    }
+
+    /// `own_root`: the vault journals in `test_support::own_root` of the folder.
+    fn test_session_with(own_root: bool) -> (Arc<Session>, tempfile::TempDir) {
         use crate::{
             clipboard::tests::{FakeClipboard, FakeData},
             policy::Signal,
@@ -1124,15 +1428,94 @@ mod tests {
         let ticket = session.begin_open().unwrap();
         session
             .open(ticket, || {
-                Vault::create(
-                    directory.path().join("vault.kdbx"),
-                    "fake-test-password-123!",
-                    None,
-                )
-                .map_err(Into::into)
+                let path = directory.path().join("vault.kdbx");
+                let password = "fake-test-password-123!";
+                if own_root {
+                    let root = crate::test_support::own_root(directory.path());
+                    Vault::create_in(path, password, None, root).map_err(Into::into)
+                } else {
+                    Vault::create(path, password, None).map_err(Into::into)
+                }
             })
             .unwrap();
         (session, directory)
+    }
+
+    /// A panic in a native step reaches the page as a fixed text, and `blocking` is the one
+    /// place that starts a blocking thread, so no other path can pass a panic message on.
+    #[test]
+    fn a_panic_in_a_native_step_reaches_the_page_as_a_fixed_text() {
+        let answer = tauri::async_runtime::block_on(blocking::<()>(|| {
+            panic!("C:\\fake-folder\\fake-secret-value")
+        }));
+        let error = answer.unwrap_err();
+        assert_eq!(error.kind, "internal");
+        assert_eq!(error.message, CommandError::failed_step().message);
+        assert!(
+            !error.message.contains("Try again"),
+            "the step may have finished, so the text does not invite a retry (U1-R1-04)"
+        );
+        let source = include_str!("commands.rs");
+        let production = &source[..source.find("\nmod tests {").unwrap()];
+        assert_eq!(production.matches("spawn_blocking(").count(), 1);
+    }
+
+    #[test]
+    fn fr04_a_failed_export_with_a_remnant_names_it_in_the_error_and_in_the_warnings() {
+        let (session, _directory) = test_session();
+        let remnants = private_export::Remnants::default();
+        let remnant = PathBuf::from(r"C:\fake-folder\.akm-export-00000000.tmp");
+        remnants.record(remnant.clone(), Some(remnant.clone()));
+
+        let error = report_remnants::<()>(
+            &session,
+            &remnants,
+            Err(CommandError::new("stalePreview", "The vault changed.")),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind, "stalePreview");
+        assert!(error.message.starts_with("The vault changed. "));
+        let shown = remnant.display().to_string();
+        assert!(error.message.contains(&shown), "{}", error.message);
+        let warnings = serde_json::to_value(session.warnings().unwrap()).unwrap();
+        let application = warnings["application"].as_array().unwrap();
+        assert_eq!(application.len(), 1);
+        assert!(application[0]["message"].as_str().unwrap().contains(&shown));
+    }
+
+    #[test]
+    fn fr04_a_saved_export_with_a_remnant_still_warns() {
+        let (session, _directory) = test_session();
+        let remnants = private_export::Remnants::default();
+        let remnant = PathBuf::from(r"C:\fake-folder\.akm-export-11111111.tmp");
+        remnants.record(remnant.clone(), Some(remnant));
+
+        let saved = report_remnants(&session, &remnants, Ok(7)).unwrap();
+
+        assert_eq!(saved, 7);
+        let warnings = serde_json::to_value(session.warnings().unwrap()).unwrap();
+        assert_eq!(warnings["application"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fr04_without_a_remnant_the_result_and_the_warnings_are_untouched() {
+        let (session, _directory) = test_session();
+        let remnants = private_export::Remnants::default();
+
+        let error = report_remnants::<()>(
+            &session,
+            &remnants,
+            Err(CommandError::new("locked", "The session is locked.")),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            (error.kind.as_str(), error.message.as_str()),
+            ("locked", "The session is locked.")
+        );
+        let warnings = serde_json::to_value(session.warnings().unwrap()).unwrap();
+        assert!(warnings["application"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -1198,6 +1581,235 @@ mod tests {
         assert_eq!(history, 1);
     }
 
+    /// A stored key that no form could type: text with spaces at both ends, a scope that holds a
+    /// comma, an expiry with a time of day and a rotation interval (FW-03).
+    fn padded_key() -> akm_core::ApiKeyInput {
+        let mut key = akm_core::ApiKeyInput::new("Fake padded key", "fake-padded-secret");
+        key.username = Some(" AKIAFAKEEXAMPLE ".into());
+        key.issuer = Some(" Fake issuer ".into());
+        key.project = Some(" demo ".into());
+        key.environment = Some(" dev ".into());
+        key.scopes = vec!["resource,subresource".into(), " read ".into()];
+        key.env_var = Some("PADDED_TOKEN".into());
+        key.url = Some(" https://example.invalid/keys ".into());
+        key.notes = Some(" padded notes ".into());
+        key.tags = vec!["alpha".into(), "beta".into()];
+        key.expires_at = Some("2030-05-06T07:08:09Z".parse().unwrap());
+        key.rotation_days = Some(90);
+        key
+    }
+
+    /// A key as the page sees it, less the two values that every save changes.
+    fn view_without_save_marks(key: &akm_core::ApiKey) -> serde_json::Value {
+        let mut view = serde_json::to_value(KeyView::from(key)).unwrap();
+        let fields = view.as_object_mut().unwrap();
+        fields.remove("updatedAt");
+        fields.remove("historyCount");
+        view
+    }
+
+    /// FW-03, through the command function, a save and a reopen. Each row names one field, and
+    /// the last row clears every field that can be empty. What a row names changes: a text is
+    /// cleaned as an add cleans it, and an empty text, an empty list or `null` clears. Every
+    /// other field, the ID, the secret and the time of the last secret change read back exactly
+    /// as they were stored.
+    #[test]
+    fn an_update_changes_only_the_fields_that_it_names() {
+        use serde_json::{json, Value};
+        let (session, directory) = test_session();
+        let cleared = [
+            "username",
+            "issuer",
+            "project",
+            "environment",
+            "envVar",
+            "url",
+            "notes",
+            "expiresAt",
+            "rotationDays",
+            "rotationDueAt",
+        ];
+        let rows: Vec<(Value, Vec<(&str, Value)>)> = vec![
+            (
+                json!({"notes": " new notes "}),
+                vec![("notes", json!("new notes"))],
+            ),
+            (
+                json!({"title": " Renamed key "}),
+                vec![("title", json!("Renamed key"))],
+            ),
+            (
+                json!({"username": " AKIANEWFAKE "}),
+                vec![("username", json!("AKIANEWFAKE"))],
+            ),
+            (
+                json!({"issuer": "New issuer"}),
+                vec![("issuer", json!("New issuer"))],
+            ),
+            (
+                json!({"project": " other "}),
+                vec![("project", json!("other"))],
+            ),
+            (
+                json!({"environment": "prod"}),
+                vec![("environment", json!("prod"))],
+            ),
+            (
+                json!({"envVar": "OTHER_TOKEN"}),
+                vec![
+                    ("envVar", json!("OTHER_TOKEN")),
+                    ("resolvedEnvVar", json!("OTHER_TOKEN")),
+                ],
+            ),
+            (
+                json!({"url": "https://example.invalid/new"}),
+                vec![("url", json!("https://example.invalid/new"))],
+            ),
+            (
+                json!({"scopes": [" write ", ""]}),
+                vec![("scopes", json!(["write"]))],
+            ),
+            (json!({"tags": ["gamma"]}), vec![("tags", json!(["gamma"]))]),
+            (
+                json!({"expiresAt": "2031-02-03T04:05:06Z"}),
+                vec![("expiresAt", json!("2031-02-03T04:05:06Z"))],
+            ),
+            (
+                json!({"rotationDays": 30}),
+                vec![("rotationDays", json!(30))],
+            ),
+            (
+                json!({
+                    "username": "", "issuer": null, "project": "", "environment": " ",
+                    "envVar": "", "url": "", "notes": "", "scopes": [], "tags": [],
+                    "expiresAt": null, "rotationDays": null,
+                }),
+                cleared
+                    .iter()
+                    .map(|field| (*field, Value::Null))
+                    .chain([
+                        ("scopes", json!([])),
+                        ("tags", json!([])),
+                        ("resolvedEnvVar", json!("FAKE_PADDED_KEY")),
+                    ])
+                    .collect(),
+            ),
+        ];
+        let stored = session
+            .access(Access::Write, None, |vault| {
+                rows.iter()
+                    .map(|_| Ok(vault.add(padded_key())?))
+                    .collect::<Result<Vec<_>, CommandError>>()
+            })
+            .unwrap()
+            .value;
+        let mut expected = Vec::new();
+        for ((request, changes), stored) in rows.into_iter().zip(stored) {
+            let draft: KeyDraft = serde_json::from_value(request.clone()).unwrap();
+            let reply = session
+                .access(Access::Write, None, |vault| {
+                    update_key(vault, &stored.id, draft)
+                })
+                .unwrap()
+                .value;
+            assert!(reply.is_some(), "{request}: a change is saved");
+            let mut view = view_without_save_marks(&stored);
+            for (field, value) in changes {
+                view[field] = value;
+            }
+            if let Some(days) = request["rotationDays"].as_i64() {
+                let due = stored.secret_changed_at.unwrap() + chrono::Duration::days(days);
+                view["rotationDueAt"] = json!(due);
+            }
+            expected.push((request, stored.id, view));
+        }
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        for (request, id, view) in expected {
+            let key = reopened.get_by_id(&id).unwrap();
+            assert_eq!(view_without_save_marks(&key), view, "{request}");
+            assert_eq!(
+                crate::test_support::secret_of(&reopened, &id),
+                "fake-padded-secret",
+                "{request}"
+            );
+        }
+    }
+
+    /// FW-03. An update that names no field, or keeps the secret, writes nothing and answers
+    /// `None`, as `akm edit` says "No change". The title cannot be cleared. The vault file keeps
+    /// its bytes.
+    /// FW-03, the class: the page chooses a project and an environment from the stored values,
+    /// and the core matches them exactly. So native code passes them on as they are: a
+    /// trimmed name selects the keys of another scope, or none.
+    #[test]
+    fn an_export_takes_the_keys_of_the_exact_project_and_environment_that_the_page_chose() {
+        let (session, _directory) = test_session();
+        session
+            .access(Access::Write, None, |vault| {
+                vault.add(padded_key())?;
+                let mut plain = akm_core::ApiKeyInput::new("Fake plain key", "fake-plain-secret");
+                plain.project = Some("demo".into());
+                plain.environment = Some("dev".into());
+                plain.env_var = Some("PLAIN_TOKEN".into());
+                vault.add(plain)?;
+                Ok(())
+            })
+            .unwrap();
+        let export = |project: &str, environment: &str| {
+            let scope =
+                ExportScope::new(Some(project.into()), Some(environment.into()), false).unwrap();
+            extract_export(&session, &scope, "test").unwrap().value
+        };
+        assert_eq!(
+            export(" demo ", " dev ").as_str(),
+            "PADDED_TOKEN=fake-padded-secret\n"
+        );
+        assert_eq!(
+            export("demo", "dev").as_str(),
+            "PLAIN_TOKEN=fake-plain-secret\n"
+        );
+    }
+
+    #[test]
+    fn an_update_that_changes_nothing_writes_nothing_and_says_so() {
+        use serde_json::json;
+        let (session, directory) = test_session();
+        let path = directory.path().join("vault.kdbx");
+        let stored = session
+            .access(Access::Write, None, |vault| Ok(vault.add(padded_key())?))
+            .unwrap()
+            .value;
+        let bytes = std::fs::read(&path).unwrap();
+        let update = |request: serde_json::Value| {
+            let draft: KeyDraft = serde_json::from_value(request).unwrap();
+            session
+                .access(Access::Write, None, |vault| {
+                    update_key(vault, &stored.id, draft)
+                })
+                .map(|completed| completed.value)
+        };
+        for request in [json!({}), json!({"secret": ""}), json!({"secret": null})] {
+            assert!(update(request.clone()).unwrap().is_none(), "{request}");
+            assert_eq!(std::fs::read(&path).unwrap(), bytes, "{request}");
+        }
+        for request in [
+            json!({"title": ""}),
+            json!({"title": "   "}),
+            json!({"title": null}),
+        ] {
+            assert_eq!(
+                update(request.clone()).err().unwrap().kind,
+                "invalid",
+                "{request}"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), bytes, "{request}");
+        }
+    }
+
     #[test]
     fn the_purge_command_deletes_only_a_key_that_is_in_the_recycle_bin() {
         let (session, _directory) = test_session();
@@ -1221,6 +1833,163 @@ mod tests {
             .unwrap()
             .value;
         assert_eq!((live, recycled), (0, 0));
+    }
+
+    #[test]
+    fn the_history_command_returns_times_and_changed_field_names_and_never_a_value() {
+        let (session, _directory) = test_session();
+        let key = session
+            .access(Access::Write, None, |vault| {
+                Ok(vault.add(akm_core::ApiKeyInput::new("Kept", "fake-first-secret"))?)
+            })
+            .unwrap()
+            .value;
+        let history = |id: &str| {
+            session
+                .access(Access::Read, None, |vault| history_views(vault, id))
+                .map(|stamped| stamped.value)
+        };
+        assert!(history(&key.id).unwrap().is_empty());
+        session
+            .access(Access::Write, None, |vault| {
+                rotate_key(vault, &key.id, "fake-second-secret".into())
+            })
+            .unwrap();
+        session
+            .access(Access::Write, None, |vault| {
+                rotate_key(vault, &key.id, "fake-third-secret".into())
+            })
+            .unwrap();
+        let views = history(&key.id).unwrap();
+        assert_eq!(views.len(), 2);
+        let wire = serde_json::to_value(&views).unwrap();
+        assert_eq!(wire[0]["index"], 0);
+        assert!(wire[0]["modifiedAt"].is_string());
+        assert_eq!(wire[0]["secretChanged"], true);
+        assert!(wire[0]["changed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "Password"));
+        assert!(wire[0].get("modified_at").is_none() && wire[0].get("secret_changed").is_none());
+        for secret in [
+            "fake-first-secret",
+            "fake-second-secret",
+            "fake-third-secret",
+        ] {
+            assert!(!wire.to_string().contains(secret), "{secret}");
+        }
+        assert_eq!(history("not-a-key").unwrap_err().kind, "notFound");
+    }
+
+    fn import_notice_for(session: &Session, operation: &str) -> Option<serde_json::Value> {
+        notices(session)
+            .into_iter()
+            .find(|record| record["id"] == operation)
+    }
+
+    /// Runs one import whose reply is dropped, as a page that lost the reply would.
+    fn import_with_lost_reply(
+        session: &Session,
+        confirm: &ScriptedConfirm,
+    ) -> (String, Result<Option<ImportReport>, CommandError>) {
+        let operation = new_operation();
+        let reply = run_import(
+            session,
+            confirm,
+            &owner(session),
+            &operation,
+            Zeroizing::new("TOKEN=fake-unapplied\n".into()),
+            Some("app".into()),
+            Some("dev".into()),
+        );
+        (operation, reply)
+    }
+
+    #[test]
+    fn a_lock_before_the_import_review_leaves_a_truthful_outcome_even_if_the_reply_is_lost() {
+        let (session, directory) = test_session();
+        let locker = session.clone();
+        let confirm = ScriptedConfirm::new(true).on_prepare(move || locker.lock().unwrap());
+        let (operation, reply) = import_with_lost_reply(&session, &confirm);
+        assert_eq!(reply.err().unwrap().kind, "locked");
+        assert!(confirm.shown().is_empty());
+        let record = import_notice_for(&session, &operation).expect("no native outcome record");
+        assert_eq!(record["kind"], "importFailed");
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
+    }
+
+    #[test]
+    fn a_lock_at_the_window_check_of_an_import_leaves_a_truthful_outcome() {
+        let (session, _directory) = test_session();
+        let locker = session.clone();
+        let confirm = ScriptedConfirm::new(true).on_probe(move || locker.lock().unwrap());
+        let (operation, reply) = import_with_lost_reply(&session, &confirm);
+        assert_eq!(reply.err().unwrap().kind, "locked");
+        assert!(confirm.shown().is_empty());
+        let record = import_notice_for(&session, &operation).expect("no native outcome record");
+        assert_eq!(record["kind"], "importFailed");
+    }
+
+    #[test]
+    fn a_lock_just_before_the_import_window_appears_applies_nothing_even_if_the_user_approves() {
+        let (session, directory) = test_session();
+        let locker = session.clone();
+        let confirm = ScriptedConfirm::new(true).on_present(move || locker.lock().unwrap());
+        let (operation, reply) = import_with_lost_reply(&session, &confirm);
+        assert_eq!(reply.err().unwrap().kind, "locked");
+        assert_eq!(confirm.shown().len(), 1, "the accepted limit of option (a)");
+        let record = import_notice_for(&session, &operation).expect("no native outcome record");
+        assert_eq!(record["kind"], "importFailed");
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
+    }
+
+    #[test]
+    fn a_failed_import_window_is_an_error_and_never_a_decline() {
+        let (session, directory) = test_session();
+        let confirm = ScriptedConfirm::new(true).failing(crate::review_window::ReviewFailure::new(
+            "TaskDialogIndirect failed",
+        ));
+        let (operation, reply) = import_with_lost_reply(&session, &confirm);
+        assert_eq!(reply.err().unwrap().kind, "reviewFailed");
+        let record = import_notice_for(&session, &operation).expect("no native outcome record");
+        assert_eq!(record["kind"], "importFailed");
+        let reopened = Vault::open(
+            directory.path().join("vault.kdbx"),
+            "fake-test-password-123!",
+        )
+        .unwrap();
+        assert!(crate::test_support::env_of(&reopened, "app", "dev").is_empty());
+    }
+
+    #[test]
+    fn a_custom_field_name_in_the_history_never_reaches_the_page() {
+        let version = HistoryVersion {
+            index: 0,
+            modified_at: None,
+            changed: vec![
+                "Title".into(),
+                "fake-secret-in-a-field-name".into(),
+                "another-fake-name".into(),
+                "AKM_PROJECT".into(),
+            ],
+            secret_changed: false,
+        };
+        let wire = serde_json::to_value(HistoryView::from(&version)).unwrap();
+        assert_eq!(
+            wire["changed"],
+            serde_json::json!(["Title", "AKM_PROJECT", "Other"])
+        );
     }
 
     #[test]
@@ -1473,7 +2242,15 @@ mod tests {
             match change {
                 "lock" => session.lock().unwrap(),
                 "revision" => {
-                    session.access(Access::Write, None, |_| Ok(())).unwrap();
+                    // A write that replaces the file moves the revision (commit-point.md).
+                    session
+                        .access(Access::Write, None, |vault| {
+                            vault
+                                .add(akm_core::ApiKeyInput::new("Fake other", "fake-other"))
+                                .map(drop)
+                                .map_err(Into::into)
+                        })
+                        .unwrap();
                 }
                 "journal" => {
                     fs::remove_file(journal.path()).unwrap();
@@ -1508,10 +2285,10 @@ mod tests {
 
     #[test]
     fn complete_export_record_with_failed_sync_keeps_publication_and_late_lock_receipt() {
-        use std::{io::Write, sync::mpsc, time::Duration};
+        use crate::test_support::{canonical, journal_in, own_root};
+        use std::{io::Write, sync::mpsc};
         for late_lock in [false, true] {
-            let (session, directory) = test_session();
-            let session = Arc::new(session);
+            let (session, directory) = test_session_with(true);
             session
                 .access(Access::Write, None, |vault| {
                     vault
@@ -1526,7 +2303,8 @@ mod tests {
             let exported = extract_export(&session, &scope, "file export").unwrap();
             let expected = exported.snapshot;
             let path = directory.path().join("vault.kdbx");
-            let log = crate::test_support::journal_of(&path);
+            let root = own_root(directory.path());
+            let log = journal_in(&path, root.clone());
             let before = fs::read(log.path()).unwrap();
             // Make valid completion bytes with the real encoder, then inject failure immediately
             // after writing those bytes to the actual test journal, before syncing that handle.
@@ -1542,20 +2320,22 @@ mod tests {
             let (written_tx, written_rx) = mpsc::channel();
             let (release_tx, release_rx) = mpsc::channel();
             let worker_session = session.clone();
+            let worker_root = root.clone();
             let worker = std::thread::spawn(move || {
                 worker_session.publish(
                     expected,
                     || {
                         private_export::prepare_private(
-                            &worker_target,
+                            private_export::choose(&worker_target).unwrap(),
                             &exported.value,
                             std::slice::from_ref(&path),
                             &[],
+                            &private_export::Remnants::default(),
                         )
                     },
                     |prepared| {
                         publish_and_record(&worker_session, expected, prepared, |_| {
-                            let log = crate::test_support::journal_of(&path);
+                            let log = journal_in(&path, worker_root);
                             let mut file = fs::OpenOptions::new()
                                 .append(true)
                                 .open(log.path())
@@ -1568,17 +2348,20 @@ mod tests {
                     },
                 )
             });
-            written_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+            written_rx
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
             assert!(target.exists());
             if late_lock {
                 session.lock().unwrap();
                 let newer = session.begin_open().unwrap();
                 session
                     .open(newer, || {
-                        Vault::create(
+                        Vault::create_in(
                             directory.path().join("b.kdbx"),
                             "fake-test-password-123!",
                             None,
+                            root.clone(),
                         )
                         .map_err(Into::into)
                     })
@@ -1589,7 +2372,7 @@ mod tests {
             if late_lock {
                 assert_eq!(outcome.unwrap_err().kind, "completedWhileLocked");
             } else {
-                assert_eq!(outcome.unwrap(), target);
+                assert_eq!(canonical(&outcome.unwrap()), canonical(&target));
             }
             assert!(fs::read_to_string(&target)
                 .unwrap()
@@ -1613,7 +2396,6 @@ mod tests {
     #[test]
     fn export_uses_core_validation_not_only_native_or_frontend_scope_checks() {
         use akm_core::model::{META_ENVIRONMENT, META_ENV_VAR, META_PROJECT};
-        use keepass::db::fields;
         use std::sync::Mutex;
         // 3-SA-01: `add` now refuses PATH, so the key is an older entry written to the file.
         let directory = tempfile::tempdir().unwrap();
@@ -1625,6 +2407,7 @@ mod tests {
             let mut group = root.add_group();
             group.name = "API Keys".into();
             let mut entry = group.add_entry();
+            use keepass::db::fields;
             entry.set_unprotected(fields::TITLE, "Process control");
             entry.set_protected(fields::PASSWORD, "fake");
             entry.set_unprotected(META_ENV_VAR, "PATH");
@@ -1661,29 +2444,16 @@ mod tests {
         assert!(!error.message.contains("fake"), "{}", error.message);
     }
 
-    #[test]
-    fn add_refuses_a_reserved_variable_name_for_the_desktop_too() {
-        let (session, _directory) = test_session();
-        let error = session
-            .access(Access::Write, None, |vault| {
-                vault.add(akm_core::ApiKeyInput {
-                    title: "Process control".into(),
-                    secret: "fake".into(),
-                    env_var: Some("PATH".into()),
-                    ..Default::default()
-                })?;
-                Ok(())
-            })
-            .err()
-            .unwrap();
-        assert!(error.message.contains("reserved"), "{}", error.message);
-    }
     struct ScriptedConfirm {
         answer: bool,
         shown: Mutex<Vec<String>>,
         while_open: Box<dyn Fn() + Send + Sync>,
         window: Arc<std::sync::atomic::AtomicBool>,
         probe: Box<dyn Fn() + Send + Sync>,
+        preparing: Box<dyn Fn() + Send + Sync>,
+        before_window: Box<dyn Fn() + Send + Sync>,
+        moved: Box<dyn Fn() + Send + Sync>,
+        failure: Mutex<Option<crate::review_window::ReviewFailure>>,
     }
     impl ScriptedConfirm {
         fn new(answer: bool) -> Self {
@@ -1696,7 +2466,26 @@ mod tests {
                 while_open: Box::new(while_open),
                 window: Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 probe: Box::new(|| {}),
+                preparing: Box::new(|| {}),
+                before_window: Box::new(|| {}),
+                moved: Box::new(|| {}),
+                failure: Mutex::new(None),
             }
+        }
+        /// Runs after the last check of the revision and before the last check of the session.
+        fn on_prepare(mut self, preparing: impl Fn() + Send + Sync + 'static) -> Self {
+            self.preparing = Box::new(preparing);
+            self
+        }
+        /// Runs after every check, just before the review appears.
+        fn on_present(mut self, before: impl Fn() + Send + Sync + 'static) -> Self {
+            self.before_window = Box::new(before);
+            self
+        }
+        /// The window fails instead of answering.
+        fn failing(self, failure: crate::review_window::ReviewFailure) -> Self {
+            *self.failure.lock().unwrap() = Some(failure);
+            self
         }
         /// The shared flag says whether the window is shown and not minimized.
         fn on_window(mut self, window: Arc<std::sync::atomic::AtomicBool>) -> Self {
@@ -1708,19 +2497,45 @@ mod tests {
             self.probe = Box::new(probe);
             self
         }
+        /// Runs right after a recovery moved the damaged journal.
+        fn on_journal_moved(mut self, moved: impl Fn() + Send + Sync + 'static) -> Self {
+            self.moved = Box::new(moved);
+            self
+        }
         fn shown(&self) -> Vec<String> {
             self.shown.lock().unwrap().clone()
         }
     }
     impl ImportConfirm for ScriptedConfirm {
-        fn confirm(&self, review: &ImportReview) -> bool {
-            self.shown.lock().unwrap().push(review.message());
-            (self.while_open)();
-            self.answer
+        fn journal_moved(&self) {
+            (self.moved)();
+        }
+        fn review_dialog(&self) -> Box<dyn crate::review_window::ReviewDialog + '_> {
+            (self.preparing)();
+            Box::new(self)
         }
         fn window_live(&self) -> bool {
             (self.probe)();
             self.window.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl crate::review_window::ReviewDialog for &ScriptedConfirm {
+        fn show(
+            &self,
+            review: &crate::review_window::ReviewText,
+        ) -> Result<i32, crate::review_window::ReviewFailure> {
+            (self.before_window)();
+            self.shown.lock().unwrap().push(review.text.clone());
+            (self.while_open)();
+            if let Some(failure) = self.failure.lock().unwrap().take() {
+                return Err(failure);
+            }
+            Ok(if self.answer {
+                crate::review_window::CONFIRM_BUTTON
+            } else {
+                crate::review_window::CANCEL_BUTTON
+            })
         }
     }
 
@@ -1787,7 +2602,7 @@ mod tests {
         assert_eq!(
             approved.shown(),
             vec![
-                "Import into project \"app\", environment \"dev\"?\n\nAdd 1:\n  TOKEN\n\nSecret values are not shown."
+                "Import into project \"app\", environment \"dev\"?\n\nAdd 1:\n  TOKEN\n\nA program that you start with these keys gets each name as a variable, and can read it as a setting. Import only the names that you expect.\n\nSecret values are not shown."
                     .to_string()
             ]
         );
@@ -1846,7 +2661,13 @@ mod tests {
             "no dialog for a refused request"
         );
         assert_eq!(exported(&session, "app", "dev"), "");
-        assert!(notices(&session).is_empty());
+        // Each refused request passed its session check, so each left one failed record. The
+        // malformed operation ID left none.
+        let kinds: Vec<serde_json::Value> = notices(&session)
+            .iter()
+            .map(|record| record["kind"].clone())
+            .collect();
+        assert_eq!(kinds, vec![serde_json::json!("importFailed"); 6]);
     }
 
     #[test]
@@ -1879,14 +2700,22 @@ mod tests {
         }
         assert!(confirm.shown().is_empty());
         assert_eq!(exported(&session, "app", "dev"), "");
-        assert!(notices(&session).is_empty());
+        let records = notices(&session);
+        assert_eq!(
+            records.len(),
+            6,
+            "one failed record for each refused request"
+        );
+        for record in &records {
+            assert_eq!(record["kind"], "importFailed");
+            assert!(!record.to_string().contains("attacker.example"), "{record}");
+        }
     }
 
     #[test]
     fn every_change_while_the_dialog_is_open_leaves_the_import_unapplied_and_recorded() {
         for change in ["lock", "session", "write", "reload"] {
             let (session, directory) = test_session();
-            let session = Arc::new(session);
             let confirm = {
                 let session = session.clone();
                 let other = directory.path().join("other.kdbx");
@@ -1964,7 +2793,6 @@ mod tests {
     ) {
         for change in ["hide", "page-load", "discard", "window"] {
             let (session, directory) = test_session();
-            let session = Arc::new(session);
             let window = Arc::new(std::sync::atomic::AtomicBool::new(true));
             let confirm = {
                 let (session, hidden) = (session.clone(), window.clone());
@@ -2016,7 +2844,6 @@ mod tests {
     fn p2r2_02_a_discard_that_native_cannot_take_locks_the_session_and_the_lock_refuses_the_approval(
     ) {
         let (session, directory) = test_session();
-        let session = Arc::new(session);
         let confirm = {
             let session = session.clone();
             let id = owner(&session);
@@ -2130,7 +2957,7 @@ mod tests {
     }
 
     #[test]
-    fn review1_1_a_window_that_is_not_shown_gets_no_dialog_and_leaves_no_record() {
+    fn t_r3_05_a_window_that_is_not_shown_gets_no_dialog_and_leaves_a_failed_record() {
         let (session, _directory) = test_session();
         let confirm = ScriptedConfirm::new(true)
             .on_window(Arc::new(std::sync::atomic::AtomicBool::new(false)));
@@ -2147,7 +2974,9 @@ mod tests {
         .expect("a dialog for a window nobody sees");
         assert_eq!(error.kind, "viewChanged");
         assert!(confirm.shown().is_empty());
-        assert!(notices(&session).is_empty());
+        let records = notices(&session);
+        assert_eq!(records.len(), 1, "a lost reply still has its outcome");
+        assert_eq!(records[0]["kind"], "importFailed");
         assert_eq!(exported(&session, "app", "dev"), "");
     }
 
@@ -2155,7 +2984,6 @@ mod tests {
     fn review1_1_a_change_after_the_review_was_read_and_before_the_dialog_shows_no_dialog() {
         for change in ["lock", "write"] {
             let (session, directory) = test_session();
-            let session = Arc::new(session);
             let confirm = {
                 let session = session.clone();
                 ScriptedConfirm::new(true).on_probe(move || match change {
@@ -2203,7 +3031,6 @@ mod tests {
     #[test]
     fn p2r2_02_a_hide_before_the_dialog_opens_does_not_withhold_the_dialog() {
         let (session, _directory) = test_session();
-        let session = Arc::new(session);
         let confirm = {
             let session = session.clone();
             ScriptedConfirm::new(true).on_probe(move || {
@@ -2271,7 +3098,6 @@ mod tests {
     #[test]
     fn a_late_request_a_neither_consumes_nor_blocks_a_valid_request_b() {
         let (session, _directory) = test_session();
-        let session = Arc::new(session);
         let inner_session = session.clone();
         let a = ScriptedConfirm::during(true, move || {
             let b = ScriptedConfirm::new(true);
@@ -2337,9 +3163,8 @@ mod tests {
 
     #[test]
     fn a_committed_import_keeps_its_receipt_when_lock_arrives_during_the_journal_append() {
-        use std::time::{Duration, Instant};
+        use std::time::Instant;
         let (session, directory) = test_session();
-        let session = Arc::new(session);
         let path = directory.path().join("vault.kdbx");
         let initial = fs::read(&path).unwrap();
         let journal = fs::OpenOptions::new()
@@ -2364,7 +3189,7 @@ mod tests {
                 Some("dev".into()),
             )
         });
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + crate::test_support::PATIENCE;
         let committed = loop {
             if fs::read(&path).unwrap() != initial {
                 break true;
@@ -2418,7 +3243,7 @@ mod tests {
                 self.release
                     .lock()
                     .unwrap()
-                    .recv_timeout(std::time::Duration::from_secs(30))
+                    .recv_timeout(crate::test_support::PATIENCE)
                     .unwrap();
             }
             self.inner.save_vault_path(ticket, owned, vault_path)
@@ -2447,13 +3272,13 @@ mod tests {
             entered: entered_tx,
             release: Mutex::new(release_rx),
         });
-        let session = Arc::new(Session::new(
+        let session = Session::new(
             Arc::new(MonotonicClock::default()),
             Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
                 Mutex::new(FakeData::default()),
             ))),
             Arc::new(|_| {}),
-        ));
+        );
         session.observe(Signal::Available);
         fn open(
             session: &Arc<Session>,
@@ -2478,7 +3303,7 @@ mod tests {
             std::thread::spawn(move || open(&session, &store, &owner, path))
         };
         entered_rx
-            .recv_timeout(std::time::Duration::from_secs(30))
+            .recv_timeout(crate::test_support::PATIENCE)
             .unwrap();
         let owner_b = session.prepare_open().unwrap();
         let b_status = open(&session, &store, &owner_b, b_path.clone()).unwrap();
@@ -2522,20 +3347,37 @@ mod tests {
             let saved = self.inner.save_vault_path(
                 ticket,
                 &|effect| {
-                    owned(&mut |held| {
-                        self.entered.send(()).unwrap();
-                        self.release
-                            .lock()
-                            .unwrap()
-                            .recv_timeout(std::time::Duration::from_secs(30))
-                            .unwrap();
-                        effect(held);
-                    });
+                    owned(&mut BarrierInAct {
+                        store: self,
+                        inner: effect,
+                    })
                 },
                 vault_path,
             );
             self.log.lock().unwrap().push("A-saved");
             saved
+        }
+    }
+
+    /// The act of the settings commit, with a barrier inside it, under the gate.
+    struct BarrierInAct<'a> {
+        store: &'a BarrierAfterCheck,
+        inner: &'a mut dyn crate::session::Effect<Output = ()>,
+    }
+    impl crate::session::Effect for BarrierInAct<'_> {
+        type Output = ();
+        fn act(&mut self, held: &crate::session::Held<'_>) -> Result<(), CommandError> {
+            self.store.entered.send(()).unwrap();
+            self.store
+                .release
+                .lock()
+                .unwrap()
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
+            self.inner.act(held)
+        }
+        fn revoke(&mut self) -> Result<(), String> {
+            self.inner.revoke()
         }
     }
 
@@ -2561,13 +3403,13 @@ mod tests {
             release: Mutex::new(release_rx),
             log: log.clone(),
         });
-        let session = Arc::new(Session::new(
+        let session = Session::new(
             Arc::new(MonotonicClock::default()),
             Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
                 Mutex::new(FakeData::default()),
             ))),
             Arc::new(|_| {}),
-        ));
+        );
         session.observe(Signal::Available);
         let open = |session: Arc<Session>, store: Arc<BarrierAfterCheck>, owner: String, path| {
             tauri::async_runtime::block_on(open_vault(
@@ -2586,7 +3428,7 @@ mod tests {
             std::thread::spawn(move || open(session, store, owner_a, a_path))
         };
         entered_rx
-            .recv_timeout(std::time::Duration::from_secs(30))
+            .recv_timeout(crate::test_support::PATIENCE)
             .unwrap();
         let (retired_tx, retired_rx) = mpsc::channel();
         let second = {
@@ -2637,13 +3479,13 @@ mod tests {
             entered: entered_tx,
             release: Mutex::new(release_rx),
         });
-        let session = Arc::new(Session::new(
+        let session = Session::new(
             Arc::new(MonotonicClock::default()),
             Box::new(crate::clipboard::tests::FakeClipboard(Arc::new(
                 Mutex::new(FakeData::default()),
             ))),
             Arc::new(|_| {}),
-        ));
+        );
         session.observe(Signal::Available);
         let open = |session: Arc<Session>, store: Arc<PausingPreferences>, owner: String, path| {
             tauri::async_runtime::block_on(open_vault(
@@ -2662,7 +3504,7 @@ mod tests {
             std::thread::spawn(move || open(session, store, owner_a, a_path))
         };
         entered_rx
-            .recv_timeout(std::time::Duration::from_secs(30))
+            .recv_timeout(crate::test_support::PATIENCE)
             .unwrap();
         let owner_b = session.prepare_open().unwrap();
         assert!(open(
@@ -2676,5 +3518,1007 @@ mod tests {
         assert!(first.join().unwrap().is_err());
         let saved: Settings = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
         assert_eq!(saved.vault_path.as_deref(), Some("pre-existing.kdbx"));
+    }
+
+    // ---- FR-03: a disclosure needs the user, not the session ID ----
+
+    struct Stepped(std::sync::atomic::AtomicU64);
+    impl Stepped {
+        fn set(&self, seconds: u64) {
+            self.0.store(seconds, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    impl crate::session::Clock for Stepped {
+        fn now(&self) -> std::time::Duration {
+            std::time::Duration::from_secs(self.0.load(std::sync::atomic::Ordering::SeqCst))
+        }
+    }
+
+    struct Disclosing {
+        session: Arc<Session>,
+        clock: Arc<Stepped>,
+        clipboard: Arc<Mutex<crate::clipboard::tests::FakeData>>,
+        keys: Vec<String>,
+        _directory: tempfile::TempDir,
+    }
+
+    /// An unlocked session with a fake clock, a fake clipboard and three fake keys: two in
+    /// `app/dev` and one in `app/prod`.
+    fn disclosing() -> Disclosing {
+        disclosing_in(akm_core::journal::JournalRoot::from_environment())
+    }
+
+    /// Like `disclosing`, with the journal in `journal`.
+    fn disclosing_in(journal: akm_core::journal::JournalRoot) -> Disclosing {
+        use crate::{
+            clipboard::tests::{FakeClipboard, FakeData},
+            policy::Signal,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let clock = Arc::new(Stepped(std::sync::atomic::AtomicU64::new(1_000)));
+        let clipboard = Arc::new(Mutex::new(FakeData::default()));
+        let session = Session::new(
+            clock.clone(),
+            Box::new(FakeClipboard(clipboard.clone())),
+            Arc::new(|_| {}),
+        );
+        session.observe(Signal::Available);
+        let ticket = session.begin_open().unwrap();
+        session
+            .open(ticket, || {
+                Vault::create_in(
+                    directory.path().join("vault.kdbx"),
+                    "fake-test-password-123!",
+                    None,
+                    journal,
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        let mut keys = Vec::new();
+        session
+            .access(Access::Write, None, |vault| {
+                for (title, secret, project, environment, variable) in [
+                    ("One", "fake-secret-one", "app", "dev", "ONE_KEY"),
+                    ("Two", "fake-secret-two", "app", "dev", "TWO_KEY"),
+                    ("Three", "fake-secret-three", "app", "prod", "THREE_KEY"),
+                ] {
+                    let key = vault.add(akm_core::ApiKeyInput {
+                        project: Some(project.into()),
+                        environment: Some(environment.into()),
+                        env_var: Some(variable.into()),
+                        ..akm_core::ApiKeyInput::new(title, secret)
+                    })?;
+                    keys.push(key.id.to_string());
+                }
+                Ok(())
+            })
+            .unwrap();
+        Disclosing {
+            session,
+            clock,
+            clipboard,
+            keys,
+            _directory: directory,
+        }
+    }
+
+    fn reveal_one(
+        f: &Disclosing,
+        host: &ScriptedConfirm,
+        action: KeyDisclosure,
+    ) -> Result<Option<Stamped<Zeroizing<String>>>, CommandError> {
+        single_disclosure(&f.session, host, &owner(&f.session), &f.keys[0], action)
+    }
+
+    fn bulk_preview(
+        f: &Disclosing,
+        host: &ScriptedConfirm,
+        scope: &ExportScope,
+    ) -> Result<Option<String>, CommandError> {
+        bulk_disclosure(
+            &f.session,
+            host,
+            &owner(&f.session),
+            scope,
+            BulkUse::Preview,
+            |expected| {
+                let exported = extract_export_at(&f.session, expected, scope, ".env preview")?;
+                f.session.reveal(exported)
+            },
+        )
+    }
+
+    fn bulk_copy(
+        f: &Disclosing,
+        host: &ScriptedConfirm,
+        scope: &ExportScope,
+    ) -> Result<Option<u64>, CommandError> {
+        bulk_disclosure(
+            &f.session,
+            host,
+            &owner(&f.session),
+            scope,
+            BulkUse::Clipboard,
+            |expected| {
+                let exported = extract_export_at(&f.session, expected, scope, "clipboard")?;
+                f.session.copy_stamped(exported)?;
+                Ok(CLEAR_AFTER.as_secs())
+            },
+        )
+    }
+
+    fn everything() -> ExportScope {
+        ExportScope::new(None, None, true).unwrap()
+    }
+
+    fn clipboard_text(f: &Disclosing) -> String {
+        f.clipboard.lock().unwrap().text.clone()
+    }
+
+    #[test]
+    fn fr03_a_bulk_preview_shows_the_scope_and_the_names_and_reveals_only_after_approval() {
+        let f = disclosing();
+        let declined = ScriptedConfirm::new(false);
+
+        let answer = bulk_preview(&f, &declined, &everything()).unwrap();
+
+        assert_eq!(answer, None, "declined gives no value");
+        let shown = declined.shown();
+        assert_eq!(shown.len(), 1);
+        assert!(shown[0].contains("ALL keys of the vault"), "{}", shown[0]);
+        for name in ["ONE_KEY", "TWO_KEY", "THREE_KEY"] {
+            assert!(shown[0].contains(name), "{name}: {}", shown[0]);
+        }
+        assert!(
+            !shown[0].contains("fake-secret"),
+            "the window never shows a value: {}",
+            shown[0]
+        );
+
+        let approved = ScriptedConfirm::new(true);
+        let scope = ExportScope::new(Some("app".into()), Some("dev".into()), false).unwrap();
+        let text = bulk_preview(&f, &approved, &scope).unwrap().unwrap();
+        assert!(text.contains("fake-secret-one") && text.contains("fake-secret-two"));
+        assert!(!text.contains("fake-secret-three"), "only the scope");
+        let window = &approved.shown()[0];
+        assert!(
+            window.contains(r#"project "app", environment "dev""#),
+            "{window}"
+        );
+        assert!(window.contains("2 variables"), "{window}");
+        assert!(!window.contains("THREE_KEY"), "{window}");
+    }
+
+    #[test]
+    fn fr03_a_declined_bulk_copy_writes_nothing_to_the_clipboard() {
+        let f = disclosing();
+
+        let answer = bulk_copy(&f, &ScriptedConfirm::new(false), &everything()).unwrap();
+
+        assert_eq!(answer, None);
+        let data = f.clipboard.lock().unwrap();
+        assert_eq!(data.sequence, 0, "no clipboard write happened");
+        assert_eq!(data.text, "");
+    }
+
+    #[test]
+    fn fr03_an_approved_bulk_copy_reaches_the_clipboard_once() {
+        let f = disclosing();
+
+        let answer = bulk_copy(&f, &ScriptedConfirm::new(true), &everything()).unwrap();
+
+        assert_eq!(answer, Some(CLEAR_AFTER.as_secs()));
+        assert!(clipboard_text(&f).contains("fake-secret-three"));
+        assert_eq!(f.clipboard.lock().unwrap().sequence, 1);
+    }
+
+    #[test]
+    fn fr03_a_window_that_fails_is_an_error_and_never_a_decline() {
+        let f = disclosing();
+        let broken = ScriptedConfirm::new(true).failing(crate::review_window::ReviewFailure::new(
+            "the window code stopped",
+        ));
+
+        let error = bulk_copy(&f, &broken, &everything()).unwrap_err();
+
+        assert_eq!(error.kind, "reviewFailed");
+        assert_eq!(f.clipboard.lock().unwrap().sequence, 0);
+        let broken = ScriptedConfirm::new(true).failing(crate::review_window::ReviewFailure::new(
+            "the window code stopped",
+        ));
+        assert_eq!(
+            bulk_preview(&f, &broken, &everything()).unwrap_err().kind,
+            "reviewFailed"
+        );
+    }
+
+    #[test]
+    fn fr03_a_lock_while_the_window_is_open_discloses_nothing() {
+        let f = disclosing();
+        let session = f.session.clone();
+        let locking = ScriptedConfirm::during(true, move || session.lock().unwrap());
+
+        let error = bulk_copy(&f, &locking, &everything()).unwrap_err();
+
+        assert_eq!(error.kind, "locked");
+        assert_eq!(
+            f.clipboard.lock().unwrap().sequence,
+            0,
+            "nothing was copied"
+        );
+    }
+
+    /// Class A: a modal window cannot run under the gate, so the session is checked again after
+    /// it. A new session opened while the window was open ends the request as `locked`: the
+    /// session that asked is gone. Nothing is disclosed.
+    #[test]
+    fn fr03_a_new_session_while_the_window_is_open_answers_locked_and_discloses_nothing() {
+        let f = disclosing();
+        let session = f.session.clone();
+        let vault = f._directory.path().join("vault.kdbx");
+        let reopening = ScriptedConfirm::during(true, move || {
+            session.lock().unwrap();
+            session.observe(crate::policy::Signal::Available);
+            let ticket = session.begin_open().unwrap();
+            session
+                .open(ticket, || {
+                    Vault::open(&vault, "fake-test-password-123!").map_err(Into::into)
+                })
+                .unwrap();
+        });
+
+        let error = bulk_preview(&f, &reopening, &everything()).unwrap_err();
+
+        assert_eq!(error.kind, "locked", "{error:?}");
+        assert!(!error.message.contains("fake"), "{}", error.message);
+    }
+
+    #[test]
+    fn fr03_a_change_while_the_window_is_open_refuses_the_disclosure() {
+        let f = disclosing();
+        let session = f.session.clone();
+        let changing = ScriptedConfirm::during(true, move || {
+            session
+                .access(Access::Write, None, |vault| {
+                    vault.add(akm_core::ApiKeyInput {
+                        env_var: Some("LATE_KEY".into()),
+                        ..akm_core::ApiKeyInput::new("Late", "fake-late")
+                    })?;
+                    Ok(())
+                })
+                .unwrap();
+        });
+
+        let error = bulk_preview(&f, &changing, &everything()).unwrap_err();
+
+        assert_eq!(
+            error.kind, "stalePreview",
+            "the plan that was approved is not the plan that would be read: {error:?}"
+        );
+    }
+
+    #[test]
+    fn fr03_a_hide_while_the_window_is_open_refuses_the_disclosure() {
+        let f = disclosing();
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            reveal_one(&f, &ScriptedConfirm::new(true), KeyDisclosure::Copy)
+                .unwrap()
+                .unwrap();
+        }
+        let session = f.session.clone();
+        let hiding = ScriptedConfirm::during(true, move || {
+            session.expire_presentation().unwrap();
+        });
+        let single = reveal_one(&f, &hiding, KeyDisclosure::Reveal);
+        assert!(
+            single.is_err(),
+            "a single key is not shown to a view that was hidden"
+        );
+
+        let session = f.session.clone();
+        let hiding = ScriptedConfirm::during(true, move || {
+            session.expire_presentation().unwrap();
+        });
+        let before = f.clipboard.lock().unwrap().sequence;
+        assert!(bulk_copy(&f, &hiding, &everything()).is_err());
+        assert!(bulk_preview(
+            &f,
+            &ScriptedConfirm::during(true, {
+                let session = f.session.clone();
+                move || {
+                    session.expire_presentation().unwrap();
+                }
+            }),
+            &everything()
+        )
+        .is_err());
+        assert_eq!(
+            f.clipboard.lock().unwrap().sequence,
+            before,
+            "nothing was copied"
+        );
+    }
+
+    #[test]
+    fn fr03_a_hidden_window_shows_no_dialog_and_discloses_nothing() {
+        let f = disclosing();
+        let hidden = ScriptedConfirm::new(true);
+        hidden
+            .window
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let error = bulk_copy(&f, &hidden, &everything()).unwrap_err();
+
+        assert_eq!(error.kind, "viewChanged");
+        assert!(hidden.shown().is_empty());
+        assert_eq!(f.clipboard.lock().unwrap().sequence, 0);
+    }
+
+    #[test]
+    fn fr03_an_empty_scope_shows_no_window_and_reveals_no_value() {
+        let f = disclosing();
+        let host = ScriptedConfirm::new(true);
+        let scope = ExportScope::new(Some("none".into()), Some("none".into()), false).unwrap();
+
+        let text = bulk_preview(&f, &host, &scope).unwrap().unwrap();
+
+        assert!(host.shown().is_empty());
+        assert!(!text.contains("fake-secret"), "{text}");
+    }
+
+    #[test]
+    fn fr03_a_second_window_is_refused_while_one_is_open() {
+        let f = disclosing();
+        let session = f.session.clone();
+        let inner = Arc::new(Mutex::new(None));
+        let sink = inner.clone();
+        let (gate_session, keys) = (f.session.clone(), f.keys.clone());
+        let outer = ScriptedConfirm::during(true, move || {
+            let second = ScriptedConfirm::new(true);
+            let result = bulk_disclosure(
+                &gate_session,
+                &second,
+                &owner(&gate_session),
+                &everything(),
+                BulkUse::Preview,
+                |_| Ok(()),
+            );
+            *sink.lock().unwrap() = Some((result.err().map(|e| e.kind), second.shown().len()));
+            let _ = &keys;
+        });
+
+        bulk_preview(&f, &outer, &everything()).unwrap();
+
+        let (kind, shown) = inner.lock().unwrap().take().unwrap();
+        assert_eq!(kind.as_deref(), Some("busy"));
+        assert_eq!(shown, 0, "the second window never opened");
+        let _ = session;
+    }
+
+    #[test]
+    fn fr03_single_keys_are_free_up_to_the_budget_then_need_the_user() {
+        let f = disclosing();
+        let host = ScriptedConfirm::new(false);
+
+        for n in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            let secret = reveal_one(&f, &host, KeyDisclosure::Reveal)
+                .unwrap_or_else(|e| panic!("request {n}: {e:?}"))
+                .unwrap_or_else(|| panic!("request {n} is inside the budget"));
+            assert_eq!(secret.value.as_str(), "fake-secret-one");
+        }
+        assert!(host.shown().is_empty(), "no window inside the budget");
+
+        let sixth = reveal_one(&f, &host, KeyDisclosure::Reveal).unwrap();
+
+        assert!(sixth.is_none(), "the sixth is declined by the user");
+        let shown = host.shown();
+        assert_eq!(shown.len(), 1);
+        assert!(shown[0].contains("One"), "names the key: {}", shown[0]);
+        assert!(!shown[0].contains("fake-secret"), "{}", shown[0]);
+    }
+
+    #[test]
+    fn fr03_a_loop_of_single_copies_cannot_drain_the_vault_without_approval() {
+        let f = disclosing();
+        let host = ScriptedConfirm::new(false);
+        let mut leaked = 0;
+
+        for _ in 0..40 {
+            if single_disclosure(
+                &f.session,
+                &host,
+                &owner(&f.session),
+                &f.keys[1],
+                KeyDisclosure::Copy,
+            )
+            .unwrap()
+            .map(|secret| f.session.copy_stamped(secret))
+            .transpose()
+            .unwrap()
+            .is_some()
+            {
+                leaked += 1;
+            }
+        }
+
+        assert_eq!(leaked, crate::session::FREE_SINGLE_DISCLOSURES);
+        assert_eq!(
+            f.clipboard.lock().unwrap().sequence as usize,
+            crate::session::FREE_SINGLE_DISCLOSURES,
+            "writes stop at the budget"
+        );
+        assert_eq!(
+            host.shown().len(),
+            40 - crate::session::FREE_SINGLE_DISCLOSURES
+        );
+    }
+
+    #[test]
+    fn fr03_the_budget_is_a_rolling_minute_on_the_clock() {
+        let f = disclosing();
+        let host = ScriptedConfirm::new(false);
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            assert!(reveal_one(&f, &host, KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some());
+            f.clock
+                .set(f.clock.0.load(std::sync::atomic::Ordering::SeqCst) + 1);
+        }
+        assert!(reveal_one(&f, &host, KeyDisclosure::Reveal)
+            .unwrap()
+            .is_none());
+
+        // The oldest request is 60 s old now: one slot frees, and only one.
+        f.clock.set(1_000 + 60);
+        assert!(reveal_one(&f, &host, KeyDisclosure::Reveal)
+            .unwrap()
+            .is_some());
+        assert!(reveal_one(&f, &host, KeyDisclosure::Reveal)
+            .unwrap()
+            .is_none());
+
+        f.clock.set(1_000 + 200);
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            assert!(reveal_one(&f, &host, KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some());
+        }
+    }
+
+    #[test]
+    fn fr03_an_approved_single_key_counts_against_the_budget_and_a_new_session_does_not_reset_it() {
+        let f = disclosing();
+        let yes = ScriptedConfirm::new(true);
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            reveal_one(&f, &yes, KeyDisclosure::Reveal)
+                .unwrap()
+                .unwrap();
+        }
+        assert!(yes.shown().is_empty());
+        reveal_one(&f, &yes, KeyDisclosure::Reveal)
+            .unwrap()
+            .unwrap();
+        assert_eq!(yes.shown().len(), 1, "the sixth asked");
+        reveal_one(&f, &yes, KeyDisclosure::Reveal)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            yes.shown().len(),
+            2,
+            "an approval buys one request, not a pass"
+        );
+
+        // A page that knows the password locks and unlocks, in the same minute.
+        f.session.lock().unwrap();
+        f.session.observe(crate::policy::Signal::Available);
+        let ticket = f.session.begin_open().unwrap();
+        f.session
+            .open(ticket, || {
+                Vault::open(
+                    f._directory.path().join("vault.kdbx"),
+                    "fake-test-password-123!",
+                )
+                .map_err(Into::into)
+            })
+            .unwrap();
+        let no = ScriptedConfirm::new(false);
+        let id = f.keys[0].clone();
+        let single = |host: &ScriptedConfirm| {
+            single_disclosure(
+                &f.session,
+                host,
+                &owner(&f.session),
+                &id,
+                KeyDisclosure::Reveal,
+            )
+            .unwrap()
+        };
+        assert!(single(&no).is_none(), "the new session asks too");
+        assert_eq!(no.shown().len(), 1);
+
+        // The budget frees itself only with time.
+        f.clock.set(1_061);
+        let free = ScriptedConfirm::new(false);
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            assert!(single(&free).is_some());
+        }
+        assert!(
+            free.shown().is_empty(),
+            "a minute later the budget is free again"
+        );
+    }
+
+    #[test]
+    fn fr03_a_lock_while_a_single_key_window_is_open_discloses_nothing() {
+        let f = disclosing();
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            reveal_one(&f, &ScriptedConfirm::new(true), KeyDisclosure::Copy)
+                .unwrap()
+                .unwrap();
+        }
+        let session = f.session.clone();
+        let locking = ScriptedConfirm::during(true, move || session.lock().unwrap());
+
+        let error = reveal_one(&f, &locking, KeyDisclosure::Copy).err().unwrap();
+
+        assert_eq!(error.kind, "locked");
+    }
+
+    #[test]
+    fn fr03_every_disclosing_command_goes_through_the_native_approval() {
+        let source = include_str!("commands.rs");
+        let code = &source[..source.find("\nmod tests {").unwrap()];
+        for (command, helper) in [
+            ("key_reveal", "single_disclosure("),
+            ("key_copy", "single_disclosure("),
+            ("env_export", "bulk_disclosure("),
+            ("env_copy", "bulk_disclosure("),
+        ] {
+            let start = code
+                .find(&format!("pub async fn {command}("))
+                .unwrap_or_else(|| panic!("{command} is a command"));
+            let body = &code[start..];
+            let body = &body[..body.find("\n}\n").unwrap()];
+            assert!(body.contains(helper), "{command} calls {helper}");
+            assert!(
+                body.contains("confirm: State<'_, ConfirmState>"),
+                "{command} takes the native window"
+            );
+            assert!(
+                !body.contains("snapshot_for"),
+                "{command} takes no snapshot of its own: the helper binds the read to the approval"
+            );
+        }
+    }
+
+    #[test]
+    fn fr03_an_approved_request_fills_the_rolling_minute_too() {
+        let f = disclosing();
+        let yes = ScriptedConfirm::new(true);
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES {
+            reveal_one(&f, &yes, KeyDisclosure::Reveal)
+                .unwrap()
+                .unwrap();
+        }
+        f.clock.set(1_050);
+        reveal_one(&f, &yes, KeyDisclosure::Reveal)
+            .unwrap()
+            .unwrap();
+        assert_eq!(yes.shown().len(), 1, "the sixth asked and was approved");
+
+        // The five free requests are 61 s old. The approved one is 11 s old and still counts.
+        f.clock.set(1_061);
+        let no = ScriptedConfirm::new(false);
+        for _ in 0..crate::session::FREE_SINGLE_DISCLOSURES - 1 {
+            assert!(reveal_one(&f, &no, KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some());
+        }
+        assert!(no.shown().is_empty());
+        assert!(reveal_one(&f, &no, KeyDisclosure::Reveal)
+            .unwrap()
+            .is_none());
+    }
+
+    // ---- FR-14: a new journal after damage, with the user's approval ----
+
+    /// Appends a line that is no record to the journal of the fixture. Returns its path and bytes.
+    fn damage_journal(f: &Disclosing) -> (PathBuf, Vec<u8>) {
+        let path = f
+            .session
+            .access(Access::Read, None, |vault| {
+                Ok(vault.audit_log().journal_path()?)
+            })
+            .unwrap()
+            .value
+            .expect("the added keys made a journal");
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut file, b"{this is not a record}\n").unwrap();
+        drop(file);
+        let bytes = fs::read(&path).unwrap();
+        (path, bytes)
+    }
+
+    fn recover(
+        f: &Disclosing,
+        host: &ScriptedConfirm,
+    ) -> Result<Option<JournalRecoveryView>, CommandError> {
+        run_recovery(&f.session, host, &owner(&f.session))
+    }
+
+    /// The files of this journal only: the journal, its lock, and any kept or pending file with its
+    /// name. The journal folder is shared by every test, so other journals are not listed.
+    fn folder_files(path: &std::path::Path) -> Vec<String> {
+        let own = path.file_name().unwrap().to_string_lossy().into_owned();
+        let mut names: Vec<String> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(&own))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn fr14_the_reviewers_probe_through_the_handler_damage_refuse_recover_reveal_old_bytes_kept() {
+        let f = disclosing();
+        let yes = ScriptedConfirm::new(true);
+        assert!(reveal_one(&f, &yes, KeyDisclosure::Reveal)
+            .unwrap()
+            .is_some());
+        let (journal, damaged) = damage_journal(&f);
+
+        let refused = reveal_one(&f, &yes, KeyDisclosure::Reveal).err().unwrap();
+        assert_eq!(
+            refused.kind, "journal",
+            "disclosure is blocked while the journal is damaged"
+        );
+        assert_eq!(fs::read(&journal).unwrap(), damaged);
+
+        let kept = recover(&f, &yes).unwrap().expect("approved");
+
+        let kept_path = journal.with_file_name(&kept.kept_name);
+        assert_eq!(
+            fs::read(&kept_path).unwrap(),
+            damaged,
+            "the old bytes are kept as they were"
+        );
+        assert_eq!(kept.bytes, damaged.len() as u64);
+        assert_eq!(kept.sha256.len(), 64);
+        let window = yes.shown().last().unwrap().clone();
+        assert!(
+            window.contains(journal.file_name().unwrap().to_str().unwrap()),
+            "{window}"
+        );
+        assert!(window.contains("cannot be proved complete"), "{window}");
+        assert!(window.contains("stay blocked"), "{window}");
+        assert!(
+            reveal_one(&f, &yes, KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some(),
+            "disclosure works after the recovery"
+        );
+        let log = f
+            .session
+            .access(Access::Read, None, |vault| {
+                Ok(vault.audit_log().read(50)?)
+            })
+            .unwrap()
+            .value;
+        assert_eq!(log[0].action, "journal-recovered");
+        assert!(log[0].detail.as_deref().unwrap().contains(&kept.sha256));
+    }
+
+    #[test]
+    fn fr14_a_decline_moves_nothing_and_disclosure_stays_blocked() {
+        let f = disclosing();
+        let (journal, damaged) = damage_journal(&f);
+        let before = folder_files(&journal);
+
+        let answer = recover(&f, &ScriptedConfirm::new(false)).unwrap();
+
+        assert!(answer.is_none());
+        assert_eq!(fs::read(&journal).unwrap(), damaged);
+        assert_eq!(folder_files(&journal), before, "no kept file, no new file");
+        let blocked = reveal_one(&f, &ScriptedConfirm::new(true), KeyDisclosure::Reveal)
+            .err()
+            .unwrap();
+        assert_eq!(blocked.kind, "journal");
+    }
+
+    #[test]
+    fn fr14_a_journal_that_is_not_damaged_is_refused_before_any_window() {
+        let f = disclosing();
+        let host = ScriptedConfirm::new(true);
+        let journal = f
+            .session
+            .access(Access::Read, None, |vault| {
+                Ok(vault.audit_log().journal_path()?)
+            })
+            .unwrap()
+            .value
+            .unwrap();
+        let before = fs::read(&journal).unwrap();
+
+        let error = recover(&f, &host).unwrap_err();
+
+        assert_eq!(error.kind, "journal");
+        assert!(host.shown().is_empty(), "no window for an intact journal");
+        assert_eq!(fs::read(&journal).unwrap(), before);
+    }
+
+    #[test]
+    fn fr14_a_window_that_fails_is_an_error_and_moves_nothing() {
+        let f = disclosing();
+        let (journal, damaged) = damage_journal(&f);
+        let before = folder_files(&journal);
+        let broken = ScriptedConfirm::new(true).failing(crate::review_window::ReviewFailure::new(
+            "the window code stopped",
+        ));
+
+        let error = recover(&f, &broken).unwrap_err();
+
+        assert_eq!(error.kind, "reviewFailed");
+        assert_eq!(fs::read(&journal).unwrap(), damaged);
+        assert_eq!(folder_files(&journal), before);
+    }
+
+    #[test]
+    fn fr14_a_lock_while_the_window_is_open_moves_nothing() {
+        let f = disclosing();
+        let (journal, damaged) = damage_journal(&f);
+        let before = folder_files(&journal);
+        let session = f.session.clone();
+        let locking = ScriptedConfirm::during(true, move || session.lock().unwrap());
+
+        let error = recover(&f, &locking).unwrap_err();
+
+        assert_eq!(error.kind, "locked");
+        assert_eq!(fs::read(&journal).unwrap(), damaged);
+        assert_eq!(
+            folder_files(&journal),
+            before,
+            "nothing was kept, nothing was started"
+        );
+    }
+
+    #[test]
+    fn fr14_a_lock_after_the_journal_moved_answers_completed_while_locked() {
+        let f = disclosing();
+        let (journal, damaged) = damage_journal(&f);
+        let own = journal.file_name().unwrap().to_string_lossy().into_owned();
+        let session = f.session.clone();
+        let locking = ScriptedConfirm::new(true).on_journal_moved(move || {
+            session.lock().unwrap();
+        });
+
+        let error = recover(&f, &locking).unwrap_err();
+
+        assert_eq!(
+            error.kind, "completedWhileLocked",
+            "the journal moved, so the answer must not say that nothing changed"
+        );
+        let kept = folder_files(&journal)
+            .into_iter()
+            .filter(|name| name != &own)
+            .any(|name| fs::read(journal.with_file_name(name)).ok().as_ref() == Some(&damaged));
+        assert!(kept, "the old bytes are kept under a dated name");
+    }
+
+    #[test]
+    fn fr14_a_hide_while_the_window_is_open_does_not_revoke_what_the_user_approved() {
+        // As for an import (`Session::access_reviewed`): the user clicked in a native window,
+        // and the recovery discloses nothing to the page. A lock and a change do revoke it.
+        let f = disclosing();
+        let (journal, damaged) = damage_journal(&f);
+        let session = f.session.clone();
+        let hiding = ScriptedConfirm::during(true, move || {
+            session.expire_presentation().unwrap();
+        });
+
+        let kept = recover(&f, &hiding).unwrap().expect("approved");
+
+        assert_eq!(
+            fs::read(journal.with_file_name(kept.kept_name)).unwrap(),
+            damaged
+        );
+        assert!(
+            reveal_one(&f, &ScriptedConfirm::new(true), KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn fr14_a_hidden_window_shows_no_dialog_and_moves_nothing() {
+        let f = disclosing();
+        let (journal, damaged) = damage_journal(&f);
+        let hidden = ScriptedConfirm::new(true);
+        hidden
+            .window
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let error = recover(&f, &hidden).unwrap_err();
+
+        assert_eq!(error.kind, "viewChanged");
+        assert!(hidden.shown().is_empty());
+        assert_eq!(fs::read(&journal).unwrap(), damaged);
+    }
+
+    /// FV-01, the reviewer's probe through the handler: two vaults share one journal folder (a
+    /// temporary one, because the test damages its mapping). A damaged mapping stops the
+    /// reveals of both. The recovery window names the mapping. After it, both vaults reveal
+    /// again, the damaged bytes are kept, both journal files are as they were, and the first
+    /// reveal of each vault gives the page one journalLineageUnconfirmed notice.
+    #[test]
+    fn fv01_a_damaged_mapping_is_recovered_through_the_handler_and_both_vaults_resume() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = akm_core::journal::JournalRoot::at(folder.path().join("journal"));
+        let both = [disclosing_in(root.clone()), disclosing_in(root)];
+        let yes = ScriptedConfirm::new(true);
+        let lineage = |f: &Disclosing| {
+            let report = serde_json::to_value(f.session.warnings().unwrap()).unwrap();
+            report["operations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|notice| notice["kind"] == "journalLineageUnconfirmed")
+                .count()
+        };
+        let journals: Vec<_> = both
+            .iter()
+            .map(|f| {
+                assert!(reveal_one(f, &yes, KeyDisclosure::Reveal)
+                    .unwrap()
+                    .is_some());
+                journal_of(f)
+            })
+            .collect();
+        let mapping = folder.path().join("journal").join("mapping.json");
+        let bytes = fs::read(&mapping).unwrap();
+        fs::write(&mapping, &bytes[..bytes.len() / 2]).unwrap();
+        let damaged = fs::read(&mapping).unwrap();
+        for f in &both {
+            let refused = reveal_one(f, &yes, KeyDisclosure::Reveal).err().unwrap();
+            assert_eq!(refused.kind, "journal");
+        }
+
+        let kept = recover(&both[0], &yes).unwrap().expect("approved");
+
+        let window = yes.shown().last().unwrap().clone();
+        assert!(window.contains("mapping.json"), "{window}");
+        assert_eq!(
+            fs::read(mapping.with_file_name(&kept.kept_name)).unwrap(),
+            damaged
+        );
+        for f in &both {
+            assert_eq!(lineage(f), 0);
+            assert!(reveal_one(f, &yes, KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some());
+            assert_eq!(lineage(f), 1, "the first reveal warns");
+            assert!(reveal_one(f, &yes, KeyDisclosure::Reveal)
+                .unwrap()
+                .is_some());
+            assert_eq!(lineage(f), 1, "and only the first");
+        }
+        for (path, bytes) in journals {
+            assert_eq!(fs::read(&path).unwrap(), bytes, "{}", path.display());
+        }
+    }
+
+    /// FV-01, class B through the handler: the window named the damaged mapping. While it is
+    /// open, another program puts the mapping back and damages the journal of this vault. The
+    /// approval covered the mapping, not the journal, so the recovery refuses and moves nothing.
+    #[test]
+    fn fv01_an_approval_of_the_mapping_moves_no_journal_that_was_damaged_later() {
+        let folder = tempfile::tempdir().unwrap();
+        let journal = folder.path().join("journal");
+        let f = disclosing_in(akm_core::journal::JournalRoot::at(&journal));
+        let (chain, mut damaged_chain) = journal_of(&f);
+        damaged_chain.extend_from_slice(b"{this is not a record}\n");
+        let mapping = journal.join("mapping.json");
+        let good = fs::read(&mapping).unwrap();
+        fs::write(&mapping, &good[..good.len() / 2]).unwrap();
+        let names = || {
+            let mut names: Vec<_> = fs::read_dir(&journal)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        let before = names();
+        let (path, bytes) = (mapping.clone(), good.clone());
+        let (chain_path, chain_bytes) = (chain.clone(), damaged_chain.clone());
+        let swapping = ScriptedConfirm::during(true, move || {
+            fs::write(&path, &bytes).unwrap();
+            fs::write(&chain_path, &chain_bytes).unwrap();
+        });
+
+        let refused = recover(&f, &swapping).unwrap_err();
+
+        assert_eq!(refused.kind, "journal", "{refused:?}");
+        assert!(swapping.shown().last().unwrap().contains("mapping.json"));
+        assert_eq!(fs::read(&mapping).unwrap(), good);
+        assert_eq!(
+            fs::read(&chain).unwrap(),
+            damaged_chain,
+            "the journal stays"
+        );
+        assert_eq!(
+            names(),
+            before,
+            "nothing was kept aside, nothing was started"
+        );
+    }
+
+    /// The journal file of the fixture and its bytes.
+    fn journal_of(f: &Disclosing) -> (PathBuf, Vec<u8>) {
+        let path = f
+            .session
+            .access(Access::Read, None, |vault| {
+                Ok(vault.audit_log().journal_path()?)
+            })
+            .unwrap()
+            .value
+            .expect("the added keys made a journal");
+        let bytes = fs::read(&path).unwrap();
+        (path, bytes)
+    }
+
+    /// U1-R1-01: a value read from the vault is not delivered after a same-session change.
+    /// Between the read and the delivery, a rotate, a remove or a reload moves the revision.
+    /// Each of the four delivery paths then refuses with stalePreview, and the clipboard keeps
+    /// the user's own text.
+    #[test]
+    fn u1_r1_01_a_value_that_left_the_vault_is_refused_after_a_same_session_change() {
+        for change in ["rotate", "remove", "reload"] {
+            for path in ["single reveal", "single copy", "bulk preview", "bulk copy"] {
+                let f = disclosing();
+                f.clipboard.lock().unwrap().text = "fake-user-value".into();
+                let expected = f.session.snapshot().unwrap();
+                let scope =
+                    ExportScope::new(Some("app".into()), Some("dev".into()), false).unwrap();
+                let stamped = if path.starts_with("single") {
+                    requested_key_at(&f.session, expected, &f.keys[0], KeyDisclosure::Reveal)
+                        .unwrap()
+                } else {
+                    extract_export_at(&f.session, expected, &scope, "fake target").unwrap()
+                };
+                let id = f.keys[0].clone();
+                match change {
+                    "rotate" => drop(
+                        f.session
+                            .access(Access::Write, None, |vault| {
+                                rotate_key(vault, &id, "fake-rotated-value".into())
+                            })
+                            .unwrap(),
+                    ),
+                    "remove" => drop(
+                        f.session
+                            .access(Access::Write, None, |vault| Ok(vault.remove(&id)?))
+                            .unwrap(),
+                    ),
+                    _ => drop(
+                        f.session
+                            .access(Access::Reload, None, |vault| Ok(vault.reload()?))
+                            .unwrap(),
+                    ),
+                }
+                let delivered = if path.ends_with("copy") {
+                    f.session.copy_stamped(stamped).map(|()| String::new())
+                } else {
+                    f.session.reveal(stamped)
+                };
+                assert_eq!(
+                    delivered.unwrap_err().kind,
+                    "stalePreview",
+                    "{change}, {path}: the old value is refused"
+                );
+                assert_eq!(clipboard_text(&f), "fake-user-value", "{change}, {path}");
+            }
+        }
     }
 }

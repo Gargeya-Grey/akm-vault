@@ -38,7 +38,7 @@ def main():
         return result.stdout
 
     run(args.akm, ["--vault", source, "init"])
-    run(args.akm, ["--vault", source, "add", "Clone original proof", "--secret", "fake-original-kept"])
+    run(args.akm, ["--vault", source, "add", "Clone original proof", "--secret-stdin"], "fake-original-kept\n")
     root = ET.fromstring(run(args.keepassxc, ["export", "-f", "xml", source], PASSWORD + "\n"))
     groups = root.findall("./Root/Group//Group")
     group = next(group for group in groups if group.findtext("Name") == "API Keys")

@@ -2,14 +2,19 @@ mod clipboard;
 #[cfg(test)]
 mod clipboard_fake;
 mod commands;
+mod disclosure;
 #[doc(hidden)]
 pub mod error;
 mod import_review;
+mod launch;
+mod outcome;
 mod policy;
 mod private_export;
+#[cfg(windows)]
+mod process;
 #[doc(hidden)]
 pub mod publication;
-mod reminders;
+mod review_window;
 mod session;
 mod settings;
 #[cfg(test)]
@@ -28,29 +33,25 @@ use session::{MonotonicClock, Session, VaultState};
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init())
         .manage(visibility::WindowPresentation::default())
         .setup(|app| {
             let handle = app.handle().clone();
             app.manage(settings::PreferenceState(Arc::new(
                 settings::FilePreferences::for_app(&handle),
             )));
-            app.manage(reminders::ReminderState(Arc::new(
-                reminders::Reminders::new(
-                    Arc::new(reminders::FileReminders::for_app(&handle)),
-                    Arc::new(reminders::NativeNotifier(handle.clone())),
-                ),
-            )));
             app.manage(import_review::ConfirmState(Arc::new(
                 import_review::NativeConfirm(handle.clone()),
             )));
-            let session = Arc::new(Session::new(
+            app.manage(launch::TerminalState(Arc::new(launch::NativeTerminal(
+                handle.clone(),
+            ))));
+            let session = Session::new(
                 Arc::new(MonotonicClock::default()),
                 Box::new(clipboard::NativeClipboard),
                 Arc::new(move |notice| {
                     let _ = handle.emit("vault-locked", notice);
                 }),
-            ));
+            );
             match windows_session::start(session.clone()) {
                 Ok(monitor) => {
                     app.manage(monitor);

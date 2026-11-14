@@ -41,6 +41,7 @@ export function ConfirmDialog({
 }: ConfirmProps) {
   const dialogRef = useDialogFocus<HTMLDivElement>();
   const titleId = useId();
+  const bodyId = useId();
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -65,9 +66,10 @@ export function ConfirmDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        aria-describedby={bodyId}
       >
         <h2 id={titleId}>{title}</h2>
-        <div className="confirm-body">{children}</div>
+        <div className="confirm-body" id={bodyId}>{children}</div>
         <div className="dialog-actions">
           <button
             type="button"

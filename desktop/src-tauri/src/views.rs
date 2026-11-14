@@ -119,58 +119,104 @@ impl From<&RecycledKey> for RecycledView {
     }
 }
 
+/// One field of a request: `None` when the request does not name it, `Some(None)` when it
+/// names it with `null`, `Some(Some(value))` when it gives a value.
+type Named<T> = Option<Option<T>>;
+
+/// A key as the page sends it (FW-03). One rule for every field: a field that the request does
+/// not name keeps the stored value exactly, with no conversion; `null`, an empty text or an
+/// empty list clears it; a value sets it, cleaned as an add cleans it. An add starts from an
+/// empty key, so it names every field that it fills. The title cannot be cleared. The secret
+/// keeps its own rule: absent, `null` or empty keeps the stored secret.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct KeyDraft {
-    title: String,
+    #[serde(default, deserialize_with = "named")]
+    title: Named<String>,
     secret: Option<String>,
-    username: Option<String>,
-    issuer: Option<String>,
-    project: Option<String>,
-    environment: Option<String>,
-    #[serde(default)]
-    scopes: Vec<String>,
-    env_var: Option<String>,
-    url: Option<String>,
-    notes: Option<String>,
-    #[serde(default)]
-    tags: Vec<String>,
-    expires_at: Option<DateTime<Utc>>,
-    rotation_days: Option<u32>,
+    #[serde(default, deserialize_with = "named")]
+    username: Named<String>,
+    #[serde(default, deserialize_with = "named")]
+    issuer: Named<String>,
+    #[serde(default, deserialize_with = "named")]
+    project: Named<String>,
+    #[serde(default, deserialize_with = "named")]
+    environment: Named<String>,
+    #[serde(default, deserialize_with = "named")]
+    scopes: Named<Vec<String>>,
+    #[serde(default, deserialize_with = "named")]
+    env_var: Named<String>,
+    #[serde(default, deserialize_with = "named")]
+    url: Named<String>,
+    #[serde(default, deserialize_with = "named")]
+    notes: Named<String>,
+    #[serde(default, deserialize_with = "named")]
+    tags: Named<Vec<String>>,
+    /// Text, read with the core's one expiry rule (`schedule::parse_expiry`), which checks the
+    /// text: a typed instant has already lost every fraction digit after the ninth. `null`
+    /// clears the expiry; an empty text is refused.
+    #[serde(default, deserialize_with = "named")]
+    expires_at: Named<String>,
+    /// `null` clears the interval.
+    #[serde(default, deserialize_with = "named")]
+    rotation_days: Named<u32>,
+}
+
+fn named<'de, D, T>(deserializer: D) -> Result<Named<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 impl KeyDraft {
-    pub fn into_input(
-        mut self,
-        existing: Option<ApiKeyInput>,
-    ) -> Result<ApiKeyInput, CommandError> {
-        let secret = self
-            .secret
-            .take()
-            .filter(|value| !value.is_empty())
-            .map(Secret::from)
-            .or_else(|| existing.as_ref().map(|input| input.secret.clone()))
-            .ok_or_else(|| CommandError::new("invalid", "The secret must not be empty."))?;
-        let username = self
-            .username
-            .take()
-            .or_else(|| existing.and_then(|key| key.username));
-        Ok(ApiKeyInput {
-            title: self.title,
-            secret,
-            username: clean(username),
-            issuer: clean(self.issuer),
-            project: clean(self.project),
-            environment: clean(self.environment),
-            scopes: tidy(self.scopes),
-            env_var: clean(self.env_var),
-            url: clean(self.url),
-            notes: clean(self.notes),
-            tags: tidy(self.tags),
-            expires_at: self.expires_at,
-            rotation_days: self.rotation_days,
-        })
+    /// `key` with the fields that the request names: the stored key of an update
+    /// (`Vault::edit_input`, as `akm edit` starts), or an empty key for an add.
+    pub fn apply(self, mut key: ApiKeyInput) -> Result<ApiKeyInput, CommandError> {
+        fn text(field: &mut Option<String>, named: Named<String>) {
+            if let Some(value) = named {
+                *field = clean(value);
+            }
+        }
+        fn list(field: &mut Vec<String>, named: Named<Vec<String>>) {
+            if let Some(values) = named {
+                *field = tidy(values.unwrap_or_default());
+            }
+        }
+        if let Some(title) = self.title {
+            key.title = title.unwrap_or_default();
+        }
+        if let Some(secret) = self.secret.filter(|value| !value.is_empty()) {
+            key.secret = Secret::from(secret);
+        }
+        text(&mut key.username, self.username);
+        text(&mut key.issuer, self.issuer);
+        text(&mut key.project, self.project);
+        text(&mut key.environment, self.environment);
+        text(&mut key.env_var, self.env_var);
+        text(&mut key.url, self.url);
+        text(&mut key.notes, self.notes);
+        list(&mut key.scopes, self.scopes);
+        list(&mut key.tags, self.tags);
+        if let Some(expires) = self.expires_at {
+            key.expires_at = expires
+                .as_deref()
+                .map(akm_core::schedule::parse_expiry)
+                .transpose()?;
+        }
+        if let Some(days) = self.rotation_days {
+            key.rotation_days = days;
+        }
+        Ok(key)
     }
+}
+
+/// A name that the page chose from the stored values, as a project or an environment of a
+/// scope: passed on exactly as it is stored, because the core matches it exactly (FW-03).
+/// Only an empty text is no choice. `clean` is for a text that the user typed.
+pub fn chosen(value: Option<String>) -> Option<String> {
+    value.filter(|inner| !inner.is_empty())
 }
 
 pub fn clean(value: Option<String>) -> Option<String> {
@@ -299,14 +345,12 @@ pub struct BackupInfo {
 mod tests {
     use super::*;
 
+    /// CORE-R1-07 at the desktop's boundary: the draft reads its expiry as text, with the one
+    /// rule of the core. A fraction of a second is refused before add and before update, also a
+    /// fraction beyond the nine digits that a typed instant keeps, and nothing is stored or
+    /// changed. A whole second, a fraction of zero and a date pass.
     #[test]
-    fn omitted_username_is_preserved_on_update() {
-        let existing = ApiKeyInput {
-            title: "Fake".into(),
-            secret: "fake-secret".into(),
-            username: Some("alice".into()),
-            ..Default::default()
-        };
+    fn a_draft_with_a_fraction_of_a_second_in_its_expiry_is_refused_and_stores_nothing() {
         let directory = tempfile::tempdir().unwrap();
         let mut vault = Vault::create(
             directory.path().join("vault.kdbx"),
@@ -314,17 +358,58 @@ mod tests {
             None,
         )
         .unwrap();
-        let key = vault.add(existing).unwrap();
-        let draft: KeyDraft =
-            serde_json::from_value(serde_json::json!({ "title": "Renamed" })).unwrap();
-        let input = draft
-            .into_input(Some(vault.edit_input(&key.id).unwrap()))
+        let draft = |expires: &str| -> KeyDraft {
+            serde_json::from_value(serde_json::json!({
+                "title": "Fake",
+                "secret": "fake-secret",
+                "expiresAt": expires,
+            }))
+            .unwrap()
+        };
+        for refused in [
+            "2030-01-02T03:04:05.5Z",
+            "2030-01-02T03:04:05.000000001Z",
+            "2030-01-02T03:04:05.0000000001Z",
+            "2030-01-02T03:04:05.00000000000000000001Z",
+            "2030-01-02T03:04:05.999+00:00",
+            "tomorrow",
+            "",
+        ] {
+            let error = draft(refused)
+                .apply(ApiKeyInput::default())
+                .expect_err(refused);
+            assert_eq!(error.kind, "invalid", "{refused}");
+            assert!(!error.message.contains("fake-secret"), "{refused}");
+        }
+        assert!(vault.list().is_empty());
+        for (accepted, stored) in [
+            ("2030-01-02T03:04:05Z", "2030-01-02T03:04:05+00:00"),
+            ("2030-01-02T03:04:05.000Z", "2030-01-02T03:04:05+00:00"),
+            ("2030-01-02T05:04:05+02:00", "2030-01-02T03:04:05+00:00"),
+            ("2030-01-02", "2030-01-02T23:59:59+00:00"),
+        ] {
+            let input = draft(accepted).apply(ApiKeyInput::default()).unwrap();
+            assert_eq!(input.expires_at.unwrap().to_rfc3339(), stored, "{accepted}");
+        }
+        let key = vault
+            .add(
+                draft("2030-01-02T03:04:05Z")
+                    .apply(ApiKeyInput::default())
+                    .unwrap(),
+            )
             .unwrap();
-        assert_eq!(input.username.as_deref(), Some("alice"));
-        vault.update(&key.id, input).unwrap();
-        assert_eq!(
-            crate::test_support::secret_of(&vault, &key.id),
-            "fake-secret"
-        );
+        let whole = key.expires_at.unwrap();
+        let existing = vault.edit_input(&key.id).unwrap();
+        let error = draft("2031-01-02T03:04:05.25Z")
+            .apply(existing)
+            .err()
+            .unwrap();
+        assert_eq!(error.kind, "invalid");
+        assert_eq!(vault.list()[0].expires_at, Some(whole));
+        // The core holds the same rule for a typed instant from any other caller.
+        let mut typed = vault.edit_input(&key.id).unwrap();
+        typed.expires_at = Some("2030-01-02T03:04:05.000000001Z".parse().unwrap());
+        assert!(vault.update(&key.id, typed).is_err());
+        assert_eq!(vault.list()[0].expires_at, Some(whole));
     }
 }

@@ -3,13 +3,13 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex, MutexGuard, PoisonError, TryLockError,
+        Arc, Mutex, MutexGuard, PoisonError, TryLockError, Weak,
     },
     time::{Duration, Instant},
 };
 
 use akm_core::{
-    vault::{VaultWarning, VaultWarningKind},
+    vault::{CommitGate, VaultWarning, VaultWarningKind},
     Vault,
 };
 use serde::Serialize;
@@ -91,6 +91,12 @@ pub enum OperationWarningKind {
     ImportSessionEnded,
     ImportFailed,
     ImportDeclined,
+    TerminalStarted,
+    TerminalSessionEnded,
+    TerminalFailed,
+    TerminalDeclined,
+    FilePermissions,
+    JournalLineageUnconfirmed,
 }
 
 #[derive(Clone, Serialize)]
@@ -132,6 +138,48 @@ struct NativeOwner {
     claimed: bool,
 }
 
+/// How many single-key disclosures (a reveal or a copy) AKM makes in a rolling minute before
+/// the next one needs the approval of the user in a native window. A page can read its
+/// session ID, so the ID is no user gesture: this budget stops a loop of single requests
+/// from doing the work of one bulk request (finding FR-03). The budget counts across
+/// sessions, because a page that knows the password can lock and unlock.
+pub const FREE_SINGLE_DISCLOSURES: usize = 5;
+pub const DISCLOSURE_WINDOW: Duration = Duration::from_secs(60);
+
+/// What the budget decided about one single-key request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Admission {
+    /// Inside the budget. The request is counted.
+    Free,
+    /// Over the budget. The request goes on only after the user approves it in a native window.
+    NeedsApproval,
+}
+
+/// The times of the single-key disclosures of this run of AKM. Nothing clears it: a lock and
+/// a new opening leave it as it is. A time leaves it when its rolling minute has passed.
+#[derive(Default)]
+struct DisclosureLog {
+    times: Vec<Duration>,
+}
+
+impl DisclosureLog {
+    fn recent(&mut self, now: Duration) -> &mut Vec<Duration> {
+        self.times
+            .retain(|at| now.saturating_sub(*at) < DISCLOSURE_WINDOW);
+        &mut self.times
+    }
+}
+
+/// The one native confirmation window for a disclosure that is open. A second request waits
+/// no turn: it is refused, so a page cannot stack windows over the user.
+pub struct ReviewSlot<'a>(&'a AtomicBool);
+
+impl Drop for ReviewSlot<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 struct Gate {
     policy: Policy,
     owner: Option<NativeOwner>,
@@ -140,6 +188,7 @@ struct Gate {
     /// A lock transition was seen and its cleanup attempt is still owed. The guard that
     /// saw the transition settles it after it released the gate (unit 1h, design D2).
     cleanup_owed: bool,
+    disclosures: DisclosureLog,
     path: Option<PathBuf>,
     warnings: Vec<ApplicationNotice>,
     notices: Vec<OperationNotice>,
@@ -162,7 +211,8 @@ struct LeaseCell {
 }
 
 /// A gate guard. A lock transition that the call saw is settled when the guard is dropped,
-/// after the gate was released, so a cleanup never runs under the gate.
+/// after the gate was released, so a cleanup never runs under the gate. The attempt never
+/// waits for the lease (`Session::settle`).
 struct GateGuard<'a> {
     session: &'a Session,
     guard: Option<MutexGuard<'a, Gate>>,
@@ -184,13 +234,13 @@ impl DerefMut for GateGuard<'_> {
 
 impl Drop for GateGuard<'_> {
     fn drop(&mut self) {
-        let Some(mut guard) = self.guard.take() else {
+        let Some(guard) = self.guard.take() else {
             return;
         };
-        let owed = self.flush && std::mem::take(&mut guard.cleanup_owed);
+        let owed = self.flush && guard.cleanup_owed;
         drop(guard);
         if owed {
-            self.session.settle(false);
+            self.session.settle();
         }
     }
 }
@@ -202,23 +252,179 @@ enum Step {
 }
 
 pub struct Session {
+    /// This session, for the vault commit gate that a vault access installs. Weak, because
+    /// the stored vault holds that gate and the session holds the stored vault.
+    me: Weak<Session>,
     gate: Mutex<Gate>,
     lease: Mutex<LeaseCell>,
     exiting: AtomicBool,
+    review_open: AtomicBool,
     vault: Mutex<StoredVault>,
     open_serial: Mutex<()>,
     clock: Arc<dyn Clock>,
     notify_locked: Arc<dyn Fn(NativeLockNotice) + Send + Sync>,
+    /// Runs at the vault commit point, before the gate is taken. A test places a barrier here.
+    #[cfg(test)]
+    commit_hook: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 #[derive(Clone)]
 pub struct VaultState(pub Arc<Session>);
 
+/// What a commit is bound to. The commit checks it under the gate, just before the act.
+#[derive(Clone, Copy)]
+pub enum Binding {
+    /// The session of a native step that holds its ticket (an opening).
+    Ticket(Ticket),
+    /// A session and a vault revision: a write since then refuses the act.
+    Revision(Snapshot),
+}
+
+/// A prepared act (`docs/design/commit-point.md`). The slow work is done before the commit:
+/// `act` is one short step under the gate, and `revoke` undoes the preparation.
+pub trait Effect {
+    type Output;
+    /// Runs under the gate, for the session that the binding names. It must be short and must
+    /// not call back into the session: the gate is not reentrant.
+    fn act(&mut self, held: &Held<'_>) -> Result<Self::Output, CommandError>;
+    /// Runs after the gate is released, when the check refused the act or the act failed. An
+    /// error is a fixed text for an application warning: no path and no value.
+    fn revoke(&mut self) -> Result<(), String>;
+}
+
+/// An act with nothing to undo, such as a copy into memory that is zeroed on drop.
+pub struct Act<F>(Option<F>);
+
+impl<F> Act<F> {
+    pub fn new(act: F) -> Self {
+        Self(Some(act))
+    }
+}
+
+impl<T, F: FnOnce(&Held<'_>) -> Result<T, CommandError>> Effect for Act<F> {
+    type Output = T;
+
+    fn act(&mut self, held: &Held<'_>) -> Result<T, CommandError> {
+        match self.0.take() {
+            Some(act) => act(held),
+            None => Err(CommandError::internal("An act ran twice.")),
+        }
+    }
+
+    fn revoke(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// The vault file replacement, as an act. The core removes its own temporary files when the
+/// replacement is refused or fails, so there is nothing to revoke here.
+struct Replacement<'r> {
+    replace: &'r mut dyn FnMut() -> akm_core::Result<()>,
+    failure: Option<akm_core::Error>,
+}
+
+impl Effect for Replacement<'_> {
+    type Output = ();
+
+    fn act(&mut self, _held: &Held<'_>) -> Result<(), CommandError> {
+        (self.replace)().map_err(|error| {
+            self.failure = Some(error);
+            CommandError::new("io", "The vault file could not be replaced.")
+        })
+    }
+
+    fn revoke(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// What the vault commit gate of one access saw.
+#[derive(Default)]
+struct CommitLog {
+    /// The revision that the next replacement is bound to.
+    revision: u64,
+    committed: bool,
+    refusal: Option<CommandError>,
+}
+
+/// The core `CommitGate` of one vault access (`docs/design/commit-point.md`, section 3.3).
+/// A write access binds it to its session and revision. Any other access, and the stored
+/// vault between accesses, gets a closed gate that refuses every replacement.
+struct VaultCommit {
+    session: Weak<Session>,
+    ticket: Option<Ticket>,
+    log: Mutex<CommitLog>,
+}
+
+impl VaultCommit {
+    fn new(session: Weak<Session>, ticket: Option<Ticket>, revision: u64) -> Self {
+        Self {
+            session,
+            ticket,
+            log: Mutex::new(CommitLog {
+                revision,
+                ..CommitLog::default()
+            }),
+        }
+    }
+
+    fn closed() -> Arc<dyn CommitGate> {
+        Arc::new(Self::new(Weak::new(), None, 0))
+    }
+
+    fn finish(&self) -> CommitLog {
+        std::mem::take(&mut *self.log.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+impl CommitGate for VaultCommit {
+    fn commit(&self, replace: &mut dyn FnMut() -> akm_core::Result<()>) -> akm_core::Result<()> {
+        let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+        let (Some(session), Some(ticket)) = (self.session.upgrade(), self.ticket) else {
+            log.refusal = Some(CommandError::internal(
+                "The vault file can change only in a vault write.",
+            ));
+            return Err(not_written());
+        };
+        #[cfg(test)]
+        session.reach_commit();
+        let binding = Binding::Revision(Snapshot {
+            ticket,
+            revision: log.revision,
+            presentation: 0,
+        });
+        let mut replacement = Replacement {
+            replace,
+            failure: None,
+        };
+        match session.commit_point(binding, &mut replacement, true) {
+            Ok(()) => {
+                log.committed = true;
+                log.revision = log.revision.wrapping_add(1);
+                Ok(())
+            }
+            Err(error) => match replacement.failure.take() {
+                Some(failure) => Err(failure),
+                None => {
+                    log.refusal = Some(error);
+                    Err(not_written())
+                }
+            },
+        }
+    }
+}
+
+/// What the core reports for a refused replacement. The access answers with the refusal that
+/// the gate recorded, not with this text.
+fn not_written() -> akm_core::Error {
+    akm_core::Error::Save("the vault file was not replaced: nothing was written".into())
+}
+
 /// Proof that the session gate is held for a session that is still current. Only
-/// `Session::while_current` and `Session::while_session` make one, and it is neither `Clone`
-/// nor `Copy`, so it cannot outlive the call that made it. A function that acts for a session
-/// (the notifier, the saved-path write) takes `&Held`: a caller that checked the session
-/// earlier and acts later has nothing to pass.
+/// `Session::commit_point` makes one, and it is neither `Clone` nor `Copy`, so it cannot
+/// outlive the call that made it. Every act for a session (the vault replacement, the terminal
+/// resume, the saved-path rename) takes `&Held`: a caller that checked the
+/// session earlier and acts later has nothing to pass.
 pub struct Held<'gate> {
     gate: std::marker::PhantomData<&'gate ()>,
 }
@@ -242,14 +448,16 @@ impl Session {
         clock: Arc<dyn Clock>,
         clipboard: Box<dyn ClipboardBackend>,
         notify_locked: Arc<dyn Fn(NativeLockNotice) + Send + Sync>,
-    ) -> Self {
-        Self {
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|me| Self {
+            me: me.clone(),
             gate: Mutex::new(Gate {
                 policy: Policy::default(),
                 owner: None,
                 revision: 0,
                 presentation: 0,
                 cleanup_owed: false,
+                disclosures: DisclosureLog::default(),
                 path: None,
                 warnings: Vec::new(),
                 notices: Vec::new(),
@@ -260,11 +468,14 @@ impl Session {
                 episode: None,
             }),
             exiting: AtomicBool::new(false),
+            review_open: AtomicBool::new(false),
             vault: Mutex::new(StoredVault::default()),
             open_serial: Mutex::new(()),
             clock,
             notify_locked,
-        }
+            #[cfg(test)]
+            commit_hook: Mutex::new(None),
+        })
     }
 
     /// The gate. A guard that saw a lock transition makes the owed cleanup attempt when it
@@ -329,11 +540,25 @@ impl Session {
         self.cell()
     }
 
-    /// The cleanup attempt of one public call (at most one, never a loop). `tick` also
-    /// expires a due lease of the current session.
-    fn settle(&self, tick: bool) {
-        let mut cell = self.cell();
-        self.settle_held(&mut cell, tick, false);
+    /// The cleanup attempt that a lock transition owes (at most one, never a loop). It never
+    /// waits for the lease, so no thread that delivers a lock waits for clipboard work (FW-01).
+    /// When a copy or a tick holds the lease, the attempt stays owed, and the holder makes it
+    /// when it lets the lease go (`release`).
+    fn settle(&self) {
+        let mut cell = match self.lease.try_lock() {
+            Ok(cell) => cell,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return,
+        };
+        self.settle_held(&mut cell, false, false);
+    }
+
+    /// Lets the lease go, then makes the attempt that a lock owed while the lease was held.
+    fn release(&self, cell: MutexGuard<'_, LeaseCell>) {
+        drop(cell);
+        if self.raw_gate().cleanup_owed {
+            self.settle();
+        }
     }
 
     fn settle_held(&self, cell: &mut LeaseCell, tick: bool, only_if_owed: bool) {
@@ -408,8 +633,10 @@ impl Session {
         }
     }
 
+    /// A signal from Windows. The Windows message thread calls it, so it ends the session under
+    /// the gate and makes no cleanup attempt: the cleanup worker's next tick makes it (FW-01).
     pub fn observe(&self, signal: Signal) {
-        if let Ok(mut gate) = self.gate() {
+        if let Ok(mut gate) = self.gate_deferred() {
             gate.policy.observe(signal);
             if signal != Signal::Available {
                 self.locked_gate(&mut gate);
@@ -455,7 +682,7 @@ impl Session {
             Err(TryLockError::WouldBlock) => return,
         };
         let valid = self
-            .gate()
+            .gate_deferred()
             .ok()
             .and_then(|mut gate| self.current(&mut gate).ok())
             .map(|s| s.ticket);
@@ -464,21 +691,33 @@ impl Session {
         }
     }
 
+    /// The cleanup worker's step: it expires a due lease, and makes an attempt that a lock owes.
+    /// It may wait for a copy in progress, so the Windows message thread never calls it.
     pub fn tick(&self) {
         // Expiry seen here is settled by the one attempt below.
         drop(self.gate_deferred());
-        self.settle(true);
+        let mut cell = self.cell();
+        self.settle_held(&mut cell, true, false);
+        self.release(cell);
         self.discard_locked_vault();
     }
 
     /// Window close and application exit: lock, with one cleanup attempt, once. Later calls
-    /// do nothing until the next open. The lease's own drop does not attempt again.
+    /// do nothing until the next open. The lease's own drop does not attempt again. The lock
+    /// comes first; the attempt then waits for a copy in progress, because nothing cleans
+    /// after the exit.
     pub fn shutdown(&self) {
         if self.exiting.swap(true, Ordering::SeqCst) {
             return;
         }
-        let _ = self.lock();
-        self.cell().clipboard.exit_attempted();
+        if let Ok(mut gate) = self.gate_deferred() {
+            gate.policy.lock();
+            self.locked_gate(&mut gate);
+        }
+        self.discard_locked_vault();
+        let mut cell = self.cell();
+        self.settle_held(&mut cell, false, false);
+        cell.clipboard.exit_attempted();
     }
 
     /// Renews the idle deadline of the session that the request names. The page makes the request
@@ -508,39 +747,126 @@ impl Session {
         Ok(())
     }
 
-    /// The one way to perform a session-scoped side effect (a settings write, a
-    /// notification). The effect runs while `ticket` still owns the session and under the
-    /// gate that lock and `start_open` take, so neither can retire the owner between the
-    /// check and the effect. The effect gets a `Held` and every such side effect takes one
-    /// as an argument, so code that checks and then acts after the gate is released does not
-    /// compile. The effect must be short and must not call back into the session: the gate
-    /// is not reentrant.
-    pub fn while_current<T>(
-        &self,
-        ticket: Ticket,
-        effect: impl FnOnce(&Held<'_>) -> T,
-    ) -> Result<T, CommandError> {
+    /// Counts one single-key request of the session `ticket` against the budget. The gate is
+    /// held only for this count in memory.
+    pub fn admit_single_disclosure(&self, ticket: Ticket) -> Result<Admission, CommandError> {
         let mut gate = self.gate()?;
+        let now = self.clock.now();
         if self.current(&mut gate)?.ticket != ticket {
             return Err(CommandError::locked());
         }
-        Ok(effect(&Held::new()))
+        let times = gate.disclosures.recent(now);
+        if times.len() < FREE_SINGLE_DISCLOSURES {
+            times.push(now);
+            Ok(Admission::Free)
+        } else {
+            Ok(Admission::NeedsApproval)
+        }
     }
 
-    /// As `while_current`, for a request that names the session it was made for.
-    pub fn while_session<T>(
-        &self,
-        session_id: &str,
-        effect: impl FnOnce(&Held<'_>) -> T,
-    ) -> Result<T, CommandError> {
-        let id = uuid::Uuid::parse_str(session_id).map_err(|_| CommandError::locked())?;
+    /// Counts a request that the user approved, so that approvals fill the window too.
+    pub fn count_approved_disclosure(&self, ticket: Ticket) -> Result<(), CommandError> {
         let mut gate = self.gate()?;
-        let current = self.current(&mut gate)?;
-        gate.owner
-            .as_ref()
-            .filter(|owner| owner.ticket == current.ticket && owner.id == id)
-            .ok_or_else(CommandError::locked)?;
-        Ok(effect(&Held::new()))
+        let now = self.clock.now();
+        if self.current(&mut gate)?.ticket != ticket {
+            return Err(CommandError::locked());
+        }
+        gate.disclosures.recent(now).push(now);
+        Ok(())
+    }
+
+    /// Takes the one place for a native confirmation window of a disclosure.
+    pub fn open_review(&self) -> Result<ReviewSlot<'_>, CommandError> {
+        self.review_open
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| {
+                CommandError::new(
+                    "busy",
+                    "Another confirmation window is open. Answer it first, then try again.",
+                )
+            })?;
+        Ok(ReviewSlot(&self.review_open))
+    }
+
+    /// The one way to perform a session-scoped effect (`docs/design/commit-point.md`). Under
+    /// the gate that lock and `start_open` take, it checks the binding and runs the act, so
+    /// neither can retire the session between the check and the act. After the gate is
+    /// released, it revokes the preparation when the check refused or the act failed.
+    pub fn commit<E: Effect + ?Sized>(
+        &self,
+        binding: Binding,
+        effect: &mut E,
+    ) -> Result<E::Output, CommandError> {
+        self.commit_point(binding, effect, false)
+    }
+
+    /// `commit`, and for the vault replacement (`advance`) the revision moves under the same
+    /// gate hold as the act, so a later commit bound to the old revision refuses.
+    fn commit_point<E: Effect + ?Sized>(
+        &self,
+        binding: Binding,
+        effect: &mut E,
+        advance: bool,
+    ) -> Result<E::Output, CommandError> {
+        let acted = self.gate().and_then(|mut gate| {
+            self.bound(&mut gate, binding)?;
+            // A panic in the act is caught here, so it never poisons the gate. The act may have
+            // happened, so the session ends: nothing builds on memory that may not match the file
+            // or the process (U1-R1-04).
+            let output =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| effect.act(&Held::new())))
+                    .unwrap_or_else(|_| {
+                        gate.policy.lock();
+                        self.locked_gate(&mut gate);
+                        Err(CommandError::failed_step())
+                    })?;
+            if advance {
+                gate.revision = gate.revision.wrapping_add(1);
+            }
+            Ok(output)
+        });
+        if acted.is_err() {
+            if let Err(message) = effect.revoke() {
+                self.warn(message);
+            }
+        }
+        acted
+    }
+
+    fn bound(&self, gate: &mut Gate, binding: Binding) -> Result<(), CommandError> {
+        let current = self.current(gate)?;
+        match binding {
+            Binding::Ticket(ticket) if ticket == current.ticket => Ok(()),
+            Binding::Revision(expected) if expected.ticket == current.ticket => {
+                if expected.revision == current.revision {
+                    Ok(())
+                } else {
+                    Err(CommandError::new(
+                        "stalePreview",
+                        "The vault changed. Start this operation again.",
+                    ))
+                }
+            }
+            Binding::Ticket(_) | Binding::Revision(_) => Err(CommandError::locked()),
+        }
+    }
+
+    /// For a test: `hook` runs at the vault commit point, before the gate is taken.
+    #[cfg(test)]
+    pub fn at_commit(&self, hook: impl Fn() + Send + Sync + 'static) {
+        *self.commit_hook.lock().unwrap() = Some(Box::new(hook));
+    }
+
+    #[cfg(test)]
+    fn reach_commit(&self) {
+        if let Some(hook) = self.commit_hook.lock().unwrap().as_ref() {
+            hook();
+        }
+    }
+
+    #[cfg(test)]
+    pub fn vault_is_released(&self) -> bool {
+        self.vault.try_lock().is_ok()
     }
 
     pub fn path(&self) -> Result<Option<PathBuf>, CommandError> {
@@ -577,7 +903,7 @@ impl Session {
             Ok((ticket, id))
         })();
         // The older owner was retired above; the one attempt for its lease is here.
-        self.settle(false);
+        self.settle();
         self.discard_locked_vault();
         reservation
     }
@@ -719,6 +1045,7 @@ impl Session {
             gate.revision = 0;
             gate.presentation = 0;
             core_notices(&mut gate, ticket, vault.take_warning_records());
+            vault.set_commit_gate(Some(VaultCommit::closed()));
             *stored = StoredVault {
                 ticket: Some(ticket),
                 vault: Some(vault),
@@ -802,30 +1129,59 @@ impl Session {
             }
         };
         let vault = stored.vault.as_mut().ok_or_else(CommandError::locked)?;
-        let result = operation(vault);
+        // Only a write can replace the file, and only through this gate: it checks the
+        // session and the revision under the gate at the replacement itself.
+        let commit = Arc::new(VaultCommit::new(
+            self.me.clone(),
+            access.persisted().then_some(before.ticket),
+            before.revision,
+        ));
+        vault.set_commit_gate(Some(commit.clone()));
+        // A panic in the operation is caught here, so `finish` below still learns whether the
+        // file was replaced (U1-R1-04).
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(vault)));
+        let panicked = result.is_err();
+        let result = result.unwrap_or_else(|_| Err(CommandError::failed_step()));
+        vault.set_commit_gate(Some(VaultCommit::closed()));
+        let log = commit.finish();
         let warnings = vault.take_warning_records();
+        let ended = |error: CommandError| {
+            if log.committed {
+                CommandError::completed_while_locked()
+            } else {
+                error
+            }
+        };
         let mut gate = match self.gate() {
             Ok(gate) => gate,
             Err(error) => {
                 *stored = StoredVault::default();
-                return Err(if result.is_ok() && access.persisted() {
-                    CommandError::completed_while_locked()
-                } else {
-                    error
-                });
+                return Err(ended(error));
             }
         };
         core_notices(&mut gate, before.ticket, warnings);
         let current = self.current(&mut gate);
         if !current.is_ok_and(|s| s.ticket == before.ticket) {
             *stored = StoredVault::default();
-            return Err(if result.is_ok() {
-                access.cancelled_after_completion()
-            } else {
-                CommandError::locked()
-            });
+            return Err(ended(CommandError::locked()));
         }
-        if result.is_ok() && !matches!(access, Access::Read) {
+        if let Some(refusal) = log.refusal {
+            return Err(refusal);
+        }
+        let result = match result {
+            // After a panic the memory may not match the file, and after a replacement no reply
+            // may invite a retry. So the session ends, and a replacement answers
+            // `completedWhileLocked` (U1-R1-04).
+            Err(error) if panicked || log.committed => {
+                *stored = StoredVault::default();
+                gate.policy.lock();
+                self.locked_gate(&mut gate);
+                return Err(ended(error));
+            }
+            result => result,
+        };
+        // A write moved the revision at its commit. A reload changes what is in memory.
+        if result.is_ok() && matches!(access, Access::Reload) {
             gate.revision = gate.revision.wrapping_add(1);
         }
         Ok(Stamped {
@@ -869,44 +1225,47 @@ impl Session {
     }
 
     pub fn copy_stamped(&self, secret: Stamped<Zeroizing<String>>) -> Result<(), CommandError> {
-        self.copy_value(
-            secret.snapshot.ticket,
-            Some(secret.snapshot.presentation),
-            secret.value,
-        )
+        self.copy_value(secret.snapshot.ticket, Some(secret.snapshot), secret.value)
     }
 
+    /// `read` is the snapshot that the value was read under. Without one (a test), only the
+    /// session is checked.
     fn copy_value(
         &self,
         ticket: Ticket,
-        presentation: Option<u64>,
+        read: Option<Snapshot>,
         text: Zeroizing<String>,
     ) -> Result<(), CommandError> {
         // The cell serializes copy with cleanup. No Vault mutex and no gate is held while the
         // OS clipboard is used, so a lock is never delayed by the copy (design D1).
         let mut cell = self.cell();
-        let result = self.copy_held(&mut cell, ticket, presentation, text);
+        let result = self.copy_held(&mut cell, ticket, read, text);
         self.settle_held(&mut cell, false, true);
+        self.release(cell);
         result
     }
 
+    /// Check, publish, check. A refusal at the second check takes the published copy back
+    /// (U1-R1-02). That take-back is the one cleanup attempt of the call, so it also settles a
+    /// cleanup that a lock owes.
+    ///
+    /// | Cause (lock, new session, same-session write, view expiry) | Clipboard after | Reply |
+    /// |---|---|---|
+    /// | before the first check | untouched | the refusal |
+    /// | after publication, the copy still AKM's | AKM's copy removed | the refusal |
+    /// | after publication, the user copied again | the user's copy kept | the refusal |
+    /// | after publication, the take-back fails | AKM's copy may remain; one warning says so | the cleanup error kind, both texts |
     fn copy_held(
         &self,
         cell: &mut LeaseCell,
         ticket: Ticket,
-        presentation: Option<u64>,
+        read: Option<Snapshot>,
         text: Zeroizing<String>,
     ) -> Result<(), CommandError> {
         let check = |this: &Self| -> Result<(), CommandError> {
             let mut gate = this.gate_deferred()?;
             let current = this.current(&mut gate)?;
-            if current.ticket != ticket {
-                return Err(CommandError::locked());
-            }
-            if presentation.is_some_and(|expected| expected != current.presentation) {
-                return Err(view_changed());
-            }
-            Ok(())
+            deliverable(current, read.unwrap_or(Snapshot { ticket, ..current }))
         };
         check(self)?;
         let before = cell.clipboard.owned_generation();
@@ -922,18 +1281,37 @@ impl Session {
                 return Err(failure.error);
             }
         }
-        check(self)
+        let refusal = match check(self) {
+            Ok(()) => return Ok(()),
+            Err(refusal) => refusal,
+        };
+        if after.is_none() || after == before {
+            return Err(refusal);
+        }
+        self.raw_gate().cleanup_owed = false;
+        let taken = cell.clipboard.clear();
+        let failure = taken
+            .as_ref()
+            .err()
+            .zip(after)
+            .map(|(error, lease_generation)| CleanupFailure {
+                lease_generation,
+                error: CommandError::new(&error.kind, error.message.clone()),
+            });
+        self.account_cleanup(cell, failure);
+        match taken {
+            Ok(()) => Err(refusal),
+            Err(error) => Err(CommandError::new(
+                &error.kind,
+                format!("{} {}", refusal.message, error.message),
+            )),
+        }
     }
 
     pub fn reveal(&self, secret: Stamped<Zeroizing<String>>) -> Result<String, CommandError> {
         let mut gate = self.gate()?;
         let current = self.current(&mut gate)?;
-        if current.ticket != secret.snapshot.ticket {
-            return Err(CommandError::locked());
-        }
-        if current.presentation != secret.snapshot.presentation {
-            return Err(view_changed());
-        }
+        deliverable(current, secret.snapshot)?;
         Ok(secret.value.as_str().to_owned())
     }
 
@@ -975,26 +1353,22 @@ impl Session {
     /// for. A request of an older session, or one that arrives after a newer opening, is
     /// refused here, so a page request never acts on a session other than its own.
     pub fn snapshot_for(&self, session_id: &str) -> Result<Snapshot, CommandError> {
-        let id = uuid::Uuid::parse_str(session_id).map_err(|_| CommandError::locked())?;
         let mut gate = self.gate()?;
         let current = self.current(&mut gate)?;
-        gate.owner
-            .as_ref()
-            .filter(|owner| owner.ticket == current.ticket && owner.id == id)
-            .ok_or_else(CommandError::locked)?;
+        owned_by(&gate, current, session_id)?;
         Ok(current)
     }
 
-    /// The record belongs to the application, not to a session: it must survive a
-    /// lock and a lost reply. It holds an opaque operation id and a fixed kind only.
-    pub fn record_import(&self, ticket: Ticket, operation_id: &str, kind: OperationWarningKind) {
-        if let Ok(mut gate) = self.gate() {
-            gate.notices.push(OperationNotice {
-                id: operation_id.to_string(),
-                origin_session: ticket.0.to_string(),
-                kind,
-            });
-        }
+    /// The outcome record of a dispatched request (`outcome.rs`). It belongs to the
+    /// application, not to a session: it must survive a lock and a lost reply. It holds the
+    /// opaque operation ID of the page, the session of the request and a fixed kind only.
+    /// A poisoned gate still takes the record, so a record is never skipped (U1-R1-04).
+    pub fn record_operation(&self, ticket: Ticket, operation_id: &str, kind: OperationWarningKind) {
+        self.raw_gate().notices.push(OperationNotice {
+            id: operation_id.to_string(),
+            origin_session: ticket.0.to_string(),
+            kind,
+        });
     }
 
     /// A page load means the document that held any on-screen result is gone.
@@ -1012,7 +1386,12 @@ impl Session {
         })
     }
 
+    /// Every ID must have the one spelling of `outcome::parse_operation_id`. An ID with any
+    /// other spelling refuses the whole call, and nothing is dismissed.
     pub fn dismiss_warnings(&self, ids: &[String]) -> Result<(), CommandError> {
+        for id in ids {
+            crate::outcome::parse_operation_id(id)?;
+        }
         let mut gate = self.gate()?;
         gate.notices.retain(|notice| !ids.contains(&notice.id));
         gate.warnings.retain(|notice| !ids.contains(&notice.id));
@@ -1068,6 +1447,39 @@ impl Session {
     }
 }
 
+/// A page request names its session: it acts only while that session is the current one.
+fn owned_by(gate: &Gate, current: Snapshot, session_id: &str) -> Result<(), CommandError> {
+    let id = uuid::Uuid::parse_str(session_id).map_err(|_| CommandError::locked())?;
+    gate.owner
+        .as_ref()
+        .filter(|owner| owner.ticket == current.ticket && owner.id == id)
+        .map(|_| ())
+        .ok_or_else(CommandError::locked)
+}
+
+/// A value read from the vault leaves AKM (a reveal or a copy) only while the session, the vault
+/// revision and the view that it was read under are all still current. A same-session write or
+/// reload after the read moves the revision, so the old value is refused (U1-R1-01).
+fn deliverable(current: Snapshot, read: Snapshot) -> Result<(), CommandError> {
+    if current.ticket != read.ticket {
+        return Err(CommandError::locked());
+    }
+    if current.revision != read.revision {
+        return Err(vault_changed());
+    }
+    if current.presentation != read.presentation {
+        return Err(view_changed());
+    }
+    Ok(())
+}
+
+fn vault_changed() -> CommandError {
+    CommandError::new(
+        "stalePreview",
+        "The vault changed. Start this operation again.",
+    )
+}
+
 fn view_changed() -> CommandError {
     CommandError::new(
         "viewChanged",
@@ -1092,13 +1504,22 @@ fn operation_notice(gate: &mut Gate, ticket: Ticket, kind: OperationWarningKind)
 
 fn core_notices(gate: &mut Gate, ticket: Ticket, warnings: Vec<VaultWarning>) {
     for warning in warnings {
-        let kind = match warning.kind {
-            VaultWarningKind::Journal => OperationWarningKind::Journal,
-            VaultWarningKind::BackupRefresh => OperationWarningKind::BackupRefresh,
-            VaultWarningKind::BackupPrune => OperationWarningKind::BackupPrune,
-            VaultWarningKind::BackupRetention => OperationWarningKind::BackupRetention,
-        };
-        operation_notice(gate, ticket, kind);
+        operation_notice(gate, ticket, notice_kind(warning.kind));
+    }
+}
+
+/// Each core warning has a notice kind of its own. The page holds the text of each kind; the
+/// core's message, which can name a path, never crosses to the page.
+fn notice_kind(kind: VaultWarningKind) -> OperationWarningKind {
+    match kind {
+        VaultWarningKind::Journal => OperationWarningKind::Journal,
+        VaultWarningKind::BackupRefresh => OperationWarningKind::BackupRefresh,
+        VaultWarningKind::BackupPrune => OperationWarningKind::BackupPrune,
+        VaultWarningKind::BackupRetention => OperationWarningKind::BackupRetention,
+        VaultWarningKind::FilePermissions => OperationWarningKind::FilePermissions,
+        VaultWarningKind::JournalLineageUnconfirmed => {
+            OperationWarningKind::JournalLineageUnconfirmed
+        }
     }
 }
 
@@ -1110,6 +1531,24 @@ mod tests {
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc,
     };
+
+    #[test]
+    fn fr05_fr12_each_core_warning_has_a_notice_kind_of_its_own_on_the_wire() {
+        let wire = |kind| serde_json::to_value(notice_kind(kind)).unwrap();
+        for (kind, name) in [
+            (VaultWarningKind::Journal, "journal"),
+            (VaultWarningKind::BackupRefresh, "backupRefresh"),
+            (VaultWarningKind::BackupPrune, "backupPrune"),
+            (VaultWarningKind::BackupRetention, "backupRetention"),
+            (VaultWarningKind::FilePermissions, "filePermissions"),
+            (
+                VaultWarningKind::JournalLineageUnconfirmed,
+                "journalLineageUnconfirmed",
+            ),
+        ] {
+            assert_eq!(wire(kind), name, "{kind:?}");
+        }
+    }
 
     #[derive(Default)]
     struct TestClock(AtomicU64);
@@ -1133,6 +1572,11 @@ mod tests {
         _directory: tempfile::TempDir,
     }
     fn fixture() -> Fixture {
+        fixture_with(false)
+    }
+
+    /// `own_root`: the vault journals in `test_support::own_root` of the folder.
+    fn fixture_with(own_root: bool) -> Fixture {
         let directory = tempfile::tempdir().unwrap();
         let clock = Arc::new(TestClock::default());
         let clipboard = Arc::new(Mutex::new(FakeData::default()));
@@ -1140,24 +1584,26 @@ mod tests {
         let notify = events.clone();
         let native_notices = Arc::new(Mutex::new(Vec::new()));
         let notices = native_notices.clone();
-        let session = Arc::new(Session::new(
+        let session = Session::new(
             clock.clone(),
             Box::new(FakeClipboard(clipboard.clone())),
             Arc::new(move |notice| {
                 notify.fetch_add(1, Ordering::SeqCst);
                 notices.lock().unwrap().push(notice);
             }),
-        ));
+        );
         session.observe(Signal::Available);
         let ticket = session.begin_open().unwrap();
         session
             .open(ticket, || {
-                Vault::create(
-                    directory.path().join("vault.kdbx"),
-                    "fake-test-password-123!",
-                    None,
-                )
-                .map_err(Into::into)
+                let path = directory.path().join("vault.kdbx");
+                let password = "fake-test-password-123!";
+                if own_root {
+                    let root = crate::test_support::own_root(directory.path());
+                    Vault::create_in(path, password, None, root).map_err(Into::into)
+                } else {
+                    Vault::create(path, password, None).map_err(Into::into)
+                }
             })
             .unwrap();
         Fixture {
@@ -1227,7 +1673,9 @@ mod tests {
                 Ok(())
             })
         });
-        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        entered_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         let (expiry_tx, expiry_rx) = mpsc::channel();
         let session = f.session.clone();
         let expiry =
@@ -1307,7 +1755,9 @@ mod tests {
                 Ok(id)
             })
         });
-        committed_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+        committed_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         let (expiry_tx, expiry_rx) = mpsc::channel();
         let session = f.session.clone();
         let expiry =
@@ -1334,8 +1784,9 @@ mod tests {
 
     #[test]
     fn native_presentation_expiry_preserves_approved_publication_and_its_truthful_completion() {
+        use crate::test_support::canonical;
         for authorized in [false, true] {
-            let f = fixture();
+            let f = fixture_with(true);
             let snapshot = f.session.snapshot().unwrap();
             let target = f._directory.path().join("presentation.env");
             let (stalled_tx, stalled_rx) = mpsc::channel();
@@ -1348,10 +1799,11 @@ mod tests {
                     snapshot,
                     || {
                         let prepared = crate::private_export::prepare_private(
-                            &path,
+                            crate::private_export::choose(&path).unwrap(),
                             "TOKEN=fake-view-export\n",
                             &[],
                             &[],
+                            &crate::private_export::Remnants::default(),
                         )?;
                         if !authorized {
                             stalled_tx.send(()).unwrap();
@@ -1368,11 +1820,13 @@ mod tests {
                     },
                 )
             });
-            stalled_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            stalled_rx
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
             f.session.expire_presentation().unwrap();
             release_tx.send(()).unwrap();
             let result = worker.join().unwrap();
-            assert_eq!(result.unwrap(), target);
+            assert_eq!(canonical(&result.unwrap()), canonical(&target));
             assert_eq!(
                 std::fs::read_to_string(&target).unwrap(),
                 "TOKEN=fake-view-export\n"
@@ -1403,10 +1857,11 @@ mod tests {
                     snapshot,
                     || {
                         let prepared = crate::private_export::prepare_private(
-                            &path,
+                            crate::private_export::choose(&path).unwrap(),
                             "TOKEN=fake-refused\n",
                             &[],
                             &[],
+                            &crate::private_export::Remnants::default(),
                         )?;
                         prepared_tx.send(()).unwrap();
                         release_rx.recv().unwrap();
@@ -1415,7 +1870,9 @@ mod tests {
                     |prepared| prepared.publish(),
                 )
             });
-            prepared_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            prepared_rx
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
             f.session.expire_presentation().unwrap();
             if lock {
                 f.session.lock().unwrap();
@@ -1703,7 +2160,9 @@ mod tests {
                 Vault::open(path, "fake-test-password-123!").map_err(Into::into)
             })
         });
-        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        started_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         f.session.lock_owned(Some(&b)).unwrap();
         release_tx.send(()).unwrap();
         assert_eq!(worker.join().unwrap().unwrap_err().kind, "locked");
@@ -1846,7 +2305,9 @@ mod tests {
                 Ok(())
             })
         });
-        committed_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+        committed_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         f.session.lock().unwrap();
         release_tx.send(()).unwrap();
         assert_eq!(
@@ -2412,21 +2873,63 @@ mod tests {
             for overtaken in [false, true] {
                 let f = fixture();
                 let origin = f.session.snapshot().unwrap().ticket;
-                if backup_fails {
-                    std::fs::create_dir(f._directory.path().join("vault.kdbx.bak")).unwrap();
-                }
+                // AKM deletes only a backup that its list inside the vault names (FR-01), so the
+                // old backups come from real saves: five saves leave five dated backups, and
+                // the save under test makes the sixth and prunes the oldest. Each one is held
+                // open without delete sharing, so removing it fails and the save reports it.
+                let mut held = Vec::new();
                 if prune_fails {
-                    for _ in 0..6 {
-                        std::fs::create_dir(f._directory.path().join(format!(
-                            "vault.kdbx.bak.20000101T000000000000000Z_{}.kdbx",
-                            uuid::Uuid::new_v4()
-                        )))
-                        .unwrap();
+                    use std::os::windows::fs::OpenOptionsExt;
+                    for index in 0..5 {
+                        f.session
+                            .access(Access::Write, None, |vault| {
+                                vault.add(akm_core::ApiKeyInput::new(
+                                    format!("Earlier key {index}"),
+                                    "fake-earlier-secret",
+                                ))?;
+                                Ok(())
+                            })
+                            .unwrap();
                     }
+                    assert!(serde_json::to_value(f.session.warnings().unwrap()).unwrap()
+                        ["operations"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty());
+                    let dated: Vec<_> = std::fs::read_dir(f._directory.path())
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path())
+                        .filter(|path| {
+                            path.file_name()
+                                .unwrap()
+                                .to_string_lossy()
+                                .starts_with("vault.kdbx.bak.")
+                        })
+                        .collect();
+                    assert_eq!(dated.len(), 5);
+                    for path in dated {
+                        held.push(
+                            std::fs::OpenOptions::new()
+                                .read(true)
+                                .share_mode(1)
+                                .open(&path)
+                                .unwrap(),
+                        );
+                    }
+                }
+                if backup_fails {
+                    let legacy = f._directory.path().join("vault.kdbx.bak");
+                    if legacy.exists() {
+                        std::fs::remove_file(&legacy).unwrap();
+                    }
+                    std::fs::create_dir(legacy).unwrap();
                 }
                 let journal =
                     crate::test_support::journal_of(&f._directory.path().join("vault.kdbx"));
                 if journal_fails {
+                    if journal.path().is_file() {
+                        std::fs::remove_file(journal.path()).unwrap();
+                    }
                     std::fs::create_dir(journal.path()).unwrap();
                 }
                 let (saved_tx, saved_rx) = mpsc::channel();
@@ -2443,7 +2946,9 @@ mod tests {
                         Ok(())
                     })
                 });
-                saved_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+                saved_rx
+                    .recv_timeout(crate::test_support::PATIENCE)
+                    .unwrap();
                 if overtaken {
                     f.session.lock().unwrap();
                 }
@@ -2539,7 +3044,7 @@ mod tests {
         f.session.warn_for(origin, OperationWarningKind::Preference);
         let id = first["operations"][0]["id"].as_str().unwrap().to_string();
         f.session
-            .dismiss_warnings(&[id.clone(), "unseen-id".into()])
+            .dismiss_warnings(&[id.clone(), uuid::Uuid::new_v4().to_string()])
             .unwrap();
         let remaining = serde_json::to_value(f.session.warnings().unwrap()).unwrap();
         assert_eq!(remaining["operations"].as_array().unwrap().len(), 1);
@@ -2581,30 +3086,21 @@ mod tests {
     fn review1_a_session_effect_runs_only_for_the_current_owner() {
         let f = fixture();
         let old_ticket = f.session.snapshot().unwrap().ticket;
-        let old_owner = f.session.active_owner(old_ticket).unwrap();
+        let old = f.session.snapshot().unwrap();
         let ran = AtomicUsize::new(0);
-        let effect = |_: &Held<'_>| ran.fetch_add(1, Ordering::SeqCst);
-        assert!(f.session.while_current(old_ticket, effect).is_ok());
-        assert!(f.session.while_session(&old_owner, effect).is_ok());
+        let run = |binding: Binding| {
+            f.session.commit(
+                binding,
+                &mut Act::new(|_: &Held<'_>| Ok(ran.fetch_add(1, Ordering::SeqCst))),
+            )
+        };
+        assert!(run(Binding::Ticket(old_ticket)).is_ok());
+        assert!(run(Binding::Revision(old)).is_ok());
         assert_eq!(ran.load(Ordering::SeqCst), 2);
-        let new_owner = f.session.prepare_open().unwrap();
+        drop(f.session.prepare_open().unwrap());
         for (name, result) in [
-            (
-                "old ticket",
-                f.session.while_current(old_ticket, effect).err(),
-            ),
-            (
-                "old owner",
-                f.session.while_session(&old_owner, effect).err(),
-            ),
-            (
-                "new owner, not opened",
-                f.session.while_session(&new_owner, effect).err(),
-            ),
-            (
-                "malformed",
-                f.session.while_session("not-a-uuid", effect).err(),
-            ),
+            ("old ticket", run(Binding::Ticket(old_ticket)).err()),
+            ("old revision", run(Binding::Revision(old)).err()),
         ] {
             assert_eq!(
                 result.unwrap_or_else(|| panic!("{name} ran")).kind,
@@ -2622,19 +3118,20 @@ mod tests {
     fn review1_a_session_effect_holds_the_gate_so_lock_and_a_new_opening_wait_for_it() {
         for newer in ["lock", "open"] {
             let f = fixture();
-            let owner = f
-                .session
-                .active_owner(f.session.snapshot().unwrap().ticket)
-                .unwrap();
+            let ticket = f.session.snapshot().unwrap().ticket;
             let (inside_tx, inside_rx) = mpsc::channel();
             let (release_tx, release_rx) = mpsc::channel();
             let effect_session = f.session.clone();
             let effect = std::thread::spawn(move || {
                 effect_session
-                    .while_session(&owner, |_| {
-                        inside_tx.send(()).unwrap();
-                        release_rx.recv().unwrap();
-                    })
+                    .commit(
+                        Binding::Ticket(ticket),
+                        &mut Act::new(|_: &Held<'_>| {
+                            inside_tx.send(()).unwrap();
+                            release_rx.recv().unwrap();
+                            Ok(())
+                        }),
+                    )
                     .unwrap();
             });
             inside_rx.recv().unwrap();
@@ -2694,7 +3191,9 @@ mod tests {
                 Ok(Zeroizing::new("fake-private-result".to_string()))
             })
         });
-        committed_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+        committed_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         f.session.lock().unwrap();
         release_tx.send(()).unwrap();
         let error = writer.join().unwrap().err().unwrap();
@@ -2737,7 +3236,9 @@ mod tests {
                 |_| -> Result<(), CommandError> { panic!("A locked export must not publish") },
             )
         });
-        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        started_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         let (locked_tx, locked_rx) = mpsc::channel();
         let session = f.session.clone();
         let locker = std::thread::spawn(move || {
@@ -2799,7 +3300,9 @@ mod tests {
                 Ok(vault)
             })
         });
-        created_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+        created_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         f.session.lock().unwrap();
         release_tx.send(()).unwrap();
         assert_eq!(
@@ -2844,8 +3347,13 @@ mod tests {
             session.publish(
                 snapshot,
                 || {
-                    let prepared =
-                        crate::private_export::prepare_private(&path, "TOKEN=fake\n", &[], &[])?;
+                    let prepared = crate::private_export::prepare_private(
+                        crate::private_export::choose(&path).unwrap(),
+                        "TOKEN=fake\n",
+                        &[],
+                        &[],
+                        &crate::private_export::Remnants::default(),
+                    )?;
                     prepared_tx.send(()).unwrap();
                     release_rx.recv().unwrap();
                     Ok(prepared)
@@ -2853,7 +3361,9 @@ mod tests {
                 |prepared| prepared.publish(),
             )
         });
-        prepared_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        prepared_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         f.session.observe(Signal::Locked);
         release_tx.send(()).unwrap();
         assert_eq!(exporter.join().unwrap().unwrap_err().kind, "locked");
@@ -2879,7 +3389,15 @@ mod tests {
         let exporter = std::thread::spawn(move || {
             session.publish(
                 snapshot,
-                || crate::private_export::prepare_private(&path, "TOKEN=fake\n", &[], &[]),
+                || {
+                    crate::private_export::prepare_private(
+                        crate::private_export::choose(&path).unwrap(),
+                        "TOKEN=fake\n",
+                        &[],
+                        &[],
+                        &crate::private_export::Remnants::default(),
+                    )
+                },
                 |prepared| {
                     authorized_tx.send(()).unwrap();
                     release_rx.recv().unwrap();
@@ -2887,7 +3405,9 @@ mod tests {
                 },
             )
         });
-        authorized_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        authorized_rx
+            .recv_timeout(crate::test_support::PATIENCE)
+            .unwrap();
         let (locked_tx, locked_rx) = mpsc::channel();
         let session = f.session.clone();
         let locker = std::thread::spawn(move || {
@@ -2961,13 +3481,17 @@ mod tests {
             .session
             .active_owner(f.session.snapshot().unwrap().ticket)
             .unwrap();
+        // A panic in an access no longer poisons the mutex (U1-R1-04,
+        // `u1_r1_04_an_access_that_fails_after_its_replacement_answers_completed_while_locked`),
+        // so the test poisons it with a panic while its guard is held.
         let session = f.session.clone();
         assert!(std::thread::spawn(move || {
-            let _: Result<Stamped<()>, _> =
-                session.access(Access::Read, None, |_| panic!("injected worker panic"));
+            let _stored = session.vault.lock().unwrap();
+            panic!("injected worker panic");
         })
         .join()
         .is_err());
+        assert!(f.session.vault.is_poisoned());
         assert!(f
             .session
             .access(Access::Read, None, |vault| Ok(vault.list()))
@@ -2977,6 +3501,10 @@ mod tests {
         assert_eq!(f.native_notices.lock().unwrap().len(), 1);
         assert_eq!(f.native_notices.lock().unwrap()[0].session_id, owner);
     }
+
+    /// The bound of a wait that proves that an event is prompt. It keeps its own short bound
+    /// (class Q).
+    const PROMPT: Duration = Duration::from_secs(5);
 
     struct BlockingClipboard {
         data: Arc<Mutex<FakeData>>,
@@ -3127,6 +3655,8 @@ mod tests {
 
         // Columns: entry, the session expires before the call, a lock notice is expected,
         // the call. Each entry is a public call of `Session` that can see a lock transition.
+        // A Windows signal is the message thread's `observe` and then the cleanup worker's
+        // `tick`, as `windows_session::Delivery` runs them (FW-01).
         fn entries() -> Vec<Entry> {
             vec![
                 ("lock", false, true, |f, _, _| {
@@ -3136,13 +3666,16 @@ mod tests {
                     let _ = f.session.lock_owned(Some(owner));
                 }),
                 ("observe locked", false, true, |f, _, _| {
-                    f.session.observe(Signal::Locked)
+                    f.session.observe(Signal::Locked);
+                    f.session.tick();
                 }),
                 ("observe suspend", false, true, |f, _, _| {
-                    f.session.observe(Signal::Suspend)
+                    f.session.observe(Signal::Suspend);
+                    f.session.tick();
                 }),
                 ("observe unobservable", false, true, |f, _, _| {
-                    f.session.observe(Signal::Unobservable)
+                    f.session.observe(Signal::Unobservable);
+                    f.session.tick();
                 }),
                 ("shutdown", false, true, |f, _, _| f.session.shutdown()),
                 ("prepare_open", false, true, |f, _, _| {
@@ -3325,7 +3858,9 @@ mod tests {
             f.clock.set(30);
             let session = f.session.clone();
             let tick = std::thread::spawn(move || session.tick());
-            started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            started_rx
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
 
             let (free_tx, free_rx) = mpsc::channel();
             let session = f.session.clone();
@@ -3335,12 +3870,17 @@ mod tests {
                 free_tx.send(()).unwrap();
             });
             free_rx
-                .recv_timeout(Duration::from_secs(10))
+                .recv_timeout(crate::test_support::PATIENCE)
                 .expect("a stalled cleanup must not hold the gate");
 
+            let (locked_tx, locked_rx) = mpsc::channel();
             let session = f.session.clone();
-            let lock = std::thread::spawn(move || session.lock());
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let lock = std::thread::spawn(move || {
+                let locked = session.lock();
+                locked_tx.send(()).unwrap();
+                locked
+            });
+            let deadline = Instant::now() + crate::test_support::PATIENCE;
             while f.events.load(Ordering::SeqCst) == 0 {
                 assert!(
                     Instant::now() < deadline,
@@ -3348,17 +3888,79 @@ mod tests {
                 );
                 std::thread::sleep(Duration::from_millis(5));
             }
-            assert!(
-                !lock.is_finished(),
-                "the lock's own attempt waits for the cleanup in progress (recorded limit)"
-            );
+            let prompt = locked_rx.recv_timeout(PROMPT).is_ok();
             assert_eq!(f.clipboard.lock().unwrap().text, "fake-stalled");
             release_tx.send(()).unwrap();
             tick.join().unwrap();
             lock.join().unwrap().unwrap();
+            assert!(prompt, "a lock waited for the cleanup in progress (FW-01)");
             assert_eq!(f.clipboard.lock().unwrap().text, "");
             assert_eq!(f.clipboard.lock().unwrap().clears, 1);
             assert_eq!(f.events.load(Ordering::SeqCst), 1);
+        }
+
+        /// The first cleanup attempt waits until the test releases it, then finds the clipboard
+        /// busy. Later attempts clear.
+        struct StalledThenBusy {
+            inner: FakeClipboard,
+            started: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+            attempts: Arc<AtomicUsize>,
+        }
+        impl ClipboardBackend for StalledThenBusy {
+            fn set_private(&mut self, text: &str) -> Publication {
+                self.inner.set_private(text)
+            }
+            fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
+                if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    self.started.send(()).unwrap();
+                    self.release.recv().unwrap();
+                    return Err(CommandError::new(
+                        "clipboard",
+                        "The clipboard is busy. Try copying again.",
+                    ));
+                }
+                self.inner.clear_matching(sequence, text)
+            }
+        }
+
+        // FW-01: a lock that finds the lease held does not wait for it. Its one attempt is made
+        // by the holder, when it lets the lease go.
+        #[test]
+        fn a_lock_that_finds_the_lease_held_gets_its_attempt_when_the_holder_lets_it_go() {
+            let f = fixture();
+            let (started_tx, started_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let attempts = Arc::new(AtomicUsize::new(0));
+            f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(StalledThenBusy {
+                inner: FakeClipboard(f.clipboard.clone()),
+                started: started_tx,
+                release: release_rx,
+                attempts: attempts.clone(),
+            }));
+            let ticket = f.session.snapshot().unwrap().ticket;
+            f.session
+                .copy(ticket, Zeroizing::new("fake-kept".into()))
+                .unwrap();
+            f.clock.set(30);
+            let session = f.session.clone();
+            let tick = std::thread::spawn(move || session.tick());
+            started_rx
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
+            let (locked_tx, locked_rx) = mpsc::channel();
+            let session = f.session.clone();
+            let lock = std::thread::spawn(move || {
+                session.lock().unwrap();
+                locked_tx.send(()).unwrap();
+            });
+            let prompt = locked_rx.recv_timeout(PROMPT).is_ok();
+            release_tx.send(()).unwrap();
+            tick.join().unwrap();
+            lock.join().unwrap();
+            assert!(prompt, "a lock waited for the lease");
+            assert_eq!(attempts.load(Ordering::SeqCst), 2);
+            assert_eq!(f.clipboard.lock().unwrap().text, "");
         }
 
         // The fence of design D2: a settle that follows a newer session's copy leaves it.
@@ -3380,7 +3982,7 @@ mod tests {
                 .copy(ticket, Zeroizing::new("fake-newer-copy".into()))
                 .unwrap();
             let before = c.attempts.lock().unwrap().len();
-            c.f.session.settle(false);
+            c.f.session.settle();
             c.f.session.tick();
             assert_eq!(c.attempts.lock().unwrap().len(), before);
             assert_eq!(c.f.clipboard.lock().unwrap().text, "fake-newer-copy");
@@ -3405,7 +4007,9 @@ mod tests {
             f.clock.set(30);
             let session = f.session.clone();
             let tick = std::thread::spawn(move || session.tick());
-            started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            started_rx
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
             let session = f.session.clone();
             let copy = std::thread::spawn(move || {
                 session.copy(ticket, Zeroizing::new("fake-second".into()))
@@ -3417,12 +4021,98 @@ mod tests {
                 free_tx.send(()).unwrap();
             });
             free_rx
-                .recv_timeout(Duration::from_secs(10))
+                .recv_timeout(crate::test_support::PATIENCE)
                 .expect("a waiting copy must not hold the gate");
             release_tx.send(()).unwrap();
             tick.join().unwrap();
             copy.join().unwrap().unwrap();
             assert_eq!(f.clipboard.lock().unwrap().text, "fake-second");
+        }
+    }
+
+    /// FW-01: the Windows message thread delivers every lock signal while a copy stalls in the
+    /// clipboard. The test runs the code that `window_proc` runs (`Delivery`), with a fake
+    /// clipboard and no window.
+    #[cfg(windows)]
+    mod message_thread {
+        use super::*;
+        use crate::windows_session::Delivery;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            WM_POWERBROADCAST, WM_TIMER, WM_WTSSESSION_CHANGE,
+        };
+
+        #[test]
+        fn fw01_a_lock_signal_after_a_timer_tick_is_delivered_while_a_copy_stalls_and_the_copy_is_then_taken_back(
+        ) {
+            for (name, message, wparam) in [
+                ("Windows lock", WM_WTSSESSION_CHANGE, 7),
+                ("sign-out", WM_WTSSESSION_CHANGE, 6),
+                ("console disconnect", WM_WTSSESSION_CHANGE, 2),
+                ("remote disconnect", WM_WTSSESSION_CHANGE, 4),
+                ("suspend", WM_POWERBROADCAST, 4),
+                ("resume", WM_POWERBROADCAST, 18),
+            ] {
+                let f = fixture();
+                let stamp = f.session.snapshot().unwrap();
+                let (started_tx, started_rx) = mpsc::channel();
+                let (release_tx, release_rx) = mpsc::channel();
+                f.session.cell_for_test().clipboard =
+                    ClipboardLease::new(Box::new(BlockingClipboard {
+                        data: f.clipboard.clone(),
+                        started: started_tx,
+                        release: release_rx,
+                        calls: 0,
+                        block_on: 1,
+                    }));
+                let session = f.session.clone();
+                let copy = std::thread::spawn(move || {
+                    session.copy(stamp.ticket, Zeroizing::new("fake-stalled-copy".into()))
+                });
+                started_rx
+                    .recv_timeout(crate::test_support::PATIENCE)
+                    .unwrap();
+
+                let delivery = Delivery::new(f.session.clone()).unwrap();
+                let (delivered_tx, delivered_rx) = mpsc::channel();
+                let thread = std::thread::spawn(move || {
+                    delivery.message(WM_TIMER, 1, || Signal::Available);
+                    delivery.message(message, wparam, || Signal::Available);
+                    delivered_tx.send(()).unwrap();
+                    delivery
+                });
+                let prompt = delivered_rx.recv_timeout(PROMPT).is_ok();
+                let reveal = f.session.reveal(Stamped {
+                    snapshot: stamp,
+                    value: Zeroizing::new("fake-secret".into()),
+                });
+                release_tx.send(()).unwrap();
+                let copied = copy.join().unwrap();
+                drop(thread.join().unwrap());
+
+                assert!(
+                    prompt,
+                    "{name}: the message thread waited for the stalled copy"
+                );
+                assert_eq!(
+                    reveal.err().map(|error| error.kind),
+                    Some("locked".to_string()),
+                    "{name}: a reveal after the signal"
+                );
+                assert_eq!(copied.unwrap_err().kind, "locked", "{name}: the copy");
+                assert_eq!(
+                    f.clipboard.lock().unwrap().text,
+                    "",
+                    "{name}: the copy outlived the lock"
+                );
+                assert!(
+                    f.session
+                        .cell_for_test()
+                        .clipboard
+                        .owned_generation()
+                        .is_none(),
+                    "{name}: the lease ended"
+                );
+            }
         }
     }
 
@@ -3484,6 +4174,136 @@ mod tests {
                 .into_iter()
                 .map(|n| n.message)
                 .collect()
+        }
+
+        /// The fake Win32 backend, with `after` run right after each publication, before the
+        /// copy's final check.
+        struct Between {
+            inner: TransactionBackend,
+            after: Box<dyn FnMut() + Send>,
+        }
+        impl ClipboardBackend for Between {
+            fn set_private(&mut self, text: &str) -> crate::clipboard::Publication {
+                let published = self.inner.set_private(text);
+                (self.after)();
+                published
+            }
+            fn clear_matching(&mut self, sequence: u32, text: &str) -> Result<bool, CommandError> {
+                self.inner.clear_matching(sequence, text)
+            }
+        }
+
+        /// U1-R1-02: the state table of `copy_held`, row by row. Each cause comes before the
+        /// first check, or between the publication and the final check. An idle lock stands
+        /// for a lock; a new session fails the same ticket comparison.
+        #[test]
+        fn u1_r1_02_a_copy_refused_after_its_publication_is_taken_back_row_by_row() {
+            #[derive(Clone, Copy, Debug, PartialEq)]
+            enum When {
+                Before,
+                StillOurs,
+                UserCopiedTheSameText,
+                TakeBackFails,
+            }
+            let refusals = [
+                ("lock", CommandError::locked()),
+                ("write", vault_changed()),
+                ("view", view_changed()),
+            ];
+            for (cause, refusal) in refusals {
+                for when in [
+                    When::Before,
+                    When::StillOurs,
+                    When::UserCopiedTheSameText,
+                    When::TakeBackFails,
+                ] {
+                    let row = format!("{cause}, {when:?}");
+                    let f = fixture();
+                    let state = Arc::new(Mutex::new(FakeState::default()));
+                    state.lock().unwrap().user_copy(units(USER));
+                    let clock = f.clock.clone();
+                    let apply = Arc::new(move |session: &Session| match cause {
+                        "lock" => clock.set(crate::policy::IDLE_TIMEOUT.as_secs() + 1),
+                        "write" => session
+                            .access(Access::Write, None, |vault| {
+                                vault.add(akm_core::ApiKeyInput::new(
+                                    "Fake intervening revision",
+                                    "fake-revision-value",
+                                ))?;
+                                Ok(())
+                            })
+                            .map(drop)
+                            .unwrap(),
+                        _ => drop(session.expire_presentation().unwrap()),
+                    });
+                    let (hook_apply, hook_state) = (apply.clone(), state.clone());
+                    let weak = Arc::downgrade(&f.session);
+                    f.session.cell_for_test().clipboard = ClipboardLease::new(Box::new(Between {
+                        inner: TransactionBackend(FakeApi(state.clone())),
+                        after: Box::new(move || {
+                            if when == When::Before {
+                                return;
+                            }
+                            hook_apply(&weak.upgrade().unwrap());
+                            let mut s = hook_state.lock().unwrap();
+                            match when {
+                                When::UserCopiedTheSameText => s.user_copy(units(A)),
+                                When::TakeBackFails => {
+                                    let next = s.open_calls + 1;
+                                    s.faults = vec![Fault::Open(next)];
+                                }
+                                _ => {}
+                            }
+                        }),
+                    }));
+                    let snapshot = f.session.snapshot().unwrap();
+                    if when == When::Before {
+                        apply(&f.session);
+                    }
+                    let error = f
+                        .session
+                        .copy_stamped(Stamped {
+                            snapshot,
+                            value: Zeroizing::new(A.into()),
+                        })
+                        .unwrap_err();
+                    let s = state.lock().unwrap();
+                    let (text, sets, faults) = (s.text(), s.set_calls, s.faults.len());
+                    drop(s);
+                    match when {
+                        When::Before => {
+                            assert_eq!(error.kind, refusal.kind, "{row}");
+                            assert_eq!(text, USER, "{row}: untouched");
+                            assert_eq!(sets, 0, "{row}: nothing published");
+                        }
+                        When::StillOurs => {
+                            assert_eq!(error.kind, refusal.kind, "{row}");
+                            assert_eq!(text, "", "{row}: AKM's copy removed");
+                            assert_eq!(generation(&f), None, "{row}: the lease ended");
+                        }
+                        When::UserCopiedTheSameText => {
+                            assert_eq!(error.kind, refusal.kind, "{row}");
+                            assert_eq!(text, A, "{row}: the user's copy kept");
+                            assert_eq!(generation(&f), None, "{row}: the lease ended");
+                        }
+                        When::TakeBackFails => {
+                            assert_eq!(error.kind, "clipboardUncertain", "{row}");
+                            assert_eq!(
+                                error.message,
+                                format!("{} {}", refusal.message, uncertain()),
+                                "{row}"
+                            );
+                            assert_eq!(faults, 0, "{row}: the busy open was reached");
+                            assert_eq!(text, A, "{row}: one attempt only, so the copy remains");
+                            assert!(generation(&f).is_some(), "{row}: the lease is kept");
+                            assert_eq!(application_messages(&f), vec![uncertain()], "{row}");
+                        }
+                    }
+                    if when != When::TakeBackFails {
+                        assert!(application_messages(&f).is_empty(), "{row}");
+                    }
+                }
+            }
         }
 
         #[derive(Clone, Copy, Debug, PartialEq)]
@@ -4313,6 +5133,595 @@ mod tests {
                 .map(|n| n.id)
                 .collect();
             assert_eq!(after, ids, "{label}: one warning ID for the episode");
+        }
+    }
+
+    /// The commit point (`docs/design/commit-point.md`): the vault file replacement is checked
+    /// under the gate, the revision moves there, and no other path can replace the file.
+    mod commit_point {
+        use super::*;
+        use akm_core::ApiKeyInput;
+        use std::{fs, path::Path};
+
+        const PASSWORD: &str = "fake-test-password-123!";
+
+        fn vault_path(f: &Fixture) -> PathBuf {
+            f._directory.path().join("vault.kdbx")
+        }
+
+        /// The vault bytes and the name of every file beside it. A refused write changes
+        /// neither, and leaves no temporary file or backup behind.
+        fn on_disk(f: &Fixture) -> (Vec<u8>, Vec<String>) {
+            let mut names: Vec<String> = fs::read_dir(f._directory.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            (fs::read(vault_path(f)).unwrap(), names)
+        }
+
+        /// The fake KDBX 4.0 vault of the core tests, which needs the explicit upgrade.
+        const LEGACY_PASSWORD: &str = "correct horse battery staple";
+
+        fn password_of(kind: &str) -> &'static str {
+            if kind == "upgrade" {
+                LEGACY_PASSWORD
+            } else {
+                PASSWORD
+            }
+        }
+
+        /// A session over the KDBX 4.0 vault.
+        fn legacy_fixture() -> Fixture {
+            let f = fixture();
+            f.session.lock().unwrap();
+            let path = f._directory.path().join("vault.kdbx");
+            fs::write(
+                &path,
+                include_bytes!("../../../crates/akm-core/tests/fixtures/kdbx40.kdbx"),
+            )
+            .unwrap();
+            let ticket = f.session.begin_open().unwrap();
+            f.session
+                .open(ticket, || {
+                    Vault::open(&path, LEGACY_PASSWORD).map_err(Into::into)
+                })
+                .unwrap();
+            f
+        }
+
+        fn listed(f: &Fixture, kind: &str) -> Vec<String> {
+            Vault::open(vault_path(f), password_of(kind))
+                .unwrap()
+                .list()
+                .into_iter()
+                .map(|key| key.id)
+                .collect()
+        }
+
+        const KINDS: [&str; 9] = [
+            "add", "update", "rotate", "remove", "restore", "purge", "import", "save", "upgrade",
+        ];
+
+        /// The state that the write of `kind` needs, written before the test arms its barrier.
+        /// Returns the ID of the key that the write acts on.
+        fn arrange(f: &Fixture, kind: &str) -> String {
+            if kind == "upgrade" {
+                return String::new();
+            }
+            f.session
+                .access(Access::Write, None, |vault| {
+                    let key = vault.add(ApiKeyInput::new("Fake", "fake-value"))?;
+                    if matches!(kind, "restore" | "purge") {
+                        vault.remove(&key.id)?;
+                    }
+                    Ok(key.id)
+                })
+                .unwrap()
+                .value
+        }
+
+        fn write(vault: &mut Vault, kind: &str, id: &str) -> Result<(), CommandError> {
+            match kind {
+                "add" => vault.add(ApiKeyInput::new("Other", "fake-other")).map(drop),
+                "update" => {
+                    let mut input = vault.edit_input(id)?;
+                    input.title = "Renamed".into();
+                    vault.update(id, input).map(drop)
+                }
+                "rotate" => vault.rotate(id, "fake-rotated".into()).map(drop),
+                "remove" => vault.remove(id).map(drop),
+                "restore" => vault.restore(id).map(drop),
+                "purge" => vault.purge(id).map(drop),
+                "import" => vault
+                    .import_env(
+                        &[("FAKE_IMPORTED".into(), "fake-imported".into())],
+                        Some("app"),
+                        Some("dev"),
+                    )
+                    .map(drop),
+                "save" => vault.save(),
+                "upgrade" => vault.upgrade(),
+                _ => unreachable!(),
+            }
+            .map_err(Into::into)
+        }
+
+        fn access_of(kind: &str) -> Access {
+            if kind == "upgrade" {
+                Access::Upgrade
+            } else {
+                Access::Write
+            }
+        }
+
+        /// T-R3-04. A lock that lands after the entry check of a write, at either of two
+        /// moments: as the write starts, and at the commit point itself, after the key
+        /// derivation, the temporary file and the backup. The replacement is refused, the
+        /// answer is `locked`, and the vault and its folder are as they were.
+        #[test]
+        fn t_r3_04_a_lock_after_the_entry_check_writes_nothing_for_every_kind_of_write() {
+            for moment in ["as the write starts", "at the commit point"] {
+                for kind in KINDS {
+                    let f = if kind == "upgrade" {
+                        legacy_fixture()
+                    } else {
+                        fixture()
+                    };
+                    let id = arrange(&f, kind);
+                    let before = on_disk(&f);
+                    let keys = listed(&f, kind);
+                    let session = f.session.clone();
+                    if moment == "at the commit point" {
+                        f.session.at_commit(move || session.lock().unwrap());
+                    }
+                    let locker = f.session.clone();
+                    let error = f
+                        .session
+                        .access(access_of(kind), None, |vault| {
+                            if moment == "as the write starts" {
+                                locker.lock().unwrap();
+                            }
+                            write(vault, kind, &id)
+                        })
+                        .err()
+                        .unwrap_or_else(|| panic!("{kind} {moment}: the write answered success"));
+                    assert_eq!(error.kind, "locked", "{kind} {moment}");
+                    assert!(on_disk(&f) == before, "{kind} {moment}: the vault changed");
+                    assert_eq!(listed(&f, kind), keys, "{kind} {moment}");
+                    assert!(f.session.snapshot().is_err(), "{kind} {moment}");
+                }
+            }
+        }
+
+        /// The same writes, with a session that stays current: each one replaces the file
+        /// once and moves the revision once.
+        #[test]
+        fn every_kind_of_write_replaces_the_file_and_moves_the_revision_once() {
+            for kind in KINDS {
+                let f = if kind == "upgrade" {
+                    legacy_fixture()
+                } else {
+                    fixture()
+                };
+                let id = arrange(&f, kind);
+                let before = f.session.snapshot().unwrap();
+                let bytes = fs::read(vault_path(&f)).unwrap();
+                let done = f
+                    .session
+                    .access(access_of(kind), None, |vault| write(vault, kind, &id))
+                    .unwrap_or_else(|error| panic!("{kind}: {}", error.message));
+                assert_eq!(done.snapshot.revision, before.revision + 1, "{kind}");
+                assert_eq!(f.session.snapshot().unwrap().revision, before.revision + 1);
+                assert_ne!(fs::read(vault_path(&f)).unwrap(), bytes, "{kind}");
+            }
+        }
+
+        /// A lock during the slow part of a write (here, a barrier at the commit point, before
+        /// the gate) finishes at once. The write then refuses.
+        #[test]
+        fn a_lock_during_the_slow_part_of_a_write_is_prompt_and_the_write_then_writes_nothing() {
+            let f = fixture();
+            let before = on_disk(&f);
+            let (arrived, at_commit) = mpsc::channel::<()>();
+            let (release, go) = mpsc::channel::<()>();
+            let (arrived, go) = (Mutex::new(arrived), Mutex::new(go));
+            f.session.at_commit(move || {
+                arrived.lock().unwrap().send(()).unwrap();
+                go.lock().unwrap().recv().unwrap();
+            });
+            let session = f.session.clone();
+            let writer = std::thread::spawn(move || {
+                session
+                    .access(Access::Write, None, |vault| {
+                        vault
+                            .add(ApiKeyInput::new("Fake", "fake-value"))
+                            .map_err(Into::into)
+                    })
+                    .map(|done| done.value.id)
+            });
+            at_commit
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
+            let (locked, done) = mpsc::channel();
+            let locker = f.session.clone();
+            std::thread::spawn(move || {
+                locker.lock().unwrap();
+                locked.send(()).unwrap();
+            });
+            let prompt = done.recv_timeout(Duration::from_secs(10)).is_ok();
+            release.send(()).unwrap();
+            assert_eq!(writer.join().unwrap().unwrap_err().kind, "locked");
+            assert!(prompt, "the lock waited for the write");
+            assert!(on_disk(&f) == before, "the vault changed");
+        }
+
+        /// A new session that opens while a write of the old one waits at its commit point:
+        /// the old write refuses and the new session's vault is untouched.
+        #[test]
+        fn a_new_session_while_a_write_waits_at_its_commit_point_refuses_the_write() {
+            let f = fixture();
+            let before = on_disk(&f);
+            let (arrived, at_commit) = mpsc::channel::<()>();
+            let (release, go) = mpsc::channel::<()>();
+            let (arrived, go) = (Mutex::new(arrived), Mutex::new(go));
+            f.session.at_commit(move || {
+                arrived.lock().unwrap().send(()).unwrap();
+                go.lock().unwrap().recv().unwrap();
+            });
+            let session = f.session.clone();
+            let writer = std::thread::spawn(move || {
+                session
+                    .access(Access::Write, None, |vault| {
+                        vault
+                            .add(ApiKeyInput::new("Fake", "fake-value"))
+                            .map_err(Into::into)
+                    })
+                    .map(drop)
+            });
+            at_commit
+                .recv_timeout(crate::test_support::PATIENCE)
+                .unwrap();
+            let ticket = f.session.begin_open().unwrap();
+            release.send(()).unwrap();
+            assert_eq!(writer.join().unwrap().unwrap_err().kind, "locked");
+            let path = vault_path(&f);
+            f.session
+                .open(ticket, || Vault::open(&path, PASSWORD).map_err(Into::into))
+                .unwrap();
+            assert_eq!(f.session.snapshot().unwrap().revision, 0);
+            assert!(on_disk(&f) == before, "the vault changed");
+        }
+
+        /// The revision moves when the file is replaced, not when the access ends. An act
+        /// bound to the old revision refuses while the write is still inside its access.
+        #[test]
+        fn a_write_moves_the_revision_at_its_commit_so_an_act_bound_to_the_old_revision_refuses() {
+            let f = fixture();
+            let old = f.session.snapshot().unwrap();
+            let session = f.session.clone();
+            f.session
+                .access(Access::Write, None, |vault| {
+                    vault.add(ApiKeyInput::new("Fake", "fake-value"))?;
+                    let refused = session
+                        .commit(Binding::Revision(old), &mut Act::new(|_: &Held<'_>| Ok(())));
+                    assert_eq!(refused.unwrap_err().kind, "stalePreview");
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(
+                f.session.snapshot().unwrap().revision,
+                old.revision + 1,
+                "one write moves the revision once"
+            );
+        }
+
+        /// The guard against a bypass at run time. A read, a reload and the stored vault
+        /// between accesses hold a closed gate: a save through any of them is refused, and the
+        /// file stays as it was.
+        #[test]
+        fn a_replacement_outside_a_write_access_is_refused_and_writes_nothing() {
+            let f = fixture();
+            let before = on_disk(&f);
+            for access in [Access::Read, Access::Reload] {
+                let error = f
+                    .session
+                    .access(access, None, |vault| vault.save().map_err(Into::into))
+                    .err()
+                    .expect("a save in a read answered success");
+                assert_eq!(error.kind, "internal");
+            }
+            {
+                let mut stored = f.session.vault.lock().unwrap();
+                assert!(stored.vault.as_mut().unwrap().save().is_err());
+            }
+            assert!(on_disk(&f) == before, "the vault changed");
+            assert!(f.session.snapshot().is_ok(), "the session stays open");
+        }
+
+        /// A revoke runs after the gate is released, and only when the act did not happen.
+        #[test]
+        fn a_refused_commit_revokes_after_the_gate_is_released_and_a_done_one_never_revokes() {
+            struct Probe<'a> {
+                session: &'a Session,
+                acted: bool,
+                revoked_with_free_gate: Option<bool>,
+            }
+            impl Effect for Probe<'_> {
+                type Output = ();
+                fn act(&mut self, _held: &Held<'_>) -> Result<(), CommandError> {
+                    self.acted = true;
+                    Ok(())
+                }
+                fn revoke(&mut self) -> Result<(), String> {
+                    self.revoked_with_free_gate = Some(self.session.gate.try_lock().is_ok());
+                    Err("fake revoke failure".into())
+                }
+            }
+            let f = fixture();
+            let ticket = f.session.snapshot().unwrap().ticket;
+            let mut done = Probe {
+                session: &f.session,
+                acted: false,
+                revoked_with_free_gate: None,
+            };
+            f.session
+                .commit(Binding::Ticket(ticket), &mut done)
+                .unwrap();
+            assert!(done.acted);
+            assert_eq!(done.revoked_with_free_gate, None);
+            f.session.lock().unwrap();
+            let mut refused = Probe {
+                session: &f.session,
+                acted: false,
+                revoked_with_free_gate: None,
+            };
+            let error = f
+                .session
+                .commit(Binding::Ticket(ticket), &mut refused)
+                .unwrap_err();
+            assert_eq!(error.kind, "locked");
+            assert!(!refused.acted);
+            assert_eq!(refused.revoked_with_free_gate, Some(true));
+            let messages: Vec<String> = f
+                .session
+                .warnings()
+                .unwrap()
+                .application
+                .into_iter()
+                .map(|notice| notice.message)
+                .collect();
+            assert_eq!(messages, ["fake revoke failure"]);
+        }
+
+        /// U1-R1-04: an act that panics under the gate. The panic does not poison the gate, the
+        /// revoke runs, the session ends, the reply does not invite a retry, and the next opening
+        /// works. A gate that is poisoned some other way still takes a record.
+        #[test]
+        fn u1_r1_04_a_panic_under_the_gate_leaves_a_working_gate_and_no_record_is_skipped() {
+            struct Panics {
+                revoked: bool,
+            }
+            impl Effect for Panics {
+                type Output = ();
+                fn act(&mut self, _held: &Held<'_>) -> Result<(), CommandError> {
+                    panic!("a fake fault under the gate")
+                }
+                fn revoke(&mut self) -> Result<(), String> {
+                    self.revoked = true;
+                    Ok(())
+                }
+            }
+            let f = fixture();
+            let ticket = f.session.snapshot().unwrap().ticket;
+            let mut effect = Panics { revoked: false };
+            let error = f
+                .session
+                .commit(Binding::Ticket(ticket), &mut effect)
+                .unwrap_err();
+            assert_eq!(error.message, CommandError::failed_step().message);
+            assert!(effect.revoked, "the revoke ran");
+            assert!(!f.session.gate.is_poisoned(), "the gate is not poisoned");
+            assert_eq!(f.session.snapshot().unwrap_err().kind, "locked");
+            assert!(f.session.warnings().is_ok());
+            let next = f.session.begin_open().unwrap();
+            f.session
+                .open(next, || {
+                    let path = f._directory.path().join("next.kdbx");
+                    Vault::create(path, "fake-test-password-123!", None).map_err(Into::into)
+                })
+                .unwrap();
+            assert!(f.session.snapshot().is_ok(), "the next opening works");
+
+            let session = f.session.clone();
+            let _ = std::thread::spawn(move || {
+                let _gate = session.gate.lock().unwrap();
+                panic!("a fake fault that poisons the gate");
+            })
+            .join();
+            assert!(f.session.gate.is_poisoned());
+            let id = uuid::Uuid::new_v4().to_string();
+            f.session
+                .record_operation(ticket, &id, OperationWarningKind::ImportFailed);
+            assert!(
+                f.session
+                    .raw_gate()
+                    .notices
+                    .iter()
+                    .any(|notice| notice.id == id),
+                "the record was taken"
+            );
+        }
+
+        /// U1-R1-04: a write access that fails or panics. Before the replacement, a panic answers
+        /// the fixed text, ends the session and leaves the file. After the replacement, an error
+        /// or a panic answers `completedWhileLocked` and ends the session; the file holds the
+        /// write. The vault mutex is never poisoned.
+        #[test]
+        fn u1_r1_04_an_access_that_fails_after_its_replacement_answers_completed_while_locked() {
+            for (way, replaces, answer) in [
+                ("a panic before the replacement", false, "internal"),
+                (
+                    "an error after the replacement",
+                    true,
+                    "completedWhileLocked",
+                ),
+                (
+                    "a panic after the replacement",
+                    true,
+                    "completedWhileLocked",
+                ),
+            ] {
+                let f = fixture();
+                let before = on_disk(&f);
+                let error = f
+                    .session
+                    .access(Access::Write, None, |vault| -> Result<(), CommandError> {
+                        if replaces {
+                            vault.add(akm_core::ApiKeyInput::new(
+                                "Fake write before the fault",
+                                "fake-fault-value",
+                            ))?;
+                        }
+                        if way.starts_with("a panic") {
+                            panic!("a fake fault in the access");
+                        }
+                        Err(CommandError::internal("a fake error after the replacement"))
+                    })
+                    .err()
+                    .expect("the access failed");
+                assert_eq!(error.kind, answer, "{way}");
+                assert!(!error.message.contains("Try again"), "{way}");
+                assert_eq!(on_disk(&f) != before, replaces, "{way}: the file");
+                assert_eq!(f.session.snapshot().unwrap_err().kind, "locked", "{way}");
+                assert!(!f.session.vault.is_poisoned(), "{way}");
+                assert!(!f.session.gate.is_poisoned(), "{way}");
+            }
+        }
+
+        fn sources() -> Vec<(String, String)> {
+            let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+            let mut files: Vec<(String, String)> = fs::read_dir(folder)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
+                .map(|path| {
+                    (
+                        path.file_name().unwrap().to_string_lossy().into_owned(),
+                        fs::read_to_string(&path).unwrap(),
+                    )
+                })
+                .collect();
+            files.sort();
+            files
+        }
+
+        /// The names of the functions whose parameters mention `needle`.
+        fn functions_taking(source: &str, needle: &str) -> Vec<String> {
+            let mut found = Vec::new();
+            let mut rest = source;
+            while let Some(at) = rest.find("fn ") {
+                rest = &rest[at + 3..];
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                let Some(open) = rest.find('(') else { break };
+                let mut depth = 0;
+                let mut end = open;
+                for (index, c) in rest[open..].char_indices() {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = open + index;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if !name.is_empty() && rest[open..end].contains(needle) {
+                    found.push(name);
+                }
+            }
+            found
+        }
+
+        /// The structural guard: a tripwire for the usual spelling, not a proof. It reads the
+        /// source text, so a new caller that checks and then acts outside `Session::commit`, a
+        /// second maker of the witness, or a second way to replace the vault file fails it only
+        /// when the code uses the names below. A renamed import (`use std::process::Command as
+        /// Child`), a re-export or a macro passes it (U1-R1-06). The type `Held` is the part that
+        /// the compiler enforces.
+        #[test]
+        fn every_session_scoped_act_goes_through_the_commit_point() {
+            let sources = sources();
+            assert!(sources.len() >= 15, "the scan finds the sources");
+            let witness = concat!("Held::", "new()");
+            let makers: Vec<&str> = sources
+                .iter()
+                .flat_map(|(name, text)| text.matches(witness).map(move |_| name.as_str()))
+                .collect();
+            assert_eq!(
+                makers,
+                ["session.rs"],
+                "only Session::commit_point makes a Held"
+            );
+            let point = &sources
+                .iter()
+                .find(|(name, _)| name == "session.rs")
+                .unwrap()
+                .1;
+            let body = &point[point.find("fn commit_point").unwrap()..];
+            assert!(
+                body[..body.find("\n    }\n").unwrap()].contains(witness),
+                "the one Held is made in commit_point"
+            );
+            for (name, text) in &sources {
+                for retired in [concat!("while_", "current"), concat!("while_", "session")] {
+                    assert!(!text.contains(retired), "{name} uses {retired}");
+                }
+                for process in [
+                    concat!("Command", "::new"),
+                    concat!("CreateProcess", "W("),
+                    concat!("Resume", "Thread("),
+                    concat!("Terminate", "Process("),
+                ] {
+                    assert!(
+                        name == "process.rs" || !text.contains(process),
+                        "{name} starts or ends a process ({process}) outside process.rs"
+                    );
+                }
+                assert!(
+                    name == "session.rs" || !text.contains(concat!("set_commit", "_gate")),
+                    "{name} installs a vault commit gate"
+                );
+                for function in functions_taking(text, "Held<") {
+                    assert!(
+                        ["act", "resume"].contains(&function.as_str()),
+                        "{name}: fn {function} takes the witness but is not an act"
+                    );
+                }
+            }
+            let core = include_str!("../../../crates/akm-core/src/vault.rs");
+            let commit = &core[core.find("fn commit(&mut self").unwrap()..];
+            let commit = &commit[..commit.find("\n    }\n").unwrap()];
+            let replace = commit.find("let mut replace = ||").unwrap();
+            let gated = commit.find("match &self.commit_gate").unwrap();
+            for act in [
+                "fs::hard_link(&tmp.path, &self.path)",
+                "fs::rename(&tmp.path, &self.path)",
+            ] {
+                assert_eq!(core.matches(act).count(), 1, "{act}");
+                let at = commit.find(act).unwrap();
+                assert!(
+                    replace < at && at < gated,
+                    "{act} runs only inside the gate"
+                );
+            }
+            assert!(commit.contains("Some(gate) => gate.commit(&mut replace)?"));
         }
     }
 }

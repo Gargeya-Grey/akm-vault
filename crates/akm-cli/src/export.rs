@@ -33,13 +33,37 @@ fn ensure_private_filesystem(flags: u32) -> Result<()> {
 fn resolved_destination(path: &Path) -> Result<PathBuf> {
     let name = path.file_name().ok_or_else(unsafe_destination)?;
     validate_path(Path::new(name))?;
-    let parent = path
+    let given = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."))
-        .canonicalize()?;
+        .unwrap_or_else(|| Path::new("."));
+    let parent = given.canonicalize()?;
+    // FV-06: a folder that `destination` resolved must still resolve to itself. Only AKM
+    // passes a `\\?\` path here, because `validate_path` refuses one from the user.
+    let resolved_before = matches!(
+        given.components().next(),
+        Some(std::path::Component::Prefix(prefix)) if prefix.kind().is_verbatim()
+    );
+    if resolved_before && parent != given {
+        return Err(folder_changed());
+    }
     validate_parent(&parent)?;
     Ok(parent.join(name))
+}
+
+fn folder_changed() -> Error {
+    Error::Invalid(
+        "the destination folder changed after AKM checked it (it was moved or replaced, for example by a junction), so AKM stopped the export"
+            .into(),
+    )
+}
+
+/// FV-06: the open file must be at `expected`, read through its handle at the act.
+fn ensure_at(io: &mut impl ExportIo, file: &File, expected: &Path) -> Result<()> {
+    if io.current_path(file)? != expected {
+        return Err(folder_changed());
+    }
+    Ok(())
 }
 
 pub fn write_new(path: &Path, envs: &[(String, String)]) -> Result<()> {
@@ -72,6 +96,44 @@ pub(super) trait ExportIo {
     fn discard(&mut self, file: &File) -> bool {
         discard(file)
     }
+
+    /// The full path of the open file now, read through its handle, never a remembered name.
+    fn current_path(&mut self, file: &File) -> Result<PathBuf> {
+        final_path(file)
+    }
+}
+
+#[cfg(windows)]
+pub(super) fn final_path(file: &File) -> Result<PathBuf> {
+    use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+
+    let mut name = vec![0u16; 32768];
+    // Flags 0: the normalized name with a drive letter, as `canonicalize` returns it.
+    let length = unsafe {
+        GetFinalPathNameByHandleW(
+            file.as_raw_handle(),
+            name.as_mut_ptr(),
+            name.len() as u32,
+            0,
+        )
+    } as usize;
+    if length == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if length >= name.len() {
+        return Err(Error::Invalid("the file's current path is too long".into()));
+    }
+    Ok(PathBuf::from(std::ffi::OsString::from_wide(
+        &name[..length],
+    )))
+}
+
+#[cfg(not(windows))]
+pub(super) fn final_path(_file: &File) -> Result<PathBuf> {
+    Err(Error::Invalid(
+        "private file export requires Windows".into(),
+    ))
 }
 
 #[cfg(windows)]
@@ -164,9 +226,28 @@ pub(super) fn write_new_with(
         Ok(()) => Ok(()),
         Err(error) if io.discard(&temp.file) => Err(error),
         Err(error) => Err(Error::Io(std::io::Error::other(format!(
-            "{error}; could not confirm cleanup: the plaintext temporary file {} may still hold the exported values. Delete it yourself",
-            shown_path(&temp.path)
+            "{error}; could not confirm cleanup: {}",
+            leftover(io, &temp)
         )))),
+    }
+}
+
+/// FV-07: the file is named by the current path of the owned handle. The remembered name
+/// can belong to another file now, so it never comes with an instruction to delete.
+fn leftover(io: &mut impl ExportIo, temp: &PrivateTemp) -> String {
+    match io.current_path(&temp.file) {
+        Ok(current) if current == temp.path => format!(
+            "the plaintext temporary file {} may still hold the exported values. Delete it yourself",
+            shown_path(&current)
+        ),
+        Ok(current) => format!(
+            "the plaintext temporary file was renamed after AKM created it. It is now {} and may still hold the exported values. Delete it yourself",
+            shown_path(&current)
+        ),
+        Err(_) => format!(
+            "AKM created a plaintext temporary file as {}, which may still hold the exported values. AKM cannot read the file's current name: it may have another name now, and another file may have this name. Check that a file holds the export before you delete it",
+            shown_path(&temp.path)
+        ),
     }
 }
 
@@ -186,11 +267,13 @@ fn fill_and_publish(
     envs: &[(String, String)],
     io: &mut impl ExportIo,
 ) -> Result<()> {
+    ensure_at(io, &temp.file, &temp.path)?;
     ensure_private_filesystem(io.filesystem_flags(&temp.file)?)?;
     verify_private_acl(&temp.file)?;
     io.write(&mut temp.file, envs)?;
     io.sync(&temp.file)?;
-    io.publish(&temp.file, path)
+    io.publish(&temp.file, path)?;
+    ensure_at(io, &temp.file, path)
 }
 
 #[cfg(windows)]
@@ -455,7 +538,7 @@ fn validate_parent(parent: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn private_file(path: &Path) -> Result<File> {
+pub(super) fn private_file(path: &Path) -> Result<File> {
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::FromRawHandle;
     use std::ptr::null_mut;
@@ -512,7 +595,7 @@ fn private_file(path: &Path) -> Result<File> {
 }
 
 #[cfg(not(windows))]
-fn private_file(_path: &Path) -> Result<File> {
+pub(super) fn private_file(_path: &Path) -> Result<File> {
     Err(Error::Invalid(
         "private file export requires Windows".into(),
     ))

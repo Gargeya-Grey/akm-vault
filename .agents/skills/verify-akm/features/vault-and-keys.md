@@ -1,18 +1,19 @@
 # Vault and keys
 
-A user creates an encrypted vault, adds API keys with their metadata, lists them without secrets, shows one key masked, and reveals its secret only on request, with a journal record first.
+A user creates an encrypted vault, adds API keys with their metadata, changes that metadata, lists them without secrets, shows one key masked, and reveals its secret only on request, with a journal record first.
 
 ## Sub-features
 
 - `vault-init` creates a KDBX 4.1 vault that needs a master password of 12 or more characters.
 - `key-add` stores a key with project, environment, variable name, expiry and rotation interval.
+- `key-edit` changes the fields that the command names and keeps every other field, the id and the secret. An edit that changes nothing saves nothing.
 - `key-list` lists keys, never their secrets, as text or `--json`.
 - `key-get` shows one key with a fixed mask and no secret characters.
 - `key-reveal` prints the secret with `--reveal` or `--field secret`, after a journal record.
 
 ## How to get to it (user POV)
 
-- CLI: `akm init`, `akm add <title>`, `akm list`, `akm get <id or exact title>`, `akm get <id> --reveal`.
+- CLI: `akm init`, `akm add <title>`, `akm edit <id or exact title> --project <name>`, `akm list`, `akm get <id or exact title>`, `akm get <id> --reveal`.
 - Desktop: Unlock screen (create or open a vault), the Keys screen, a key's detail view and its Reveal button. The GUI path is covered by the full GUI proof, which needs the owner (it uses the clipboard).
 
 ## Driving it with akm-verify
@@ -26,12 +27,16 @@ Preconditions:
 - **List.** `& $h cli -Session $s -- list --json`. Exit 0. One object with title `Fake OpenAI`, project `demo`, environment `dev`; stdout holds no `fake-secret`.
 - **Show masked.** `& $h cli -Session $s -- get 'Fake OpenAI'`. Exit 0. stdout holds no part of `fake-secret-0123456789`.
 - **Substring refused.** `& $h cli -Session $s -- get Fake`. Non-zero exit, a refusal that lists candidates by id and title, and no secret.
+- **Edit.** `& $h cli -Session $s -- edit 'Fake OpenAI' --project fake-other`. Exit 0. stdout says `Updated` and shows the key masked, with no part of `fake-secret-0123456789`.
+- **Edit kept the rest.** `& $h cli -Session $s -- list --json`. Exit 0. The same id as before, project `fake-other`, and environment `dev`, variable `OPENAI_API_KEY`, expiry and rotation interval as added.
+- **No change.** Run the same edit again. Exit 0, stdout says `No change`, and `Get-FileHash <session>\vault.kdbx` gives the same SHA-256 before and after.
 - **Reveal.** `& $h cli -Session $s -- get 'Fake OpenAI' --field secret`. Exit 0, stdout `fake-secret-0123456789`.
 - **Journal first.** `& $h cli -Session $s -- audit --verify`. Exit 0; the newest record is a disclosure request for the key's id, with no title and no secret.
 - **Proof.** The transcript holds all of the above. `Get-ChildItem <session>` shows only `vault.kdbx`, its `.bak` and dated backups, `vault.kdbx.lock`, `journal\` and `session.json`: no plaintext file beside the vault.
 
 ## Gotchas
 
-- `--expires 2027-03-15` means 23:59:59 UTC on that day. Compare with that instant, not midnight.
+- `--expires 2027-03-15` means 23:59:59 UTC on that day. Compare with that instant, not midnight. A full time keeps whole seconds: `2027-03-15T12:00:00.5Z` is refused, and `.000` is accepted.
 - `init` refuses a password shorter than 12 characters; the helper's fake password is long enough.
+- `edit` needs at least one option. It refuses `--secret` (use `rotate`), a field that is both set and cleared, and a tag with `;`, `,`, a tab or a space at either end.
 - A run without `AKM_JOURNAL_ROOT` would write the real profile folder. Use the helper, never the bare binary.

@@ -58,6 +58,8 @@ pub fn inject(command: &mut Command, envs: &[(String, String)]) -> Result<()> {
     Ok(())
 }
 
+/// The desktop test `the_akm_name_rule_mirrors_the_one_of_the_command_line` pins this text,
+/// and the test below holds it to `reserved_class`.
 fn is_akm_name(name: &OsStr) -> bool {
     name.to_string_lossy()
         .get(..4)
@@ -128,4 +130,34 @@ fn executable(path: &Path) -> Option<PathBuf> {
         return None;
     }
     path.canonicalize().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use akm_core::model::ReservedClass;
+
+    /// The inherited variables that a child loses are the AkmInternal class of
+    /// `reserved_class`.
+    #[test]
+    fn the_akm_name_rule_is_the_akm_internal_class_of_reserved_class() {
+        for name in [
+            "AKM_PASSWORD",
+            "akm_password",
+            "Akm_",
+            "AKM_VAULT",
+            "AKM",
+            "AKMX",
+            "XAKM_Y",
+            "PATH",
+            "HOST_CC",
+            "",
+        ] {
+            assert_eq!(
+                is_akm_name(OsStr::new(name)),
+                reserved_class(name) == Some(ReservedClass::AkmInternal),
+                "{name:?}"
+            );
+        }
+    }
 }

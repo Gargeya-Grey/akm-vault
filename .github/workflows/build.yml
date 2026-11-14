@@ -11,7 +11,9 @@ permissions:
 
 jobs:
   verify:
-    runs-on: windows-latest
+    # A pinned label, not windows-latest. GitHub still updates the image under this label each week;
+    # the log of 'Set up job' names the image version (docs/TESTING.md, "What CI pins").
+    runs-on: windows-2025-vs2026
     steps:
       # The default temp path holds the short name RUNNER~1, and four desktop tests compare
       # raw temp paths with canonical ones (FINDINGS.md P2R2-06). RUNNER_TEMP has no short names.
@@ -20,31 +22,51 @@ jobs:
         run: |
           "TEMP=$env:RUNNER_TEMP" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "TMP=$env:RUNNER_TEMP" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # tools/test_check_docs.py reads two past commits
-      - uses: actions/setup-node@v4
+          # tools/test_check_docs.py compares its fixtures with two past commits. Without them it
+          # says so and still runs its cases (tools/test_snapshot_runs_its_checks.py shows that).
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 22.23.4
           cache: npm
           cache-dependency-path: desktop/package-lock.json
       # Pinned to the toolchain of the local checks (Cargo.toml rust-version 1.90): a newer
       # Clippy adds lints, which turned a passing branch red on 2026-11-07. Raise it on purpose.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-11-13
         with:
           toolchain: 1.90.0
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
-      - name: Documentation check (stale test names, control characters)
+      # tools/check_docs.py reads the workflows with PyYAML (docs/TESTING.md): a pinned version, as a binary wheel only.
+      - name: Install the pinned PyYAML for the documentation check
         run: |
-          python tools/check_docs.py
-          python tools/test_check_docs.py
+          python -m pip install --disable-pip-version-check --only-binary :all: PyYAML==6.0.3
+      - name: Documentation check, fast mode (stale test names, control characters)
+        run: python tools/check_docs.py
       - name: KeePassXC fetch tool never deletes what it does not own
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_fetch_keepassxc.ps1
+      - name: Verification helper never removes a folder it did not create
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_akm_verify.ps1
+      - name: Native-proof tools refuse a computer that is not a disposable runner
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_native_proof_guards.ps1
+      - name: The install test binds the installed program to the hashed build
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_install_binding.ps1
+      - name: Public-snapshot tool refuses private data and writes only its own new folder
+        run: python tools/test_make_public_snapshot.py
+      - name: Public-snapshot tool never runs Git on the source and fetches nothing
+        run: python tools/test_snapshot_source.py
+      - name: Every Git call of the tools ignores inherited GIT_ variables, fetches nothing and starts no transport
+        run: python tools/test_git_child.py
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm ci
+      # After npm ci: the full-mode cases list fixtures with cargo and with desktop's Vitest and Playwright.
+      - name: Documentation check test (each runner's listing on fixtures)
+        run: python tools/test_check_docs.py --require-tools
       - name: Frontend regressions
         working-directory: desktop
         run: npm test
@@ -61,6 +83,9 @@ jobs:
         run: Remove-Item -LiteralPath target/akm-test-journal -Recurse -Force -ErrorAction SilentlyContinue
       - name: Native and executable regressions
         run: cargo test --workspace --locked
+      # After cargo test and npm ci, so the cargo listing reuses that build (findings U4-R1-07, U4-R2-05).
+      - name: Documentation check, full mode (the test runners' own listings)
+        run: python tools/check_docs.py --full
       - name: Rust lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Rust format
@@ -70,6 +95,16 @@ jobs:
         run: npm run tauri -- build -- --locked
       - name: Build CLI
         run: cargo build --release --locked -p akm-cli
+      # Report only (docs/TESTING.md, "Reproducible builds"). AKM does not promise a reproducible build.
+      - name: Rebuild the CLI in a second target folder and compare (report only)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $second = Join-Path $env:RUNNER_TEMP 'akm-rebuild'
+          cargo build --release --locked -p akm-cli --target-dir $second
+          $a = (Get-FileHash target/release/akm.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $b = (Get-FileHash (Join-Path $second 'release/akm.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+          "REBUILD akm.exe first=$a second=$b same=$($a -eq $b)"
       - name: Fetch pinned independent KDBX implementation
         shell: pwsh
         run: |
@@ -87,6 +122,28 @@ jobs:
         run: |
           python tools/check_no_network.py
           python tools/test_check_no_network.py
+      # After the build steps, so the crates that the no-network check reads are fetched.
+      - name: A one-commit snapshot of this commit passes its own checks (U4-R1-05)
+        run: python tools/test_snapshot_runs_its_checks.py
+      # tools/check_dependencies.ps1 (FINDINGS.md FR-23) needs cargo-audit and cargo-deny, which the
+      # runner does not have. It looks for them in .scratch/cargo-tools/bin first, so install them
+      # there, at pinned versions with --locked (both support Rust 1.90). The checks fetch the
+      # advisory databases (GitHub) and the npm registry, so they need the network. Raise the pins on purpose.
+      - name: Cache the pinned dependency check tools
+        id: cargo-tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .scratch/cargo-tools
+          key: cargo-tools-${{ runner.os }}-cargo-deny-0.20.2-cargo-audit-0.22.2-rust-1.90.0
+      - name: Install the pinned dependency check tools
+        if: steps.cargo-tools.outputs.cache-hit != 'true'
+        run: cargo install --locked --root .scratch/cargo-tools cargo-deny@0.20.2 cargo-audit@0.22.2
+      - name: Dependency checks (cargo audit, cargo deny, npm audit)
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_dependencies.ps1
+      - name: Third-party notices are current (FR-25)
+        run: |
+          python tools/generate_third_party_notices.py --check
+          python tools/test_third_party_notices.py
       - name: Second KDBX reader (kdbxweb)
         working-directory: tools/verify_kdbxweb
         run: |
@@ -97,13 +154,12 @@ jobs:
         run: |
           New-Item -ItemType Directory out | Out-Null
           Copy-Item target/release/akm.exe out/
-          Copy-Item target/release/bundle/msi/*.msi out/
           Copy-Item target/release/bundle/nsis/*-setup.exe out/
           $lines = Get-ChildItem out -File | ForEach-Object {
             "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
           }
           $lines | Set-Content out/SHA256SUMS.txt -Encoding utf8NoBOM
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: akm-windows-x64-untrusted-development
           path: out/*
