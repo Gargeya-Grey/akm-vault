@@ -57,7 +57,7 @@ $s = & $h new -Feature vault-and-keys -Akm "$target\release\akm.exe"
 
 `cli` returns an object with `ExitCode`, `Stdout` and `Stderr`. Commands and flags are in `akm.exe --help` and `crates/akm-cli/README.md`. A single-key command takes an id or an exact title.
 
-**Desktop GUI.** Drive it only through `tools/verify_windows_app.ps1`. It uses UI Automation with accessible names (buttons such as `Move to Recycle Bin`, `Review import`, `Refresh`; fields such as `Vault file`, `Master password`). These focused modes need no owner, because they never touch the clipboard and never minimize:
+**Desktop GUI.** Drive it only through `tools/verify_windows_app.ps1`. It uses UI Automation with accessible names (buttons such as `Move to Recycle Bin`, `Review import`, `Refresh`; fields such as `Vault file`, `Master password`). These focused modes never touch the clipboard and never minimize. Since 14 Nov 2026 the owner uses AKM on this computer, so every run, also of these modes, needs the owner's yes in chat and the owner's app closed (AGENTS.md, Safety):
 
 ```powershell
 ./tools/verify_windows_app.ps1 -DesktopExe "$target\release\akm-desktop.exe" -CliExe "$target\release\akm.exe" -JournalOnly

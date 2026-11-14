@@ -16,7 +16,7 @@ AKM is a Windows API-key manager. It has a Rust core and CLI, and a Tauri + Reac
 - Use fake data only: temporary vaults and fake keys. Real secrets wait for the release gate. That gate is an independent full review that scores above 90/100, followed by the owner's own testing.
 - Keep the owner's clipboard intact. A test that writes the clipboard needs its empty-clipboard guard and the owner present.
 - Lock, suspend or sign out of Windows, or minimize or hide a real window, only after the owner confirms in chat that they are ready to watch. Each confirmation allows one attempt. A failed attempt stops, and the result goes back to the owner.
-- The desktop app's saved settings point at a fake vault from an older proof run (see STATE.md). Keep that setting until the owner gives the value to restore.
+- The owner uses AKM on this computer since 14 Nov 2026. The app's settings (`%APPDATA%\com.akm.desktop\`), its web view data (`%LOCALAPPDATA%\com.akm.desktop\`) and the journal folder (`%LOCALAPPDATA%\akm\`) are the owner's. Never change, move or delete them. A run of `tools/verify_windows_app.ps1`, in any mode, replaces the settings for its run and shares the web view data, so it needs the owner's yes in chat and the owner's app closed.
 - Keep KDBX compatibility. The format is established. This integration and the community `keepass` writer are not audited.
 
 ## Owner gates
