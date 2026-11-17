@@ -2,7 +2,7 @@
 
 AKM keeps your API keys in one encrypted file on your own computer. You need no account and no command line.
 
-**This is an early build. Use fake keys only.** It has not passed the independent security review and the testing that must come before real keys. The [README](../README.md) gives the current status.
+**This is an early build. Use fake keys only.** The latest review score is 91.75/100, and that is not a professional audit. The tests on a real Windows session that must come before real keys have not run. The [README](../README.md) gives the current status.
 
 ## What you need
 

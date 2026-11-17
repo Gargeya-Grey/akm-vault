@@ -1,22 +1,72 @@
-# AKM: a Windows API-key manager
+# AKM
 
-**Untrusted development build. Use fake keys only.** The latest full review
-scored the implementation 83.5/100 on 13 November 2026. See the
-[full review](docs/reviews/2026-11-13-full-review.md). The
-[baseline review](docs/reviews/2026-10-30-baseline.md) scored 40.5/100. Fixing the reported bugs
-does not itself establish a new score or certify security. The release gate is an
-independent re-review above 90, followed by real-use testing before wider
-distribution. Current status: [docs/STATE.md](docs/STATE.md). The owner's own use
-before that gate follows [docs/FIRST_USE.md](docs/FIRST_USE.md).
+AKM keeps API keys in a KeePass file on your own Windows computer. You get a desktop
+app and a command-line tool. There is no account and no server.
+
+A key has the facts a project needs: a title, the secret, a project, an environment,
+an environment-variable name, an expiry and a rotation interval. You can copy one key,
+save one project's keys to a `.env` file, or start one program with that project's keys
+in its environment. The file stays a normal KeePass vault. KeePassXC 2.8 can open it,
+so the keys do not depend on AKM.
+
+KeePassXC, 1Password CLI and Bitwarden Secrets Manager already cover much of this.
+AKM is a narrower personal workflow: one person, one computer, no team account. It is
+not a replacement for an audited password manager or a team secrets service. macOS is
+out of scope.
 
 **New here?** [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) shows how to install
-AKM and add your first key, with no command line.
+AKM and add a first key, with no command line. A short account of why AKM exists, and
+how to use this build as it stands, is in [docs/posts/why-akm.md](docs/posts/why-akm.md).
 
-AKM is for a Windows developer who wants a local, account-free KeePass file plus
-API-key fields and process-environment injection. KeePassXC, 1Password CLI and
-Bitwarden Secrets Manager already cover much of this use case. AKM is a narrower
-personal workflow, not a replacement for an audited password manager or a team
-secrets service. macOS is out of scope.
+## Status
+
+This is a development build. It has had no professional security audit, and there is
+no public download.
+
+The latest full review scored the implementation **91.75/100** on 14 November 2026
+([third full review](docs/reviews/2026-11-14-full-review-3.md)). The same rubric
+scored 87.5 and 83.5 on 13 November 2026
+([second](docs/reviews/2026-11-13-full-review-2.md),
+[first](docs/reviews/2026-11-13-full-review.md)), 66.25 on 9 November 2026, and
+40.5 on 30 October 2026 ([baseline review](docs/reviews/2026-10-30-baseline.md)).
+Fixing a reported bug does not itself establish a new score or certify security.
+
+The release gate is an independent re-review above 90, followed by real-use testing
+before wider distribution. The score is past 90. The testing is not done. Six
+reviewers read the code and the documents. They did not start the app. Four would
+use the command line with precautions. Two would not yet keep real keys in the
+desktop app. Every reviewer wrote that the points overstate the desktop app, because
+several of its flows have never run on a real Windows session. Those tests are in
+[docs/FIRST_USE.md](docs/FIRST_USE.md). **Real secrets wait for that testing.** See
+[SECURITY.md](SECURITY.md). Day-to-day project status is in
+[docs/STATE.md](docs/STATE.md).
+
+## What you can do in this build
+
+In the desktop app:
+
+- Create a vault, unlock it, and search and inspect keys.
+- Add a key, reveal it for 30 seconds, or copy it.
+- Import a `.env` file after you review the names. The review does not show secret values.
+- Save one project's keys to a `.env` file you choose in a Windows dialog.
+- Open a command prompt with one project's keys. No file is written.
+- See expiry and rotation reminders inside AKM, and an activity list for this computer.
+
+On the command line, the same vault supports create, add, list, get, edit, rotate,
+history, export, run, delete and restore. The commands are under [CLI](#cli). That
+path is the one the automated tests have run on a real build.
+
+## What this build does not do
+
+- It does not reset a forgotten master password.
+- It does not sign the installer. Windows SmartScreen warns on an unsigned setup program.
+- It does not update itself.
+- It does not stop malware, a keylogger, or a person at an unlocked computer.
+- It does not merge two copies of the vault. If the file changes on disk, AKM refuses the stale write.
+- It does not promise that a copied secret has left the clipboard. The clear is an attempt.
+
+The rest of this page is the precise behaviour: storage, writes, the desktop app, the
+command line, the activity journal, how to build, and the limits.
 
 ## Storage, and what is actually borrowed
 

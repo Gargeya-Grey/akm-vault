@@ -2,7 +2,7 @@
 
 ## Status
 
-AKM is an untrusted development build. It has had no professional security audit. Its latest measured review score is 66.25/100 ([full rescore](docs/reviews/2026-11-09-full-rescore.md)), and the release gate is an independent full review above 90/100 followed by real-use testing ([AGENTS.md](AGENTS.md)). **Real secrets wait for that gate.** Use fake keys and temporary vaults only. Do not send a real secret, vault or master password in a report.
+AKM is an untrusted development build. It has had no professional security audit. Its latest measured review score is 91.75/100 ([third full review](docs/reviews/2026-11-14-full-review-3.md), 14 November 2026). Earlier scores on the same rubric were 87.5 and 83.5 on 13 November 2026, 66.25 on 9 November 2026 ([full rescore](docs/reviews/2026-11-09-full-rescore.md)), and 40.5 on 30 October 2026. The release gate is an independent full review above 90/100 followed by real-use testing ([AGENTS.md](AGENTS.md)). The score is past 90. The real-use testing has not run. **Real secrets wait for that testing.** Use fake keys and temporary vaults only. Do not send a real secret, vault or master password in a report.
 
 ## Report a vulnerability
 
